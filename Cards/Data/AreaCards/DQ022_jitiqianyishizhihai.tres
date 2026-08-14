@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 5
+Score = 4
+CardImagePath = "res://Cards/Image/AreaCards/DQ022_jitiqianyishizhihai.jpg"
+CategoryFlag = 16
+SubCategories = Array[String](["异界"])
+WinTriggerEffect = ""
+UID = "DQ022_jitiqianyishizhihai"
+CardName = "集体潜意识之海"

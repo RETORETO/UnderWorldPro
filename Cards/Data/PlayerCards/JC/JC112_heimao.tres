@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["猫", "魔宠"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["公开 不能被装备结附 快速行动，牺牲黑猫：本回合中，你下一张正面打出，且具有魔法领域图标的牌，其所需费用减少1。"])
+UID = "JC112_heimao"
+CardName = "黑猫"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["鸟", "魔宠"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([0])
+Organization = "帷幕守望"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["不能被装备结附 进场触发：预测1。 触发：每当一个敌方非人类角色进入本地区时，你可以支付1，然后令雪鸮信使闪烁。"])
+UID = "JZ003_xuexiaoxinshi"
+CardName = "雪鸮信使"

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦境", "幽灵"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([2])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["非资产 灵体 进场触发：你可以将一张封印在本方秘社上且名为精神锚点的牌洗入其拥有者的牌库，若你如此做，将你墓地中的目标角色放置进场并置于本地区。"])
+UID = "BQ084_zhanlixiongling"
+CardName = "战栗凶灵"

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 3
+Score = 2
+CardImagePath = "res://Cards/Image/AreaCards/DQ025_riyuetan.jpg"
+CategoryFlag = 16
+SubCategories = Array[String](["水域", "山脉"])
+WinTriggerEffect = ""
+UID = "DQ025_riyuetan"
+CardName = "日月潭"

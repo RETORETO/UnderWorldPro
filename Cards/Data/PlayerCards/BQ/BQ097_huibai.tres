@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦境"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([2])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["非资产 【隐秘】灵体 持续：若有七张或更多卡牌封印在本方秘社上，灰败获得［黑眼］［黑星］。 墓地行动，横置一个未横置的本方法师角色：将灰败从墓地封印在本方秘社上，然后抓一张牌。"])
+UID = "BQ097_huibai"
+CardName = "灰败"

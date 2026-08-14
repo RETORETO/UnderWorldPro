@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["幽灵"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([3])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["灵体 现身触发：将你牌库顶的一张牌封印在本地区的目标敌方角色上。 持续：只要徘徊的幽灵在场且未横置，所有其上有牌封印的敌方角色失去魔法领域图标。"])
+UID = "JC099_paihuaideguihun"
+CardName = "徘徊的鬼魂"

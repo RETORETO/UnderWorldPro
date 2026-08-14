@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 2
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["书籍"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([-1])
+Organization = "圣贤"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["选择一项： ·借阅：结附于目标角色 持续：受此结附的角色获得［白眼］。 ·收藏：结附于本方秘社 快速行动2，横置：本回合中，当你赢得下一次调查对抗时，你可以抓一张牌。"])
+UID = "JC082_suoyazhishu"
+CardName = "索亚之书"

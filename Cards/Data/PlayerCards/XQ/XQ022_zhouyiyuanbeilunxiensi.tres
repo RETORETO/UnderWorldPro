@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "政治家"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["公开 持续：只要州议员贝伦·希恩斯未横置，双方玩家就不能打出事务牌。 快速行动1：横置或重置州议员贝伦·希恩斯。双方玩家都能够发动此能力。"])
+UID = "XQ022_zhouyiyuanbeilunxiensi"
+CardName = "州议员贝伦·希恩斯"

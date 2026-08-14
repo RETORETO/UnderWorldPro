@@ -1,0 +1,55 @@
+[gd_scene format=3 uid="uid://bjeh2eacnolh5"]
+
+[ext_resource type="Script" uid="uid://xeusp4ifwi3r" path="res://Script/UI/TargetSelectionWindow.cs" id="1_tgt"]
+
+[node name="TargetSelectionWindow" type="Window" unique_id=200000040 node_paths=PackedStringArray("TitleLabel", "HintLabel", "ConfirmButton")]
+oversampling_override = 1.0
+title = "选择目标"
+position = Vector2i(0, 36)
+size = Vector2i(500, 150)
+script = ExtResource("1_tgt")
+TitleLabel = NodePath("Panel/TitleLabel")
+HintLabel = NodePath("Panel/HintLabel")
+ConfirmButton = NodePath("Panel/ConfirmButton")
+
+[node name="BlockLayer" type="ColorRect" parent="." unique_id=200000041]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0.55)
+metadata/_edit_use_anchors_ = true
+
+[node name="Panel" type="Panel" parent="." unique_id=200000042]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TitleLabel" type="Label" parent="Panel" unique_id=200000043]
+layout_mode = 1
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 486.0
+offset_bottom = 48.0
+text = "选择目标"
+
+[node name="HintLabel" type="Label" parent="Panel" unique_id=200000044]
+layout_mode = 1
+offset_left = 16.0
+offset_top = 56.0
+offset_right = 486.0
+offset_bottom = 100.0
+text = "请在场上选择合法目标卡（点击场上卡完成选择）。"
+
+[node name="ConfirmButton" type="Button" parent="Panel" unique_id=200000045]
+layout_mode = 1
+offset_left = 16.0
+offset_top = 108.0
+offset_right = 486.0
+offset_bottom = 144.0
+disabled = true
+text = "（点场上卡后自动关闭）"

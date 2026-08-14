@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["熵", "法师"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([3])
+Organization = "鸣钟教派"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 2
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["时间标志1 【隐秘】传闻 行动，自钟楼怪客上移除一个时间标志：将一张法术或灾难牌从本方墓地移回你的手中。该能力每回合只能发动一次。"])
+UID = "WM033_zhonglouguaike"
+CardName = "钟楼怪客"

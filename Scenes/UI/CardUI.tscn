@@ -1,0 +1,172 @@
+[gd_scene format=3 uid="uid://b8pe47m4erabd"]
+
+[ext_resource type="Script" uid="uid://bgn2ery4vfe7i" path="res://Script/UI/CardUI.cs" id="1_7cml5"]
+[ext_resource type="Texture2D" uid="uid://dgcrvcko2s5tf" path="res://Cards/Image/CardBack.jpg" id="2_7cml5"]
+
+[node name="CardUI" type="Control" unique_id=828673890 node_paths=PackedStringArray("_costLabel", "_cardImage", "_investigationLabel", "_subCategoriesLabel", "_magicDomainsLabel", "_combatLabel", "_powerLabel", "_defenseLabel", "_selectionHighlight", "_frontface", "_backface", "_damageAllocationLabel")]
+custom_minimum_size = Vector2(100, 140)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 100.0
+offset_bottom = 140.0
+script = ExtResource("1_7cml5")
+_costLabel = NodePath("CostLabel")
+_cardImage = NodePath("CardImage")
+_investigationLabel = NodePath("StatsContainer/InvestigationLabel")
+_subCategoriesLabel = NodePath("SubCategoriesLabel")
+_magicDomainsLabel = NodePath("MagicDomainsLabel")
+_combatLabel = NodePath("StatsContainer/CombatLabel")
+_powerLabel = NodePath("StatsContainer/PowerLabel")
+_defenseLabel = NodePath("DefenseLabel")
+_selectionHighlight = NodePath("SelectionHighlight")
+_frontface = NodePath("Frontface")
+_backface = NodePath("Backface")
+_damageAllocationLabel = NodePath("DamageAllocationLabel")
+
+[node name="DamageAllocationLabel" type="Label" parent="." unique_id=1424618950]
+visible = false
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -20.0
+offset_top = -25.0
+offset_right = 20.0
+offset_bottom = -2.0
+grow_horizontal = 2
+
+[node name="Background" type="TextureRect" parent="." unique_id=402635777]
+texture_filter = 4
+texture_repeat = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("2_7cml5")
+expand_mode = 3
+
+[node name="CardImage" type="TextureRect" parent="." unique_id=1916368765]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 5
+
+[node name="CostLabel" type="Label" parent="." unique_id=1537292913]
+z_index = 1
+layout_mode = 1
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="SubCategoriesLabel" type="Label" parent="." unique_id=583481842]
+z_index = 1
+layout_mode = 1
+anchors_preset = 14
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_top = -11.5
+offset_bottom = 11.5
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_vertical = 0
+text = "子类型"
+
+[node name="StatsContainer" type="HBoxContainer" parent="." unique_id=1728503613]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -37.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="InvestigationLabel" type="Label" parent="StatsContainer" unique_id=1370771718]
+layout_mode = 2
+size_flags_vertical = 0
+text = "调查"
+
+[node name="CombatLabel" type="Label" parent="StatsContainer" unique_id=1965266956]
+layout_mode = 2
+size_flags_vertical = 0
+text = "战斗"
+
+[node name="PowerLabel" type="Label" parent="StatsContainer" unique_id=171366982]
+layout_mode = 2
+size_flags_vertical = 0
+text = "势力"
+
+[node name="DefenseLabel" type="Label" parent="." unique_id=2006292104]
+z_index = 1
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -40.0
+offset_top = -23.0
+grow_horizontal = 0
+grow_vertical = 0
+
+[node name="SelectionHighlight" type="Panel" parent="." unique_id=1096708139]
+modulate = Color(1, 1, 1, 0.72156864)
+self_modulate = Color(1, 1, 1, 0.62352943)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="Frontface" type="TextureRect" parent="." unique_id=362103143]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch_mode = 7
+
+[node name="Backface" type="TextureRect" parent="." unique_id=1490477401]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch_mode = 7
+
+[node name="ColorRect" type="ColorRect" parent="." unique_id=94160725]
+visible = false
+modulate = Color(1, 1, 1, 0.92156863)
+self_modulate = Color(1, 1, 1, 0.95686275)
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="MagicDomainsLabel" type="Label" parent="." unique_id=764512083]
+z_index = 1
+layout_mode = 1
+anchors_preset = 14
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_top = 10.0
+offset_right = -3.0
+offset_bottom = 33.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_vertical = 0
+text = "领域"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["仪式", "灾难"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([4])
+Organization = "鸣钟教派"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["隐秘：+2，在本次隐秘对抗后，若本方秘社为计时者，你可以在目标角色或附属上放置一个时间标志。 非资产 行动：每位玩家牺牲一个角色。"])
+UID = "WM036_jinguijin"
+CardName = "烬归烬"

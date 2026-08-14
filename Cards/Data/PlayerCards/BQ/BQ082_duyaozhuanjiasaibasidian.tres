@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "罪犯", "学者"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([-1])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["【暴露】公开 进场触发：进行一次隐秘对抗。本次隐秘对抗中你所展示的牌获得+2。若你赢得本次隐秘对抗，将你墓地中的目标角色牌横置放置进场，并置于本地区。"])
+UID = "BQ082_duyaozhuanjiasaibasidian"
+CardName = "毒药专家塞巴斯蒂安"

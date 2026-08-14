@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["吸血鬼"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([4])
+Organization = "王座会"
+Investigation = 2
+Combat = 1
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 3
+Effects = Array[String](["现身触发：自你牌库顶的六张牌中寻找任意数量的装备、武器或状态附属牌，将这些牌展示后置于你的手中，将其余牌洗回牌库。 行动1，牺牲一个结附于本方角色上的附属：进行一次隐秘对抗，本次隐秘对抗中你获得+2。"])
+UID = "BQ036_feinikesi"
+CardName = "菲尼克斯"

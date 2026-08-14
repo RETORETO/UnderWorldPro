@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["吸血鬼", "猎手"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([4])
+Organization = "王座会"
+Investigation = 0
+Combat = 2
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 3
+Effects = Array[String](["机动 威名 持续：所有有名为鲜血的附属结附于其上的本方吸血鬼角色获得机动。 持续：所有有装备或武器附属结附于其上的本方吸血鬼角色获得威名。"])
+UID = "BQ035_youmingqishi"
+CardName = "幽冥骑士"

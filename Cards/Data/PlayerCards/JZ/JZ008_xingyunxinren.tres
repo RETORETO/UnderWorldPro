@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 3
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "猎手"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([-1])
+Organization = "猎魔人"
+Investigation = 0
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["屏障（该角色不能成为敌方卡牌或能力的目标。）"])
+UID = "JZ008_xingyunxinren"
+CardName = "幸运新人"

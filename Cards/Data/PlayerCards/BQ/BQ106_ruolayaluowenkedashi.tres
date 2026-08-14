@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([1])
+Organization = ""
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["非资产 护盾1 触发：当你打出一张法术牌时，或赢得一次隐秘对抗时，在目标本方角色或暗藏者上放置一个护盾标志。"])
+UID = "BQ106_ruolayaluowenkedashi"
+CardName = "若拉·雅罗文科大师"

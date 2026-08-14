@@ -1,0 +1,66 @@
+[gd_scene format=3 uid="uid://ceg4cdd535f3q"]
+
+[ext_resource type="Script" uid="uid://bawbnpbguxwsj" path="res://Script/UI/TriggerEntryUI.cs" id="1_tri"]
+
+[node name="TriggerEntryUI" type="Control" unique_id=200000010 node_paths=PackedStringArray("NameLabel", "EffectText", "MandatoryBadge", "CardArt")]
+custom_minimum_size = Vector2(110, 150)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 110.0
+offset_bottom = 150.0
+mouse_filter = 1
+size_flags_horizontal = 0
+size_flags_vertical = 4
+script = ExtResource("1_tri")
+NameLabel = NodePath("NameLabel")
+EffectText = NodePath("EffectText")
+MandatoryBadge = NodePath("MandatoryBadge")
+CardArt = NodePath("CardArt")
+
+[node name="CardArt" type="TextureRect" parent="." unique_id=200000035]
+:layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Bg" type="Panel" parent="." unique_id=200000011]
+mouse_filter = 0
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="NameLabel" type="Label" parent="." unique_id=200000012]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 106.0
+offset_bottom = 26.0
+text = "触发名称"
+mouse_filter = 0
+
+[node name="EffectText" type="Label" parent="." unique_id=200000013]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 30.0
+offset_right = 106.0
+offset_bottom = 120.0
+text = "效果描述"
+autowrap_mode = 2
+mouse_filter = 0
+
+[node name="MandatoryBadge" type="Label" parent="." unique_id=200000014]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 124.0
+offset_right = 106.0
+offset_bottom = 146.0
+text = "强制"
+mouse_filter = 0

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([0])
+Organization = "帷幕守望"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["进场触发：选择本地区的目标角色。横置该角色。若该角色已横置，则改为将其移回其拥有者手上。"])
+UID = "JC004_lichangfashi"
+CardName = "力场法师"

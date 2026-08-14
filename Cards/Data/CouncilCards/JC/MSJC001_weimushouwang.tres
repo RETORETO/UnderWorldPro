@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="MSJC001_weimushouwang" format=3 uid="uid://cpryhlqhmhlnk"]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" uid="uid://dtomkfiqh1cej" path="res://Cards/Script/CouncilCards/JC/MSJC001_weimushouwang.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "（行动，横置，3费）：抽一张牌。
+（行动，横置，4费）：从牌库底抓一张牌。"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC001_weimushouwang.jpg"
+SubType = "秘社-法师结社"
+ColorText = "黄·帷幕守望"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "帷幕守望"
+Cost = 3
+UID = "MSJC001_weimushouwang"
+CardName = "帷幕守望"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

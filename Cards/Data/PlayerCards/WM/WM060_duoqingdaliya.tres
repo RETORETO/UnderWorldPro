@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "罪犯"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([-1])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 0
+Power = 2
+FirstStrikeInvestigation = 2
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["【暴露】公开 现身触发：在本地区上放置X个本方势力标志。X等于本地区的其他本方罪犯数量之和。 触发：每当一个其他本方罪犯进场时，抓一张牌，然后弃一张牌，遏制2。"])
+UID = "WM060_duoqingdaliya"
+CardName = "多情达莉娅"

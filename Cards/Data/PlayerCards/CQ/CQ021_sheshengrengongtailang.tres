@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 2
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "武士", "修行"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([4])
+Organization = "圣贤"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["【隐秘】声望 【隐秘】威名 触发：每当你抓牌时，在舍生刃恭太郎上放置一个［黑刀］能力图标标志。 死亡触发：若本方秘社上有【隐秘】，抓X张牌。X等于舍生刃恭太郎上［白刀］和［黑刀］能力图标数量之和。"])
+UID = "CQ021_sheshengrengongtailang"
+CardName = "舍生刃恭太郎"

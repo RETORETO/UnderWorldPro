@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://dqaa1qc4ow5rd"]
+
+[ext_resource type="Script" uid="uid://daotnc3x6qgyg" path="res://Script/UI/CouncilActivateWindow.cs" id="1_win"]
+
+[node name="CouncilActivateWindow" type="Window" unique_id=1807613909]
+oversampling_override = 1.0
+title = "秘社激活"
+position = Vector2i(0, 36)
+size = Vector2i(400, 200)
+script = ExtResource("1_win")

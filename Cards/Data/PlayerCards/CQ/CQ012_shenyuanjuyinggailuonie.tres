@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦魇", "灾难"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([0])
+Organization = "鸣钟教派"
+Investigation = 1
+Combat = 1
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 3
+Effects = Array[String](["手牌行动，先兆（从手中展示此牌），2：若你的资产区具有【红红】，在目标地区生成一个邪教徒角色指示物。该能力只能在准备步骤发动且每回合只能发动一次。 额外费用：牺牲X个角色。打出或付费现身深渊惧影盖罗涅的所需费用减少X。"])
+UID = "CQ012_shenyuanjuyinggailuonie"
+CardName = "深渊惧影盖罗涅"

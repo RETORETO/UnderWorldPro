@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 3
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 6
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["吸血鬼"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([4])
+Organization = "王座会"
+Investigation = 0
+Combat = 2
+Power = 2
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 3
+Effects = Array[String](["领袖 持续：你每操控一个暗藏者，克里斯蒂娜·爱弗罗德就获得一个［黑眼］。"])
+UID = "JC037_kelisidinaaifuluode"
+CardName = "克里斯蒂娜·爱弗罗德"

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["状态", "祝福"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于目标本方角色 强制触发：当受此结附的角色成为敌方卡牌或能力的目标时，令其闪烁。 快速手牌行动2，从你手中弃掉阿黛尔的救赎：若本方秘社上有【隐秘】，令目标本方角色闪烁。"])
+UID = "BH054_adaierdejiushu"
+CardName = "阿黛尔的救赎"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 4
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 7
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["化身", "灾难"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([3])
+Organization = "鸣钟教派"
+Investigation = 1
+Combat = 0
+Power = 3
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 2
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["领袖 时间标志1 行动，横置，从消逝的乌尔德上移除一个时间标志：消灭所有其他角色。 准备步骤强制触发：若消逝的乌尔德上没有时间标志，则牺牲之。"])
+UID = "WM034_xiaoshidewuerde"
+CardName = "消逝的乌尔德"

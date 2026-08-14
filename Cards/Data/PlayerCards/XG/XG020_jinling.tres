@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 3
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["政治", "策略"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["隐秘：若本方资产区中有政治家牌，+3 结附于本方秘社 非资产 进场触发：你选择一个数字。 持续：敌方玩家不能正面打出或付费翻面印刷费用为你选择之数字的牌。 FAQ： ◆禁令进场时，玩家可以响应打出禁令所选择费用的牌。"])
+UID = "XG020_jinling"
+CardName = "禁令"

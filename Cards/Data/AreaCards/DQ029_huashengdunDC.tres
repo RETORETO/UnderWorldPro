@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3 uid="uid://cul7wqusq8sum"]
+
+[ext_resource type="Script" uid="uid://lfcppbjlq5li" path="res://Script/Data/Cards/AreaCardData.cs" id="1_5u5r3"]
+
+[resource]
+script = ExtResource("1_5u5r3")
+RequiredPower = 4
+SubCategories = Array[String](["城市"])
+CardImagePath = "res://Cards/Image/AreaCards/DQ029_huashengdunDC.jpg"
+UID = "DQ029_huashengdun D．C．"
+CardName = "华盛顿 D．C．"
+Score = 4

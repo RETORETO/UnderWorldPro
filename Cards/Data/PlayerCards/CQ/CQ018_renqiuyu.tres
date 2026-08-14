@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 3
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "超能力者", "特工"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([0])
+Organization = "国家机构"
+Investigation = 0
+Combat = 2
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["隐秘：+1，在本次隐秘对抗后，若本方秘社为哨兵，你可以在目标角色或暗藏者上放置一个锁定标志。 进场触发：在本地区的所有敌方角色和暗藏者上各放置一个锁定标志。 触发：当一个其上有锁定标志的敌方角色或暗藏者离场时，抓一张牌。"])
+UID = "CQ018_renqiuyu"
+CardName = "任秋雨"

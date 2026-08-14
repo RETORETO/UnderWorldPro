@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 8
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦境", "造物"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([2])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 2
+FirstStrikeCombat = 1
+FirstStrikePower = 2
+Defense = 1
+Effects = Array[String](["灵体 额外费用：每有一张牌封印在本方秘社上，无垠宫殿的所需费用就减少1。 持续：每回合中你可以正面打出一张由你拥有，且封印在角色、附属或你秘社上的角色牌，如同其在你手中一般。"])
+UID = "BQ100_wuyingongdian"
+CardName = "无垠宫殿"

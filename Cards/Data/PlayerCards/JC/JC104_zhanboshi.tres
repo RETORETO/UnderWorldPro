@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([2])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["进场触发：预测3。（检视你牌库顶的三张牌，将其中任意数量的牌以任意顺序至于你的牌库顶，将其余的牌以任意顺序置于你的牌库底。）"])
+UID = "JC104_zhanboshi"
+CardName = "占卜师"

@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["装备", "武器"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于目标角色 撤回（当所在的地区被赢取时，将该牌移回其拥有者手上，而非置于牌库底。） 持续：受此结附的角色获得［黑刀］。 FAQ： ◆柯尔特巨蟒左轮的撤回能力仅柯尔特巨蟒左轮拥有，若其所在地区被赢取，将柯尔特巨蟒左轮回手，而非其结附的角色。"])
+UID = "JC116_keertejumangzuolun"
+CardName = "柯尔特巨蟒左轮"

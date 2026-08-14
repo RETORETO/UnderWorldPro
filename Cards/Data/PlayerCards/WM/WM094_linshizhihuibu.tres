@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["设施", "互联网"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于本方秘社 行动X，横置：在目标暗藏者上放置X个锁定标志。该能力不能被响应。 强制触发：每当一个暗藏者现身时，除非其操控者为每个在其上的锁定标志支付1，否则终止之。 FAQ： ◆若玩家无法为锁定标志支付费用，则现身的角色将直接置入墓地。"])
+UID = "WM094_linshizhihuibu"
+CardName = "临时指挥部"

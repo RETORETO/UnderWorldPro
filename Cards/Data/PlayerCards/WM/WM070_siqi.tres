@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦魇", "女妖"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([2])
+Organization = "梦境行者"
+Investigation = 1
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["混乱 触发：当丝琪进入一个地区时，本地区上的目标角色失去所有的［黑星］和［白星］能力图标，丝琪获得这些图标直到回合结束。 行动，将一张你手中的人类牌封印在丝琪上：丝琪获得机动直到本回合结束。"])
+UID = "WM070_siqi"
+CardName = "丝琪"

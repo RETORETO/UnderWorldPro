@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 4
+Score = 3
+CardImagePath = "res://Cards/Image/AreaCards/DQ008_shanghai.jpg"
+CategoryFlag = 16
+SubCategories = Array[String](["城市", "水域"])
+WinTriggerEffect = ""
+UID = "DQ008_shanghai"
+CardName = "上海"

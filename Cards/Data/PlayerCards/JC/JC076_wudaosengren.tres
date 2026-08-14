@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 2
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "僧侣"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([1])
+Organization = "圣贤"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 2
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["声望（当一个地区的所有对抗结束后，在该地区上若你比对手操控更多未横置的声望角色，则你可以在该地区额外放置一个本方势力标志。） 现身触发：抓一张牌。"])
+UID = "JC076_wudaosengren"
+CardName = "悟道僧人"

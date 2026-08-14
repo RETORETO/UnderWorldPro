@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["现身触发：将你的一张手牌背面朝上封印在守秘人上。（你的对手不能检视该牌） 死亡触发：展示封印在守秘人上的所有牌，你可以打出其中一张牌，视作他具有【快速】且不需要支付其费用（但仍需满足忠诚需求）。将不打出的牌移回其拥有者手上。"])
+UID = "JC119_shoumiren"
+CardName = "守秘人"

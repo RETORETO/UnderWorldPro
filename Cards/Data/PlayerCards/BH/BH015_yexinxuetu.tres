@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "奴仆"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([3])
+Organization = "王座会"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["快速行动2：野心学徒成为吸血鬼角色，具有［白刀］［黑星］和1防御力，然后饮血1。 快速行动3：若野心学徒是吸血鬼角色，则成为吸血鬼/法师角色，具有［黑眼］［黑眼］［黑刀］［黑星］和2防御力，然后抓一张牌。"])
+UID = "BH015_yexinxuetu"
+CardName = "野心学徒"

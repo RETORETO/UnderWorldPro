@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://dk7ajiij2p3fj"]
+
+[ext_resource type="Script" path="res://Script/UI/BattleWindow.cs" id="1_bw"]
+
+[node name="BattleWindow" type="Window" unique_id=1256798242]
+oversampling_override = 1.0
+title = "战斗对抗"
+size = Vector2i(800, 190)
+script = ExtResource("1_bw")
+
+[node name="RootControl" type="Control" parent="." unique_id=1309150797]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="TitleLabel" type="Label" parent="RootControl" unique_id=1309150800]
+layout_mode = 0
+offset_left = 170.0
+offset_top = 35.0
+offset_right = 470.0
+offset_bottom = 65.0
+text = "⚔️ 战斗对抗 - 分配伤害"
+
+[node name="RemainingLabel" type="Label" parent="RootControl" unique_id=1309150801]
+layout_mode = 0
+offset_left = 170.0
+offset_top = 70.0
+offset_right = 370.0
+offset_bottom = 95.0
+text = "剩余可分配：7 点"
+
+[node name="HintLabel" type="Label" parent="RootControl" unique_id=1309150802]
+layout_mode = 0
+offset_left = 170.0
+offset_top = 95.0
+offset_right = 520.0
+offset_bottom = 120.0
+text = "💡 点击敌方角色分配伤害（右键减少）"
+
+[node name="ClearButton" type="Button" parent="RootControl" unique_id=1309150803]
+layout_mode = 0
+offset_left = 170.0
+offset_top = 130.0
+offset_right = 290.0
+offset_bottom = 165.0
+text = "清空分配"
+
+[node name="ConfirmButton" type="Button" parent="RootControl" unique_id=1309150805]
+layout_mode = 0
+offset_left = 510.0
+offset_top = 130.0
+offset_right = 630.0
+offset_bottom = 165.0
+disabled = true
+text = "确认分配"

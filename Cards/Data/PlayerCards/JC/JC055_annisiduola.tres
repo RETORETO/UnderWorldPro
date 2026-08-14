@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "圣者"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([4])
+Organization = "鸣钟教派"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["准备步骤触发：在目标角色或附属上放置一个时间标志。 行动：自本方卡牌上移除X个时间标志：本回合中，你所打出的下一张灾难牌的所需费用减少X。"])
+UID = "JC055_annisiduola"
+CardName = "安妮斯朵拉"

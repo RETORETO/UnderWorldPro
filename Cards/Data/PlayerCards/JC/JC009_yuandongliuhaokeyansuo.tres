@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["机构"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([-1])
+Organization = "帷幕守望"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于本方秘社 进场触发：将目标角色封印在远东六号科研所上，然后遏制1。 FAQ： ◆远东六号科研所进场时，你可以选择一个角色，把该角色封印在远东六号科研所上。被封印的角色离场，且牌面视作空白。当远东六号科研所离场时，被封印的角色牌移回其拥有者手上， ◆远东六号科研所的触发能力，如果未能成功将一个角色封印在其上，则之后的遏制1 能力无法结算。"])
+UID = "JC009_yuandongliuhaokeyansuo"
+CardName = "远东六号科研所"

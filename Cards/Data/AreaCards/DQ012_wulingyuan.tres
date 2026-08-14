@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 0
+Score = 0
+CardImagePath = "res://Cards/Image/AreaCards/DQ012_wulingyuan.jpg"
+CategoryFlag = 16
+SubCategories = Array[String](["山脉", "隐秘对抗"])
+WinTriggerEffect = ""
+UID = "DQ012_wulingyuan"
+CardName = "武陵源"

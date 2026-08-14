@@ -1,0 +1,38 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_domain_0"]
+script = ExtResource("3")
+Domain = 4
+Amount = 1
+
+[sub_resource type="Resource" id="Resource_domain_1"]
+script = ExtResource("3")
+Domain = 0
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([SubResource("Resource_domain_0"), SubResource("Resource_domain_1")])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "阴阳师"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([0])
+Organization = ""
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["持续：你所打出的式神角色牌，其所需费用减少1。 触发：当土御门真知子或本方式神角色进场时，预测3，然后将你的牌库顶牌封印在目标阴阳师上。"])
+UID = "JZ071_tuyumenzhenzhizi"
+CardName = "土御门真知子"

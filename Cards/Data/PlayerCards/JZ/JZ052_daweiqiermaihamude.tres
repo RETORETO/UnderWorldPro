@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 4
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 7
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([3])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 2
+Power = 2
+FirstStrikeInvestigation = 3
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 5
+Effects = Array[String](["领袖 持续：你不能从手牌中正面打出角色牌。 持续：你可以从墓地中正面打出【死】领域的角色牌，就如同其在你手中一样。"])
+UID = "JZ052_daweiqiermaihamude"
+CardName = "大维齐尔迈哈穆德"

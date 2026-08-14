@@ -1,0 +1,27 @@
+{
+  "deckName": "默认对局卡组",
+  "cards": [
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC001_tonglingmaotouying.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC002_jushizhenkanhuren.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC003_weimuhuwei.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC004_lichangfashi.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC005_liejieshu.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC006_nizhuanyijiezhimen.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC007_changchuntengpaixuezhe.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC008_lingnengjifa.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC009_yuandongliuhaokeyansuo.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC010_qingshoufeinandier.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC011_demositinidamofashi.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC012_weimushouwanghuiji.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC013_mo.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC014_gongluqishi.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/XG/XG001_yinyaotanqiuzhe.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/BQ/BQ022_hejinzhihu.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC030_juxingbianfu.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC049_shenyuanxiyu.tres", "copies": 3 },
+	{ "templatePath": "res://Cards/Data/PlayerCards/JC/JC047_liehuozhongwei.tres", "copies": 3 }
+  ],
+  "councils": [
+	{ "templatePath": "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres", "copies": 1 }
+  ]
+}

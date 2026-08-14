@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([0])
+Organization = "帷幕守望"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["隐秘：在本次隐秘对抗后，若你的资产区具有【黄黄黄】，你可以令目标本方角色闪烁。 快速行动2：闪烁。 快速行动，弃一张牌：将相位转化师移回其拥有者手上。"])
+UID = "WM004_xiangweizhuanhuashi"
+CardName = "相位转化师"

@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://bsk8olkglkr6o"]
+
+[ext_resource type="Script" uid="uid://btig1e12qdo0t" path="res://Script/UI/StackEntryUI.cs" id="1_stack"]
+
+[node name="StackEntryUI" type="Control" unique_id=200000001]
+custom_minimum_size = Vector2(110, 150)
+layout_mode = 2
+anchors_preset = 0
+offset_right = 110.0
+offset_bottom = 150.0
+script = ExtResource("1_stack")
+TriggerCardArt = NodePath("TriggerCardArt")
+
+[node name="TriggerCardArt" type="TextureRect" parent="." unique_id=200000050]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="EffectPanel" type="Panel" parent="." unique_id=200000003]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+modulate = Color(1, 1, 1, 0.7)
+
+[node name="EffectBadge" type="Label" parent="EffectPanel" unique_id=200000004]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 2.0
+offset_right = 106.0
+offset_bottom = 22.0
+text = "效果发动"
+
+[node name="EffectText" type="Label" parent="EffectPanel" unique_id=200000005]
+layout_mode = 1
+offset_left = 4.0
+offset_top = 26.0
+offset_right = 106.0
+offset_bottom = 146.0
+autowrap_mode = 2
+text = "效果描述"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 3
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "警察", "载具"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Investigation = 1
+Combat = 1
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 3
+Effects = Array[String](["公开 机动 只能打出在城市地区。 进场触发：选择一项： ·在本地区的目标角色或暗藏者上放置一个锁定标志。 ·消灭位于本地区，且其上有锁定标记的角色或暗藏者。"])
+UID = "JZ045_jingyongzhishengji"
+CardName = "警用直升机"

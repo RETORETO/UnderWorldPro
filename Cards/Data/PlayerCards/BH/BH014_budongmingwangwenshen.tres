@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 3
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["纹身"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([-1])
+Organization = "猎魔人"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于目标本方角色 持续：受此结附的角色获得［黑星］和+1防御力，并获得威名和【先手】屏障，且额外具有猎手类别。 快速行动1，横置，牺牲一个猎手角色：本回合中，所有本方角色不能被消灭。"])
+UID = "BH014_budongmingwangwenshen"
+CardName = "不动明王纹身"

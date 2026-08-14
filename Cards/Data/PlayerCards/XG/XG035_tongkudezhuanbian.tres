@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["状态", "诅咒"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([4])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于目标本方人类角色 触发：当受此结附的角色死亡时，若本方秘社上有【隐秘】，你可以从本方牌库中寻找一张非人类角色牌，将其放置进场并位于本地区，然后洗牌。 FAQ： ◆因痛苦的转变的触发能力放置进场的角色无需满足其忠诚要求。"])
+UID = "XG035_tongkudezhuanbian"
+CardName = "痛苦的转变"

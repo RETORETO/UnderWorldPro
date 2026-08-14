@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["化身"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([2])
+Organization = "仙灵"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["屏障 机动 强制触发：若你的秘社不是凛冬王廷，牺牲冬将军。 持续：冬将军的防御力等于本方仙灵角色数量。你每操控一个仙灵角色，冬将军就获得［黑刀］［黑星］。"])
+UID = "JZ018_dongjiangjun"
+CardName = "冬将军"

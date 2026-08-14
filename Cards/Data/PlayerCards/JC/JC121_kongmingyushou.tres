@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 5
+SubCategories = Array[String](["装备", "式神"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 2
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["公开 灵体 不能移动 进场触发：将空鸣御守结附于位于本地区的目标本方角色。 触发：每当受此结附的角色将受到伤害时，该伤害改为对空鸣御守造成。"])
+UID = "JC121_kongmingyushou"
+CardName = "空鸣御守"

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 4
+Score = 3
+CardImagePath = "res://Cards/Image/AreaCards/DQ027_shiluodeshenmiao.jpg"
+CategoryFlag = 16
+SubCategories = Array[String](["遗迹", "森林"])
+WinTriggerEffect = ""
+UID = "DQ027_shiluodeshenmiao"
+CardName = "失落的神庙"

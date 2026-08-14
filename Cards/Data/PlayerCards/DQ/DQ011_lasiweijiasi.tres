@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = -1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 0
+SubCategories = Array[String](["城市"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 3
+Effects = Array[String](["赢取触发：每位玩家各展示其牌库顶牌，若所展示牌的印刷费用为偶数，则他可以将该牌置于其资产区作为一个资产，否则需将该牌洗回牌库。（0为偶数） FAQ： ◆当拉斯维加斯的赢取触发能力展示顶牌为没有费用的牌（如熵力化身、 白骨仆人），没有费用的牌视为偶数。"])
+UID = "DQ011_lasiweijiasi"
+CardName = "拉斯维加斯"

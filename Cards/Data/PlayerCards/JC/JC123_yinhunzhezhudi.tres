@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["吸血鬼", "法师"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([3])
+Organization = ""
+Investigation = 0
+Combat = 2
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["快速行动2：在目标角色或暗藏者上放置一个锁定标记。 持续：只要饮魂者朱迪在场，所有具有锁定标记的角色或暗藏者失去所有［黑星］和［白星］能力图标。"])
+UID = "JC123_yinhunzhezhudi"
+CardName = "饮魂者朱迪"

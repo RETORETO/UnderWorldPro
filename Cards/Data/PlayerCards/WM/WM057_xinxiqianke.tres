@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "罪犯", "工程师"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([-1])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["行动2，横置：进行一次隐秘对抗。若敌方秘社上有【隐秘】，则敌方玩家也可以发动本能力。 触发：当你赢得隐秘对抗时，遏制1，然后你可以检视目标暗藏者或秘密计划。"])
+UID = "WM057_xinxiqianke"
+CardName = "信息掮客"

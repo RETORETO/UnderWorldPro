@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["梦魇", "法师", "梦境"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([4])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 2
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["【隐秘】灵体 【隐秘】传闻 触发：当原初牧者贝拉斯克斯或另一张卡牌被封印在本方角色或附属上时，若你的资产区具有【紫】，在目标地区上生成一个梦魇角色指示物。"])
+UID = "WM066_yuanchumuzhebeilasikesi"
+CardName = "原初牧者贝拉斯克斯"

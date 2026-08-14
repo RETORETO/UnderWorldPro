@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 3
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["仙灵", "法师", "异界"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([2])
+Organization = "仙灵"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 2
+Effects = Array[String](["非资产 领袖 持续：所有其他本方仙灵角色获得［黑眼］。 触发：当你打出一张法术牌时，或赢得一次隐秘对抗时，在目标地区上生成一个仙灵斗士角色指示物。"])
+UID = "CQ006_maibunvwang"
+CardName = "麦布女王"

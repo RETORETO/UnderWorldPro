@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 2
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([2])
+Organization = "圣贤"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 2
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["持续：所有本方附属和资产获得屏障。 持续：堆叠中的本方卡牌或能力不能被终止。 神秘学博弈·横置一个本方附属（手牌行动，横置一个本方附属，从你手中弃掉此牌：进行一次隐秘对抗。）"])
+UID = "BH036_saiyilazhebizhe"
+CardName = "赛伊拉，遮蔽者"

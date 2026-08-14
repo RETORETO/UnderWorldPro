@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "艺术家"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([-1])
+Organization = "梦境行者"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["进场触发：展示你的牌库顶牌，你可以将该牌封印在目标角色、附属或本方秘社上。 持续：每有一张卡牌封印在其上，摩登女郎获得一个额外的［黑眼］。"])
+UID = "BH050_modengnvlang"
+CardName = "摩登女郎"

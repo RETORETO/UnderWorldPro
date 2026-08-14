@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["策略"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["快速行动：选择一项： ·将目标角色潜伏。（将该角色翻面为暗藏者） ·将目标暗藏者移回其拥有者手上。 FAQ： ◆在打出警车追捕并为其付费时，你必须选择其中一项能力，然后警车追捕进入堆叠，你不能再更改选项。 ◆当你使用警车追捕的选项二，将一个对手的暗藏者回手时，对手可以响应并将这个暗藏者付费翻面，若对手如此做，则警车追捕因为目标不合法而失效。 ◆当对手宣布翻面一个本方暗藏者时，这个暗藏者会进入堆叠并等待结算成角色进场，此时你即使响应打出警车追捕，也不能用选项二指定这个正在结算中的牌回手，因为此时这只是一个卡牌翻面能力，而不是暗藏者，但你可以在该角色进场后，打出警车追捕来用选项一将该角色翻面回暗藏者。"])
+UID = "JC063_jingchezhuibu"
+CardName = "警车追捕"

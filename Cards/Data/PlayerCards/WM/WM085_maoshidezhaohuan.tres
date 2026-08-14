@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["召唤", "仪式"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([4])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["隐秘：+3 额外费用：牺牲四个角色。 行动：选择目标地区，从你的牌库中寻找一张异界角色牌，将该角色放置进场并置于该地区，然后洗牌。"])
+UID = "WM085_maoshidezhaohuan"
+CardName = "冒失的召唤"

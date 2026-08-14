@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 3
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 6
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["设施", "研究"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([-1])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于本方秘社 进场触发：为本方秘社创建一个名为集团总部的区域。将本方墓地中的所有牌置于集团总部区。本局游戏中，你所拥有的卡牌上注明本方墓地的，改为集团总部区，将被置入本方墓地的牌，改为置入集团总部区。 准备步骤触发：抓两张牌，然后弃一张牌。"])
+UID = "BQ095_shengjiachongyaoyejituanzongbu"
+CardName = "圣甲虫药业集团总部"

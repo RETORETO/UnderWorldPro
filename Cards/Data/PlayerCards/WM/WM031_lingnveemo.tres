@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["恶魔", "异界"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([4])
+Organization = "鸣钟教派"
+Investigation = 0
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["创伤1 【暴露】混乱 强制触发：本回合中当首次有指示物标志置于凌虐恶魔上时，每位玩家各选择一个其所操控的角色，凌虐恶魔对这些角色各造成1点创伤。"])
+UID = "WM031_lingnveemo"
+CardName = "凌虐恶魔"

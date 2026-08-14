@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = -1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 0
+SubCategories = Array[String]([])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["在游戏开始时，将你选定的副名称为修格斯的核心角色放置于此区域。 核心角色上以【核心】标注的能力，当其在场或在核心区中时均有效，但需要其他卡牌来配合发动。 触发：当你的核心角色离场时，你可以将其放置于此区域，然后在此区域上放置一个休整标志。 你可以从此区域打出核心角色。你需要支付其费用，并满足其忠诚需求，同时为每个此区域上的休整标志支付2【名誉点】或2。 触发：当你赢得一个地区时，你获得2【名誉点】。 ----- 在遊戲開始時，將你選定的副名稱為修格斯的核心角色放置於此區域。 核心角色上以【核心】標注的能力，當其在場或在核心區中時均有效，但需要其他卡牌來配合發動。 觸發：當你的核心角色離場時，你可以將其放置於此區域，然後在此區域上放置一個休整標誌。 你可以從此區域打出核心角色。你需要支付其費用，並滿足其忠誠需求，同時為每個此區域上的休整標誌支付2【名譽點】或2。 觸發：當你贏得一個地區時，你獲得2【名譽點】。"])
+UID = "TK011_xiugesidehexinqu"
+CardName = "修格斯的核心区"

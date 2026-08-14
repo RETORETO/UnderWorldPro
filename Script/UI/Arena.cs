@@ -1,0 +1,1510 @@
+﻿using Godot;
+using Script.Data.Cards;
+using Script.Data.Effects;
+using Script.Game.Entities;
+using Script.UI;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Script.Enums;
+using Script.Manager;
+using Script.Interfaces;
+
+public partial class Arena : Control
+{
+    // ============================================================
+    // 区域引用
+    // ============================================================
+    [Export] private Control _scoreZone;
+    private Control _handContainerRef;
+    private Control _handContainerRef2;
+    private Label _scoreLabel;
+    private Control _areasContainer;
+    private Label _phaseStatusLabel;
+    private Label _resultLabel;   // 胜负结算文字（居中覆盖），初始隐藏
+
+    // 按钮引用
+    private Button _endTurnButton;
+    private Button _passButton;
+    private Button _opponentPassButton;
+    private Button _concedeButton;   // 投降按钮（ActionPanel 子节点），按下直接判本地玩家失败
+
+    // ============================================================
+    // 卡牌 UI 列表
+    // ============================================================
+    // 【MVC 修复 M-08】以下 UI 集合/状态改为 internal，供 CardDragController（同程序集子控制器）访问，
+    // 无须经大量委托转发，避免行为漂移；Arena 仍是对外唯一的 View 根。
+    internal List<AreaSlot> AreaSlots => _areaSlots;
+    internal List<CardUI> HandCardUIs => _handCardUIs;
+    internal List<CardUI> HandCardUIs2 => _handCardUIs2;
+    internal List<CardUI> AreaCardUIs => _areaCardUIs;
+    /// <summary>附属子区(AttachedZone)中"已结附"的附属卡 UI（含结附秘社的附属），供激活拖拽命中检测使用。</summary>
+    internal IEnumerable<CardUI> AttachedCardUIs
+        => _cardUIMap.Values.Where(ui => ui != null && ui.Instance != null
+            && ui.Instance.CurrentZone == CardZone.AttachedZone && ui.Instance.IsAttached);
+    internal Control AssetContainer1 => _assetContainer1;
+    internal MaskMode ActiveMask => _activeMask;
+    internal bool IsDragInteractionLocked => IsInteractionLocked;
+    internal int? PendingHandInsertIndex { get => _pendingHandInsertIndex; set => _pendingHandInsertIndex = value; }
+    internal void ExitMaskInternal() => ExitMask();
+    internal void ArrangeAllCardsInternal() => ArrangeAllCards();
+    internal void UpdateTurnUIInternal() => UpdateTurnUI();
+    internal void RefreshMaskUIInternal() => RefreshMaskUI();
+
+    private List<AreaSlot> _areaSlots = new List<AreaSlot>();
+
+    // 【MVC 修复 M-08】触发交互协调器（实现 ITriggerView），承载触发排序/选目标交互，Arena 不再直接实现该接口。
+    private Script.UI.Interaction.TriggerInteractionCoordinator _triggerCoordinator;
+    // 【MVC 修复 M-08】模态对抗窗口协调器，承载战斗/调查窗口生命周期与事件路由。
+    private Script.UI.Interaction.ModalWindowCoordinator _modalCoordinator;
+    // 【MVC 修复 M-08】手牌拖拽控制器，承载拖拽起手/放手路由与出牌/蒙版落点判定。
+    private Script.UI.Interaction.CardDragController _cardDragController;
+    // 拖拽结束事件转发到控制器（CardUI 的 CardDragEnded 事件签名 (CardUI, bool)）
+    private CardUI.CardDragEndedEventHandler _onCardDragEndedForward;
+        // 暗藏者现身请求转发（CardUI 的 CovertRevealRequested 事件签名 (CardUI)）
+        private CardUI.CovertRevealRequestedEventHandler _onCovertRevealForward;
+        // 附属卡双击激活请求转发（CardUI 的 AttachmentDoubleClicked 事件签名 (CardUI)，与秘社双击一致）
+        private CardUI.AttachmentDoubleClickedEventHandler _onAttachmentDoubleClickedForward;
+    private List<CardUI> _handCardUIs = new List<CardUI>();
+    private List<CardUI> _handCardUIs2 = new List<CardUI>();
+    private List<CardUI> _areaCardUIs = new List<CardUI>();
+    // 附属于地区 / 封印于地区的卡（AttachedTo==null 且 ZoneDetailId 非空）：不在 _areaCardUIs 角色列表中，
+    // 由 ArrangeAreaAttachmentsAndSeals 与角色卡一起在地区内统一均匀平铺。
+    private List<CardUI> _areaAttachSealUIs = new List<CardUI>();
+
+    // 拖拽退回手牌时，按放手 X 坐标插入到序列中接近的位置（而非固定末尾）。
+    // 非 null 时，SyncCardUIToZone 的 Hand 分支会按此索引 Insert；否则走原 Add（末尾）。
+    private int? _pendingHandInsertIndex = null;
+
+    // ============================================================
+    // 模块引用
+    // ============================================================
+    [Export] private DeckZone _deckZone;
+    [Export] private GraveyardZone _graveyardZone;
+    private DeckZone _deckZone2;
+    private GraveyardZone _graveyardZone2;
+    private WorldDeckZone _worldDeckZone;
+
+    // ============================================================
+    // 预制体
+    // ============================================================
+    [Export] private PackedScene _cardUIScene;
+    [Export] private PackedScene _areaSlotScene;
+    [Export] private PackedScene _areaCardUIScene;
+    [Export] private PackedScene _councilUIScene;   // 议会（秘社）UI 场景（CouncilCardUI.tscn）
+
+    // 议会（秘社）容器 UI 引用（Arena.tscn 已预留 CouncilContainer 节点，阶段 C：渲染秘社实例）
+    private Control _councilContainer1;
+    private Control _councilContainer2;
+
+    // 对抗窗口预制体
+    [Export] private PackedScene _investigationWindowScene;
+    [Export] private PackedScene _battleWindowScene;
+    [Export] private PackedScene _tieBreakWindowScene;   // 先手破平确认窗口（2026-08-05）
+    // 当前拖拽中的手牌卡状态已迁移至 CardDragController（MVC 修复 M-08），Arena 不再持有。
+
+    // 堆叠区预制体
+    [Export] private PackedScene _stackEntryScene;
+    [Export] private PackedScene _stackArrowScene;
+
+    // D9 激活框架：暴露箭头预制体与图层（internal 供同程序集的 CardDragController 复用）
+    internal PackedScene StackArrowScene => _stackArrowScene;
+    internal Control ArrowLayer => _arrowLayer;
+
+    // 布局引擎相关常量已迁移至 Arena.Layout.cs（CARD_WIDTH / CARD_HEIGHT / HAND_SPACING / ZINDEX_CARD_BASE）
+
+    // ============================================================
+    // Manager 引用（由 GameInitializer 提供）
+    // ============================================================
+    private GameInitializer _initializer;
+    private CardManager _cardManager;
+    private PlayerManager _playerManager;
+    private DeckManager _deckManager;
+    private TurnManager _turnManager;
+    //【MVC 修复-问题3】玩家意图统一通道：View 所有写操作经此服务表达，不再直接点名各 Manager 命令方法
+    private PlayerActionService _actionService;
+    private AreaManager _areaManager;
+    private WorldDeckManager _worldDeckManager;
+    private StackManager _stackManager;
+
+    // 堆叠区 UI 节点
+    private Control _stackContainer;
+    private Control _arrowLayer;
+    private Dictionary<StackEntry, StackEntryUI> _stackEntryUIMap = new Dictionary<StackEntry, StackEntryUI>();
+    private Dictionary<StackEntry, List<StackArrow>> _stackArrows = new Dictionary<StackEntry, List<StackArrow>>();
+
+    // 触发排序 / 选目标窗口（最新需求：触发效果入堆叠系统 UI 骨架）
+    private PackedScene _triggerOrderScene;
+    private PackedScene _targetSelectionScene;
+    private PackedScene _triggerEntryScene;
+    private PackedScene _councilActivateWindowScene;
+    private PackedScene _activationChoiceWindowScene;
+    private TriggerOrderWindow _triggerOrderWindow;
+    private TargetSelectionWindow _targetSelectionWindow;
+
+    // ============================================================
+    // 基础行动蒙版（派遣暗藏 / 建立资产）
+    // 蒙版 = "可拖拽态"提示：激活后仅允许对应卡牌拖拽/行动，成功后退出蒙版。
+    // 点击按钮为纯 UI 切换（进入/退出/互斥切换），不消耗次数。
+    // ============================================================
+    // 【MVC 修复 M-08】MaskMode 枚举已提取至 Script.UI.MaskMode（共享类型），
+    // Arena 处于同命名空间 Script.UI，可直接引用。
+
+    /// <summary>当前激活的蒙版（None 表示普通可出牌状态）</summary>
+    private MaskMode _activeMask = MaskMode.None;
+
+    // ============================================================
+    // 模态交互锁（Atomicity / 7.3）：调查对抗 / 战斗对抗 / 触发排序窗口打开期间，
+    // 冻结一切非本窗口输入（出牌、Pass），避免原子操作执行期间被打断。
+    // 注意：窗口 Exclusive 模态只拦截下层 Control 的 _GuiInput，而拖拽出牌是 CardUI 回调、
+    // Pass 是按钮回调，均绕过 _GuiInput，故必须在 Arena 逻辑层显式拦截。
+    // ============================================================
+    // 【MVC 修复 M-08】ModalWindow 枚举已提取至 Script.UI.ModalWindow（共享类型），
+    // Arena 处于同命名空间 Script.UI，可直接引用。
+    private readonly System.Collections.Generic.HashSet<ModalWindow> _openModalWindows = new();
+    private bool IsInteractionLocked => _openModalWindows.Count > 0;
+    private void LockModal(ModalWindow m)
+    {
+        _openModalWindows.Add(m);
+        // 通知 Controller 维护规则层原子锁（核心需求 7.3）：模态窗口打开期间不给响应权
+        _turnManager?.NotifyModalOpened();
+        // 原子锁置位后立即刷新激活高亮：清除窗口打开前（锁外）残留的 CanActivate=true 缓存，
+        // 使 JC003 等快速行动能力在触发排序/选目标窗口内不再显示可发动高亮（呼应 D25/D26，修复原子残差）。
+        RefreshActivateHighlights();
+    }
+    private void UnlockModal(ModalWindow m)
+    {
+        _openModalWindows.Remove(m);
+        _turnManager?.NotifyModalClosed();
+        // 原子锁解除后刷新激活高亮：恢复窗口关闭后的合法激活高亮。
+        RefreshActivateHighlights();
+    }
+
+    // 按钮引用
+    private Button _deployCovertButton;
+    private Button _establishAssetButton;
+
+    // 蒙版提示 Label（动态创建到 Player1Area）
+    private Label _maskHintLabel;
+
+    // ============================================================
+    // PM命令
+    // ============================================================
+    private PMCommandManager _pmCommandManager;
+    private ZoneManager _zoneManager;
+    private TextEdit _commandInput;
+
+    // 逻辑→UI 同步
+    private Dictionary<string, CardUI> _cardUIMap = new Dictionary<string, CardUI>();
+    // 议会（秘社）UI 单独管理（与玩家卡 _cardUIMap 解耦，避免类型冲突）
+    private Dictionary<string, CouncilCardUI> _councilCardUIs = new Dictionary<string, CouncilCardUI>();
+    private Control _scoreContainer1, _scoreContainer2;
+    private Control _assetContainer1, _assetContainer2;
+    private Label _assetLabel1, _assetLabel2;
+
+    // ============================================================
+    // _Ready
+    // ============================================================
+    public override void _Ready()
+    {
+        GD.Print("【Arena】对战场景加载开始");
+
+        // ---- 1. 获取场景节点 ----
+        _handContainerRef = GetNode<Control>("Player1Area/HandContainer");
+        _scoreLabel = GetNode<Label>("Player1Area/ScoreZone/ScoreLabel");
+        if (_scoreLabel != null) _scoreLabel.Text = "";
+        _handContainerRef2 = GetNode<Control>("Player2Area/HandContainer");
+        _deckZone2 = GetNode<DeckZone>("Player2Area/DeckZone");
+        _graveyardZone2 = GetNode<GraveyardZone>("Player2Area/GraveyardZone");
+        _scoreContainer1 = GetNode<Control>("Player1Area/ScoreZone/CardContainer");
+        _scoreContainer2 = GetNode<Control>("Player2Area/ScoreZone/CardContainer");
+        _assetContainer1 = GetNode<Control>("Player1Area/AssetContainer");
+        _assetContainer2 = GetNode<Control>("Player2Area/AssetContainer");
+        _assetLabel1 = GetNode<Label>("Player1Area/AssetContainer/AssetLabel");
+        _assetLabel2 = GetNode<Label>("Player2Area/AssetContainer/AssetLabel");
+        _councilContainer1 = GetNode<Control>("Player1Area/CouncilContainer");
+        _councilContainer2 = GetNode<Control>("Player2Area/CouncilContainer");
+        _areasContainer = GetNode<Control>("CenterArea/AreasContainer");
+        _phaseStatusLabel = GetNode<Label>("ActionPanel/PhaseLabel");
+        // 胜负结算文字 LABEL（居中覆盖全场，初始隐藏；游戏结束时由 OnGameOver 显示 3 秒后回主界面）
+        _resultLabel = GetNode<Label>("CenterArea/ResultLabel");
+        if (_resultLabel != null) _resultLabel.Visible = false;
+
+        // ---- 1.5 获取堆叠区节点 ----
+        _stackContainer = GetNode<Control>("StackPanel/StackContainer");
+        _arrowLayer = GetNode<Control>("ArrowLayer");
+        // 箭头层强制置顶：地区槽位/手牌等会设置正 ZIndex，ArrowLayer 必须高于它们才能不被遮挡。
+        // Godot 4 ZIndex 有效范围 -4096~4095。设为上限确保箭头层在所有节点之上。
+        _arrowLayer.ZIndex = 4095;
+        _arrowLayer.ZAsRelative = false;   // 绝对 ZIndex，不受父节点影响
+
+        // ---- 2. 配置 ActionPanel ----
+        var actionPanel = GetNode<Panel>("ActionPanel");
+        if (actionPanel != null) actionPanel.MouseFilter = MouseFilterEnum.Stop;
+
+        // ---- 3. 绑定按钮 ----
+        _passButton = GetNode<Button>("ActionPanel/PassButton");
+        _passButton.Pressed += OnPlayerPass;
+        _opponentPassButton = GetNode<Button>("ActionPanel/OpponentPassButton");
+        _opponentPassButton.Pressed += OnOpponentPass;
+        _endTurnButton = GetNode<Button>("ActionPanel/EndTurnButton");
+        _endTurnButton.Pressed += OnEndTurnPressed;
+        // 投降按钮：本地玩家(1)直接判负（对手胜），结算逻辑在 PlayerManager.Concede，UI 仅触发意图
+        _concedeButton = GetNodeOrNull<Button>("ActionPanel/ConcedeButton");
+        if (_concedeButton != null) _concedeButton.Pressed += OnConcedePressed;
+
+        // ---- 3.5 绑定基础行动按钮（派遣暗藏 / 建立资产）----
+        _deployCovertButton = GetNodeOrNull<Button>("Player1Area/DeployCovertButton");
+        _establishAssetButton = GetNodeOrNull<Button>("Player1Area/EstablishAssetButton");
+        if (_deployCovertButton != null) _deployCovertButton.Pressed += OnDeployCovertButtonPressed;
+        if (_establishAssetButton != null) _establishAssetButton.Pressed += OnEstablishAssetButtonPressed;
+
+        // 动态创建蒙版提示 Label（显示在玩家1手牌区上方）
+        _maskHintLabel = new Label();
+        _maskHintLabel.Name = "MaskHintLabel";
+        _maskHintLabel.Visible = false;
+        _maskHintLabel.AddThemeColorOverride("font_color", new Color(1f, 0.85f, 0.3f));
+        _maskHintLabel.Position = new Vector2(240, 10);
+        _handContainerRef?.GetParent()?.AddChild(_maskHintLabel);
+
+        // ---- 4. 加载预制体 ----
+        if (_cardUIScene == null)
+            _cardUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
+        if (_councilUIScene == null)
+            _councilUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CouncilCardUI.tscn");
+        if (_areaSlotScene == null)
+            _areaSlotScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/AreaSlot.tscn");
+        if (_areaCardUIScene == null)
+            _areaCardUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/AreaCardUI.tscn");
+        if (_investigationWindowScene == null)
+            _investigationWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/InvestigationWindow.tscn");
+        if (_battleWindowScene == null)
+            _battleWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/BattleWindow.tscn");
+        if (_tieBreakWindowScene == null)
+            _tieBreakWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/TieBreakWindow.tscn");
+        if (_stackEntryScene == null)
+            _stackEntryScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/StackEntryUI.tscn");
+        if (_stackArrowScene == null)
+            _stackArrowScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/StackArrow.tscn");
+        if (_triggerOrderScene == null)
+            _triggerOrderScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/TriggerOrderWindow.tscn");
+        if (_targetSelectionScene == null)
+            _targetSelectionScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/TargetSelectionWindow.tscn");
+        if (_triggerEntryScene == null)
+            _triggerEntryScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/TriggerEntryUI.tscn");
+        if (_councilActivateWindowScene == null)
+            _councilActivateWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CouncilActivateWindow.tscn");
+        if (_activationChoiceWindowScene == null)
+            _activationChoiceWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/ActivationChoiceWindow.tscn");
+
+        // ---- 4.1 实例化触发排序 / 选目标窗口（默认隐藏，供 D4 触发收集逻辑调用）----
+        if (_triggerOrderWindow == null && _triggerOrderScene != null)
+        {
+            _triggerOrderWindow = _triggerOrderScene.Instantiate<TriggerOrderWindow>();
+            _triggerOrderWindow.Visible = false;
+            // 层级（ZIndex/TopLevel）由 TriggerOrderWindow._Ready 自行设置，这里不再覆盖
+            AddChild(_triggerOrderWindow);
+        }
+        if (_targetSelectionWindow == null && _targetSelectionScene != null)
+        {
+            _targetSelectionWindow = _targetSelectionScene.Instantiate<TargetSelectionWindow>();
+            _targetSelectionWindow.Visible = false;
+            // 根节点已改为 Window，层级由 Window 自身管理，不再需要 TopLevel/ZIndex。
+            AddChild(_targetSelectionWindow);
+        }
+
+        // ---- 5. 初始化所有 Manager（委托给 GameInitializer） ----
+        //【MVC 修复】装配器（GameInitializer）的职责由场景声明（Composition Root），
+        //此处仅从场景树获取已实例化的节点，不再由 View 自行 new + AddChild。
+        _initializer = GetNodeOrNull<GameInitializer>("GameInitializer");
+        if (_initializer == null)
+        {
+            //【MVC 修复 M-03】禁止 View 自行 new 装配器兜底：装配器缺失属场景配置错误，
+            // 必须暴露而非由表现层偷偷补齐，否则 Composition Root 唯一性被破坏。
+            GD.PushError("Arena: 场景中未找到 GameInitializer 节点，请在 Arena.tscn 中声明该节点。");
+            return;
+        }
+        _initializer.InitializeAll();
+        _zoneManager = _initializer.ZoneManager;
+        // 持续光环（D19-③）依赖 ZoneManager 读取区域卡集合，注入引用供 EffectEngine 使用
+        EffectEngine.ZoneManagerRef = _zoneManager;
+        // 持续光环的撤销/补授需跨控制者按 UID 找回实例（夺控场景），必须注入 CardManagerRef；
+        // 此前漏注入导致 CardManagerRef 为 null，ReevaluateAuras/UnregisterPersistent 内所有 GetInstance 查找静默失败，
+        // 表现为 JC060 对他者授予不生效、夺控后不撤销（攻击力叠加/领域不取消）。
+        EffectEngine.CardManagerRef = _initializer.CardManager;
+        // JC068 阿格斯IV 准备维护询问：弹出"支付N/横置阿格斯IV"二选一窗。
+        // 弹窗为异步模态，支付/横置的实际动作在各自 OnChosen 回调内执行（与 JC012 激活选择一致）。
+        EffectEngine.PromptPayOrTap = (source, payAmount) =>
+        {
+            if (source == null) return;
+            var pm = _initializer.PlayerManager;
+            bool canPay = pm != null && pm.GetAvailableMana(source.ControllerId) >= payAmount;
+            var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+            if (win != null)
+            {
+                var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+                // 支付选项：费用不足时置灰（此时只能选横置；阿格斯IV已未横置故横置总是可选）
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"支付{payAmount}（横置1张资产区牌）",
+                    Disabled = !canPay,
+                    OnChosen = () =>
+                    {
+                        pm?.SpendMana(source.ControllerId, payAmount);
+                        GD.Print($"[Arena] 阿格斯IV 准备维护：玩家{source.ControllerId} 支付 {payAmount}，保持未横置");
+                        EffectEngine.OnVisualDirty?.Invoke();
+                    },
+                });
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = "横置阿格斯IV",
+                    OnChosen = () =>
+                    {
+                        source.SetTapped(true);   // 横置阿格斯IV（发 TappedChanged → 解除对手派遣封锁）
+                        GD.Print($"[Arena] 阿格斯IV 准备维护：被横置，玩家{source.ControllerId} 的对手恢复秘密派遣权");
+                        EffectEngine.OnVisualDirty?.Invoke();
+                    },
+                });
+                win.Init(items);
+                AddChild(win);
+                win.PopupCentered();
+            }
+            else
+            {
+                // 无窗口兜底：能付则付，否则横置
+                if (canPay) pm?.SpendMana(source.ControllerId, payAmount);
+                else source.SetTapped(true);
+                EffectEngine.OnVisualDirty?.Invoke();
+            }
+        };
+        _zoneManager.OnCardMoved += SyncCardUIToZone;
+        //【MVC 收口】派生 UI 聚合刷新（资产区领域忠诚/地区能力统计/分数/横置视觉/持续效果态）
+        // 统一经 ZoneManager.OnPostMove 事件驱动，所有 move 路径（move/PM 命令/结算）自动刷新，
+        // 无需调用方逐处手动调 SyncDerivedUI，杜绝"一个一个 UI 刷新漏调"的问题。
+        _zoneManager.OnPostMove += (_, _, _, _) => SyncDerivedUI();
+        // 持续光环（D19-③）：区域变动后重算所有光环受影响集合（入场/离场/夺控），与 ReevaluatePrereqs 内调用双保险
+        _zoneManager.OnPostMove += (_, _, p, _) => EffectEngine.ReevaluateAuras(p);
+        //【MVC 收口-堆叠箭头】箭头刷新改由事件驱动，去掉原 _Process 每帧轮询全量重绘：
+        //  - 目标卡移动（FireMoved→OnPostMove）驱动箭头实时跟随；
+        //  - 目标状态变更（CardManager.OnCardStateChanged，含翻面/离场/屏障）驱动重绘，
+        //    丢失目标的条目因 entry.TargetWasLost 跳过其箭头（方案 B：与结算丢失走同一条总线）。
+        _zoneManager.OnPostMove += (_, _, _, _) => RedrawAllArrows();
+        //【MVC 收口-P0】牌库顺序重组由 ZoneManager 唯一决定，Arena 订阅后仅按序纯重绘 DeckZone
+        _zoneManager.OnDeckReordered += OnDeckReorderedHandler;
+
+        _cardManager = _initializer.CardManager;
+        //【MVC 收口-堆叠箭头】目标状态变更（翻面/离场/屏障）驱动箭头重绘；
+        // 丢失目标的条目因 entry.TargetWasLost 跳过其箭头（方案 B：与结算丢失走同一条总线）。
+        // 注意：OnCardStateChanged 是 static 事件，须用类型名 CardManager 限定，不能用实例引用。
+        CardManager.OnCardStateChanged += (card, kind) => RedrawAllArrows();
+        _playerManager = _initializer.PlayerManager;
+        // 订阅游戏结束事件：胜利/失败瞬间由 Manager 广播（不经过堆叠），UI 仅展示 LABEL 并延时回主界面
+        if (_playerManager != null) _playerManager.OnGameOver += OnGameOverHandler;
+        _deckManager = _initializer.DeckManager;
+        _turnManager = _initializer.TurnManager;
+        //【MVC 收口-P2】先手加成由 TurnManager 在卡移动后统一重算，Arena 订阅事件仅刷新先手角标，
+        // 不再在 SyncCardUIToZone 渲染过程中反向驱动 Controller 重算
+        _turnManager.OnFirstStrikeRecalculated += RefreshFirstStrikeFlags;
+        // D9 激活框架：优先权变化时刷新“可发动”高亮边框
+        _turnManager.OnPriorityChanged += RefreshActivateHighlights;
+        // 2026-08-11：费用修正栈变化（JC012 登记/消费/到期）时刷新手牌减费提示
+        EffectEngine.CostModChanged += RefreshHandCostReductions;
+        // 阶段 C：Arena 加载时主动同步双方议会（秘社）UI。
+        // 注意：SetupCouncils 在 InitializeAll 阶段（Arena 未加载）已把秘社移入 CouncilZone，
+        // 事件早于本订阅触发，故此处主动重放一次，而非依赖 OnCardMoved 事件。
+        SyncCouncilsUI();
+        //【MVC 修复-问题3】所有玩家意图经统一通道表达
+        _actionService = _initializer.PlayerActionService;
+        _areaManager = _initializer.AreaManager;
+        // 触发效果系统（新系统）：【MVC 修复 M-08】触发交互逻辑收归 TriggerInteractionCoordinator
+        // （实现 ITriggerView），Arena 不再直接实现该接口；此处 new 出协调器、注入窗口/场景/地区槽位/
+        // 命中测试/模态锁依赖，再把协调器实例注入 TurnManager。TurnManager 仍只依赖 ITriggerView，
+        // 不直接引用 Arena 或其他具体 UI 类型，Controller 无 UI 引用红线保持不变。
+        if (_turnManager != null)
+        {
+            _triggerCoordinator = new Script.UI.Interaction.TriggerInteractionCoordinator();
+            AddChild(_triggerCoordinator);
+            _triggerCoordinator.Configure(
+                _triggerOrderWindow, _targetSelectionWindow, _triggerEntryScene,
+                _areaSlots,
+                (pos) => _cardDragController?.PickAreaCardAt(pos),
+                () => LockModal(ModalWindow.TriggerOrder),
+                () => UnlockModal(ModalWindow.TriggerOrder));
+            _turnManager.SetTriggerView(_triggerCoordinator);
+            GD.Print("  ✅ TriggerInteractionCoordinator（ITriggerView）已注入 TurnManager");
+        }
+        else
+        {
+            GD.PrintErr("❌ 触发效果注入失败：_turnManager 为 null");
+        }
+        _worldDeckManager = _initializer.WorldDeckManager;
+        _stackManager = _initializer.StackManager;
+        _stackManager.OnStackChanged += RefreshStackUI;
+
+        // 模态对抗窗口协调器（MVC 修复 M-08）：承接战斗/调查窗口生命周期与事件路由。
+        // 直接订阅 CombatManager.OnCombatWindowRequired，替代 Arena 此前手动订阅转发；
+        // 注入窗口预制体、Controller 引用、命中委托与模态锁委托，并把战斗结算后的 UI 刷新钩子接回 Arena。
+        _modalCoordinator = new Script.UI.Interaction.ModalWindowCoordinator();
+        AddChild(_modalCoordinator);
+        _modalCoordinator.Configure(
+            _investigationWindowScene, _battleWindowScene, _tieBreakWindowScene, _areaSlots,
+            _initializer.CombatManager, _cardManager, _actionService,
+            FindCardUIByUID,
+            LockModal, UnlockModal);
+        _modalCoordinator.SetBattleResolvedCallback(() =>
+        {
+            RefreshDamageDisplay();
+            RefreshArenaStats();
+        });
+        _modalCoordinator.BindToCombatManager(_initializer.CombatManager);
+
+        // 手牌拖拽控制器（MVC 修复 M-08）：承接拖拽起手/放手路由与出牌/蒙版落点判定。
+        // 通过 Arena 暴露的 internal 访问器读取 UI 状态，并持有 Controller 引用表达写意图。
+        _cardDragController = new Script.UI.Interaction.CardDragController();
+        AddChild(_cardDragController);
+        _cardDragController.Configure(this, _actionService, _cardManager, _turnManager, _modalCoordinator);
+        _onCardDragEndedForward = (c, d) => _cardDragController.OnCardDragEnded(c, d);
+        _onCovertRevealForward = (c) =>
+        {
+            // 双击暗藏者：由当前有行动权的玩家发动（门禁在 TurnManager 内校验 controller==playerId）
+            if (c?.Instance == null) return;
+            _actionService.RevealCovert(_turnManager.PriorityPlayerId, c.Instance.UID);
+        };
+        // 附属卡双击激活：与秘社双击一致，单击不再弹窗（JC012 交互修正）。
+        _onAttachmentDoubleClickedForward = (c) =>
+        {
+            if (c?.Instance == null) return;
+            if (!c.Instance.IsAttached) return;
+            // 仅当该附属具备可激活能力时才弹窗（无能力则视为普通双击，忽略）。
+            // 能力判定与 OpenAttachmentActivateChoice 一致：模板 EffectDataList 中 Timing 为
+            // AttachmentActivated / CharacterActivated 的条目；避免依赖不存在的 GetAbilities 接口。
+            if (c.Instance.PlayerTemplate is PlayerCardData tmpl)
+            {
+                bool hasActivatable = false;
+                foreach (var e in tmpl.EffectDataList)
+                {
+                    if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
+                    {
+                        hasActivatable = true;
+                        break;
+                    }
+                }
+                if (!hasActivatable) return;
+            }
+            else
+            {
+                return;
+            }
+            OpenAttachmentActivateChoice(c);
+        };
+
+        // ---- 6. 订阅逻辑层事件 ----
+        SubscribeToManagerEvents();
+
+        // ---- 7. 初始化 UI 组件 ----
+        InitializeWorldDeckZone();
+        InitializeAreas();
+        InitializeDeckAndGraveyard();
+        BuildCardUIMap();
+        RefreshAssetLabels();   // 初始化时先渲染资产区标签
+        InitializePMCommands();
+
+        // ---- 8. 开局 ----
+        //【MVC 修复 M-02】开局编排（发起始手牌、起局）由 GameInitializer（Composition Root）负责，
+        // View 只在自身 UI 与事件订阅全部就绪后触发一次，不再感知发牌张数等规则参数。
+        GameManager.Instance?.GoToState(GameManager.GameState.Arena);   // 同步应用级状态（已是 Arena 场景，内部跳过重载）
+        _initializer.StartMatch();
+        ArrangeAllCards();   // 开局发牌完成后统一排布一次（纯 UI）
+        RefreshActivateHighlights();   // D9 激活框架：初始高亮（若开局即拥有优先权且满足条件）
+        GD.Print("【Arena】对战场景加载完成");
+    }
+
+    /// <summary>2026-08-11：费用修正栈变化（JC012 登记/消费/到期）时，刷新双方手牌的减费提示。
+    /// 遍历 HandCardUIs / HandCardUIs2，调 CardUI.RefreshCostReduction 重算并显示减后费用。</summary>
+    private void RefreshHandCostReductions()
+    {
+        foreach (var c in HandCardUIs) c?.RefreshCostReduction();
+        foreach (var c in HandCardUIs2) c?.RefreshCostReduction();
+    }
+
+        // D9 激活框架：激活合法目标缓存（源卡 UID -> 合法目标卡 UID 集合）。
+        // 【MVC 收口-问题A】合法目标由 Model 在 RefreshActivateHighlights 时一次性预计算，
+        // 拖拽控制器只读取缓存，不再自行持有 CardManager 实时重算规则，View 与规则解耦。
+        private readonly Dictionary<string, HashSet<string>> _activateLegalTargetCache = new();
+        /// <summary>查询某源卡对某目标卡是否为当前合法激活目标（读预计算缓存）。</summary>
+        public bool IsLegalActivateTargetCached(CardUI actingCard, CardUI targetCard)
+        {
+            if (actingCard == null || targetCard == null || actingCard == targetCard) return false;
+            if (actingCard.Instance == null || targetCard.Instance == null) return false;
+            // 规则层原子锁（核心需求 7.3 / D26）：原子操作进行中冻结响应权，落点合法性查询亦须拒绝。
+            if (_turnManager != null && _turnManager.IsAtomicLocked) return false;
+            return _activateLegalTargetCache.TryGetValue(actingCard.Instance.UID, out var set)
+                   && set.Contains(targetCard.Instance.UID);
+        }
+
+        // ============================================================
+        // 堆叠区 UI 同步
+        // ============================================================
+        private void RefreshStackUI()
+    {
+        // 堆叠由空变非空（如对手出牌入堆叠）→ 基础行动蒙版的限制条件失效，强制退出蒙版
+        if (_activeMask != MaskMode.None && _stackManager != null && !_stackManager.IsEmpty)
+            ExitMask();
+
+        if (_stackManager == null || _stackContainer == null) return;
+
+        // 收集当前应存在的条目
+        var current = _stackManager.Entries;
+
+        // 移除已不存在的条目 UI 及其箭头
+        var toRemove = new List<StackEntry>();
+        foreach (var kv in _stackEntryUIMap)
+        {
+            if (!current.Contains(kv.Key))
+            {
+                kv.Value.QueueFree();
+                toRemove.Add(kv.Key);
+            }
+        }
+        foreach (var key in toRemove)
+        {
+            _stackEntryUIMap.Remove(key);
+            if (_stackArrows.TryGetValue(key, out var arrows))
+            {
+                foreach (var a in arrows) a.QueueFree();
+                _stackArrows.Remove(key);
+            }
+        }
+
+        // 新增缺失的条目 UI（保持堆叠顺序：末尾为顶，HBoxContainer 中末尾显示在右侧）
+        for (int i = 0; i < current.Count; i++)
+        {
+            var entry = current[i];
+            if (!_stackEntryUIMap.ContainsKey(entry))
+            {
+                var inst = _stackEntryScene.Instantiate<StackEntryUI>();
+                // 必须先 AddChild 触发 _Ready（初始化子节点引用），再调用 Setup 赋值/挂卡，
+                // 否则 Setup 内访问 _effectPanel 等字段时仍为 null 导致 NullReferenceException。
+                _stackContainer.AddChild(inst);
+                // 卡片型复用真卡 UI：从手牌列表取对应 CardUI（入堆叠时已脱离手牌容器）
+                CardUI reuse = null;
+                if (entry.IsCard && !string.IsNullOrEmpty(entry.SourceCardUid))
+                    reuse = FindCardUIByUID(entry.SourceCardUid);
+                inst.Setup(entry, reuse);
+
+                // 赢取地区条目：复制并显示一张该地区卡的卡面（复用 AreaCardUI.tscn）
+                if (entry.Kind == ResolveKind.AreaWon && !string.IsNullOrEmpty(entry.WonAreaUid))
+                {
+                    var slot = _areaSlots.FirstOrDefault(s => s.AreaUID == entry.WonAreaUid);
+                    if (slot != null)
+                        inst.AttachAreaCard(slot.Data, _areaCardUIScene);
+                }
+
+                _stackEntryUIMap[entry] = inst;
+            }
+        }
+
+        RedrawAllArrows();
+    }
+
+    /// <summary>
+    /// 重绘所有堆叠条目 → 目标的箭头。目标节点通过 CardUID / 地区槽位 / 玩家 实时查询全局中心点。
+    /// </summary>
+    private void RedrawAllArrows()
+    {
+        if (_arrowLayer == null) return;
+
+        foreach (var kv in _stackEntryUIMap)
+        {
+            var entry = kv.Key;
+            var entryUI = kv.Value;
+
+            // 清理旧箭头
+            if (_stackArrows.TryGetValue(entry, out var oldArrows))
+            {
+                foreach (var a in oldArrows) a.QueueFree();
+                oldArrows.Clear();
+            }
+            else
+            {
+                oldArrows = new List<StackArrow>();
+                _stackArrows[entry] = oldArrows;
+            }
+
+            // 目标已丢失：取消本条目所有 StackArrow，不取消其他条目箭头。
+            // 说明（2026-08-11）：目标丢失总线已移除，TargetWasLost 改由结算时 IsTargetLost 置位，
+            // 因此这里补一道【只读】版本号预判——目标版本号已变（离场/翻面等）时立即隐藏箭头，
+            // 让 UI 在移动/翻面瞬间就有反馈，而不必等到结算。纯只读、不置位、无副作用，
+            // 最终是否真丢失一律以结算时 IsTargetLost 的判定为准。
+            bool uiLost = entry.TargetWasLost;
+            if (!uiLost && entry.TargetVersionId >= 0 && !string.IsNullOrEmpty(entry.TargetCardUid))
+            {
+                var tgt = _cardManager?.GetInstance(entry.TargetCardUid);
+                uiLost = tgt == null || tgt.VersionId != entry.TargetVersionId;
+            }
+            if (uiLost)
+                continue;
+            if (entry.Targets == null) continue;
+            Vector2 from = entryUI.GetGlobalCenter();
+            // 箭头按控制者（ControllerId）着色（核心需求 / D31）：夺控场景下控制者颜色，而非拥有者颜色。
+            Color col = entry.ControllerId == 1 ? Colors.OrangeRed : Colors.CornflowerBlue;
+
+            foreach (var target in entry.Targets)
+            {
+                Vector2? to = ResolveTargetCenter(target);
+                if (to == null) continue;
+                var arrow = _stackArrowScene.Instantiate<StackArrow>();
+                arrow.ZIndex = 4095;
+                arrow.ZAsRelative = false;   // 绝对 ZIndex
+                _arrowLayer.AddChild(arrow);
+                arrow.SetColor(col);
+                arrow.SetPoints(from, to.Value);
+                oldArrows.Add(arrow);
+            }
+        }
+    }
+
+    /// <summary>根据目标引用定位目标节点中心点（全局坐标）。找不到返回 null。</summary>
+    private Vector2? ResolveTargetCenter(StackTargetRef target)
+    {
+        switch (target.Kind)
+        {
+            case StackTargetRef.TargetKind.Card:
+                if (_cardUIMap.TryGetValue(target.CardUid, out var cardUI))
+                {
+                    // 使用旋转后视觉包围盒中心，兼容横置卡（90° 旋转后视觉中心已偏离逻辑中心）
+                    return cardUI.GetVisualGlobalRect().GetCenter();
+                }
+                return null;
+            case StackTargetRef.TargetKind.Area:
+                // 优先用 AreaUid 精确定位（AreaSlot 节点命名 AreaSlot_<编号>，编号由 AreaUID 映射）
+                Control slotNode = null;
+                if (!string.IsNullOrEmpty(target.AreaUid))
+                {
+                    int no = GetAreaNo(target.AreaUid);   // 由地区 UID → 1-based 编号
+                    if (no > 0)
+                        slotNode = _areasContainer.GetNodeOrNull<Control>($"AreaSlot_{no}");
+                }
+                // 回退：直接用解析出的 AreaSlotId
+                if (slotNode == null && target.AreaSlotId > 0)
+                    slotNode = _areasContainer.GetNodeOrNull<Control>($"AreaSlot_{target.AreaSlotId}");
+                if (slotNode != null) return slotNode.GlobalPosition + slotNode.GetRect().Size / 2f;
+                return null;
+            case StackTargetRef.TargetKind.Player:
+                // 玩家区中心（用对应 PlayerArea 的全局中心近似）
+                var pArea = GetNodeOrNull<Control>(target.PlayerId == 1 ? "Player1Area" : "Player2Area");
+                if (pArea != null) return pArea.GlobalPosition + pArea.GetRect().Size / 2f;
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    public override void _Process(double delta)
+    {
+        // 拖拽手牌时实时高亮合法目标卡（黄色蒙版：仅标识"打出附属卡可结附目标"）
+        // 基础行动蒙版（建立资产/派遣暗藏）拖拽期间不显示该高亮，避免场上角色卡被错误打上黄色蒙版
+        // 【MVC 修复 M-08】拖拽状态与高亮逻辑已迁移至 CardDragController，此处经控制器转发。
+        if (_cardDragController != null && _cardDragController.IsDraggingUnderNoneMask)
+            _cardDragController.UpdateDragTargetHighlights();
+
+        // D9 激活框架：激活拖拽中实时更新箭头与目标高亮
+        if (_cardDragController != null && _cardDragController.IsActivating)
+            _cardDragController.UpdateActivateDrag(GetGlobalMousePosition());
+
+        // 堆叠箭头刷新已改为事件驱动（OnPostMove 随目标移动、OnCardStateChanged 随目标状态变更），
+        // 不再每帧全量轮询。仅拖拽交互进行中（目标卡实时拖动）保留每帧跟随，避免拖拽时箭头滞后。
+        if (_cardDragController != null && _cardDragController.IsActivating
+            && _stackManager != null && !_stackManager.IsEmpty && _arrowLayer != null)
+            RedrawAllArrows();
+    }
+
+    // [诊断] 用于确认输入事件分发链路：打印鼠标按下时 Arena 是否收到、以及当前鼠标下命中的卡牌
+    private void OnArenaGuiInputDiagnostic(InputEvent @event)
+    {
+        if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+        {
+            Vector2 mp = mb.GlobalPosition;
+            GD.Print($"[Arena.Diag] 鼠标按下 @({mp.X:F0},{mp.Y:F0})");
+            // 检测鼠标位置是否落在任意手牌卡的可视包围盒内（使用 CardUI 的 GetVisualGlobalRect）
+            int hitHand = 0;
+            foreach (var c in _handCardUIs)
+            {
+                if (c != null && c.GetVisualGlobalRect().HasPoint(mp)) hitHand++;
+            }
+            foreach (var c in _handCardUIs2)
+            {
+                if (c != null && c.GetVisualGlobalRect().HasPoint(mp)) hitHand++;
+            }
+            GD.Print($"[Arena.Diag] 手牌中命中 {hitHand} 张");
+        }
+    }
+
+    // ============================================================
+    // 订阅逻辑层事件（核心：表现层仅通过事件获知状态变化）
+    // ============================================================
+    // 【M-09 结构拆分】SubscribeToManagerEvents 及全部事件处理器已迁至 Arena.Events.cs
+    // （仍为本类的 partial 成员，行为不变）。
+
+    // ============================================================
+    // 初始化 UI 子模块
+    // ============================================================
+    private void InitializeWorldDeckZone()
+    {
+        _worldDeckZone = GetNode<WorldDeckZone>("CenterArea/WorldDeckZone");
+        if (_worldDeckZone != null)
+        {
+            _worldDeckZone.Visible = true;
+            // 位置与尺寸由场景文件(Arena.tscn)定义:左侧 offset_left=50, offset_top=250, 尺寸 140x100
+            // 不在此处用代码覆盖,避免面板被挪到右侧或撑大
+
+            _worldDeckZone.Initialize(_worldDeckManager?.Count ?? 0, _areaCardUIScene);
+        }
+        else
+        {
+            GD.PrintErr("[Arena] ❌ WorldDeckZone 节点未找到！路径: CenterArea/WorldDeckZone");
+        }
+    }
+
+    /// <summary>给 AreaSlot 注入统计所需的逻辑层依赖（ZoneManager/PlayerManager），再 Setup</summary>
+    private void ConfigureSlot(AreaSlot slot, CardInstance instance, int index)
+    {
+        slot.SetStatsDependencies(_zoneManager, _playerManager);
+        slot.Setup(instance, index, false, _areaCardUIScene);
+    }
+
+    /// <summary>刷新所有地区 slot 的能力统计 Label（进出地区/横置/先手切换时调用）</summary>
+    private void RefreshAllAreaStatsLabels()
+    {
+        foreach (var slot in _areaSlots)
+            slot?.RefreshStatsLabels();
+    }
+
+    private void InitializeAreas()
+    {
+        List<CardInstance> initialAreas = _actionService.DrawInitialAreas(3);
+        _areaSlots.Clear();
+        foreach (Node child in _areasContainer.GetChildren())
+            child.QueueFree();
+
+        for (int i = 0; i < initialAreas.Count; i++)
+        {
+            var slot = _areaSlotScene.Instantiate<AreaSlot>();
+            _areasContainer.AddChild(slot);
+            slot.Name = $"AreaSlot_{i + 1}";
+            ConfigureSlot(slot, initialAreas[i], i + 1);
+            _areaSlots.Add(slot);
+            _actionService.RegisterArea(slot.AreaUID, i + 1, initialAreas[i]);
+        }
+        // AreaManager 已改为纯逻辑层，不再持有 UI 引用；标记/替换均通过事件通知本类刷新
+        ArrangeAreas();
+        _worldDeckZone?.RefreshDisplay(_worldDeckManager?.Count ?? 0);
+    }
+
+    private void InitializeDeckAndGraveyard()
+    {
+        if (_deckZone != null)
+            _deckZone.Initialize(_deckManager.GetPlayer1DeckData(), _cardUIScene, 1);
+        if (_graveyardZone != null)
+            _graveyardZone.Initialize(_cardUIScene);
+        if (_deckZone2 != null)
+            _deckZone2.Initialize(_deckManager.GetPlayer2DeckData(), _cardUIScene, 2);
+        if (_graveyardZone2 != null)
+            _graveyardZone2.Initialize(_cardUIScene);
+    }
+
+    private void InitializePMCommands()
+    {
+        //【MVC 修复】PMCommandManager 的生命周期由 GameInitializer（Composition Root）统一管理，
+        //此处仅获取其引用并注入 UI 回调，不再由 View 自行 new + AddChild。
+        _pmCommandManager = _initializer.PMCommandManager;
+        if (_pmCommandManager == null)
+        {
+            //【MVC 修复 M-03】禁止 View 自建：PMCommandManager 生命周期归 Composition Root 独占。
+            GD.PushError("Arena: GameInitializer 未创建 PMCommandManager，PM 调试命令不可用。");
+            return;
+        }
+        // 方案②：向 PM 注入"实时查询地区 UID 列表"的 Func，每次命令执行时按槽位顺序取当前 UID，
+        // 避免地区赢取/替换后旧快照过期（PM 命令落到失效槽位）。不传递 UI 实例/列表类型，符合 MVC 边界。
+        _pmCommandManager.Initialize(
+            _cardManager, _deckManager,
+            () => _areaSlots.Select(s => s.AreaUID).ToList(),
+            (int playerId, int count) => _actionService.DrawCards(playerId, count),
+            _zoneManager,
+            () => { ArrangeAllCards(); RefreshArenaStats(); },
+            (string uid) =>   // 仅刷新指定卡的 UI（横置/数值同步），不返回 UI 实例
+            {
+                var ui = FindCardUIByUID(uid);
+                var inst = _cardManager.GetInstance(uid);
+                if (ui != null && inst != null)
+                {
+                    ui.SetTapped(inst.IsTapped);
+                    ui.RefreshStats();
+                }
+            },
+            (string uid) => FindCardUIByUID(uid)?.IsFaceUp ?? false,   // 读取翻面状态
+            (string uid, bool face) => FindCardUIByUID(uid)?.SetFace(face), // 设置翻面状态
+            (CombatManager.CombatType type, int winner, int x, int areaNo) =>
+            {
+                // 按对抗类型路由到对应窗口：调查对抗走调查窗口（取牌分配+抽1），战斗对抗走战斗窗口（伤害分配）。
+                // 原实现硬编码调用 OpenBattleWindow，导致 investigation 命令也误用战斗对抗逻辑，违反核心需求 6.4。
+                if (type == CombatManager.CombatType.Investigation)
+                    _modalCoordinator.OpenInvestigationWindow(winner, x, areaNo, null);
+                else
+                    _modalCoordinator.OpenBattleWindow(winner, x, areaNo, null);
+            },
+            _areaManager,
+            () => DrawAndAddNewArea(),
+            _stackManager
+        );
+
+        _commandInput = GetNodeOrNull<TextEdit>("CommandInput");
+        if (_commandInput != null)
+        {
+            _commandInput.Visible = false;
+            // 多行输入：Enter 换行，Shift+Enter 执行（在 _GuiInput 中拦截）
+            _commandInput.GuiInput += OnCommandInputGuiInput;
+        }
+        else
+        {
+            GD.PrintErr("❌ Arena: 未找到 CommandInput(TextEdit) 节点");
+        }
+    }
+
+    // ============================================================
+    // 事件处理器（TurnManager / CardManager / AreaManager / PlayerManager）
+    // ============================================================
+    // 【M-09 结构拆分】全部 On*Handler 及计分区刷新方法已迁至 Arena.Events.cs
+    // （仍为本类的 partial 成员，行为不变）。
+
+    // ============================================================
+    // 拖拽处理（玩家卡）— 仅负责 UI，逻辑验证全部委托给 TurnManager
+    // ============================================================
+    // 拖拽处理（玩家卡）已迁移至 CardDragController（MVC 修复 M-08）。
+    // OnCardDragEnded / ReturnCardToHand 不再由 Arena 直接实现，
+    // 经 _onCardDragEndedForward 转发至 _cardDragController.OnCardDragEnded。
+
+
+
+    // 蒙版拖放处理（派遣暗藏 / 建立资产）已迁移至 CardDragController.HandleMaskDrop（MVC 修复 M-08）。
+
+    // ============================================================
+    // 按钮事件 → 经 PlayerActionService 表达意图
+    // ============================================================
+    public void OnPlayerPass()
+    {
+        // 模态窗口打开期间冻结 Pass（原子操作执行期间不给响应权，核心需求 7.3）
+        if (IsInteractionLocked) return;
+        _actionService.Pass(1);
+        UpdateTurnUI();
+    }
+
+    public void OnOpponentPass()
+    {
+        if (IsInteractionLocked) return;
+        _actionService.Pass(2);
+        UpdateTurnUI();
+    }
+
+    public void OnEndTurnPressed()
+    {
+        GD.Print("⚠️ 使用调试功能强制结束回合 [未实现]");
+    }
+
+    /// <summary>投降按钮：本地玩家(1)表达投降意图，经 PlayerActionService 收口判负（UI 不写规则）。</summary>
+    public void OnConcedePressed()
+    {
+        if (_playerManager == null || _playerManager.IsGameOver) return;
+        _actionService.Concede(1);
+    }
+
+    // 【M-09 结构拆分】OnGameOverHandler 已迁至 Arena.Events.cs（仍为本类的 partial 成员）。
+
+    // ============================================================
+    // 基础行动蒙版 / 回合状态栏
+    // ============================================================
+    // 【M-09 结构拆分】蒙版（ToggleMask/EnterMask/ExitMask/RefreshMaskUI/RefreshHandMask/
+    // ApplyMaskToOneCard/UpdateMaskHint/UpdateActionButtons）与 UpdateTurnUI/UpdateDeckCount
+    // 已迁至 Arena.Mask.cs（仍为本类的 partial 成员，行为不变）。
+
+    // ============================================================
+    // 刷新争夺区能力值
+    // ============================================================
+    /// <summary>
+    /// 根据当前先后手刷新【争夺区内】所有卡牌的 StatsContainer 显示（手牌/资产区不参与对抗，不刷新）。
+    /// 先手加成计算已上收至 Controller（TurnManager.RefreshFirstStrikeStats），本方法只负责把
+    /// Controller 算好的 CardInstance.CurrentXxx 同步到 UI（View 只读，不再写 Model）。
+    /// </summary>
+    private void RefreshArenaStats()
+    {
+        if (_turnManager == null) return;
+        // 规则收口：由 Controller 统一重算争夺区内所有卡的先手加成显示值
+        _actionService.RefreshFirstStrikeStats();
+        if (_zoneManager == null) return;
+        foreach (var inst in _zoneManager.GetZoneCards(CardZone.AreaZone, 0))
+        {
+            FindCardUIByUID(inst.UID)?.RefreshStats();
+        }
+    }
+
+    /// <summary>
+    /// 附属结附在地区内角色上时刷新该角色及其附属的对抗属性显示（接口，附属系统暂未实现）。
+    /// 后续附属实现后：结附在角色上的附属会为当前地区提供对抗属性，应在此统一重算
+    /// 角色 + 其所有附属的显示能力值（实例 CurrentXxx 与 UI StatsContainer）。
+    /// </summary>
+    private void RefreshAttachedStats(CardInstance character)
+    {
+        if (character == null) return;
+        // 当前版本附属系统未实现，保留接口：
+        // 1. _turnManager?.RefreshFirstStrikeStats(); character.RefreshStats();
+        // 2. 对每个 AttachedCards 中的附属：_turnManager?.RefreshFirstStrikeStats(); attached.RefreshStats();
+    }
+
+    // 布局引擎（ArrangeAllCards / ArrangeAllAttachments / ArrangeAllSeals / ArrangeCouncilCards /
+    // FindCardUIByUID 及全套 Arrange* / Layout / Place 方法）已迁移至 Arena.Layout.cs
+
+    // ============================================================
+    // 逻辑→UI 同步（订阅 ZoneManager.OnCardMoved）
+    // ============================================================
+    private void BuildCardUIMap()
+    {
+        _cardUIMap.Clear();
+        if (_deckZone != null)
+            foreach (var c in _deckZone.GetCards())
+                if (c?.Instance != null) _cardUIMap[c.Instance.UID] = c;
+        if (_deckZone2 != null)
+            foreach (var c in _deckZone2.GetCards())
+                if (c?.Instance != null) _cardUIMap[c.Instance.UID] = c;
+
+        // 统一订阅横置变化：任一张卡横置/解除横置都会刷新所有地区能力统计 Label
+        foreach (var cardUI in _cardUIMap.Values)
+        {
+            if (cardUI == null) continue;
+            cardUI.TappedChanged -= OnAnyCardTappedChanged;
+            cardUI.TappedChanged += OnAnyCardTappedChanged;
+        }
+    }
+
+    /// <summary>任一卡牌横置状态变化 → 重排场上布局并刷新所有派生 UI。
+    /// 经由统一绑定层 SyncDerivedUI，避免与移动/回合切换的刷新契约分叉（问题 4）。</summary>
+    private void OnAnyCardTappedChanged(CardUI cardUI, bool tapped)
+    {
+        SyncDerivedUI();
+    }
+
+    // 玩家分流辅助方法、Sync 系列、Arrange 系列、Layout/Place 方法
+    // 已全部迁移至 Arena.Layout.cs（partial 实现，无需在主文件保留声明）
+
+    // ============================================================
+    // 触发排序 / 选目标交互（MVC 修复 M-08）
+    // 原逻辑已迁移至 TriggerInteractionCoordinator（实现 ITriggerView），
+    // Arena 仅在输入路由中转发选目标点击到协调器。
+    // ============================================================
+
+
+
+    // ============================================================
+    // 公开方法
+    // ============================================================
+    public void AddNewArea(CardInstance areaInstance)
+    {
+        if (areaInstance == null) { GD.PrintErr("❌ AddNewArea: areaInstance 为空"); return; }
+        if (_areaSlotScene == null) { GD.PrintErr("❌ AddNewArea: _areaSlotScene 未加载"); return; }
+
+        int newIndex = _areaSlots.Count + 1;
+        var slot = _areaSlotScene.Instantiate<AreaSlot>();
+
+        // 必须先 AddChild 让 _Ready 执行（绑定 CardContainer 等子节点），再 Setup 填入地区卡
+        _areasContainer.AddChild(slot);
+        slot.Name = $"AreaSlot_{newIndex}";
+        ConfigureSlot(slot, areaInstance, newIndex);
+
+        _areaSlots.Add(slot);
+        _actionService.RegisterArea(slot.AreaUID, newIndex, areaInstance);   // 同步逻辑注册表（任务地区额外槽位）
+        ArrangeAreas();
+        _worldDeckZone?.RefreshDisplay(_worldDeckManager?.Count ?? 0);
+    }
+
+    /// <summary>
+    /// 从世界牌库抽出一张新的地区卡，生成新的 AreaSlot 并填入 CardContainer，
+    /// 随后重新排列所有 AreaSlot（放不下则重叠，右侧压左侧）。
+    /// </summary>
+    /// <returns>成功返回 true</returns>
+    public bool DrawAndAddNewArea()
+    {
+        if (_areaManager == null) { GD.PrintErr("❌ AreaManager 未初始化"); return false; }
+
+        CardInstance data = _actionService.DrawNewArea();
+        if (data == null) return false;
+
+        AddNewArea(data);
+        GD.Print($"✅ 新增地区：{data.AreaTemplate?.CardName}（当前共 {_areaSlots.Count} 个地区，世界牌库剩余 {_areaManager.WorldDeckCount} 张）");
+        return true;
+    }
+
+    public void ClearHand()
+    {
+        foreach (var card in _handCardUIs) card.QueueFree();
+        _handCardUIs.Clear();
+        _zoneManager?.ClearHand(1);
+        ArrangeAllCards();
+    }
+
+    public void ReturnCardToDeck(CardUI cardUI, bool toTop = false)
+    {
+        int playerId = _handCardUIs2.Contains(cardUI) ? 2 : 1;
+        _handCardUIs.Remove(cardUI);
+        _handCardUIs2.Remove(cardUI);
+        _areaCardUIs.Remove(cardUI);
+
+        var instance = cardUI.Instance;
+        if (instance != null)
+        {
+            // 委托 PlayerActionService 收口：经 ZoneManager 统一移动（避免 UI 越权直调 ZoneManager.MoveToDeckBottom）
+            _actionService.ReturnCardToDeck(playerId, instance.UID, toTop);
+            // 数据移动经 FireMoved(Deck) 触发 SyncCardUIToZone→ReturnCardUI 完成 UI 同步；
+            // 此处再显式调 ReturnCardUI 冗余，但因 MoveToDeckBottom 内部已 FireMoved，
+            // 故本行实际走的是与 Sync 一致的【单张通道】。若日后 MoveToDeckBottom 改为不 FireMoved，需同步确认此处。
+            GetDeckZone(playerId)?.ReturnCardUI(cardUI, toTop);
+            ArrangeAllCards();
+            UpdateDeckCount();
+        }
+    }
+
+    // ============================================================
+    // 对抗窗口（调查/战斗）
+    // ============================================================
+    // 对抗窗口生命周期（MVC 修复 M-08）
+    // 事件路由与窗口实例化逻辑已迁移至 ModalWindowCoordinator，
+    // Arena 仅保留：OnDeckReorderedHandler（牌库按序重绘）、RefreshFirstStrikeFlags（先手加成数值刷新）、
+    // PickBattleCardAt（命中测试，经协调器读取当前战斗窗口）、GetAreaNo。
+
+    /// <summary>OnDeckReordered 处理器：按 ZoneManager 编排后的有序牌库列表，重建对应 DeckZone 的 CardUI 顺序（纯重绘）。</summary>
+    private void OnDeckReorderedHandler(int playerId, List<CardInstance> orderedDeck)
+    {
+        var deckZone = playerId == 1 ? _deckZone : _deckZone2;
+        deckZone?.RebuildFromOrdered(orderedDeck);
+    }
+
+    /// <summary>【MVC 收口-P2】先手加成重算完成后（TurnManager 触发），统一刷新所有在场卡 UI 的能力数值。
+    /// 先手加成已体现在 CardInstance.CurrentXxx（由 Controller 算好），View 仅通过 RefreshStats 重绘数值，
+    /// 不再在渲染过程中反向驱动 Controller 重算。</summary>
+    private void RefreshFirstStrikeFlags()
+    {
+        if (_zoneManager == null) return;
+            foreach (var inst in _zoneManager.GetZoneCards(CardZone.AreaZone, 0))
+            {
+                var ui = FindCardUIByUID(inst.UID);
+                if (ui != null && GodotObject.IsInstanceValid(ui)) ui.RefreshStats();
+            }
+        // GD.Print("[Arena.UI] 先手加成能力数值已按 Controller 重算结果统一刷新");
+    }
+
+    /// <summary>D9 激活框架：刷新所有场上卡的“可发动”高亮边框。
+    /// 仅当该卡控制者当前拥有优先权、费用足够、且有合法目标时高亮。
+    /// 订阅 TurnManager.OnPriorityChanged 触发；初始化及每次优先权转移后调用。</summary>
+        private void RefreshActivateHighlights(int playerId = 0)
+        {
+            if (_turnManager == null || _playerManager == null || _cardManager == null || _zoneManager == null) return;
+            _activateLegalTargetCache.Clear();
+            // 可发动遍历范围：争夺区(AreaZone) 卡 + 附属/封印子区(AttachedZone) 的附属卡。
+            // AttachedZone 中的封印卡(IsSeal)无激活 timing，CanActivate 自然为 false，不会被高亮。
+            // 结附秘社的附属卡也落在 AttachedZone，此前漏遍历导致双击无高亮、无法激活（本次修复）。
+            var activatableCards = new List<CardInstance>(_zoneManager.GetZoneCards(CardZone.AreaZone, 0));
+            activatableCards.AddRange(_zoneManager.GetZoneCards(CardZone.AttachedZone, 0));
+            foreach (var inst in activatableCards)
+            {
+                var ui = FindCardUIByUID(inst.UID);
+                // 过滤已释放（QueueFree 后 IsInstanceValid=false）的卡 UI：赢地区移入分数区等路径可能
+                // 释放节点但 _cardUIMap 中仍保留引用，访问其 Label 会抛 ObjectDisposedException，中断本 handler。
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                bool can = ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
+                ui.SetActivatableHighlight(can);
+                if (inst.IsAttached)
+                    GD.Print($"[ActHL] 附属 {inst.PlayerTemplate?.CardName}({inst.UID}) CurrentZone={inst.CurrentZone} CanActivate={can}");
+                // 【MVC 收口-问题A】仅对“可发动”的卡预计算其合法目标集合，供拖拽控制器只读查询
+                if (can)
+                {
+                    var ability = GetFirstActivateAbility(inst);
+                    if (ability != null)
+                    {
+                        var set = new HashSet<string>();
+                        foreach (var t in _zoneManager.GetZoneCards(CardZone.AreaZone, 0))
+                        {
+                            if (t == inst) continue;
+                            if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
+                                set.Add(t.UID);
+                        }
+                        _activateLegalTargetCache[inst.UID] = set;
+                    }
+                }
+            }
+        }
+
+        /// <summary>D9：取某卡的第一个角色/附属激活能力（与 CardDragController.GetActivatingAbility 对齐）。</summary>
+        private static EffectData GetFirstActivateAbility(CardInstance inst)
+        {
+            if (inst?.PlayerTemplate is PlayerCardData tmpl)
+            {
+                foreach (var e in tmpl.EffectDataList)
+                {
+                    if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return e;
+                }
+                return null;
+            }
+            if (inst?.CouncilTemplate is CouncilCardData councilTmpl)
+            {
+                foreach (var opt in councilTmpl.ActivationOptions)
+                {
+                    if (opt?.EffectDataList == null) continue;
+                    foreach (var e in opt.EffectDataList)
+                    {
+                        if (e.Timing is EffectTiming.CouncilActivated) return e;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 议会（秘社）卡双击激活处理。
+        /// 由 CouncilCardUI.CouncilDoubleClicked 信号触发（订阅见 SyncCouncilsUI / SyncCouncilCardUI）。
+        /// 行为：当前控制者需拥有优先权且议会可激活时，激活其第一个激活能力（无目标直接发动）。
+        /// 注：本方法在 Arena.Layout.cs 拆分迁移时随 SyncCouncilsUI 区域一并整理，
+        /// 原双击弹窗/选目标交互如需增强可在此扩展（如复用 ModalWindowCoordinator）。
+        /// </summary>
+        private void OnCouncilDoubleClicked(CouncilCardUI cardUI)
+        {
+            if (cardUI?.Instance == null) return;
+            var inst = cardUI.Instance;
+            if (inst.IsTapped)
+            {
+                GD.PrintErr($"[Arena] 已横置，无法使用秘社效果: {inst.CouncilTemplate?.CardName}");
+                return;
+            }
+            if (_turnManager == null || _playerManager == null || _cardManager == null) return;
+            bool canAct = ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
+            if (!canAct)
+            {
+                return;
+            }
+            var councilTmpl = inst.CouncilTemplate;
+            if (councilTmpl == null || councilTmpl.ActivationOptions.Count == 0)
+            {
+                // 无选项：走默认单一激活
+                var ability = GetFirstActivateAbility(inst);
+                if (ability == null)
+                {
+                    return;
+                }
+                _actionService.ActivateAbility(inst, ability, null);
+                RefreshActivateHighlights();
+                return;
+            }
+
+            // 多选项：弹出选择窗口，取消则不发动
+            if (_councilActivateWindowScene == null)
+            {
+                GD.PrintErr("[Arena] 秘社激活弹窗场景未加载");
+                return;
+            }
+            var win = _councilActivateWindowScene.Instantiate<CouncilActivateWindow>();
+            AddChild(win);
+            win.Init(councilTmpl.ActivationOptions, (opt) =>
+            {
+                if (opt?.EffectDataList == null || opt.EffectDataList.Count == 0) return;
+                // 取第一个 EffectData 发动（本秘社两选项均单一 EffectData、无目标）
+                _actionService.ActivateAbility(inst, opt.EffectDataList[0], null);
+                RefreshActivateHighlights();
+            });
+        }
+
+        /// <summary>
+        /// 附属卡（如 JC012 帷幕守望徽记）的激活弹出选择框：列出所有 AttachmentActivated 效果供玩家选其一发动。
+        /// 与秘社 OnCouncilDoubleClicked 对称，但使用泛用 ActivationChoiceWindow（后续秘社也将迁移到此）。
+        /// 选项①（减费，无目标）：直接 ActivateAbility；选项②（牺牲横置角色，有目标）：先弹选目标窗再发动。
+        /// </summary>
+        public void OpenAttachmentActivateChoice(CardUI cardUI)
+        {
+            if (cardUI == null || cardUI.Instance == null) return;
+            var inst = cardUI.Instance;
+            if (!ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager))
+                return;
+
+            var abilities = new List<EffectData>();
+            if (inst.PlayerTemplate is PlayerCardData tmpl)
+            {
+                foreach (var e in tmpl.EffectDataList)
+                {
+                    if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
+                        abilities.Add(e);
+                }
+            }
+            if (abilities.Count == 0)
+                return;
+
+            // 单选项且无目标：直接发动，不走弹窗（与原本拖拽激活一致，避免多余点击）
+            if (abilities.Count == 1)
+            {
+                var only = abilities[0];
+                if (only.Target is { NeedsSelection: true })
+                {
+                    BeginAttachmentActivateWithTarget(inst, only);
+                }
+                else
+                {
+                    _actionService.ActivateAbility(inst, only, null);
+                    RefreshActivateHighlights();
+                }
+                return;
+            }
+
+            // 多选项：弹泛用选择窗
+            var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+            if (win == null) return;
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            for (int i = 0; i < abilities.Count; i++)
+            {
+                var ability = abilities[i];
+                int idx = i;
+                string label = $"{i + 1}. {GetActivationAbilityLabel(inst, ability)}";
+                // 需要指定目标的效果：预判断场上是否存在合法目标；无目标则置灰禁用，避免无目标也能发动
+                bool disabled = ability.Target is { NeedsSelection: true }
+                                && !ActivateEligibility.HasLegalTarget(inst, ability, _cardManager);
+                if (disabled) label += "（无合法目标）";
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = label,
+                    Disabled = disabled,
+                    OnChosen = () =>
+                    {
+                        if (items[idx].Disabled) return;
+                        var ab = abilities[idx];
+                        if (ab.Target is { NeedsSelection: true })
+                            BeginAttachmentActivateWithTarget(inst, ab);
+                        else
+                        {
+                            _actionService.ActivateAbility(inst, ab, null);
+                            RefreshActivateHighlights();
+                        }
+                    }
+                });
+            }
+            win.Init(items);
+            AddChild(win);
+            win.PopupCentered();
+        }
+
+        /// <summary>生成单条激活效果在选框中的简短描述（优先 FaqNote，回退 EffectId）。</summary>
+        private static string GetActivationAbilityLabel(CardInstance inst, EffectData ability)
+        {
+            if (!string.IsNullOrEmpty(ability.FaqNote)) return ability.FaqNote;
+            if (!string.IsNullOrEmpty(ability.EffectId)) return ability.EffectId;
+            return "激活效果";
+        }
+
+        /// <summary>为附属激活效果（有目标，如 JC012 ②横置角色）弹出选目标窗。选完后发动并牺牲来源。</summary>
+        private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability)
+        {
+            var set = new HashSet<string>();
+            for (int pid = 0; pid <= 1; pid++)
+            {
+                foreach (var t in _zoneManager.GetZoneCards(CardZone.AreaZone, pid))
+                {
+                    if (t == inst) continue;
+                    if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
+                        set.Add(t.UID);
+                }
+            }
+            // 仅角色（AreaZone 中的正面角色；暗藏者由 IncludeCovert=false 已在 IsLegalActivateTarget 内排除）
+            var validUids = new System.Collections.Generic.List<string>(set);
+            _triggerCoordinator.RequestActivateTargetSelection(
+                inst.PlayerTemplate?.CardName ?? "激活效果",
+                ability.Target is { Kind: TargetKind.Area },
+                validUids,
+                (uid) =>
+                {
+                    var target = _cardManager.GetInstance(uid);
+                    _actionService.ActivateAbility(inst, ability, target);
+                    RefreshActivateHighlights();
+                });
+        }
+
+    /// <summary>将地区 UID 转为 1-based 地区序号（供 CombatManager 调用窗口使用）。</summary>
+    public int GetAreaNo(string areaUid)
+    {
+        for (int i = 0; i < _areaSlots.Count; i++)
+            if (_areaSlots[i].AreaUID == areaUid) return i + 1;
+        return -1;
+    }
+
+    /// <summary>命中测试：取出点击位置下的合法战斗承伤目标。
+    /// 【MVC 修复 M-04】原先在此内联复现 ControllerId/CurrentZone/ZoneDetailId/IsCovert 四项判据，
+    /// 与 CombatManager.IsLegalBattleTarget 重复且漏掉了 HasDefense（两份规则已实际漂移）；
+    /// 现统一委托 Controller 判定，View 只负责几何命中测试。</summary>
+    private CardUI PickBattleCardAt(Vector2 globalPos)
+    {
+        // 【MVC 修复 M-08】当前战斗窗口改由 ModalWindowCoordinator 持有，此处经协调器读取。
+        var battleWindow = _modalCoordinator?.ActiveBattleWindow;
+        if (battleWindow == null) return null;
+        var combatManager = _initializer?.CombatManager;
+        if (combatManager == null) return null;
+        int loser = battleWindow.WinnerPlayer == 1 ? 2 : 1;
+        string areaUid = battleWindow.AreaUid;
+        foreach (var card in _areaCardUIs)
+        {
+            // 合法性判定上收 Controller（单一真相源），此处仅做 UI 层几何命中
+            if (!combatManager.IsLegalBattleTarget(card.Instance, loser, areaUid)) continue;
+            if (card.GetVisualGlobalRect().HasPoint(globalPos)) return card;
+        }
+        return null;
+    }
+
+    // ============================================================
+    // 测试/PM命令
+    // ============================================================
+    /// <summary>测试按钮：对指定地区全体造成伤害/创伤。
+    /// 【MVC 修复 M-05】原先在此取出 Model 集合并逐个循环发伤害，属 View 遍历 Model 执行领域操作；
+    /// 现改为表达单一意图 DealAreaDamage，遍历与结算由 Controller 负责，View 只负责刷新显示。</summary>
+    public void OnTestDamageButton(int areaIdx, int amount, bool isTrauma)
+    {
+        if (areaIdx < 0 || areaIdx >= _areaSlots.Count) return;
+        _actionService.DealAreaDamage(_areaSlots[areaIdx].AreaUID, amount, isTrauma);
+        RefreshDamageDisplay();
+    }
+
+    private void RefreshDamageDisplay()
+    {
+        foreach (var cardUI in _areaCardUIs)
+            cardUI.RefreshDamageDisplay();
+    }
+
+
+
+    /// <summary>
+    /// 多行命令框输入拦截：
+    ///   Enter        → 换行（TextEdit 默认行为，不拦截）
+    ///   Shift+Enter  → 执行全部命令
+    /// </summary>
+    private void OnCommandInputGuiInput(InputEvent @event)
+    {
+        if (@event is not InputEventKey key || !key.Pressed || key.Echo) return;
+        if (key.Keycode != Key.Enter && key.Keycode != Key.KpEnter) return;
+        if (!key.ShiftPressed) return;   // 无 Shift 时交给 TextEdit 换行
+
+        OnCommandSubmitted();
+        _commandInput?.AcceptEvent();
+    }
+
+    private void OnCommandSubmitted()
+    {
+        if (_commandInput == null) return;
+
+        string text = _commandInput.Text;
+        ExecutePMCommandBatch(text);
+
+        // 发送后保持输入框可见，方便连续输入；清空内容并重新聚焦
+        _commandInput.Text = "";
+        _commandInput.GrabFocus();
+    }
+
+    /// <summary>执行单条 PM 命令</summary>
+    public void ExecutePMCommand(string cmd)
+    {
+        _pmCommandManager?.ExecuteCommand(cmd);
+    }
+
+    /// <summary>执行多行 PM 命令（从上往下，遇对抗命令后中止）</summary>
+    public void ExecutePMCommandBatch(string text)
+    {
+        _pmCommandManager?.ExecuteCommandBatch(text);
+    }
+
+    public override void _Input(InputEvent @event)
+    {
+        // ---- 手牌拖拽（全局输入驱动，绕开 Godot 命中分发失效问题）----
+        // 【MVC 修复 M-08】拖拽起手/放手路由已收归 CardDragController，此处仅转发。
+        if (@event is InputEventMouseButton dragDown && dragDown.Pressed && dragDown.ButtonIndex == MouseButton.Left)
+        {
+            // [DEBUG] 诊断双击暗藏者无反应：记录左键按下，看 DoubleClick 是否被标记、是否被 Try 拦截
+            // D9 激活框架：激活拖拽起手优先于出牌拖拽（命中可发动的场上卡才进入激活模式）
+            if (_cardDragController.IsActivating || _cardDragController.TryBeginActivateDragAt(dragDown.GlobalPosition))
+            {
+                AcceptEvent();
+                return;
+            }
+            if (_cardDragController.TryBeginDragAt(dragDown.GlobalPosition))
+            {
+                AcceptEvent();
+                return;
+            }
+        }
+        else if (@event is InputEventMouseButton dragUp && !dragUp.Pressed && dragUp.ButtonIndex == MouseButton.Left)
+        {
+            if (_cardDragController.IsActivating)
+            {
+                _cardDragController.EndActivateDrag(dragUp.GlobalPosition);
+                AcceptEvent();
+                return;
+            }
+            if (_cardDragController.IsDragging)
+            {
+                _cardDragController.EndDrag();
+                AcceptEvent();
+                return;
+            }
+        }
+
+        // 战斗对抗窗口打开时，路由主战场卡点击分配伤害（左键+1 / 右键-1）
+        // 【MVC 修复 M-08】当前战斗窗口改由 ModalWindowCoordinator 持有，此处经协调器读取。
+        if (_modalCoordinator != null && _modalCoordinator.ActiveBattleWindow != null && @event is InputEventMouseButton mb && mb.Pressed)
+        {
+            if (mb.ButtonIndex == MouseButton.Left || mb.ButtonIndex == MouseButton.Right)
+            {
+                var card = _cardDragController.PickAreaCardAt(mb.GlobalPosition);
+                if (card != null)
+                {
+                    _modalCoordinator.ActiveBattleWindow.TryAllocate(card, mb.ButtonIndex == MouseButton.Right ? 2 : 1);
+                    AcceptEvent();
+                    return;
+                }
+            }
+        }
+
+        // 触发效果选目标窗口激活时，路由场上卡点击（最新需求：选目标提示窗口）
+        // 【MVC 修复 M-08】选目标状态与命中逻辑已迁移至 TriggerInteractionCoordinator，此处转发。
+        if (_triggerCoordinator != null && _triggerCoordinator.IsTargetSelectionActive
+            && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
+        {
+            _triggerCoordinator.HandleTargetSelectionClick(tsMb.GlobalPosition);
+            AcceptEvent();
+            return;
+        }
+
+        if (@event is InputEventKey key && key.Pressed && key.Keycode == (Key)96)
+        {
+            if (_commandInput != null)
+            {
+                bool isVisible = _commandInput.Visible;
+                _commandInput.Visible = !isVisible;
+                _commandInput.Text = "";
+                if (!isVisible)
+                {
+                    _commandInput.GrabFocus();
+                    _commandInput.SetCaretLine(0);
+                    _commandInput.SetCaretColumn(0);
+                }
+                else
+                {
+                    _commandInput.ReleaseFocus();
+                }
+                AcceptEvent();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 手牌命中 / 可拖拽判定 / 落点目标判定 / 拖拽高亮 已全部迁移至 CardDragController（MVC 修复 M-08）。
+    /// Arena 经 _cardDragController（PickAreaCardAt / UpdateDragTargetHighlights / IsDraggingUnderNoneMask）访问。
+    /// </summary>
+}

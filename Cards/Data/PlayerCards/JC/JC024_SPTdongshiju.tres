@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3 uid="uid://db0rmje1jxtag"]
+
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="1_3qu6w"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="2_trr4j"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="3_gsad8"]
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="4_hqafy"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("1_3qu6w")
+Color = 3
+Amount = 3
+
+[resource]
+script = ExtResource("4_hqafy")
+Cost = 6
+ColorLoyaltyRequirements = Array[ExtResource("1_3qu6w")]([SubResource("Resource_color_0")])
+CategoryFlag = 1
+SubCategories = Array[String](["人类"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([-1])
+Organization = "猎魔人"
+Investigation = 2
+Power = 2
+FirstStrikePower = 1
+Defense = 3
+Effects = Array[String](["领袖 进场触发：所有其他本方角色获得机动直到回合结束。 快速行动2：将S．P．T董事局潜伏。在下一个准备步骤开始时，令其现身，且不需要支付其费用。"])
+UID = "JC024_SPTdongshiju"
+CardName = "S．P．T董事局"

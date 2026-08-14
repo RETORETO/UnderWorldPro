@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 2
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "学者"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([-1])
+Organization = "圣贤"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["唯一 【暴露】公开 1分值 现身强制触发：进行一次隐秘对抗，本次对抗中你获得+1。 准备步骤触发：若本方秘社上有【隐秘】【隐秘】【隐秘】，将灯塔看护人置入你的计分区。"])
+UID = "WM049_dengtakanhuren"
+CardName = "灯塔看护人"

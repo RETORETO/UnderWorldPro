@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_domain_0"]
+script = ExtResource("3")
+Domain = 1
+Amount = 4
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 9
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([SubResource("Resource_domain_0")])
+CategoryFlag = 1
+SubCategories = Array[String](["天使", "异界"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([1])
+Organization = "圣贤"
+Investigation = 3
+Combat = 3
+Power = 3
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 4
+Effects = Array[String](["灵体 唯一 屏障 手牌行动，先兆（从手中展示此牌），2：本回合中，防止目标【圣贤】角色将受到的所有伤害。该能力只能在准备步骤发动且每回合只能发动一次。"])
+UID = "LC014_midalun"
+CardName = "米达伦"

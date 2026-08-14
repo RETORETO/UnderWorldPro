@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = -1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 0
+SubCategories = Array[String](["未知"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([3])
+Organization = "独立"
+Investigation = 0
+Combat = 2
+Power = 0
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["优先进入：顺序最末位的地区。 行动2，支付［黑星］［黑星］［黑星］：利用。 --- 恐怖3 触发：当一个敌方角色因恐怖离开瘦长鬼影所在的地区时，遏制2。"])
+UID = "DQ099_shouzhangguiying"
+CardName = "瘦长鬼影"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 5
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 19
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["灾难", "永恒意志"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([-1])
+Organization = "鸣钟教派"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["唯一 末日钟降临不能被响应 额外费用：每有一个已毁灭的地区，打出末日钟降临的所需费用减少4。 额外费用：自本方卡牌上移除X个时间标志，使打出末日钟降临的所需费用减少X。 行动：将你的秘社牌替换为末日钟。"])
+UID = "JZ042_morizhongjianglin"
+CardName = "末日钟降临"

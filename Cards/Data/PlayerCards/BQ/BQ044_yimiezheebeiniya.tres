@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["神话生物", "克隆体"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([4])
+Organization = "国家机构"
+Investigation = 1
+Combat = 1
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["触发：当你牺牲一个角色时，你可以支付3，若你如此做，敌方玩家牺牲一个角色或附属。本方秘社上每有一个失控标志，你可以少支付1。 【核心】牺牲一个角色，抓一张牌，遏制1。"])
+UID = "BQ044_yimiezheebeiniya"
+CardName = "夷灭者厄贝尼亚"

@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 5
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["宁芙", "法师"])
+Colors = Array[int]([5])
+MagicDomains = Array[int]([2])
+Organization = "仙灵"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["【隐秘】灵体 行动，横置，将你墓地中的两张牌封印在本方秘社上：对本地区具有魔法领域图标的目标角色造成1点伤害。 持续：若本方秘社上封印有七张或更多牌，烈焰宁芙妃卓拉获得［白眼］［白眼］［白眼］。"])
+UID = "BQ096_lieyanningfufeizhuola"
+CardName = "烈焰宁芙妃卓拉"

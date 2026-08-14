@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["吸血鬼", "法师"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([4])
+Organization = "王座会"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 1
+Effects = Array[String](["进场触发：若本方秘社上没有【隐秘】，则放置一个【隐秘】标志。 触发：当一个本方吸血鬼或法师角色成为敌方事务牌的目标时，抓一张牌。"])
+UID = "CQ007_feibi"
+CardName = "菲碧·π"

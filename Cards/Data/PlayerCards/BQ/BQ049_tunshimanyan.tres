@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 8
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["命令", "强化"])
+Colors = Array[int]([8])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["快速行动：选择一项： ·牺牲一个角色，你获得4【名誉点】。 ·本方核心角色和触手角色获得机动直到回合结束。你获得1【名誉点】。 ·在目标地区生成一个触手指示物角色。若该地区是本方任务地区，在该地区上放置一个本方势力标志。"])
+UID = "BQ049_tunshimanyan"
+CardName = "吞噬蔓延"

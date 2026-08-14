@@ -1,0 +1,112 @@
+[gd_scene format=3 uid="uid://bgp4uhoubqt8j"]
+
+[ext_resource type="Script" uid="uid://c2nnjis3pnnho" path="res://Script/UI/AreaSlot.cs" id="1_xb57g"]
+[ext_resource type="Texture2D" uid="uid://bocdmidoqbiga" path="res://Cards/Image/堆叠1.jpg" id="2_mk07n"]
+[ext_resource type="Texture2D" uid="uid://64v61x2i4xid" path="res://Cards/Image/堆叠2.jpg" id="3_trnex"]
+[ext_resource type="Texture2D" uid="uid://dcxk8tcrn4tkn" path="res://Cards/Image/AreaCardBack.jpg" id="4_mujq0"]
+
+[node name="AreaSlot" type="Control" unique_id=1030230027]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 400.0
+offset_bottom = 580.0
+script = ExtResource("1_xb57g")
+
+[node name="Background" type="TextureRect" parent="." unique_id=1411792667]
+visible = false
+texture_filter = 4
+texture_repeat = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("3_trnex")
+expand_mode = 3
+
+[node name="Player1Area" type="Control" parent="." unique_id=826300804]
+layout_mode = 1
+anchors_preset = 0
+offset_top = 340.0
+offset_right = 400.0
+offset_bottom = 580.0
+
+[node name="Background" type="TextureRect" parent="Player1Area" unique_id=1584058739]
+texture_filter = 4
+texture_repeat = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("2_mk07n")
+expand_mode = 3
+
+[node name="StatsLabel" type="Label" parent="Player1Area" unique_id=826300805]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 23.0
+grow_horizontal = 2
+horizontal_alignment = 1
+
+[node name="Player2Area" type="Control" parent="." unique_id=2090889631]
+layout_mode = 1
+anchors_preset = 0
+offset_right = 400.0
+offset_bottom = 240.0
+
+[node name="Background" type="TextureRect" parent="Player2Area" unique_id=723445261]
+texture_filter = 4
+texture_repeat = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("2_mk07n")
+expand_mode = 3
+
+[node name="StatsLabel" type="Label" parent="Player2Area" unique_id=2090889632]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -23.0
+grow_horizontal = 2
+grow_vertical = 0
+horizontal_alignment = 1
+
+[node name="CardContainer" type="Control" parent="." unique_id=1389407461]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -70.0
+offset_top = -50.0
+offset_right = 70.0
+offset_bottom = 50.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Background" type="TextureRect" parent="CardContainer" unique_id=1675308021]
+texture_filter = 4
+texture_repeat = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("4_mujq0")
+expand_mode = 3

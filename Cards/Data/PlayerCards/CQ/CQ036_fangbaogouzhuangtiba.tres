@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["机械", "人工智能"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([-1])
+Organization = "帷幕守望"
+Investigation = 0
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 2
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["【帷幕守望】秘社限定 唯一 触发：当你打出一张法术牌时，或赢得一次隐秘对抗时，在其上放置一个［黑刀］能力图标标志。然后你可以横置本地区所有［黑刀］能力图标少于防暴构装体，八的敌方角色。"])
+UID = "CQ036_fangbaogouzhuangtiba"
+CardName = "防暴构装体，八"

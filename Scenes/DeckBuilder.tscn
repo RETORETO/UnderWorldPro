@@ -1,0 +1,164 @@
+[gd_scene format=3 uid="uid://1b2ecor3w5ke"]
+
+[ext_resource type="Script" path="res://Script/UI/DeckBuilder.cs" id="1_db"]
+
+[node name="DeckBuilder" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_db")
+
+[node name="TitleLabel" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.04
+anchor_right = 0.5
+anchor_bottom = 0.04
+grow_horizontal = 2
+grow_vertical = 0
+offset_left = -60.0
+offset_top = -16.0
+offset_right = 60.0
+offset_bottom = 16.0
+text = "卡组编辑"
+
+[node name="PoolPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 0
+anchor_left = 0.02
+anchor_top = 0.12
+anchor_right = 0.48
+anchor_bottom = 0.82
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 0.0
+offset_bottom = 0.0
+
+[node name="SearchBox" type="LineEdit" parent="PoolPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 0.07
+grow_horizontal = 2
+grow_vertical = 2
+offset_left = 6.0
+offset_right = -6.0
+offset_bottom = -4.0
+placeholder_text = "输入卡号过滤，如 JC"
+
+[node name="PoolScroll" type="ScrollContainer" parent="PoolPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_top = 0.07
+anchor_right = 1.0
+anchor_bottom = 0.93
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PoolPager" type="HBoxContainer" parent="PoolPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_top = 0.93
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+offset_left = 6.0
+offset_right = -6.0
+offset_top = 4.0
+offset_bottom = -4.0
+
+[node name="PrevPage" type="Button" parent="PoolPanel/PoolPager"]
+layout_mode = 2
+text = "上一页"
+
+[node name="PageLabel" type="Label" parent="PoolPanel/PoolPager"]
+layout_mode = 2
+size_flags_horizontal = 4
+text = "1 / 1"
+horizontal_alignment = 1
+
+[node name="NextPage" type="Button" parent="PoolPanel/PoolPager"]
+layout_mode = 2
+text = "下一页"
+
+[node name="PoolList" type="VBoxContainer" parent="PoolPanel/PoolScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="DeckPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 0
+anchor_left = 0.52
+anchor_top = 0.12
+anchor_right = 0.98
+anchor_bottom = 0.82
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 0.0
+offset_bottom = 0.0
+
+[node name="DeckScroll" type="ScrollContainer" parent="DeckPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DeckList" type="VBoxContainer" parent="DeckPanel/DeckScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="BottomBar" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 9
+anchor_left = 0.02
+anchor_top = 0.86
+anchor_right = 0.98
+anchor_bottom = 0.86
+offset_left = 0.0
+offset_top = -19.0
+offset_right = 0.0
+offset_bottom = 19.0
+
+[node name="NameEdit" type="LineEdit" parent="BottomBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "卡组名"
+
+[node name="CouncilOption" type="OptionButton" parent="BottomBar"]
+layout_mode = 2
+
+[node name="CountLabel" type="Label" parent="BottomBar"]
+layout_mode = 2
+text = "0 张"
+
+[node name="SaveButton" type="Button" parent="BottomBar"]
+layout_mode = 2
+text = "保存"
+
+[node name="BackButton" type="Button" parent="BottomBar"]
+layout_mode = 2
+text = "返回"
+
+[node name="LoadOption" type="OptionButton" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.09
+anchor_right = 0.5
+anchor_bottom = 0.09
+grow_horizontal = 2
+grow_vertical = 0
+offset_left = -90.0
+offset_top = -16.0
+offset_right = 90.0
+offset_bottom = 16.0

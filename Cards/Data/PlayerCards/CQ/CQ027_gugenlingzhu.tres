@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 5
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["植物", "仙灵", "超能力者"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([3])
+Organization = "仙灵"
+Investigation = 1
+Combat = 1
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 1
+Defense = 3
+Effects = Array[String](["【暴露】非资产 混乱 不能移动 准备步骤触发：将你墓地中的一张角色牌置于你的牌库底，然后在本地区生成一个行尸指示物角色。 墓地行动，牺牲三个角色：将骨根灵主从墓地放置进场。"])
+UID = "CQ027_gugenlingzhu"
+CardName = "骨根灵主"

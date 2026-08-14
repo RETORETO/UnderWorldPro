@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 4
+SubCategories = Array[String](["研究", "计划"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([0])
+Organization = ""
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["结附于本方秘社 【隐秘】秘密计划 可推进 快速行动，牺牲计划：神秘学研究：本回合的下一次隐秘对抗中你获得+X，X等于本附属上的推进标志数量。 秘密计划触发：当计划：神秘学研究在秘密状态被敌方玩家检视或消灭时，你抓两张牌。"])
+UID = "WM092_jihuashenmixueyanjiu"
+CardName = "计划：神秘学研究"

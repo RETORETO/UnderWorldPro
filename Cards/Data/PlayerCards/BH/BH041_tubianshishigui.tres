@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 7
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 3
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["不死生物", "食尸鬼"])
+Colors = Array[int]([7])
+MagicDomains = Array[int]([3])
+Organization = "方碑序列"
+Investigation = 0
+Combat = 2
+Power = 1
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["准备步骤强制触发：将你墓地中的一张牌置于你的牌库底，否则牺牲突变食尸鬼。 结束步骤触发：若本地区有副名为圣甲虫产业的本方附属，或本回合中有一张或更多角色牌离开你的墓地，抓一张牌。"])
+UID = "BH041_tubianshishigui"
+CardName = "突变食尸鬼"

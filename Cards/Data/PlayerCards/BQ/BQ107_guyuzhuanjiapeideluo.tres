@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师", "特工"])
+Colors = Array[int]([0])
+MagicDomains = Array[int]([0])
+Organization = ""
+Investigation = 0
+Combat = 1
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 2
+Effects = Array[String](["修格斯秘社限定 进场触发：若本方核心角色牌位于核心区，从游戏外选择另一张副名为修格斯的角色牌并将其替换为你的新核心角色。 触发：当你发动一次【核心】能力是，你可以支付1【名誉点】然后抓一张牌。"])
+UID = "BQ107_guyuzhuanjiapeideluo"
+CardName = "古语专家佩德罗"

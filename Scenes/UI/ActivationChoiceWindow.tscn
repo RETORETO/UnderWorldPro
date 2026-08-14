@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://bdqa64qsy7hxk"]
+
+[ext_resource type="Script" uid="uid://cuh15uymyxotp" path="res://Script/UI/ActivationChoiceWindow.cs" id="1_win"]
+
+[node name="ActivationChoiceWindow" type="Window" unique_id=1338251068]
+oversampling_override = 1.0
+title = "选择激活效果"
+position = Vector2i(0, 36)
+size = Vector2i(600, 140)
+script = ExtResource("1_win")

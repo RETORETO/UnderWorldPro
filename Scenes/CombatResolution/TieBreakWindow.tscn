@@ -1,0 +1,49 @@
+[gd_scene format=3 uid="uid://ui8nxp1ppwub"]
+
+[ext_resource type="Script" path="res://Script/UI/TieBreakWindow.cs" id="1_tb"]
+
+[node name="TieBreakWindow" type="Window"]
+title = "先手破平特权"
+size = Vector2i(460, 240)
+script = ExtResource("1_tb")
+
+[node name="RootControl" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+
+[node name="TitleLabel" type="Label" parent="RootControl"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 16.0
+offset_right = 440.0
+offset_bottom = 46.0
+text = "⚖ 先手破平特权"
+
+[node name="PromptLabel" type="Label" parent="RootControl"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 56.0
+offset_right = 440.0
+offset_bottom = 140.0
+text = "地区X 对抗打平。\n是否使用先手破平特权？"
+
+[node name="CancelButton" type="Button" parent="RootControl"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 168.0
+offset_right = 200.0
+offset_bottom = 208.0
+text = "取消"
+
+[node name="ConfirmButton" type="Button" parent="RootControl"]
+layout_mode = 0
+offset_left = 260.0
+offset_top = 168.0
+offset_right = 440.0
+offset_bottom = 208.0
+text = "确定破平"

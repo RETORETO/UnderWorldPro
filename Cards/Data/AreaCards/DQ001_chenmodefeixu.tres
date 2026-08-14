@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="AreaCardData" format=3 uid="uid://dpnjujqaqjefy"]
+
+[ext_resource type="Script" uid="uid://lfcppbjlq5li" path="res://Script/Data/Cards/AreaCardData.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+RequiredPower = 4
+SubCategories = Array[String](["遗迹", "水域"])
+CardImagePath = "res://Cards/Image/AreaCards/DQ001_chenmodefeixu.jpg"
+UID = "DQ01_chenmodefeixu"
+CardName = "沉没的废墟"
+Score = 4

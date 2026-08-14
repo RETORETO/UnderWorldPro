@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 6
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["阴魂", "法师", "诅咒"])
+Colors = Array[int]([6])
+MagicDomains = Array[int]([3])
+Organization = "王座会"
+Investigation = 0
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 1
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["【隐秘】灵体 现身触发：若本方秘社上有【隐秘】，袭击1。若本方秘社上有【隐秘】【隐秘】，则再袭击1。若本方秘社上有【隐秘】【隐秘】【隐秘】，则再袭击1。"])
+UID = "XG011_yinhunshushi"
+CardName = "阴魂术士"

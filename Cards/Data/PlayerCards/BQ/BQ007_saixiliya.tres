@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 1
+Amount = 2
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 4
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "法师", "超能力者"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([2])
+Organization = "帷幕守望"
+Investigation = 1
+Combat = 0
+Power = 1
+FirstStrikeInvestigation = 1
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = 1
+Effects = Array[String](["灵体 护盾1 现身触发：将本方墓地中的所有名为精神锚点的牌封印在本方秘社上。 触发：当隐秘对抗结束时，将用于展示的本方卡牌封印在本方秘社上，而非洗入牌库。"])
+UID = "BQ007_saixiliya"
+CardName = "塞西莉亚"

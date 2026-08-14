@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+
+[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 3
+Amount = 1
+
+
+
+[resource]
+script = ExtResource("1")
+Cost = 2
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+DomainLoyaltyRequirements = Array[ExtResource("3")]([])
+CategoryFlag = 2
+SubCategories = Array[String](["策略"])
+Colors = Array[int]([3])
+MagicDomains = Array[int]([-1])
+Organization = "猎魔人"
+Investigation = 0
+Combat = 0
+Power = 0
+FirstStrikeInvestigation = 0
+FirstStrikeCombat = 0
+FirstStrikePower = 0
+Defense = -1
+Effects = Array[String](["只能在行动阶段打出。 快速行动：选择目标本方角色和/或目标敌方角色，将这些角色移动到目标地区。 FAQ： ◆若对方的卡牌或能力，对指定的目标角色有位置要求（比如巨石阵看护人的触发能力要求必须是位于相同地区的角色），你可以通过响应打出狭路相逢将该角色移动至其他地区，以令该卡牌或能力因目标不合法而失效。 ◆将一个角色移动时，必须是进入另一个地区，而不能选择他正位于的那个地区，也就是说，不能原地移动。"])
+UID = "JC021_xialuxiangfeng"
+CardName = "狭路相逢"
