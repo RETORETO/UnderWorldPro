@@ -51,31 +51,37 @@ public partial class Arena : Control
         // 效果引擎：结算/激活改动了卡牌横置等可见状态时通知表现层刷新
         // （复用资产变化处理器：同步资产区+争夺区横置视觉并重排卡牌；
         //  同时刷新激活高光，使"发动后横置"的卡立即取消可发动高光/拖拽箭头）
-        Script.Manager.EffectEngine.OnVisualDirty += () =>
-        {
-            OnAssetsChangedHandler();
-            RefreshActivateHighlights();
-            // 持续光环补授/撤销（夺控/入场/离场）会改写 MagicDomains、攻击力、调查力等数据，
-            // 这些字段同时驱动地区能力统计 StatsLabel 与卡面动态标签，必须随 OnVisualDirty 一并刷新
-            // （OnPostMove 的 SyncDerivedUI 早于 ReevaluateAuras 执行，故光环改写后需此处二次收口）。
-            SyncDerivedUI();
-        };
+        Script.Manager.EffectEngine.OnVisualDirty += OnVisualDirtyHandler;
 
         // 翻面（暗藏↔公开）影响持续光环生效范围：源卡背面→整光环注销；目标卡背面→仅撤销该目标。
         // 经 CardManager 全局总线捕获 CovertChanged（CardManager 位于全局命名空间），重算光环并刷新 UI。
-        CardManager.OnCardStateChanged += (card, kind) =>
+        CardManager.OnCardStateChanged += OnCardStateChangedHandler;
+    }
+
+    /// <summary>OnVisualDirty 具名处理器（匿名 lambda 无法用 -= 反订阅，须具名化以支持 _ExitTree 清理）。</summary>
+    private void OnVisualDirtyHandler()
+    {
+        OnAssetsChangedHandler();
+        RefreshActivateHighlights();
+        // 持续光环补授/撤销（夺控/入场/离场）会改写 MagicDomains、攻击力、调查力等数据，
+        // 这些字段同时驱动地区能力统计 StatsLabel 与卡面动态标签，必须随 OnVisualDirty 一并刷新
+        // （OnPostMove 的 SyncDerivedUI 早于 ReevaluateAuras 执行，故光环改写后需此处二次收口）。
+        SyncDerivedUI();
+    }
+
+    /// <summary>OnCardStateChanged 具名处理器（匿名 lambda 无法用 -= 反订阅，须具名化以支持 _ExitTree 清理）。</summary>
+    private void OnCardStateChangedHandler(CardInstance card, Script.Enums.CardChangeKind kind)
+    {
+        if (card == null) return;
+        if (kind == Script.Enums.CardChangeKind.CovertChanged)
         {
-            if (card == null) return;
-            if (kind == Script.Enums.CardChangeKind.CovertChanged)
-            {
-                Script.Manager.EffectEngine.ReevaluateAuras(card.ControllerId);
-            }
-            // 横置/重置：JC068 阿格斯IV"未横置封锁"依赖此即时开关（横置→解除封锁，竖置→恢复封锁）
-            else if (kind == Script.Enums.CardChangeKind.TappedChanged)
-            {
-                Script.Manager.EffectEngine.ReevaluatePrereqs(card.ControllerId);
-            }
-        };
+            Script.Manager.EffectEngine.ReevaluateAuras(card.ControllerId);
+        }
+        // 横置/重置：JC068 阿格斯IV"未横置封锁"依赖此即时开关（横置→解除封锁，竖置→恢复封锁）
+        else if (kind == Script.Enums.CardChangeKind.TappedChanged)
+        {
+            Script.Manager.EffectEngine.ReevaluatePrereqs(card.ControllerId);
+        }
     }
 
     // ============================================================
@@ -107,9 +113,8 @@ public partial class Arena : Control
     private void OnTurnStartedHandler(int turnCount)
     {
         GD.Print($"[Arena.UI] 回合开始: {turnCount}");
-        // 回合开始：重置基础行动次数并退出蒙版（次数用尽后下一回合恢复）
-        _actionService.ResetActionCharges(1);
-        _actionService.ResetActionCharges(2);
+        // 回合开始：基础行动次数重置已上收 TurnManager（发 OnTurnStarted 前完成），View 不再反向驱动；
+        // 这里仅退出蒙版（次数用尽后下一回合恢复，蒙版显示状态由 UI 管理）。
         ExitMask();
 
         SyncDerivedUI();   // 先后手可能已切换，统一刷新派生 UI（争夺区先手加成 + 地区统计）

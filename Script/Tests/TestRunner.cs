@@ -35,7 +35,9 @@ namespace Script.Tests
                 catch (Exception ex)
                 {
                     var inner = ex is System.Reflection.TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
-                    _failures.Add($"[ERR ] {m.Name}: 异常 {inner.GetType().Name}: {inner.Message}");
+                    // 打印完整堆栈，便于定位异常出处（诊断用；定位后可视情改回精简）
+                    var stack = inner.StackTrace?.Replace("\n", " | ") ?? "";
+                    _failures.Add($"[ERR ] {m.Name}: 异常 {inner.GetType().Name}: {inner.Message} @ {stack}");
                 }
             }
         }

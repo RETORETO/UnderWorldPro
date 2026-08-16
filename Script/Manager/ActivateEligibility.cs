@@ -91,6 +91,10 @@ namespace Script.Manager
             // 规则：仅正面朝上可激活；暗藏者（IsCovert）隐藏信息，不可发动任何激活能力。
             // 修复 JC003 BUG：原仅遍历 AreaZone 未判 IsCovert，导致背面朝上亦高亮可激活。
             if (card.IsCovert) return false;
+            // 【方案C】生效区门禁收敛到内层 foreach：对每个激活效果用 IsEffectActiveInZone 做效果粒度判定
+            // （默认：附属=AttachedZone，角色=AreaZone；显式声明 Scope 的效果按声明）。
+            // 旧整卡判定（isAtt + CurrentZone 一刀切 return false）已移除，勿再在别处重复写区判断，
+            // 避免"显式声明其他区（如墓地/手牌）的激活效果"被整卡误拦。
             // 控制权语义（核心需求 / D28）：激活能力由"当前控制者"发动，而非拥有者。
             // 夺控场景下 OwnerId 不变而 ControllerId 改变，若用 OwnerId 会导致：
             // ① 真正控制者因 OwnerId != 优先权被拒（自己的卡不能发动）；② 非控制者因 OwnerId == 优先权反能发动他人卡。
@@ -104,6 +108,9 @@ namespace Script.Manager
             foreach (var e in tmpl.EffectDataList)
             {
                 if (e.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)) continue;
+                // 方案C：激活效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
+                // 显式声明 Scope 的效果按声明（如未来墓地/手牌激活）。不在此区则跳过该效果。
+                if (!EffectEngine.IsEffectActiveInZone(e, card)) continue;
                 if (e.Cost > mana) continue;
                 // 窗口门禁（D9）：行动类激活仅限【自己行动步骤 + 堆叠为空 + 有行动权】
                 // （先手→ActionFirst，后手→ActionSecond，复用 CanEnterBasicActionMask）。
@@ -158,6 +165,11 @@ namespace Script.Manager
         {
             if (source == null || ability == null || target == null || source == target) return false;
             if (ability.Target == null || !ability.Target.NeedsSelection) return false;
+            // 本地区限定（TargetSpec.IsLocalZone）：目标须与来源卡同地区。统一基准=source.ZoneDetailId，
+            // 对三种情况均成立：角色激活=角色所在地区；结附地区的附属=结附的地区；
+            // 结附角色的附属=宿主角色所在地区（结附时 MoveToAttachedZone 已把 ZoneDetailId 记为宿主地区）。
+            // 此处前置统一拦截，使上方 TargetRules 分支与下方 allowedB 分支都受本地区约束。
+            if (ability.Target.IsLocalZone && target.ZoneDetailId != source.ZoneDetailId) return false;
             var tmpl = source.PlayerTemplate as PlayerCardData;
             if (tmpl == null) return false;
 
@@ -211,7 +223,11 @@ namespace Script.Manager
         public static bool HasLegalTarget(CardInstance source, EffectData ability, CardManager cm)
         {
             if (cm == null) return false;
-            var all = cm.GetAreaCards();
+            // 本地区限定：仅枚举来源卡所在地区的卡（基准=source.ZoneDetailId，含暗藏者与角色）；
+            // 否则 GetAreaCards 会遍历所有地区，本地区效果会把其他地区的目标也算合法。
+            var all = ability.Target != null && ability.Target.IsLocalZone
+                ? cm.GetAreaInstancesBySlot(source.ZoneDetailId)
+                : cm.GetAreaCards();
             if (all == null) return false;
             foreach (var c in all)
             {

@@ -68,11 +68,28 @@ namespace Script.UI.Interaction
         /// <summary>订阅 CombatManager 的对抗窗口请求事件 + 先手破平确认事件（替代 Arena 此前手动订阅/转发）。</summary>
         public void BindToCombatManager(CombatManager combatManager)
         {
+            _combatManager = combatManager;
             if (combatManager != null)
             {
                 combatManager.OnCombatWindowRequired += OnCombatWindowRequiredHandler;
                 combatManager.OnTieBreakRequired += OnTieBreakRequiredHandler;
             }
+        }
+
+        /// <summary>
+        /// 退出场景树时反订阅跨局常驻的 CombatManager 事件。
+        /// CombatManager 是 GameInitializer 的常驻子节点（跨局复用），而本协调器随 Arena 场景销毁；
+        /// 若不在退出时反订阅，旧协调器实例的回调会残留在 CombatManager 上，重开第二局触发对抗窗口时会访问已释放节点。
+        /// （订阅/反订阅成对，2026-08-16）
+        /// </summary>
+        public override void _ExitTree()
+        {
+            if (_combatManager != null)
+            {
+                _combatManager.OnCombatWindowRequired -= OnCombatWindowRequiredHandler;
+                _combatManager.OnTieBreakRequired -= OnTieBreakRequiredHandler;
+            }
+            base._ExitTree();
         }
 
         // ============================================================

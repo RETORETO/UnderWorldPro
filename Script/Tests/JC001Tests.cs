@@ -21,6 +21,7 @@ namespace Script.Tests
             var inst = new CardInstance(tmpl, "jc001_" + controllerId);
             inst.OwnerId = controllerId;
             inst.ControllerId = controllerId;
+            inst.CurrentZone = CardZone.AreaZone; // 角色卡在争夺区生效（方案C：配合 Scope 判定）
             return inst;
         }
 

@@ -62,6 +62,18 @@ public partial class CardManager : Node
         Instance = this;
     }
 
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 在 EffectEngine.ResetAll 之后调用（先清空静态效果注册表，
+    /// 避免本表清空时旧 UID 与新卡冲突）。
+    /// </summary>
+    public void Reset()
+    {
+        _allInstances.Clear();
+        _nextUID = 1;
+        GD.Print("[CardManager] Reset: 卡实例注册表已清空, _nextUID=1");
+    }
+
     // ============================================================
     // 创建
     // ============================================================

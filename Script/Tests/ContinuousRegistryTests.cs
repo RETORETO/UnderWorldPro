@@ -23,7 +23,7 @@ namespace Script.Tests
                     {
                         EffectId = name + "_C",
                         Timing = EffectTiming.Continuous,
-                        Scope = ZoneScope.HandZone,
+                        Scope = ZoneScope.ContestZone, // 角色卡在争夺区生效（方案C：Continuous 也按 Scope 判定）
                         ContinuousPrereq = "常驻",
                         ContinuousGrants = new Array<EffectGrant>
                         {
@@ -40,6 +40,7 @@ namespace Script.Tests
             var inst = new CardInstance(tmpl, uid);
             inst.OwnerId = 0;
             inst.ControllerId = 0;
+            inst.CurrentZone = CardZone.AreaZone; // 角色卡在争夺区生效（方案C：配合 Scope 判定）
             return inst;
         }
 

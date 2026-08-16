@@ -60,6 +60,25 @@ public partial class ZoneManager : Node
         _deckManager = deckManager;
     }
 
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 调用：清空全部区域桶并复位离场连带模式。
+    /// 字典键无需预建——后续开局 Ensure 会自动重建；List 桶直接 Clear。
+    /// </summary>
+    public void Reset()
+    {
+        _hand.Clear();
+        _graveyard.Clear();
+        _asset.Clear();
+        _score.Clear();
+        _council.Clear();
+        _area.Clear();
+        _attached.Clear();
+        _sealed.Clear();
+        _detachMode = DetachMode.Normal;
+        GD.Print("[ZoneManager] Reset: 全部区域桶已清空");
+    }
+
     // ============================================================
     // 桶工具
     // ============================================================
@@ -115,6 +134,39 @@ public partial class ZoneManager : Node
         {
             GD.Print($"[JC001DEBUG] 离场注销持久效果: {card.PlayerTemplate?.CardName} (UID={card.UID})");
             Script.Manager.EffectEngine.UnregisterPersistent(card);
+        }
+
+        // D49：附属自身离场（AttachedZone → 其他区，如 JC020 牺牲进墓地）——清结附关系。
+        // 此前 leavingArea 只处理"宿主离场"（DetachAttachments*），不处理"附属自己离场"，
+        // 导致 ResetToBaseState 清了 IsAttached 但 AttachedTo 残留、宿主 AttachedCards 残留已离场的附属
+        // → JC020 回手牌后无法再次结附。必须在离场入口统一清（不在 BumpVersion 清，避免争夺区移动误清）。
+        if (leavingAttach)
+        {
+            var host = card.AttachedTo;
+            if (host != null)
+            {
+                host.AttachedCards?.Remove(card);
+                card.AttachedTo = null;
+            }
+        }
+
+        // D49：封印卡自身离场（SealedZone → 其他区）——清封印关系（与附属对称）。
+        // 封印系统未实装（DetachSealedCards 为空实现），此分支当前不影响运行；封印实装后需测试确认。
+        if (card.CurrentZone == CardZone.SealedZone && targetZone != CardZone.SealedZone)
+        {
+            var sealedTarget = card.SealedBy;
+            if (sealedTarget != null)
+            {
+                sealedTarget.SealedCards?.Remove(card);
+                card.SealedBy = null;
+            }
+        }
+
+        // D49：被封印的卡（IsSealed）离场——其封印卡（SealedCards）按规则返回拥有者手牌（预留钩子 DetachSealedCards）。
+        // 封印系统未实装，此分支随封印实装后需测试确认（封印卡是否应回拥有者手牌）。
+        if (card.IsSealed && targetZone != CardZone.SealedZone)
+        {
+            DetachSealedCards(card);
         }
 
         // 离开场上：附属按连带模式处置（递归），封印卡跟随预留钩子
@@ -355,8 +407,19 @@ public partial class ZoneManager : Node
         TransferOwnership(card, playerId, bumpVersion);
         card.CurrentZone = CardZone.AreaZone;
         card.ZoneDetailId = areaDetailId;
+        // BUG3 修复：角色移动时同步其结附的附属（AttachedCards）的 ZoneDetailId（仅改地区，不改 control）。
+        // 附属在 AttachedZone，ZoneDetailId 记宿主地区；宿主移动后若不跟随，附属"本地区(IsLocalZone)"基准
+        // 与 UI 位置会停留在旧地区。夺控（TransferOwnership）只改控制者，不改附庸 control，故此处只同步地区。
+        foreach (var att in card.AttachedCards)
+        {
+            if (att == null) continue;
+            att.ZoneDetailId = areaDetailId;
+        }
         _area.Add(card);
         GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName}(UID={card.UID}) 进入地区 {areaDetailId} (玩家{playerId})，当前版本号={card.VersionId}");
+        // [DIAG 阿格斯IV] 追踪阿格斯进入争夺区（AreaZone）的实例，排查多实例问题
+        if (card.PlayerTemplate?.CardName == "阿格斯IV")
+            GD.Print($"[DIAG 阿格斯IV] 阿格斯进入AreaZone: UID={card.UID} ctrl={card.ControllerId} owner={card.OwnerId} fromZone={fromZone} 宿主AttachedTo={(card.AttachedTo?.UID ?? "∅")}");
         FireMoved(card, CardZone.AreaZone, playerId, areaDetailId, bumpVersion);
         if (fromZone != CardZone.AreaZone)
         {
@@ -391,6 +454,9 @@ public partial class ZoneManager : Node
             Script.Manager.EffectEngine.RegisterPersistent(card);
         }
         GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
+        // [DIAG 阿格斯IV] 追踪阿格斯进入附属区（AttachedZone）的实例，排查多实例问题
+        if (card.PlayerTemplate?.CardName == "阿格斯IV")
+            GD.Print($"[DIAG 阿格斯IV] 阿格斯进入AttachedZone: UID={card.UID} ctrl={card.ControllerId} owner={card.OwnerId} fromZone={fromZone} 宿主AttachedTo={(card.AttachedTo?.UID ?? "∅")}");
         FireMoved(card, CardZone.AttachedZone, playerId, areaDetailId);
     }
 

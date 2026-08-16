@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="PlayerCardData" format=3 uid="uid://bdg8wi3ck2k8h"]
+
+[ext_resource type="Script" uid="uid://yuh1i66ywukl" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="3_toddc"]
+
+[sub_resource type="Resource" id="Resource_color_0"]
+script = ExtResource("2")
+Color = 4
+Amount = 3
+
+[resource]
+script = ExtResource("1")
+Cost = 1
+ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
+CategoryFlag = 4
+SubCategories = Array[String](["机构"])
+Colors = Array[int]([4])
+MagicDomains = Array[int]([-1])
+Organization = "国家机构"
+Effects = Array[String](["结附于本方秘社 准备步骤强制触发：支付1，否则横置阿格斯IV。 持续：只要阿格斯IV未横置，对手就不能进行秘密派遣行动。"])
+UID = "JC068_agesiIV"
+CardName = "阿格斯IV"

@@ -109,6 +109,17 @@ public partial class AreaManager : Node
         GD.Print("✅ AreaManager 初始化完成");
     }
 
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 调用：清空地区注册表与势力标记（AreaInfo 持有的地区卡实例引用随之释放）。
+    /// </summary>
+    public void Reset()
+    {
+        _areas.Clear();
+        _marks.Clear();
+        GD.Print("[AreaManager] Reset: 地区注册表与势力标记已清空");
+    }
+
     // ============================================================
     // 世界牌库查询
     // ============================================================

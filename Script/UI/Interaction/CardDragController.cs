@@ -1,6 +1,7 @@
 using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
+using Script.Enums;
 using Script.Game.Entities;
 using Script.Manager;
 using Script.UI;
@@ -144,12 +145,20 @@ namespace Script.UI.Interaction
             {
                 // 命中结算：先判争夺区槽位（结附地区），再判秘社区（结附秘社）。
                 // 此前仅检测 AreaSlots，导致结附秘社卡放下时永远取不到 targetCardUid 而报"未检测到合法目标"。
+                // 地区落点仅当 dragging 卡允许结附地区（GetAllowedTargets 含 Area）时接受；否则不放 targetAreaName，
+                // 避免"只能结附角色的附属"（如 JC020）被拖到地区而错误结附地区（D48）。
+                bool allowsArea = _cardManager != null
+                    && cardUI.Instance?.PlayerTemplate is PlayerCardData pcd
+                    && pcd.GetAllowedTargets().Contains(TargetKind.Area);
                 foreach (var slot in _arena.AreaSlots)
                 {
                     var container = slot.GetTargetContainer(mousePos);
                     if (container != null)
                     {
-                        targetAreaName = slot.AreaUID;
+                        if (allowsArea)
+                        {
+                            targetAreaName = slot.AreaUID;
+                        }
                         break;
                     }
                 }

@@ -16,10 +16,11 @@ namespace Cards.Effects.PlayerCards.JC
             JC014_gongluqishi_Effects.Register();
             JC015_qumoren_Effects.Register();
             JC018_morenchuanren_Effects.Register();
+            JC020_yinbidefeidao_Effects.Register();
             JC030_juxingbianfu_Effects.Register();
             JC035_chuanmeimozhou_Effects.Register();
             JC060_shenmixueguwen_Effects.Register();
-            JC068_agesi_Effects.Register();
+            JC068_agesiIV_Effects.Register();
         }
     }
 }

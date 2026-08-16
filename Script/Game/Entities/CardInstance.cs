@@ -184,9 +184,10 @@ namespace Script.Game.Entities
                     }
                     break;
                 case "SubCategory":
-                    // 运行时子类型（如 JC030 授予"吸血鬼"）：写入 CurrentSubCategories（当前实际子类型集合）
+                    // 运行时子类型（如 JC030 授予"吸血鬼"）：写入 CurrentSubCategories（当前实际子类型集合）。
+                    // 不 BumpVersion：子类别合法性由 TargetValidity.Check 结算时实时复检（如 NotStaticSubCategory/StaticSubCategory/CurrentSubCategory），
+                    // 不再依赖版本号（原 Bump 为旧"总线通知"遗留，总线已移除）。见 2026-08-15 JC030 修复。
                     CurrentSubCategories.Add(value);
-                    BumpVersion();   // 子类别变化影响目标合法性 → 版本号失效
                     break;
             }
         }
@@ -223,9 +224,9 @@ namespace Script.Game.Entities
                     }
                     break;
                 case "SubCategory":
-                    // 撤销时回退：仅当该子类型非模板固有（避免误删静态子类型）才从 CurrentSubCategories 移除
+                    // 撤销时回退：仅当该子类型非模板固有（避免误删静态子类型）才从 CurrentSubCategories 移除。
+                    // 不 BumpVersion：同 Grant("SubCategory")，子类别合法性由结算复检覆盖，不依赖版本号（2026-08-15 JC030 修复）。
                     if (!HasStaticSubCategory(value)) CurrentSubCategories.Remove(value);
-                    BumpVersion();   // 子类别撤销影响目标合法性 → 版本号失效
                     break;
             }
         }
@@ -388,7 +389,9 @@ namespace Script.Game.Entities
         /// </summary>
         public void Untap()
         {
-            IsTapped = false;
+            // 统一走 SetTapped 事件链，避免绕过 TappedChanged 导致持续效果（JC068 阿格斯封锁）不同步。
+            // 注意：当前无调用者；回合重置实际走 CardManager.UntapAll（亦经 SetTapped）。
+            SetTapped(false);
         }
 
         // ============================================================

@@ -47,7 +47,16 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
                     CanTargetSelf = false,
-                    Filter = "敌方非人类且印刷费用≥3的角色"
+                    Filter = "敌方非人类且印刷费用≥3的角色",
+                    // ⚑ [2026-08-15] 激活目标精筛条件：与 data.TargetRules 同步（敌方 + 非人类 + 费≥3）。
+                    // 供 EffectEngine.ValidateTargetAtResolve 结算复检兜底"夺控换边"：目标被夺控成己方后 Enemy 不匹配即判丢失。
+                    Restrictions = new Godot.Collections.Array<TargetRestriction>
+                    {
+                        TargetRestriction.Enemy,
+                        TargetRestriction.NotStaticSubCategory,
+                        TargetRestriction.CostAtLeast
+                    },
+                    Param = "人类|3"
                 },
                 Actions = new Array<EffectAction>
                 {

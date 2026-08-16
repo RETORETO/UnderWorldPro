@@ -116,8 +116,8 @@ public partial class Arena : Control
         switch (_activeMask)
         {
             case MaskMode.DeployCovert:
-                bool isChar = (card.Instance?.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0;
-                bool canCovert = isChar && !(card.Instance?.HasPublicKeyword ?? false);
+                // MVC 单一真相源：资格判定上收 TurnManager.CanDeployCovert，View 只调不问（避免双份规则漂移）。
+                bool canCovert = _turnManager.CanDeployCovert(card.Instance);
                 // 仅"可派遣暗藏"的卡打灰色蒙版（角色卡 且 无【公开】关键字）；
                 // 事务卡/附属卡/公开卡均不打蒙版（不可暗藏）。
                 card.SetMask(canCovert ? grey : (Color?)null);

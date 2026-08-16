@@ -365,6 +365,8 @@ public partial class Arena : Control
                         EffectEngine.OnVisualDirty?.Invoke();
                     },
                 });
+                // 强制选择：阿格斯准备维护为强制触发，玩家必须二选一（不能取消/点窗外关闭）
+                win.ForceChoice = true;
                 win.Init(items);
                 AddChild(win);
                 win.PopupCentered();
@@ -381,14 +383,14 @@ public partial class Arena : Control
         //【MVC 收口】派生 UI 聚合刷新（资产区领域忠诚/地区能力统计/分数/横置视觉/持续效果态）
         // 统一经 ZoneManager.OnPostMove 事件驱动，所有 move 路径（move/PM 命令/结算）自动刷新，
         // 无需调用方逐处手动调 SyncDerivedUI，杜绝"一个一个 UI 刷新漏调"的问题。
-        _zoneManager.OnPostMove += (_, _, _, _) => SyncDerivedUI();
+        _zoneManager.OnPostMove += OnPostMoveSyncDerivedUI;
         // 持续光环（D19-③）：区域变动后重算所有光环受影响集合（入场/离场/夺控），与 ReevaluatePrereqs 内调用双保险
-        _zoneManager.OnPostMove += (_, _, p, _) => EffectEngine.ReevaluateAuras(p);
+        _zoneManager.OnPostMove += OnPostMoveReevaluateAuras;
         //【MVC 收口-堆叠箭头】箭头刷新改由事件驱动，去掉原 _Process 每帧轮询全量重绘：
         //  - 目标卡移动（FireMoved→OnPostMove）驱动箭头实时跟随；
         //  - 目标状态变更（CardManager.OnCardStateChanged，含翻面/离场/屏障）驱动重绘，
         //    丢失目标的条目因 entry.TargetWasLost 跳过其箭头（方案 B：与结算丢失走同一条总线）。
-        _zoneManager.OnPostMove += (_, _, _, _) => RedrawAllArrows();
+        _zoneManager.OnPostMove += OnPostMoveRedrawArrows;
         //【MVC 收口-P0】牌库顺序重组由 ZoneManager 唯一决定，Arena 订阅后仅按序纯重绘 DeckZone
         _zoneManager.OnDeckReordered += OnDeckReorderedHandler;
 
@@ -396,7 +398,8 @@ public partial class Arena : Control
         //【MVC 收口-堆叠箭头】目标状态变更（翻面/离场/屏障）驱动箭头重绘；
         // 丢失目标的条目因 entry.TargetWasLost 跳过其箭头（方案 B：与结算丢失走同一条总线）。
         // 注意：OnCardStateChanged 是 static 事件，须用类型名 CardManager 限定，不能用实例引用。
-        CardManager.OnCardStateChanged += (card, kind) => RedrawAllArrows();
+        // 匿名 lambda 无法用 -= 反订阅，故具名化以支持 _ExitTree 清理。
+        CardManager.OnCardStateChanged += OnCardStateChangedRedrawArrows;
         _playerManager = _initializer.PlayerManager;
         // 订阅游戏结束事件：胜利/失败瞬间由 Manager 广播（不经过堆叠），UI 仅展示 LABEL 并延时回主界面
         if (_playerManager != null) _playerManager.OnGameOver += OnGameOverHandler;
@@ -605,6 +608,86 @@ public partial class Arena : Control
         }
 
         RedrawAllArrows();
+    }
+
+    // ============================================================
+    // 事件订阅生命周期（2026-08-16 修复：投降/重开跨局崩溃的根治）
+    // 所有逻辑层/静态事件订阅改为具名方法，并在 _ExitTree 统一反订阅，
+    // 防止"旧 Arena 已释放但回调仍挂在静态/单例事件上"导致 ObjectDisposedException。
+    // 这是 MTGA 等卡牌的"订阅/反订阅成对"行业铁律。
+    // ============================================================
+
+    private void OnPostMoveSyncDerivedUI(CardInstance card, CardZone zone, int playerId, string detailId) => SyncDerivedUI();
+
+    private void OnPostMoveReevaluateAuras(CardInstance card, CardZone zone, int playerId, string detailId)
+        => Script.Manager.EffectEngine.ReevaluateAuras(playerId);
+
+    private void OnPostMoveRedrawArrows(CardInstance card, CardZone zone, int playerId, string detailId) => RedrawAllArrows();
+
+    private void OnCardStateChangedRedrawArrows(CardInstance card, Script.Enums.CardChangeKind kind) => RedrawAllArrows();
+
+    /// <summary>退出场景时反订阅全部逻辑层/静态事件，避免残留回调访问已释放节点。</summary>
+    public override void _ExitTree()
+    {
+        UnsubscribeFromManagerEvents();
+        base._ExitTree();
+    }
+
+    /// <summary>
+    /// 反注册 SubscribeToManagerEvents 与 _Ready 中订阅的所有逻辑层/静态事件（成对反订阅）。
+    /// 其中 _zoneManager/_turnManager/_cardManager 等逻辑层对象为全局单例，跨局复用，必须反订阅，
+    /// 否则旧 Arena 实例的回调会残留在其上，重开第二局时被触发而访问已释放的 UI 节点。
+    /// </summary>
+    private void UnsubscribeFromManagerEvents()
+    {
+        GD.Print($"[Arena._ExitTree] 反订阅逻辑层事件（Arena 实例 {GetInstanceId()}）");
+
+        if (_turnManager != null)
+        {
+            _turnManager.OnPhaseChanged -= OnPhaseChangedHandler;
+            _turnManager.OnPriorityChanged -= OnPriorityChangedHandler;
+            _turnManager.OnTurnStarted -= OnTurnStartedHandler;
+            _turnManager.OnTurnEnded -= OnTurnEndedHandler;
+            _turnManager.OnCardDrawn -= OnCardDrawnFromTurn;
+            _turnManager.OnCardPlayed -= OnCardPlayedHandler;
+            _turnManager.OnAssetsChanged -= OnAssetsChangedHandler;
+            _turnManager.OnFirstStrikeRecalculated -= RefreshFirstStrikeFlags;
+            _turnManager.OnPriorityChanged -= RefreshActivateHighlights;
+        }
+        if (_initializer?.CombatManager != null)
+            _initializer.CombatManager.OnAssetsChanged -= OnAssetsChangedHandler;
+        if (_cardManager != null)
+            _cardManager.OnCardDied -= OnCardDiedHandler;
+        CardManager.OnTargetSelectionChanged -= OnTargetSelectionChangedHandler;
+        CardManager.OnCardStateChanged -= OnCardStateChangedHandler;
+        CardManager.OnCardStateChanged -= OnCardStateChangedRedrawArrows;
+        if (_areaManager != null)
+        {
+            _areaManager.OnAreaWon -= OnAreaWonHandler;
+            _areaManager.OnAreaReplaced -= OnAreaReplacedHandler;
+            _areaManager.OnAreaRemoved -= OnAreaRemovedHandler;
+            _areaManager.OnMarksChanged -= OnMarksChangedHandler;
+            _areaManager.OnWorldDeckChanged -= OnWorldDeckChangedHandler;
+            _areaManager.OnAreaWonResolved -= OnAreaWonResolvedHandler;
+        }
+        Script.Manager.EffectEngine.OnVisualDirty -= OnVisualDirtyHandler;
+        Script.Manager.EffectEngine.CostModChanged -= RefreshHandCostReductions;
+        if (_zoneManager != null)
+        {
+            _zoneManager.OnCardMoved -= SyncCardUIToZone;
+            _zoneManager.OnPostMove -= OnPostMoveSyncDerivedUI;
+            _zoneManager.OnPostMove -= OnPostMoveReevaluateAuras;
+            _zoneManager.OnPostMove -= OnPostMoveRedrawArrows;
+            _zoneManager.OnDeckReordered -= OnDeckReorderedHandler;
+        }
+        if (_playerManager != null)
+            _playerManager.OnGameOver -= OnGameOverHandler;
+        if (_stackManager != null)
+            _stackManager.OnStackChanged -= RefreshStackUI;
+        // 清理静态 UI 回调委托：PromptPayOrTap 由本 Arena 注入（捕获本实例），
+        // Arena 销毁后置空，避免旧实例残留（第二局会由新 Arena 重新注入）。
+        if (Script.Manager.EffectEngine.PromptPayOrTap != null)
+            Script.Manager.EffectEngine.PromptPayOrTap = null;
     }
 
     /// <summary>
@@ -1243,10 +1326,17 @@ public partial class Arena : Control
             if (abilities.Count == 0)
                 return;
 
-            // 单选项且无目标：直接发动，不走弹窗（与原本拖拽激活一致，避免多余点击）
+            // 单选项：直接发动，不走弹窗（与原本拖拽激活一致，避免多余点击）。
+            // 若该效果"以横置本角色为代价"且本卡已横置（无法执行横置代价），或需要目标但无合法目标，则不发动。
             if (abilities.Count == 1)
             {
                 var only = abilities[0];
+                bool needsTapOnly = !string.IsNullOrEmpty(only.ActivateCondition)
+                                    && only.ActivateCondition.Contains("横置本角色");
+                bool noTargetOnly = only.Target is { NeedsSelection: true }
+                                    && !ActivateEligibility.HasLegalTarget(inst, only, _cardManager);
+                if (noTargetOnly || (needsTapOnly && inst.IsTapped))
+                    return;
                 if (only.Target is { NeedsSelection: true })
                 {
                     BeginAttachmentActivateWithTarget(inst, only);
@@ -1268,10 +1358,14 @@ public partial class Arena : Control
                 var ability = abilities[i];
                 int idx = i;
                 string label = $"{i + 1}. {GetActivationAbilityLabel(inst, ability)}";
-                // 需要指定目标的效果：预判断场上是否存在合法目标；无目标则置灰禁用，避免无目标也能发动
-                bool disabled = ability.Target is { NeedsSelection: true }
-                                && !ActivateEligibility.HasLegalTarget(inst, ability, _cardManager);
-                if (disabled) label += "（无合法目标）";
+                // 需要指定目标的效果：预判断场上是否存在合法目标；无目标则置灰禁用，避免无目标也能发动。
+                // "以横置本角色为代价"的效果：若本卡已横置（无法执行横置代价）也置灰（如 JC020 效果A）。
+                bool needsTap = !string.IsNullOrEmpty(ability.ActivateCondition)
+                                && ability.ActivateCondition.Contains("横置本角色");
+                bool disabled = (ability.Target is { NeedsSelection: true }
+                                 && !ActivateEligibility.HasLegalTarget(inst, ability, _cardManager))
+                                || (needsTap && inst.IsTapped);
+                if (disabled) label += needsTap && inst.IsTapped ? "（已横置，无法横置自身）" : "（无合法目标）";
                 items.Add(new ActivationChoiceItem
                 {
                     Label = label,

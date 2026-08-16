@@ -128,14 +128,19 @@ namespace Script.Data.Effects
         NonResponsive, // 卡文注明"不能以响应打出"
     }
 
-    /// <summary>持续效果生效位置（ZoneScope，B组专用）。</summary>
+    /// <summary>效果生效位置（ZoneScope，声明式生效区）。
+    /// 方案C（声明式 Scope）默认推导见 EffectEngine.GetDefaultScope/IsEffectActiveInZone。
+    /// 每个 EffectData 可声明其生效区；Specified=未声明，回退到卡类型默认区。
+    /// 未来扩展（如"墓地/卡组生效"）在此枚举补值并在 GetDefaultScope/IsEffectActiveInZone 加分支即可。</summary>
     public enum ZoneScope
     {
         ContestZone,   // 争夺区（角色默认生效位置）
         HandZone,      // 手牌区（如"公开"关键字仅约束手牌派遣暗藏）
-        AttachTarget,  // 结附于合法目标时（附属默认）
+        AttachTarget,  // 结附于合法目标时（附属默认；严格规则下=仅 AttachedZone）
         AssetZone,     // 资产区
-        Specified,     // 由卡文指定区域
+        Graveyard,     // 墓地（未来扩展：墓地生效效果）
+        DeckZone,      // 卡组（未来扩展：卡组生效效果）
+        Specified,     // 由卡文指定区域（未声明→回退卡类型默认）
     }
 
     /// <summary>静止/禁止效果种类（D19-⑤ 打通：让"不能被装备结附"等静止效果可被系统识别与校验）。
@@ -271,7 +276,10 @@ namespace Script.Data.Effects
         [Export] public CovertTriggerMode TriggerCovertMode { get; set; } = CovertTriggerMode.FaceUp; // 触发对暗藏状态的要求（默认仅正面朝上可触发）
 
         // ---- 持续专用（B组） ----
-        [Export] public ZoneScope Scope { get; set; } = ZoneScope.ContestZone;
+        // 默认 Specified：由 IsEffectActiveInZone 走 GetDefaultScope（附属→AttachTarget，角色→ContestZone），
+        // 实现"附属默认在附属区生效、角色默认在争夺区生效"。此前默认 ContestZone 会让未声明 Scope 的
+        // 附属卡激活效果被误当角色区判定而失效（D46）。显式声明 Scope 的效果按声明。
+        [Export] public ZoneScope Scope { get; set; } = ZoneScope.Specified;
         [Export] public string ContinuousPrereq { get; set; } = "常驻"; // 持续前提（常驻/心灵领域忠诚≥2…），兼容旧文本
         [Export] public ContinuousPrereqSpec PrereqSpec { get; set; } = null; // 结构化前提（D19-②，优先于文本）
         [Export] public string ContinuousEffect { get; set; } = "";      // 持续效果文本（获得图标/关键字…）

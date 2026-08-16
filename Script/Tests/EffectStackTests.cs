@@ -97,38 +97,40 @@ namespace Script.Tests
             Assert.AreEqual(v0, entry.TargetVersionId, "Push 应自动登记入栈时目标版本号（D16 统一收口）");
         }
 
-        /// <summary>D16 属性二次复检（2026-08-11）：目标被夺控换边（敌方→己方）且争夺区→争夺区移动不刷版本号时，
-        /// ValidateTargetAtResolve 必须靠 TargetRules 属性复检拦截——JC015 消灭"敌方"角色，目标变己方后应判丢失。
-        /// 验证版本号机制无法覆盖"夺控换边不刷版本号"的场景由属性复检兜底。</summary>
+        /// <summary>D16 属性复检（2026-08-16 起 Enemy/子类别/费用下沉到 TargetValidity.Check 单一真相源）：
+        /// 目标被夺控换边（敌方→己方）且争夺区→争夺区移动不刷版本号时，由 Check 的 Enemy Restrictions 拦截——
+        /// JC015 消灭"敌方"角色，目标变己方后应判丢失。版本号机制无法覆盖"夺控换边不刷版本号"的场景由属性复检兜底。</summary>
         public void TestResolveRejectsTargetAfterControlTransfer()
         {
             var cm = new CardManager();
             cm._Ready();
-            // 来源卡：声明 TargetRules=[敌方]（模拟 JC015 消灭敌方角色）
-            var srcTmpl = new PlayerCardData { CardName = "驱魔人" };
-            srcTmpl.TargetRules = new Godot.Collections.Array<TargetRule>
+            // 来源卡（模拟 JC015 驱魔人）：控制者=玩家1（己方），位于争夺区
+            var src = cm.CreateCardInstance(new PlayerCardData { CardName = "驱魔人", CategoryFlag = CardCategory.Character }, 1);
+            src.CurrentZone = CardZone.AreaZone;
+            src.ZoneDetailId = "areaA";
+            // 目标：初始敌方（玩家2控制），位于争夺区
+            var tgt = cm.CreateCardInstance(new PlayerCardData { CardName = "血族长老", CategoryFlag = CardCategory.Character }, 2);
+            tgt.CurrentZone = CardZone.AreaZone;
+            tgt.ZoneDetailId = "areaA";
+
+            // 激活目标规则：Character + Enemy 限制（单一真相源，经 CheckRestrictions 复检）
+            var desc = new TargetSpec
             {
-                new TargetRule { Kind = TargetKind.Character, Restrictions = new Godot.Collections.Array<TargetRestriction> { TargetRestriction.Enemy } }
+                Kind = TargetKind.Character,
+                NeedsSelection = true,
+                Restrictions = new Godot.Collections.Array<TargetRestriction> { TargetRestriction.Enemy },
             };
-            var src = cm.CreateCardInstance(srcTmpl, 0);
-            src.ControllerId = 1;                        // 来源控制者=玩家1（己方）
-            // 目标：初始敌方（玩家2控制），非人类，费用≥3 —— 满足 JC015 入栈时合法性
-            var tgtTmpl = new PlayerCardData { CardName = "血族长老", Cost = 3 };
-            tgtTmpl.SubCategories = new Godot.Collections.Array<string> { "非人类" };
-            var tgt = cm.CreateCardInstance(tgtTmpl, 0);
-            tgt.ControllerId = 2;                        // 入栈时敌方
+            // 来源控制者快照=1（入栈时），Enemy 以此为准，来源事后被夺控不改变敌我关系
+            var snap = new TargetValidity.TargetSnapshot("areaA", 1);
 
-            var effect = new EffectData { EffectId = "JC015_X", Timing = EffectTiming.CharacterActivated };
+            // 入栈时（目标敌方=玩家2 vs 来源=玩家1）：Enemy 通过 → 合法
+            var before = TargetValidity.Check(src, tgt, desc, snap);
+            Assert.IsTrue(before.valid, $"夺控前目标敌方，应合法（reason={before.reason}）");
 
-            // 入栈时（敌方）：属性复检通过
-            var before = EffectEngine.ValidateTargetAtResolve(effect, src, tgt, targetVersionId: tgt.VersionId);
-            Assert.AreEqual(EffectEngine.TargetValidation.Ok, before, "夺控前目标敌方，应合法");
-
-            // 争夺区→争夺区夺控换边：控制者 2→1，版本号不刷（模拟 FireMoved bump=False）
-            tgt.ControllerId = 1;                        // 变成己方（与来源同控）
-            // 版本号仍为原值（夺控不刷），模拟运行时"不刷版本号"事实
-            var after = EffectEngine.ValidateTargetAtResolve(effect, src, tgt, targetVersionId: tgt.VersionId);
-            Assert.AreEqual(EffectEngine.TargetValidation.Lost, after, "夺控换边成己方后，Enemy 属性复检应判丢失");
+            // 争夺区→争夺区夺控换边：控制者 2→1，版本号不刷（模拟 FireMoved bump=False），变为己方
+            tgt.ControllerId = 1;
+            var after = TargetValidity.Check(src, tgt, desc, snap);
+            Assert.IsFalse(after.valid, "夺控换边成己方后，Enemy 属性复检应判丢失");
         }
     }
 }

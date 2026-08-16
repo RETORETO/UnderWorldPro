@@ -54,6 +54,19 @@ public partial class PlayerManager : Node
         GD.Print("✅ PlayerManager 初始化完成");
     }
 
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 调用：复位游戏结束标记并重建玩家数据（计数/先手复位为默认）。
+    /// 先手归属由后续对局流程（掷先手/首回合）重新决定。
+    /// </summary>
+    public void Reset()
+    {
+        _isGameOver = false;
+        Player1 = new PlayerData { PlayerId = 1, Name = "玩家1" };
+        Player2 = new PlayerData { PlayerId = 2, Name = "玩家2" };
+        GD.Print("[PlayerManager] Reset: 玩家数据已重建, _isGameOver=false");
+    }
+
     public PlayerData GetPlayer(int id) => id == 1 ? Player1 : Player2;
     public PlayerData GetCurrentPlayer() => Player1; // 本地玩家（玩家1）
 
@@ -233,7 +246,7 @@ public partial class PlayerManager : Node
     {
         if (_zoneManager == null) return;
         foreach (var card in _zoneManager.GetZoneCards(CardZone.AssetZone, playerId))
-            card.IsTapped = false;
+            card.SetTapped(false);   // SetTapped 发 TappedChanged，统一横置/重置事件链
     }
 
     // ============================================================

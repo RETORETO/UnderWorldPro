@@ -44,11 +44,11 @@ public partial class DeckManager : Node
         ("JC012_weimushouwanghuiji",  "res://Cards/Data/PlayerCards/JC/JC012_weimushouwanghuiji.tres",  3),
         ("JC013_mo",                  "res://Cards/Data/PlayerCards/JC/JC013_mo.tres",                  3),
         ("JC014_gongluqishi",         "res://Cards/Data/PlayerCards/JC/JC014_gongluqishi.tres",         3),
-        ("XG001_yinyaotanqiuzhe",      "res://Cards/Data/PlayerCards/XG/XG001_yinyaotanqiuzhe.tres",      3),
         ("BQ022_hejinzhihu",      "res://Cards/Data/PlayerCards/BQ/BQ022_hejinzhihu.tres",      3),
         ("JC030_juxingbianfu",      "res://Cards/Data/PlayerCards/JC/JC030_juxingbianfu.tres",      3),
         ("JC049_shenyuanxiyu",      "res://Cards/Data/PlayerCards/JC/JC049_shenyuanxiyu.tres",      3),
         ("JC047_liehuozhongwei",      "res://Cards/Data/PlayerCards/JC/JC047_liehuozhongwei.tres",      3),
+        ("JC068_agesiIV",             "res://Cards/Data/PlayerCards/JC/JC068_agesIV.tres",              3),
         
 
     };

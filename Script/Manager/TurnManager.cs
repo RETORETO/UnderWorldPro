@@ -258,8 +258,27 @@ public partial class TurnManager : Node
     }
 
     // ============================================================
-    // 核心方法：StartGame / NextTurn
+    // 核心方法：Reset / StartGame / NextTurn
     // ============================================================
+
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 调用：将全部对局状态复位到"未开局"初始值。
+    /// 纯复位、不触发任何事件；真正开局由后续 GameInitializer.StartMatch → StartGame 完成。
+    /// </summary>
+    public void Reset()
+    {
+        TurnCount = 0;
+        CurrentPhase = TurnPhase.StartReset;
+        FirstPlayerId = 1;
+        PriorityPlayerId = 0;
+        _passCount = 0;
+        _combatAreaUids.Clear();
+        _combatAreaIndex = 0;
+        _atomicLock = false;
+        _openModalCount = 0;
+        GD.Print("[TurnManager] Reset: 回合状态已复位到未开局");
+    }
 
     public void StartGame()
     {
@@ -269,6 +288,10 @@ public partial class TurnManager : Node
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
         _playerManager?.SetFirstPlayer(FirstPlayerId);
+        // MVC：回合级规则（重置基础行动次数/破平特权）归属 Controller（TurnManager），
+        // 在广播 OnTurnStarted 前完成，避免 View 收到事件后再反向驱动 Model。
+        _playerManager?.ResetActionCharges(1);
+        _playerManager?.ResetActionCharges(2);
         GD.Print($"=== 游戏开始，回合 {TurnCount}，先手玩家: {FirstPlayerId} ===");
         OnTurnStarted?.Invoke(TurnCount);
         EnterPhase(TurnPhase.StartReset);
@@ -282,6 +305,10 @@ public partial class TurnManager : Node
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
         _playerManager?.SetFirstPlayer(FirstPlayerId);
+        // MVC：回合级规则（重置基础行动次数/破平特权）归属 Controller（TurnManager），
+        // 在广播 OnTurnStarted 前完成，避免 View 收到事件后再反向驱动 Model。
+        _playerManager?.ResetActionCharges(1);
+        _playerManager?.ResetActionCharges(2);
         GD.Print($"=== 开始回合 {TurnCount}，先手玩家: {FirstPlayerId} ===");
         OnTurnStarted?.Invoke(TurnCount);
         EnterPhase(TurnPhase.StartReset);
@@ -795,16 +822,16 @@ public partial class TurnManager : Node
 
         // ③ 结算复检（总线移除后的主判定）：版本号一致，但仍需按入栈快照复核那些"不刷版本号"的条件——
         // 规则⑥本地区（争夺区内移动不刷版本号）与 Friendly/Enemy（夺控换边不刷版本号）等。
-        var desc = GetPrimaryTargetDesc(entry);
-        if (desc != null)
-        {
-            var source = entry.SourceCard ?? _cardManager?.GetInstance(entry.SourceCardUid);
-            var snapshot = entry.HasSourceZoneSnapshot
-                ? new Script.Manager.TargetValidity.TargetSnapshot(
-                    entry.SourceZoneDetailSnapshot, entry.SourceControllerSnapshot)
-                : (Script.Manager.TargetValidity.TargetSnapshot?)null;
-            var (valid, reason) = TargetValidity.Check(source, target, desc, snapshot);
-            if (!valid)
+            var desc = GetPrimaryTargetDesc(entry);
+            if (desc != null)
+            {
+                var source = entry.SourceCard ?? _cardManager?.GetInstance(entry.SourceCardUid);
+                var snapshot = entry.HasSourceZoneSnapshot
+                    ? new Script.Manager.TargetValidity.TargetSnapshot(
+                        entry.SourceZoneDetailSnapshot, entry.SourceControllerSnapshot)
+                    : (Script.Manager.TargetValidity.TargetSnapshot?)null;
+                var (valid, reason) = TargetValidity.Check(source, target, desc, snapshot);
+                if (!valid)
             {
                 GD.Print($"⚑ [D16] 目标 {targetUid} 结算复检不合法（{reason}）：发动地快照={entry.SourceZoneDetailSnapshot}，" +
                          $"目标当前地区={target.ZoneDetailId}，来源控制者快照={entry.SourceControllerSnapshot}，目标控制者={target.ControllerId} → 判丢失");
@@ -959,8 +986,11 @@ public partial class TurnManager : Node
                     card.IsAttached = true;
                     card.AttachedTo = target;
                     target.AttachedCards.Add(card);
-                    // 附属进入目标所在地区（与目标同区），detailId 用目标地区
-                    _cardManager?.MoveCardToArea(card, target.ZoneDetailId ?? "");
+                    // 附属进入 AttachedZone（非 AreaZone）：Z1 生效区判定需要 CurrentZone=AttachedZone，
+                    // 否则结附角色的附属效果（RegisterPersistent/TriggerRegistry/CanActivate）不会生效。
+                    // ZoneDetailId 记宿主角色所在地区，供"本地区（IsLocalZone）"判定使用。
+                    // （此前误用 MoveCardToArea→AreaZone，导致结附角色的附属效果全部失效。）
+                    _zoneManager?.MoveToAttachedZone(card, target.ZoneDetailId ?? "", card.ControllerId == 0 ? 1 : card.ControllerId);
                     GD.Print($"[Resolve] 附属 {card.PlayerTemplate?.CardName} 结附于 {target.PlayerTemplate?.CardName}（地区 {target.ZoneDetailId}）");
                 }
                 else if (!string.IsNullOrEmpty(targetAreaId))

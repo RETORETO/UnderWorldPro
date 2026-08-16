@@ -57,6 +57,9 @@ namespace Script.Tests
             _cm._Ready();                       // 单例 + 实例表初始化
             _sm = new StackManager();
             _sm._Ready();
+            // 注入 CardManager：让 StackManager.Push 入栈时自动登记目标版本号（D16 统一收口），
+            // 否则 entry.TargetVersionId 保持默认 -1，结算版本号比对失效（EffectStackTests 亦如此注入）。
+            _sm.SetCardManager(_cm);
             _zm = new ZoneManager();
             _zm.Initialize(_cm, null);          // 牌库管理器传 null（测试不涉牌库）
             // 关键连通性：CardManager 的 _zoneManager 必须由本 ZoneManager 注入，
@@ -83,6 +86,7 @@ namespace Script.Tests
         {
             var 卡数据 = new PlayerCardData
             {
+                UID = "JC002_测试卡",
                 CardName = "JC002_测试卡",
                 // 关键：本地区选目标（GetLocalZoneTargets）按 MapInstanceToTargetKind 过滤候选，
                 // 它依赖实例 PlayerTemplate.CategoryFlag 是否为 Character。未声明则候选恒空，
@@ -104,6 +108,10 @@ namespace Script.Tests
             };
             卡数据.EffectDataList.Add(效果);
             var 实例 = _cm.CreateCardInstance(卡数据, 拥有者Id);
+            // 注意：CreateCardInstance 内部 EnsureEffects 会对未注册 UID 的卡执行 EffectDataList.Clear()，
+            // 清掉上面手动添加的触发效果（效果完全由 builder 构建是设计约束）。_effectsInjected 已置位后
+            // 不会再 Clear，故在此重新补回效果，使实例能被触发扫描到（否则收集为 0、不入栈）。
+            卡数据.EffectDataList.Add(效果);
             实例.CurrentZone = CardZone.Hand;   // 模拟“从手牌进场”
             _最后效果 = 效果;
             return 实例;
@@ -179,9 +187,11 @@ namespace Script.Tests
             // 先放一张“另一张角色”在地区A，作为 JC002 的非自身目标候选
             var 目标卡 = _cm.CreateCardInstance(new PlayerCardData
             {
+                UID = "本地区友军",
                 CardName = "本地区友军",
                 CategoryFlag = CardCategory.Character,
             }, 1);
+            目标卡.CurrentZone = CardZone.Hand;   // 模拟从手牌进场（默认 Deck 会让 RemoveFromAllZones 调 null 牌库管理器 NRE）
             _zm.MoveToArea(目标卡, 地区A, 1);
 
             var 卡片 = 创建JC002风格卡(1, 地区A);
@@ -217,9 +227,11 @@ namespace Script.Tests
 
             var 目标卡 = _cm.CreateCardInstance(new PlayerCardData
             {
+                UID = "被移走的角色",
                 CardName = "被移走的角色",
                 CategoryFlag = CardCategory.Character,
             }, 1);
+            目标卡.CurrentZone = CardZone.Hand;   // 模拟从手牌进场（默认 Deck 会让 RemoveFromAllZones 调 null 牌库管理器 NRE）
             _zm.MoveToArea(目标卡, 地区A, 1);
 
             var 卡片 = 创建JC002风格卡(1, 地区A);

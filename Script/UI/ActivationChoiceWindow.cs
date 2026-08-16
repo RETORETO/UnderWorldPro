@@ -33,6 +33,11 @@ namespace Script.UI
         // 窗口是否已通过"选项/取消"正常关闭，避免 FocusExited 重复释放
         private bool _dismissed = false;
 
+        /// <summary>强制选择模式：为强制触发效果（如 JC068 阿格斯IV准备维护）使用。
+        /// 开启后：不显示"取消"按钮，点击窗口外不关闭窗口——玩家必须二选一才能继续。
+        /// 默认 false：保持原行为（可取消、点窗外即关闭），不影响其他非强制效果。</summary>
+        public bool ForceChoice = false;
+
         private void EnsureButtonBox()
         {
             if (_buttonBox != null) return;
@@ -42,6 +47,8 @@ namespace Script.UI
             _buttonBox.AddThemeConstantOverride("separation", 8);
             AddChild(_buttonBox);
 
+            // 强制选择模式：不提供取消按钮（玩家必须选一项才能继续）
+            if (ForceChoice) return;
             // 取消按钮（始终在最后）：等同点击窗口外，视为取消
             var cancel = new Button { Text = "取消" };
             cancel.Pressed += Dismiss;
@@ -66,6 +73,8 @@ namespace Script.UI
         private void OnFocusExited()
         {
             if (_dismissed) return;
+            // 强制选择模式：点击窗口外不关闭，玩家必须选一项（选项/取消之外无关闭途径）
+            if (ForceChoice) return;
             _dismissed = true;
             QueueFree();
         }

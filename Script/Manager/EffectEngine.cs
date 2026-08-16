@@ -187,6 +187,9 @@ namespace Script.Manager
                 return TargetValidation.Lost;
             }
 
+            // ⚑ [2026-08-15 诊断] 结算入口打印目标当前版本/控制者/区域，配合 [DIAG][Stack.Push] 对比入栈与结算差异
+            GD.Print($"[DIAG][Resolve] 效果 {data.EffectId} 结算目标={target.PlayerTemplate?.CardName ?? "?"} 当前版本={target.VersionId} 入栈版本={targetVersionId} ctrl={target.ControllerId} zone={target.CurrentZone} kind={CardManager.MapInstanceToTargetKind(target)}");
+
             // 卡目标（D16 新方案）：状态版本号比对——入栈时记录的版本号与当前不一致即判丢失。
             // 版本号由移动/翻面/控制者变化/子类别授予撤销等中枢的 BumpVersion 驱动，取代逐属性广播。
             // targetVersionId<0 表示调用方未提供入栈版本号（兼容旧路径），回退为"实例存在即有效"。
@@ -194,16 +197,18 @@ namespace Script.Manager
             // 必须由下方属性二次复检（TargetRules）兜底"敌方/友方、子类别、费用"等约束。
             if (targetVersionId >= 0 && target.VersionId != targetVersionId)
             {
-                GD.Print($"[EffectEngine] ⚑ [D16] 效果 {data.EffectId} 目标状态版本号变化（入栈 {targetVersionId} → 现 {target.VersionId}）→ 不结算");
+                GD.Print($"[EffectEngine] ⚑ [D16] 效果 {data.EffectId} 目标状态版本号变化（入栈 {targetVersionId} → 现 {target.VersionId}）→ 不结算  [DIAG target={target.PlayerTemplate?.CardName ?? "?"} ctrl={target.ControllerId} zone={target.CurrentZone}]");
                 return TargetValidation.Lost;
             }
 
             // 属性二次复检（D16 需求点 3，2026-08-11 实装）：
             // 优先用激活目标规则 data.Target 复检（与 IsLegalActivateTarget 取目标阶段同源）；
-            // 仅当激活无 Target 配置（data.Target==null）时，才回退到打出规则 TargetRules 精筛
-            // （供"激活目标=打出目标"的卡，如 JC015 消灭"敌方非人类且费用≥3"角色，目标被夺控换边后判丢失）。
+            // 仅当激活无 Target 配置（data.Target==null）时，才回退到打出规则 TargetRules 精筛。
             // 解决：JC012 等"激活目标≠打出目标"的卡，被打出规则 TargetRules（结附秘社的附属）误判目标丢失（2026-08-11 修复）。
             // 语义：版本号比对覆盖移动/翻面；本复检覆盖控制者换边（版本号不变）类变化。两条缺一不可。
+            // ⚠ 2026-08-16：Restrictions（Enemy/子类别/费用）精筛复检不再在此重复——
+            //   激活/触发/事务效果均先经 TurnManager.IsTargetLost → TargetValidity.Check 做完整复检（含 CheckRestrictions），
+            //   此处的 data.Target 与之同源，故此处只保留大类复检，避免冗余。
             if (source != null && target != null)
             {
                 var actTarget = data.Target;
@@ -259,12 +264,12 @@ namespace Script.Manager
             switch (action.Verb)
             {
                 case ActionVerb.Tap:
-                    if (target != null) { target.IsTapped = true; GD.Print($"[EffectEngine] 横置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
+                    if (target != null) { target.SetTapped(true); GD.Print($"[EffectEngine] 横置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
                     else GD.Print("[EffectEngine] Tap 目标为空，跳过");
                     break;
 
                 case ActionVerb.Untap:
-                    if (target != null) { target.IsTapped = false; GD.Print($"[EffectEngine] 重置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
+                    if (target != null) { target.SetTapped(false); GD.Print($"[EffectEngine] 重置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
                     break;
 
                 case ActionVerb.Destroy:
@@ -642,6 +647,25 @@ namespace Script.Manager
         /// <summary>清空威名放置去重表（每次战斗对抗 Emit 前调用，保证单次战斗维度内去重）。</summary>
         public static void ResetCombatWonDedup() => _combatWonMarkPlaced.Clear();
 
+        // ==================== 对局级全量重置（B2：单场景常驻 + 显式 Reset） ====================
+        // 一局结束、重开下一局前调用（由 GameInitializer.ResetMatch 编排，且必须先于 CardManager.Reset 调用）。
+        // 作用：清空本引擎全部静态对局状态注册表 + 复位 CurrentTurn。
+        // 注意：仅清空"对局状态数据"，绝不清空模板级注册表（CardEffectFactory）与常驻注入引用/委托
+        // （TurnManagerRef/CardManagerRef/ZoneManagerRef/IsStackCircuitBroken/OnVisualDirty/PromptPayOrTap/CostModChanged）。
+        // 采用"直接清空"方案：B2 下第二局会重建全部 CardInstance，旧卡对象整体被抛弃，无需先 Revoke。
+        public static void ResetAll()
+        {
+            _continuousRegistry.Clear();
+            _activePrereqCards.Clear();
+            _auraGrants.Clear();
+            _timedModStack.Clear();
+            _combatWonMarkPlaced.Clear();
+            _pendingPrereqCards.Clear();
+            _blockDeployCovertPlayers.Clear();
+            CurrentTurn = 1;
+            GD.Print("[EffectEngine] ResetAll: 7 个静态注册表已清空, CurrentTurn=1");
+        }
+
         // ==================== 条件判定（最小） ====================
         public static bool EvaluateCondition(string predicate, CardInstance source, CardInstance target, CardInstance contextCard = null, int triggeringPlayerId = -1, string triggeringAreaId = null)
         {
@@ -756,6 +780,17 @@ namespace Script.Manager
         public static void RegisterPersistent(CardInstance card)
         {
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return;
+            // Z1 严格规则：附属卡仅 AttachedZone 生效。非 AttachedZone 的附属卡（如 AreaZone/资产/手牌/墓地）
+            // 不注册持久效果，其持续/静止效果不生效。角色卡仍按原逻辑（进 AreaZone/AttachedZone 时注册）。
+            // 【方案C 后续改动方向】此整卡判定将移除，改为内层 foreach 按每个效果的 Scope（IsEffectActiveInZone）
+            // 做效果粒度判定——允许"显式声明 Scope 的效果"在其他区生效（如墓地/手牌效果）。
+            // 当前 Z1 严格规则仍由本整卡快速返回兜底，行为不变。
+            bool isAttachment = (tmpl.CategoryFlag & CardCategory.Attachment) != 0;
+            if (isAttachment && card.CurrentZone != CardZone.AttachedZone)
+            {
+                GD.Print($"[EffectEngine][Z1] 附属卡 {tmpl.CardName}(UID={card.UID}) 不在附属区(Zone={card.CurrentZone})，跳过持久效果注册");
+                return;
+            }
             GD.Print($"[JC001DEBUG] RegisterPersistent 进入: {tmpl.CardName} (UID={card.UID}, 效果数={tmpl.EffectDataList.Count})");
             if (_continuousRegistry.ContainsKey(card.UID)) return; // 防重复注册
             var applied = new System.Collections.Generic.List<EffectGrant>();
@@ -764,8 +799,11 @@ namespace Script.Manager
             {
                 if (e.Timing == EffectTiming.Static)
                 {
-                    // 静止/禁止效果：按 Scope 置位（默认争夺区；非场地区不生效）
-                    if (e.Scope != ZoneScope.ContestZone) continue;
+                    // 静止/禁止效果：按生效区判定（默认争夺区/结附区；非对应区不生效）
+                    // 【方案C】改为统一 IsEffectActiveInZone（效果粒度，尊重 e.Scope 声明）。
+                    // 原旧逻辑：`if (e.Scope != ZoneScope.ContestZone) continue;` 已在下方收敛为 IsEffectActiveInZone，
+                    // 未来移除时勿漏（Static 效果也须过生效区判定）。
+                    if (!IsEffectActiveInZone(e, card)) continue;
                     foreach (var s in e.StaticEffects ?? new Array<StaticEffect>())
                     {
                         if (s == null) continue;
@@ -775,6 +813,9 @@ namespace Script.Manager
                 }
                 else if (e.Timing == EffectTiming.Continuous)
                 {
+                    // 【方案C】生效区判定：持续效果也须在生效区（当前整卡 Z1 已保证，此处为效果粒度兜底，
+                    // 未来允许显式声明 Scope 的效果在其他区生效时，靠此判定 + 移除整卡 return）。
+                    if (!IsEffectActiveInZone(e, card)) continue;
                     // 持续效果：前提判定
                     bool prereqMet = EvaluatePrereq(card, e);
                     if (!prereqMet)
@@ -786,6 +827,8 @@ namespace Script.Manager
                     // 全局封锁秘密派遣（JC068）：带 BlockDeployCovert 且前提（未横置）满足 → 登记封锁对手派遣。
                     if (HasBlockDeployCovert(e))
                     {
+                        // [DIAG] 追踪阿格斯封锁注册次数与实例，排查多实例（UI 只见一张但逻辑多个）
+                        GD.Print($"[DIAG 阿格斯IV] RegisterPersistent 效果B: UID={card.UID} Zone={card.CurrentZone} ctrl={card.ControllerId} 宿主={(card.AttachedTo?.UID ?? "∅")} 前提满足={prereqMet}");
                         SetBlockDeployCovert(card, active: true);
                         _activePrereqCards.Add(card); // 登记到已生效集合，供横置/竖置时 ReevaluatePrereqs 重判
                     }
@@ -834,6 +877,37 @@ namespace Script.Manager
             return v;
         }
 
+        /// <summary>卡类型默认生效区（方案C 声明式 Scope 的默认推导）。
+        /// 未声明 Scope（Specified）的效果回退到此处：附属→AttachTarget（严格=仅 AttachedZone）；角色→ContestZone（仅 AreaZone）。
+        /// 未来扩展（墓地/手牌生效等）在此加判断，或让具体效果声明 Scope 覆盖。</summary>
+        public static ZoneScope GetDefaultScope(CardInstance card)
+        {
+            if (card?.PlayerTemplate is not PlayerCardData tmpl) return ZoneScope.Specified;
+            bool isAttachment = (tmpl.CategoryFlag & CardCategory.Attachment) != 0;
+            return isAttachment ? ZoneScope.AttachTarget : ZoneScope.ContestZone;
+        }
+
+        /// <summary>某效果在其来源卡当前所在区是否生效（方案C 统一判定，替代三处散落的"卡类型+CurrentZone"）。
+        /// 判定基准：效果声明的 Scope；未声明（Specified）→ 卡类型默认区。
+        /// 接入点：RegisterPersistent（持续/静止）、TriggerRegistry（触发）、ActivateEligibility（激活）。
+        /// 注意：AttachTarget 采用严格规则=仅 AttachedZone（Z1/Z4，AreaZone 附属暂不生效）。
+        /// 未来加"某区生效"只需在 switch 增分支，勿在调用处重复写区判断（避免遗漏）。</summary>
+        public static bool IsEffectActiveInZone(EffectData e, CardInstance card)
+        {
+            if (card == null || e == null) return false;
+            ZoneScope scope = (e.Scope == ZoneScope.Specified) ? GetDefaultScope(card) : e.Scope;
+            switch (scope)
+            {
+                case ZoneScope.ContestZone:  return card.CurrentZone == CardZone.AreaZone;
+                case ZoneScope.AttachTarget: return card.CurrentZone == CardZone.AttachedZone; // 严格版（Z1/Z4）
+                case ZoneScope.HandZone:     return card.CurrentZone == CardZone.Hand;
+                case ZoneScope.AssetZone:    return card.CurrentZone == CardZone.AssetZone;
+                case ZoneScope.Graveyard:    return card.CurrentZone == CardZone.Graveyard; // 未来
+                case ZoneScope.DeckZone:     return card.CurrentZone == CardZone.Deck;      // 未来
+                default:                     return false;
+            }
+        }
+
         /// <summary>结构化前提判定（D19-②）。PrereqSpec 优先；无则回退旧文本（仅"常驻"生效）。
         /// 注意：ScaleByLoyalty=true 时视为"线性计量"——N&gt;0 即满足，授予量由调用方按 N 缩放。</summary>
         public static bool EvaluatePrereq(CardInstance card, EffectData e)
@@ -877,6 +951,9 @@ namespace Script.Manager
         {
             if (card == null) return;
             int opponent = card.ControllerId == 1 ? 2 : 1;
+            // [DIAG] 打印阿格斯IV完整实例信息：UID、Zone、控制者、拥有者、宿主(AttachedTo)、是否横置
+            // 用于排查 UI 只见一张但逻辑存在多个实例的问题（同一阿格斯不应出现两个 UID 的封锁登记）。
+            GD.Print($"[DIAG 阿格斯IV] 封锁开关 active={active} 卡={card.PlayerTemplate?.CardName}(UID={card.UID}) Zone={card.CurrentZone} ctrl={card.ControllerId} owner={card.OwnerId} 宿主AttachedTo={(card.AttachedTo?.PlayerTemplate?.CardName ?? "∅")}(UID={(card.AttachedTo?.UID ?? "∅")}) IsTapped={card.IsTapped} → 封锁玩家{opponent}");
             if (active)
             {
                 _blockDeployCovertPlayers.Add(opponent);
@@ -1168,7 +1245,8 @@ namespace Script.Manager
         /// 角色/附属激活能力入堆叠（D9 激活框架接驳点）：将一条激活型 EffectData 包装为 Trigger 类
         /// StackEntry 入堆叠，统一走 ResolveEntry 的 Trigger 分支执行（含 D16 目标丢失校验）。
         /// </summary>
-        public static void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null)
+        public static void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null,
+            string sourceZoneDetailSnapshot = null, int sourceControllerSnapshot = -1)
         {
             if (sm == null || card == null || ability == null) return;
             var entry = new StackEntry(card.OwnerId, $"[激活]{ability.EffectId}")
@@ -1199,6 +1277,24 @@ namespace Script.Manager
                     Kind = Script.Game.Entities.StackTargetRef.TargetKind.Card,
                     CardUid = target.UID,
                 });
+            }
+            // 补记来源（发动地）快照：激活效果的本地区（IsLocalZone）结算复检依赖它，
+            // 与 TurnManager.CaptureTargetSnapshot（触发/出牌入栈）一致。此前激活入栈漏记
+            // （HasSourceZoneSnapshot=false）→ 结算时 snapshot=null → TargetValidity.Check 规则⑥
+            // 本地区判定跳过 → 目标移出本地区不判丢失（JC020 效果A/B 复现，见 D46）。
+            // 优先用 ActivateAbility 传入的"横置/牺牲前"宿主地区快照（来源可能已离场，如 JC020 效果B 先牺牲自身，
+            // 此时 card.ZoneDetailId 已非宿主地区）；未传时回退 card 当前值（触发/出牌等来源在场场景）。
+            if (sourceZoneDetailSnapshot != null || sourceControllerSnapshot >= 0)
+            {
+                entry.SourceZoneDetailSnapshot = sourceZoneDetailSnapshot;
+                entry.SourceControllerSnapshot = sourceControllerSnapshot;
+                entry.HasSourceZoneSnapshot = true;
+            }
+            else if (card != null)
+            {
+                entry.SourceZoneDetailSnapshot = card.ZoneDetailId;
+                entry.SourceControllerSnapshot = card.ControllerId;
+                entry.HasSourceZoneSnapshot = true;
             }
             sm.Push(entry);
             GD.Print($"[EffectEngine] ✓ 激活能力入堆叠: {ability.EffectId}（来源 {card.PlayerTemplate?.CardName}）");
@@ -1323,11 +1419,18 @@ namespace Script.Manager
                 OnVisualDirty?.Invoke();   // 费用支付（横置资产卡）已改模型，刷新 UI
             }
 
+            // 4.5) 捕获来源（发动地）快照：必须在"横置/牺牲"代价前取 source.ZoneDetailId。
+            //      否则 JC020 效果B 先牺牲自身入墓地（第 3.5 步），ZoneDetailId 已非宿主地区，
+            //      本地区(IsLocalZone)结算判定基准会丢失 → 目标移动不判丢失。
+            //      source.ZoneDetailId = 宿主角色所在地区（附属 MoveToAttachedZone 时设置）。
+            string srcZoneSnap = source?.ZoneDetailId ?? "";
+            int srcCtrlSnap = source?.ControllerId ?? 0;
+
             // 3) 激活条件：横置本角色（付出代价）
             if (!string.IsNullOrEmpty(data.ActivateCondition) &&
                 data.ActivateCondition.Contains("横置本角色"))
             {
-                source.IsTapped = true;
+                source.SetTapped(true);    // SetTapped 发 TappedChanged → 持续效果重判（阿格斯封锁即时开关）
                 GD.Print($"[EffectEngine] ↻ {tmpl.CardName} 因激活横置");
                 OnVisualDirty?.Invoke();   // 本角色横置已改模型，刷新 UI
             }
@@ -1364,7 +1467,7 @@ namespace Script.Manager
             var sm = TurnManager.Instance?.StackManagerRef;
             if (sm != null)
             {
-                PushActivationToStack(sm, source, data, target);
+                PushActivationToStack(sm, source, data, target, srcZoneSnap, srcCtrlSnap);
             }
             else
             {

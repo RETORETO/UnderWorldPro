@@ -87,7 +87,11 @@ public partial class StackManager : Node
         if (_cardManager != null && !string.IsNullOrEmpty(entry.TargetCardUid))
         {
             var target = _cardManager.GetInstance(entry.TargetCardUid);
-            if (target != null) entry.TargetVersionId = target.VersionId;
+            if (target != null)
+            {
+                entry.TargetVersionId = target.VersionId;
+                GD.Print($"[DIAG][Stack.Push] 效果 {entry.EffectText} 登记目标 {target.PlayerTemplate?.CardName ?? "?"}(UID={entry.TargetCardUid}) 版本号={target.VersionId} ctrl={target.ControllerId} zone={target.CurrentZone}");
+            }
         }
 
 

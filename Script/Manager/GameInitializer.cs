@@ -132,9 +132,36 @@ public partial class GameInitializer : Node
         TurnManager.SetCombatManager(CombatManager);
         GD.Print("  ✅ CombatManager");
 
-        // 7. 加载卡组（依赖 CardManager + DeckManager）
-        //    规则：P2 始终使用硬编码测试卡组；P1 仅在房间勾选「使用卡组JSON」时，
-        //    用 SelectedDeck（优先）或 SelectedDeckPath 指向的 JSON 初始化，否则也用硬编码卡组。
+        // 7. 加载卡组（依赖 CardManager + DeckManager）+ 初始化双方秘社
+        ReloadDecks();
+        SetupCouncils();
+
+        // 7.6 实例化地区卡牌堆（依赖 WorldDeckManager 对象 + CardManager）
+        // 顺序要求：玩家卡(InitTestDecks) → 秘社(SetupCouncils) → 地区(此处)，故延迟至此。
+        IWorldDeckProvider provider = new LocalWorldDeckProvider();
+        WorldDeckManager.Initialize(provider, RandomSource, CardManager);
+        GD.Print($"  ✅ WorldDeckManager (共 {WorldDeckManager.Count} 张地区卡)");
+
+        // 8. PM 调试命令管理器：创建并纳入本节点生命周期（UI 回调由 Arena 注入）
+        PMCommandManager = new PMCommandManager();
+        AddChild(PMCommandManager);
+        GD.Print("  ✅ PMCommandManager");
+
+        GD.Print("=== GameInitializer: 所有 Manager 初始化完成 ===");
+    }
+
+    // ============================================================
+    // 卡组加载（供 InitializeAll 装配与 ResetMatch 重开复用）
+    // ============================================================
+
+    /// <summary>
+    /// 加载双方卡组并缓存秘社来源（_loadedDeck）。
+    /// 规则：P2 始终使用硬编码测试卡组；P1 仅在房间勾选「使用卡组JSON」时，
+    /// 用 SelectedDeck（优先）或 SelectedDeckPath 指向的 JSON 初始化，否则也用硬编码卡组。
+    /// InitTestDecks / InitFromDeckList 均为幂等重建（内部 Clear 后填充+洗牌），可安全重复调用。
+    /// </summary>
+    private void ReloadDecks()
+    {
         DeckManager.InitTestDecks(playerId: 2); // P2 硬编码
 
         var gm = GameManager.Instance;
@@ -156,22 +183,6 @@ public partial class GameInitializer : Node
         {
             DeckManager.InitTestDecks(playerId: 1); // P1 硬编码（未勾选）
         }
-
-        // 7.5 初始化双方秘社（依赖 CardManager + ZoneManager，从卡组 JSON 的 councils 读取）
-        SetupCouncils();
-
-        // 7.6 实例化地区卡牌堆（依赖 WorldDeckManager 对象 + CardManager）
-        // 顺序要求：玩家卡(InitTestDecks) → 秘社(SetupCouncils) → 地区(此处)，故延迟至此。
-        IWorldDeckProvider provider = new LocalWorldDeckProvider();
-        WorldDeckManager.Initialize(provider, RandomSource, CardManager);
-        GD.Print($"  ✅ WorldDeckManager (共 {WorldDeckManager.Count} 张地区卡)");
-
-        // 8. PM 调试命令管理器：创建并纳入本节点生命周期（UI 回调由 Arena 注入）
-        PMCommandManager = new PMCommandManager();
-        AddChild(PMCommandManager);
-        GD.Print("  ✅ PMCommandManager");
-
-        GD.Print("=== GameInitializer: 所有 Manager 初始化完成 ===");
     }
 
     // ============================================================
@@ -221,6 +232,36 @@ public partial class GameInitializer : Node
 
     /// <summary>每位玩家的起始手牌数。规则参数属逻辑层，不应由 UI 传入。</summary>
     public const int InitialHandSize = 6;
+
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset，供"再来一局"场景内重开调用）。
+    /// 前置条件：InitializeAll() 已完成（Manager 实例常驻，本方法不重建对象，仅清状态复用）。
+    /// 顺序要求：
+    ///   1. 必须先 EffectEngine.ResetAll() 清静态效果注册表，早于 CardManager.Reset()，
+    ///      避免新卡 UID（_nextUID 归 1）与旧注册表残留 key 冲突、旧 CardInstance 强引用泄漏。
+    ///   2. 清各 Manager 对局状态 → 重建卡组/秘社/世界牌库 → 发牌起局。
+    /// 本方法不改变当前"游戏结束切主界面"流程，仅提供能力；弹窗（再来一局）接入后由 UI 调用。
+    /// </summary>
+    public void ResetMatch()
+    {
+        GD.Print("=== GameInitializer: 对局重置 (ResetMatch) ===");
+        // 1. 先清静态效果注册表（最关键）
+        Script.Manager.EffectEngine.ResetAll();
+        // 2. 清各 Manager 对局状态（不重建对象，复用常驻实例）
+        CardManager.Reset();
+        PlayerManager.Reset();
+        ZoneManager.Reset();
+        AreaManager.Reset();
+        WorldDeckManager.Reset();
+        StackManager.ClearAll();
+        TurnManager.Reset();
+        // 3. 重建玩家卡组 + 世界牌库 + 秘社（ZoneManager.Reset 已清 CouncilZone，需重放秘社）
+        ReloadDecks();
+        SetupCouncils();
+        // 4. 发牌起局
+        StartMatch();
+        GD.Print("=== GameInitializer: 对局重置完成，已重新开局 ===");
+    }
 
     /// <summary>
     /// 【MVC 修复 M-02】开局编排：发起始手牌并起局。

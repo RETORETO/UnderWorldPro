@@ -35,6 +35,23 @@ public partial class WorldDeckManager : Node
         GD.Print($"【WorldDeckManager】已加载并实例化 {_deck.Count} 张地区卡，已洗牌");
     }
 
+    /// <summary>
+    /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
+    /// 由 GameInitializer.ResetMatch 调用：复用已保存的依赖（_provider/_rng/_cardManager）
+    /// 重新加载并洗牌全部地区卡，产生一套全新的地区卡实例。
+    /// </summary>
+    public void Reset()
+    {
+        _deck.Clear();
+        // 复用已保存的依赖重建（依赖在首次 Initialize 时保存，常驻场景下无需重新注入）
+        var areaDataList = _provider.LoadAllAreas();
+        _deck = areaDataList
+            .Select(data => _cardManager.CreateCardInstance(data, 0))
+            .ToList();
+        Shuffle();
+        GD.Print($"[WorldDeckManager] Reset: 世界牌库已重建并洗牌, 共 {_deck.Count} 张");
+    }
+
     public void Shuffle()
     {
         // 随机源统一走注入的 IRandomSource，保证同种子下地区牌序可复现。

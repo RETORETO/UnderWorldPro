@@ -384,7 +384,7 @@ public partial class PMCommandManager : Node
         var instance = _cardManager.GetInstance(parts[1]);
         if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[1]}"); return; }
 
-        instance.IsTapped = true;
+        instance.SetTapped(true);           // SetTapped 发 TappedChanged → 持续效果重判（阿格斯封锁即时开关）
         _refreshCardUI?.Invoke(parts[1]);   // 仅通知 UI 刷新，不持有 UI 实例
         GD.Print($"🔒 横置 {instance.PlayerTemplate?.CardName}（实例 IsTapped 已置 true）");
     }
@@ -396,7 +396,7 @@ public partial class PMCommandManager : Node
         var instance = _cardManager.GetInstance(parts[1]);
         if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[1]}"); return; }
 
-        instance.IsTapped = false;
+        instance.SetTapped(false);          // SetTapped 发 TappedChanged → 持续效果重判（阿格斯封锁即时开关）
         _refreshCardUI?.Invoke(parts[1]);   // 仅通知 UI 刷新，不持有 UI 实例
         GD.Print($"🔓 解除横置 {instance.PlayerTemplate?.CardName}（实例 IsTapped 已置 false）");
     }

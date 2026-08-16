@@ -130,23 +130,24 @@ namespace Script.Manager
                 var tmpl = card.PlayerTemplate;
                 if (tmpl == null) continue;
 
-                // 规则1：仅争夺区/场上卡可作触发源
-                // 放宽：附属区(AttachedZone)的附属卡（无论结附地区还是结附角色/秘社）同样可作为触发源，
-                // 使准备步骤/回合开始等非进场时机能扫到结附类附属（如 JC035 结附地区附属的 OnTurnStarted 触发）。
-                // 进场/现身时机(EnterPlay/Uncover)仍仅限来源卡自身（规则1.6），不在此放宽，避免附属误触发自身进场/现身。
-                bool isAttachZone = (card.CurrentZone == CardZone.AttachedZone);
-                bool allowAttach = isAttachZone && evt != GameEvent.EnterPlay && evt != GameEvent.Uncover;
-                if (card.CurrentZone != CardZone.AreaZone && !allowAttach)
-                {
-                    skippedZone++;
-                    continue;
-                }
+                // 规则1：触发源区判定——交由内层 foreach 对每个效果用 IsEffectActiveInZone 做效果粒度判定
+                // （方案C：附属卡默认仅 AttachedZone；角色卡仅 AreaZone；显式声明 Scope 的效果按声明）。
+                // 【方案C 后续改动方向】旧整卡判定（isAttachZone/allowAttach/isAttachment + 整卡 return）
+                // 已收敛为下方 foreach 内的 IsEffectActiveInZone(data, card) 效果粒度判定；
+                // 进场/现身例外（规则1.6）仍在 foreach 内单独保留（仅触发来源卡自身），勿在此重复写区判断。
 
                 var effectDataList = tmpl.EffectDataList ?? new Godot.Collections.Array<Script.Data.Effects.EffectData>();
                 foreach (var data in effectDataList)
                 {
                     if (data == null) continue;
                     if (data.Timing != timing) continue;
+                    // 方案C：触发效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
+                    // 显式声明 Scope 的效果按声明（如未来墓地/手牌触发）。不在此区则跳过该效果。
+                    if (!Script.Manager.EffectEngine.IsEffectActiveInZone(data, card))
+                    {
+                        skippedZone++;
+                        continue;
+                    }
 
                     // 规则1.6（D40）：进场触发(EnterPlay)/现身触发(Uncover) 属"自身进场/现身"语义，
                     // 仅当触发源卡 == 事件来源卡时才收集——避免任意卡进场/现身误触发他人身上的进场/现身类效果

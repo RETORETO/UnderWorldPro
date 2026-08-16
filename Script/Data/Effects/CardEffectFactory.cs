@@ -40,6 +40,15 @@ namespace Script.Data.Effects
             data.TargetRules?.Clear();
             data.EffectDataList?.Clear();
 
+            // 空 UID（null/空串）视为未注册，跳过：避免 Dictionary<string,...>.TryGetValue(null) 抛
+            // ArgumentNullException: key。任何无 UID 的卡模板（测试/空骨架/未实现卡）均走此安全路径，
+            // 与下方"未注册的卡效果为空列表、不报错"的设计一致。
+            if (string.IsNullOrEmpty(data.UID))
+            {
+                data._effectsInjected = true;
+                return;
+            }
+
             if (_builders.TryGetValue(data.UID, out var b))
                 b(data);
 

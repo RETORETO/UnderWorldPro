@@ -72,7 +72,10 @@ namespace Script.UI.Interaction
             {
                 var entry = _triggerEntryScene.Instantiate<TriggerEntryUI>();
                 var sourceTemplate = t.Source?.PlayerTemplate;
-                entry.Setup(t.DisplayName, t.DisplayText, false, t, sourceTemplate);
+                // 强制触发（EffectData.Forced=true，如 JC068 阿格斯IV准备维护）标记为强制，
+                // 供 TriggerOrderRoot 阻止拖入放弃区（新规范下仅此路径读取 Forced 作为 IsMandatory）。
+                bool isMandatory = t.EffectDataRef?.Forced == true;
+                entry.Setup(t.DisplayName, t.DisplayText, isMandatory, t, sourceTemplate);
                 entries.Add(entry);
             }
 

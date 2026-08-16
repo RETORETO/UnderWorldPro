@@ -11,10 +11,10 @@ namespace Cards.Effects.PlayerCards.JC
     ///  A）准备步骤强制触发：支付1（横置1张资产区牌），否则横置阿格斯IV；
     ///  B）持续：只要阿格斯IV未横置，对手就不能进行秘密派遣行动。
     /// </summary>
-    public static class JC068_agesi_Effects
+    public static class JC068_agesiIV_Effects
     {
         public static void Register()
-            => CardEffectFactory.Register("JC068_agesi", Build);
+            => CardEffectFactory.Register("JC068_agesiIV", Build);
 
         private static void Build(PlayerCardData data)
         {
@@ -45,7 +45,10 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC068_B_BlockDeployCovert",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                // 生效区：AttachTarget（结附于目标时）。阿格斯IV是结附于本方秘社的附属，在 AttachedZone 生效。
+                // 【方案C】原误写 ContestZone（角色卡模板遗留），导致 IsEffectActiveInZone 判 AreaZone 为 false、
+                // 附属于 AttachedZone 时封锁不注册。改为 AttachTarget 与附属身份/生效位置一致。
+                Scope = ZoneScope.AttachTarget,
                 Duration = "常驻",
                 ContinuousPrereq = "阿格斯IV未横置",
                 PrereqSpec = new ContinuousPrereqSpec

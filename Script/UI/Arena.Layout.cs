@@ -521,6 +521,22 @@ public partial class Arena
                 {
                     GD.PrintErr($"[Arena.Sync] 未找到争夺区 slot: {card.ZoneDetailId}");
                 }
+                // 宿主争夺区移动（含跨地区）：把结附的附属 UI 移到宿主新容器，再重排宿主与附属。
+                // 否则附属 UI 停留旧容器，ArrangeAllAttachments 因 attUI.GetParent() != host 跳过附属（D48）。
+                var newHost = cardUI.GetParent() as Control;
+                if (newHost != null)
+                {
+                    foreach (var attInst in card.AttachedCards)
+                    {
+                        if (attInst == null) continue;
+                        var attUI = FindCardUIByUID(attInst.UID);
+                        if (attUI == null || attUI.GetParent() == newHost) continue;
+                        attUI.GetParent()?.RemoveChild(attUI);
+                        newHost.AddChild(attUI);
+                    }
+                }
+                ArrangeAreaCards();
+                ArrangeAllAttachments();
                 break;
             }
             case CardZone.AttachedZone:
@@ -1025,9 +1041,12 @@ public partial class Arena
     {
         CardUI FindIn(Control container)
         {
-            if (container == null) return null;
+            if (container == null || !GodotObject.IsInstanceValid(container)) return null;
             foreach (var child in container.GetChildren())
+            {
+                if (child == null || !GodotObject.IsInstanceValid(child)) continue;
                 if (child is CardUI c && c.Instance != null && c.Instance.UID == uid) return c;
+            }
             return null;
         }
 
@@ -1036,6 +1055,9 @@ public partial class Arena
             if (_areaSlots == null) return null;
             foreach (var slot in _areaSlots)
             {
+                // 防御：跨局/投降后 AreaSlot 可能已被释放（延迟 QueueFree），访问其子节点前须校验
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                if (!GodotObject.IsInstanceValid(slot.Player1Area) && !GodotObject.IsInstanceValid(slot.Player2Area)) continue;
                 var found = FindIn(slot.Player1Area) ?? FindIn(slot.Player2Area);
                 if (found != null) return found;
             }
@@ -1045,13 +1067,13 @@ public partial class Arena
         return FindIn(_handContainerRef) ?? FindIn(_handContainerRef2)
             ?? FindIn(_assetContainer1) ?? FindIn(_assetContainer2)
             ?? FindIn(_scoreContainer1) ?? FindIn(_scoreContainer2)
-            ?? _areaCardUIs.FirstOrDefault(c => c.Instance != null && c.Instance.UID == uid)
+            ?? _areaCardUIs.FirstOrDefault(c => GodotObject.IsInstanceValid(c) && c.Instance != null && c.Instance.UID == uid)
             ?? FindInAreaSlots()   // 含结附卡的附属 UI（挂于 PlayerXArea，不在 _areaCardUIs）
             ?? FindIn(_councilContainer1) ?? FindIn(_councilContainer2)  // 含结附秘社的附属 UI（挂于 CouncilContainer，与角色附属对称）
-            ?? _deckZone?.GetCards().FirstOrDefault(c => c.Instance != null && c.Instance.UID == uid)
-            ?? _deckZone2?.GetCards().FirstOrDefault(c => c.Instance != null && c.Instance.UID == uid)
-            ?? _graveyardZone?.GetCards().FirstOrDefault(c => c.Instance != null && c.Instance.UID == uid)
-            ?? _graveyardZone2?.GetCards().FirstOrDefault(c => c.Instance != null && c.Instance.UID == uid);
+            ?? _deckZone?.GetCards().FirstOrDefault(c => GodotObject.IsInstanceValid(c) && c.Instance != null && c.Instance.UID == uid)
+            ?? _deckZone2?.GetCards().FirstOrDefault(c => GodotObject.IsInstanceValid(c) && c.Instance != null && c.Instance.UID == uid)
+            ?? _graveyardZone?.GetCards().FirstOrDefault(c => GodotObject.IsInstanceValid(c) && c.Instance != null && c.Instance.UID == uid)
+            ?? _graveyardZone2?.GetCards().FirstOrDefault(c => GodotObject.IsInstanceValid(c) && c.Instance != null && c.Instance.UID == uid);
     }
 
     /// <summary>按 UID 查找秘社 UI（CouncilCardUI，非 CardUI 子类）。供结附秘社的附属定位宿主秘社 UI 使用。</summary>
