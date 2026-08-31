@@ -35,9 +35,9 @@ namespace Script.Data.Effects
         PlaceToken,     // 放置标志/指示物
         RemoveToken,    // 移除标志/指示物
         GenerateToken,  // 生成 token/附属
-        // 对抗（特殊原语，接入 ComatManager/InvestigationManager）
+        // 对抗（特殊原语，接入 CombatManager/InvestigationManager）
         Investigate,    // 调查对抗
-        Fight,          // 战斗对抗
+        Strength,       // 战斗对抗（对齐 CombatType.Strength）
         Power,          // 势力对抗
         // 胜负
         Win,            // 胜负判定

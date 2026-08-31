@@ -29,7 +29,7 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC001_B_WhiteEye",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 ContinuousPrereq = "心灵领域忠诚≥2",
                 PrereqSpec = new ContinuousPrereqSpec
                 {

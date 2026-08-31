@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -135,11 +135,11 @@ public class PlayerActionService
 
     /// <summary>
     /// 发动角色/附属/秘社激活能力（作为"行动"或"快速"窗口入堆叠）。
-    /// 原由 Arena / CardDragController 直接调用 EffectEngine.ActivateAbility（静态执行体）。
+    /// 原由 Arena / CardDragController 直接调用 EffectEngine.Instance.ActivateAbility（静态执行体）。
     /// 此处透传参数，规则门禁（原子锁/优先权/窗口校验/堆叠熔断）仍由 EffectEngine 内部负责。
     /// </summary>
     public void ActivateAbility(CardInstance source, EffectData data, CardInstance target)
-        => EffectEngine.ActivateAbility(source, data, target);
+        => EffectEngine.Instance.ActivateAbility(source, data, target);
 
     /// <summary>回合开始重置玩家基础行动次数（派遣暗藏/建立资产/先手破平 各 1）。原由 Arena 直接调用 PlayerManager.ResetActionCharges。</summary>
     public void ResetActionCharges(int playerId) => _playerManager.ResetActionCharges(playerId);

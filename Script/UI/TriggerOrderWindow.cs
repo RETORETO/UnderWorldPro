@@ -146,7 +146,7 @@ namespace Script.UI
         /// 触发实际入栈后由 Arena 调用：从 OrderZone 移除已入栈条目。
         /// 取目标触发在玩家选完目标后才调用本方法，故条目会保留到选目标完成。
         /// </summary>
-        public void RemoveEntries(System.Collections.Generic.List<Script.Data.Effects.TriggerEffectInstance> pushed)
+        public void RemoveEntries(System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance> pushed)
         {
             if (pushed == null || pushed.Count == 0)
             {

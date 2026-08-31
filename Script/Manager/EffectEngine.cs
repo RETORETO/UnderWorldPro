@@ -24,45 +24,96 @@ namespace Script.Manager
     /// 触发驱动：反应/机动触发由监听总线（GameEventBus + TriggerRegistry）收集；
     /// 进场/现身触发由本类 CollectTriggers 收集，统一经 TurnManager.RunTriggerPhase 入栈。
     /// </summary>
-    public static class EffectEngine
+    public class EffectEngine
     {
-        // 抓牌等需要回合管理器参与的全局操作，由 TurnManager 初始化时注入
-        public static TurnManager TurnManagerRef { get; set; }
+        /// <summary>
+        /// 【MVC 收口】单例访问器（等价于 DI 容器的 RegisterSingleton）。
+        /// 实例由 Composition Root（GameInitializer）在装配时创建，场景释放时实例随之释放，
+        /// 8 个对局状态集合（原 static 字段）改为实例字段后，跨局不再残留。
+        /// </summary>
+        public static EffectEngine Instance { get; private set; }
+
+        public EffectEngine()
+        {
+            Instance = this;
+        }
+
+        // 抓牌等需要回合管理器参与的全局操作，由 GameInitializer 注入
+        public TurnManager TurnManagerRef { get; set; }
 
         // ==================== 持续效果注册表 ====================
         // 记录每张卡实际生效（已授予）的持续效果条目，注销时精确还原。
         // value = 该卡所有"已实际生效"的 EffectGrant 扁平列表（含来源 EffectId，便于调试）。
-        private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>> _continuousRegistry
+        private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>> _continuousRegistry
             = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>>();
         // 已生效持续效果的卡引用集合（与 _continuousRegistry 并行，供 ReevaluatePrereqs 遍历全集，无需 UID 反查）。
-        private static readonly System.Collections.Generic.HashSet<CardInstance> _activePrereqCards
+        private readonly System.Collections.Generic.HashSet<CardInstance> _activePrereqCards
             = new System.Collections.Generic.HashSet<CardInstance>();
         // 持续光环（D19-③）注册表：源卡 UID → (受影响他者 UID → 该源对该他者实际授予的 EffectGrant 列表)。
         // 用于精确还原：源卡离场/被封印、或他者离场/夺控时，仅撤销本源授予的部分，不影响其他源。
-        private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>>> _auraGrants
+        private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>>> _auraGrants
             = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<EffectGrant>>>();
 
         // ==================== 管理器引用（供动词执行体访问模型） ====================
-        // 由 TurnManager 初始化时注入；用于 Move 等动词真正改写模型（跨地区移动）。
-        public static CardManager CardManagerRef { get; set; }
-        // 持续光环（D19-③）需读取区域卡集合，由 Arena 初始化时注入 ZoneManager 引用。
-        public static ZoneManager ZoneManagerRef { get; set; }
+        // 由 GameInitializer 注入；用于 Move 等动词真正改写模型（跨地区移动）。
+        public CardManager CardManagerRef { get; set; }
+        // 持续光环（D19-③）需读取区域卡集合，由 GameInitializer 注入 ZoneManager 引用。
+        public ZoneManager ZoneManagerRef { get; set; }
 
         // ==================== D-1 堆叠熔断查询 ====================
-        // 由 TurnManager 初始化时注入 StackManager.IsCircuitBroken。
+        // 由 TurnManager 注入 StackManager.IsCircuitBroken。
         // 为 true 时禁止激活新效果，防止效果递归失控。未注入时默认不熔断（测试环境）。
-        public static System.Func<bool> IsStackCircuitBroken { get; set; }
+        public System.Func<bool> IsStackCircuitBroken { get; set; }
 
         // ==================== D-UI 模型脏标记广播 ====================
         // 当结算/激活改动了卡牌模型可见状态（横置等）时通知表现层刷新。
-        // 由 Arena 初始化时注入（回调其内部的资产区/争夺区横置态刷新）。
-        public static System.Action OnVisualDirty { get; set; }
+        //【MVC 收口】不再用 static 委托由 Arena 注入；改为 UiNotificationBus（实例单例）广播，
+        // Controller 只 NotifyVisualDirty()，View 订阅后自行刷新（依赖倒置）。
 
         // ==================== 准备步骤维护询问（JC068 阿格斯IV） ====================
-        // 效果A"支付1，否则横置"的玩家二选一。由 Arena 注入：弹出选择窗，并把"支付/横置"的
-        // 实际执行放进弹窗回调（异步）。本引擎弹窗是异步的，故委托只负责"发起并登记动作"，不等待返回。
-        // 签名：(source, payAmount)。UI 实现内部弹窗，两选项 OnChosen 分别执行 SpendMana 或 SetTapped。
-        public static System.Action<CardInstance, int> PromptPayOrTap { get; set; }
+        // 效果A"支付1，否则横置"的玩家二选一。由 View（Arena）实现 IGameUIHooks 接口，
+        // 在启动装配时经 Composition Root 注入本引擎（依赖倒置：Controller 依赖接口，View 实现接口）。
+        // UI 只负责弹窗 + 收集选择，把 pay=true/false 回传给 ResolvePrepareUpkeep，不直接操作 Model。
+        public Script.Interfaces.IGameUIHooks UIHooks { get; set; }
+
+        // ==================== C/S 化 P0-B 输入网关 ====================
+        // 注入后，结算在"需玩家决策"处（当前仅 PrepareUpkeep）经网关发起异步请求-响应，
+        // 而非同步弹窗阻塞。未注入（null）时所有 *Async 入口退化为同步行为，与现有逻辑完全一致。
+        // 服务端 Headless 场景注入 NetworkInputGateway（未来）/ AutoInputGateway（测试）；
+        // 单机场景保持 null（沿用 UIHooks 本地弹窗），实现完全向后兼容。
+        public Script.Net.IInputGateway InputGateway { get; set; }
+
+        /// <summary>查询「准备维护」支付是否可行：控制者有足够可用费用支付 payAmount。</summary>
+        public bool CanPayPrepareUpkeep(CardInstance source, int payAmount)
+        {
+            if (source == null) return false;
+            var pm = TurnManagerRef?.PlayerManagerRef;
+            return pm != null && pm.GetAvailableMana(source.ControllerId) >= payAmount;
+        }
+
+        /// <summary>
+        /// 【MVC 收口】执行「准备维护」的业务决策（JC068 阿格斯IV 效果A「支付 N，否则横置」）。
+        /// pay=true → 支付 payAmount 费用，保持来源未横置；pay=false → 横置来源卡（发 TappedChanged 解除对手派遣封锁）。
+        /// 无 UI（测试）与 UI 弹窗回调统一经此落地，消除业务逻辑重复，且把「支付/横置」的模型写回收归 Controller。
+        /// </summary>
+        public void ResolvePrepareUpkeep(CardInstance source, int payAmount, bool pay)
+        {
+            if (source == null) return;
+            if (pay)
+            {
+                var pm = TurnManagerRef?.PlayerManagerRef;
+                if (pm != null)
+                {
+                    pm.SpendMana(source.ControllerId, payAmount);
+                    GD.Print($"[EffectEngine] 准备维护：玩家{source.ControllerId} 支付 {payAmount}（阿格斯IV保持未横置）");
+                }
+            }
+            else
+            {
+                source.SetTapped(true);   // 横置阿格斯IV（发 TappedChanged → 解除对手派遣封锁）
+                GD.Print($"[EffectEngine] 准备维护：阿格斯IV 被横置，玩家{source.ControllerId} 的对手恢复秘密派遣权");
+            }
+        }
 
         // ==================== P2 时效修正栈 ====================
         // 记录"直到回合结束"等时效类修正，回合结束（ExpireTurnEndEffects）时自动还原。
@@ -77,7 +128,7 @@ namespace Script.Manager
             public string FilterText = ""; // 玩家级费用修正的匹配过滤（如"帷幕守望"），空=全匹配
             public bool ConsumeOnce;     // 一次性：打出/翻面符合条件牌一次后消费移除（JC012"下一张"语义）
         }
-        private static readonly System.Collections.Generic.List<TimedMod> _timedModStack
+        private readonly System.Collections.Generic.List<TimedMod> _timedModStack
             = new System.Collections.Generic.List<TimedMod>();
 
         // ==================== 动作原语执行器 ====================
@@ -86,14 +137,14 @@ namespace Script.Manager
         /// 统一结算入口：执行一条 EffectData 的动作序列。
         /// source = 效果来源卡实例；target = 已选中的目标卡实例（可能为 null）。
         /// </summary>
-        public static void ResolveEffect(EffectData data, CardInstance source, CardInstance target)
+        public void ResolveEffect(EffectData data, CardInstance source, CardInstance target)
             => ResolveEffect(data, source, target, "");
 
         /// <summary>
         /// 带"目标地区"的重载：用于机动类效果（如 JC014 公路骑士）在对抗前将来源卡移动到另一地区。
         /// targetAreaId 非空时优先作为移动目的地（ManeuverTrigger 的目标类型为 TargetKind.Area）。
         /// </summary>
-        public static void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId)
+        public void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId)
         {
             // 复用 5 参重载；触发/激活路径默认 winnerId=-1（仅"X对抗获胜"类触发需要传入，见 WinnerIsSelf 判定）。
             ResolveEffect(data, source, target, targetAreaId, -1);
@@ -101,10 +152,10 @@ namespace Script.Manager
 
         /// <summary>
         /// 带"对抗获胜方玩家 ID"的重载：用于"X对抗获胜"类触发（威名等）。
-        /// winnerId = 对应 PlayerId（如 CombatWon 的获胜方），供条件 WinnerIsSelf 判定
+        /// winnerId = 对应 PlayerId（如 OnCombatWon 的获胜方），供条件 WinnerIsSelf 判定
         /// "本卡控制者是否为该对抗的获胜方"。非对抗类时机传 -1（默认），谓词走原判定。
         /// </summary>
-        public static void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId)
+        public void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId)
             => ResolveEffect(data, source, target, targetAreaId, winnerId, -1);
 
         /// <summary>
@@ -112,17 +163,17 @@ namespace Script.Manager
         /// 目标卡 VersionId；结算时与当前目标 VersionId 比对，不一致即判丢失（见 ValidateTargetAtResolve）。
         /// 不传（默认 -1）表示调用方未提供版本号，回退为"实例存在即有效"（兼容旧路径）。
         /// </summary>
-        public static void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId, int targetVersionId)
+        public void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId, int targetVersionId)
         {
             if (data == null) return;
             GD.Print($"[EffectEngine] 结算效果 {data.EffectId} (Timing={data.Timing})");
 
             // D16 雏形：结算前目标丢失校验（双保险，与 TurnManager.ResolveEntryTargetIsLost 互补）。
-            // 事务卡（SpellCast）目标丢失 → 整张不结算、卡进墓地；触发/激活来源卡在场，仅跳过本条结算。
+            // 事务卡（OnSorceryCast）目标丢失 → 整张不结算、卡进墓地；触发/激活来源卡在场，仅跳过本条结算。
             var tv = ValidateTargetAtResolve(data, source, target, targetAreaId, targetVersionId);
             if (tv == TargetValidation.Lost)
             {
-                if (data.Timing == EffectTiming.SpellCast && source != null)
+                if (data.Timing == EffectTiming.OnSorceryCast && source != null)
                 {
                     GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {source.PlayerTemplate?.CardName} 目标丢失 → 不结算，卡进墓地");
                     CardManager.Instance?.MoveCardToGraveyard(source);
@@ -167,7 +218,7 @@ namespace Script.Manager
         /// 规则（用户确认）：若效果/卡需要指定目标，但结算时目标丢失，则不结算，卡直接进墓地。
         /// 本方法只做"判定"，不执行进墓地——由调用方按卡类别决定是否把来源卡送墓地（事务卡适用，触发/激活不适用）。
         /// </summary>
-        public static TargetValidation ValidateTargetAtResolve(EffectData data, CardInstance source, CardInstance target, string targetAreaUid = "", int targetVersionId = -1)
+        public TargetValidation ValidateTargetAtResolve(EffectData data, CardInstance source, CardInstance target, string targetAreaUid = "", int targetVersionId = -1)
         {
             if (data?.Target == null) return TargetValidation.Ok;
             var t = data.Target;
@@ -186,9 +237,6 @@ namespace Script.Manager
                 GD.Print($"[EffectEngine] ⚑ [D16] 效果 {data.EffectId} 需要目标但目标已丢失 → 不结算");
                 return TargetValidation.Lost;
             }
-
-            // ⚑ [2026-08-15 诊断] 结算入口打印目标当前版本/控制者/区域，配合 [DIAG][Stack.Push] 对比入栈与结算差异
-            GD.Print($"[DIAG][Resolve] 效果 {data.EffectId} 结算目标={target.PlayerTemplate?.CardName ?? "?"} 当前版本={target.VersionId} 入栈版本={targetVersionId} ctrl={target.ControllerId} zone={target.CurrentZone} kind={CardManager.MapInstanceToTargetKind(target)}");
 
             // 卡目标（D16 新方案）：状态版本号比对——入栈时记录的版本号与当前不一致即判丢失。
             // 版本号由移动/翻面/控制者变化/子类别授予撤销等中枢的 BumpVersion 驱动，取代逐属性广播。
@@ -249,7 +297,7 @@ namespace Script.Manager
         }
 
         /// <summary>执行动作序列。durationText 传入以驱动时效修正栈（P2）；targetAreaId 供机动等指向地区的动词使用。</summary>
-        private static void ExecuteActions(Array<EffectAction> actions, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
+        private void ExecuteActions(Array<EffectAction> actions, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
         {
             if (actions == null) return;
             foreach (var a in actions)
@@ -258,18 +306,104 @@ namespace Script.Manager
             }
         }
 
+        // ==================== C/S 化 P0-B：可挂起续算重载 ====================
+        // 以下 *Async 入口与上方同步入口语义一致，唯一区别：当 InputGateway 已注入时，
+        // 结算在"需要玩家决策"的点（当前仅 PrepareUpkeep）await 网关请求-响应，而非同步弹窗阻塞。
+        // 未注入 InputGateway 时，*Async 与同步版行为完全一致（向后兼容，现有调用/测试零改动）。
+        // 规则层只依赖 IInputGateway 接口，绝不 await Godot 节点——满足服务端 Headless 要求。
+
+        /// <summary>可挂起续算版 ResolveEffect（详见类顶 P0-B 说明）。</summary>
+        public async System.Threading.Tasks.Task ResolveEffectAsync(EffectData data, CardInstance source, CardInstance target)
+            => await ResolveEffectAsync(data, source, target, "");
+
+        public async System.Threading.Tasks.Task ResolveEffectAsync(EffectData data, CardInstance source, CardInstance target, string targetAreaId)
+            => await ResolveEffectAsync(data, source, target, targetAreaId, -1);
+
+        public async System.Threading.Tasks.Task ResolveEffectAsync(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId)
+            => await ResolveEffectAsync(data, source, target, targetAreaId, winnerId, -1);
+
+        public async System.Threading.Tasks.Task ResolveEffectAsync(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId, int targetVersionId)
+        {
+            if (data == null) return;
+            GD.Print($"[EffectEngine] 结算效果(Async) {data.EffectId} (Timing={data.Timing})");
+
+            var tv = ValidateTargetAtResolve(data, source, target, targetAreaId, targetVersionId);
+            if (tv == TargetValidation.Lost)
+            {
+                if (data.Timing == EffectTiming.OnSorceryCast && source != null)
+                {
+                    GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {source.PlayerTemplate?.CardName} 目标丢失 → 不结算，卡进墓地");
+                    CardManager.Instance?.MoveCardToGraveyard(source);
+                }
+                else
+                {
+                    GD.Print($"[EffectEngine] ⚑ [D16] 触发/激活效果 {data.EffectId} 目标丢失 → 跳过本条结算");
+                }
+                return;
+            }
+
+            if (data.Condition != null && data.Condition.Predicate != "Always")
+            {
+                bool met = EvaluateCondition(data.Condition.Predicate, source, target, target, winnerId, targetAreaId);
+                if (!met)
+                {
+                    GD.Print($"[EffectEngine] 条件不满足「{data.Condition.Predicate}」，走 ElseBranch");
+                    await ExecuteActionsAsync(data.Condition.ElseBranch, source, target, data.Duration, targetAreaId);
+                    return;
+                }
+            }
+
+            await ExecuteActionsAsync(data.Actions, source, target, data.Duration, targetAreaId);
+        }
+
+        private async System.Threading.Tasks.Task ExecuteActionsAsync(Array<EffectAction> actions, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
+        {
+            if (actions == null) return;
+            foreach (var a in actions)
+            {
+                await ExecuteVerbAsync(a, source, target, durationText, targetAreaId);
+            }
+        }
+
+        /// <summary>
+        /// 可挂起版单动词执行：除 PrepareUpkeep 在 InputGateway 注入时走 await 请求-响应外，
+        /// 其余动词直接复用同步 ExecuteVerb（纯模型写入，无需等待玩家）。
+        /// </summary>
+        private async System.Threading.Tasks.Task ExecuteVerbAsync(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
+        {
+            if (action.Verb == ActionVerb.PrepareUpkeep && InputGateway != null)
+            {
+                // C/S 挂起点：经输入网关向控制者请求"支付/横置"二选一，await 回包后续算。
+                int payAmount = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var parsedPay)) ? parsedPay : 1;
+                var result = await InputGateway.RequestChoice(
+                    source?.ControllerId ?? 0,
+                    new Script.Net.ChoiceRequest
+                    {
+                        RequestKind = Script.Net.ChoiceRequest.Kind.PayOrTap,
+                        SourceUid = source?.UID,
+                        PayAmount = payAmount,
+                        Prompt = $"准备维护：支付{payAmount} 或 横置",
+                    });
+                // 拿到选择后续算（与同步版 ResolvePrepareUpkeep 落地逻辑一致）
+                ResolvePrepareUpkeep(source, payAmount, pay: result.Pay);
+                return;
+            }
+            // 其余动词：复用同步执行体（无需等待玩家）
+            ExecuteVerb(action, source, target, durationText, targetAreaId);
+        }
+
         /// <summary>执行单个动作原语。未实现者打印 TODO 占位。</summary>
-        private static void ExecuteVerb(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
+        private void ExecuteVerb(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
         {
             switch (action.Verb)
             {
                 case ActionVerb.Tap:
-                    if (target != null) { target.SetTapped(true); GD.Print($"[EffectEngine] 横置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
+                    if (target != null) { target.SetTapped(true); GD.Print($"[EffectEngine] 横置 {target.PlayerTemplate?.CardName}"); Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty(); }
                     else GD.Print("[EffectEngine] Tap 目标为空，跳过");
                     break;
 
                 case ActionVerb.Untap:
-                    if (target != null) { target.SetTapped(false); GD.Print($"[EffectEngine] 重置 {target.PlayerTemplate?.CardName}"); OnVisualDirty?.Invoke(); }
+                    if (target != null) { target.SetTapped(false); GD.Print($"[EffectEngine] 重置 {target.PlayerTemplate?.CardName}"); Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty(); }
                     break;
 
                 case ActionVerb.Destroy:
@@ -292,7 +426,7 @@ namespace Script.Manager
                 case ActionVerb.Move:
                     if (!string.IsNullOrEmpty(targetAreaId) && source != null)
                     {
-                        // 机动：移动到指定地区（JC014 公路骑士在对抗前触发，targetAreaId 由 PreCombat 窗口推导"另一地区"）
+                        // 机动：移动到指定地区（JC014 公路骑士在对抗前触发，targetAreaId 由 ManeuverTrigger 窗口推导"另一地区"）
                         var cm = CardManagerRef ?? CardManager.Instance;
                         if (cm != null)
                         {
@@ -418,7 +552,7 @@ namespace Script.Manager
                 case ActionVerb.RemoveToken:
                 case ActionVerb.GenerateToken:
                 case ActionVerb.Investigate:
-                case ActionVerb.Fight:
+                case ActionVerb.Strength:
                 case ActionVerb.Power:
                 case ActionVerb.Attach:
                 case ActionVerb.Win:
@@ -426,7 +560,7 @@ namespace Script.Manager
                     break;
 
                 // 准备步骤维护（JC068 阿格斯IV）：支付 N 费用，否则横置来源卡。
-                // Args[0] 为所需费用（缺省 1）。经 PromptPayOrTap 发起"支付/横置"二选一弹窗
+                // Args[0] 为所需费用（缺省 1）。经 UIHooks.PromptPayOrTap 发起"支付/横置"二选一弹窗
                 //（异步：支付/横置实际动作在弹窗 OnChosen 回调内执行）。
                 // 无 UI（测试）时按"能付则付"同步处理，保证单元测试可达。
                 case ActionVerb.PrepareUpkeep:
@@ -437,26 +571,15 @@ namespace Script.Manager
                         break;
                     }
                     int payAmount = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var parsedPay)) ? parsedPay : 1;
-                    if (PromptPayOrTap != null)
+                    if (UIHooks != null)
                     {
-                        // 异步弹窗：发起选择，支付/横置动作交给回调
-                        PromptPayOrTap(source, payAmount);
+                        // 异步弹窗：发起选择，支付/横置动作由 UI 回调经 ResolvePrepareUpkeep 落地
+                        UIHooks.PromptPayOrTap(source, payAmount);
                     }
                     else
                     {
-                        // 无 UI（测试）：能付则付，否则横置
-                        var pm = TurnManagerRef?.PlayerManagerRef;
-                        if (pm != null && pm.GetAvailableMana(source.ControllerId) >= payAmount)
-                        {
-                            pm.SpendMana(source.ControllerId, payAmount);
-                            GD.Print($"[EffectEngine] 准备维护：玩家{source.ControllerId} 支付 {payAmount}（阿格斯IV保持未横置）");
-                        }
-                        else
-                        {
-                            source.SetTapped(true);   // 横置阿格斯IV（发 TappedChanged → 解除对手派遣封锁）
-                            GD.Print($"[EffectEngine] 准备维护：阿格斯IV 被横置，玩家{source.ControllerId} 的对手恢复秘密派遣权");
-                        }
-                        OnVisualDirty?.Invoke();
+                        // 无 UI（测试）：能付则付，否则横置（与 UI 分支复用同一业务决策）
+                        ResolvePrepareUpkeep(source, payAmount, pay: CanPayPrepareUpkeep(source, payAmount));
                     }
                     break;
                 }
@@ -479,14 +602,14 @@ namespace Script.Manager
         // ==================== P2 时效修正栈 ====================
 
         /// <summary>当前回合号（由 TurnManager 在结算时通过 CurrentTurn 提供，供时效登记）。</summary>
-        public static int CurrentTurn { get; set; } = 1;
+        public int CurrentTurn { get; set; } = 1;
 
         /// <summary>
         /// Gain 动词落地（P2）：解析 Args 并实际修改目标卡状态。
         /// Args 约定：["防御","1"] / ["战斗属性",""] / ["费用减少","1"] 等。
         /// durationText 含"回合结束"则登记时效修正，回合结束自动还原。
         /// </summary>
-        private static void ApplyGain(CardInstance source, CardInstance target, Array<string> args, string durationText)
+        private void ApplyGain(CardInstance source, CardInstance target, Array<string> args, string durationText)
         {
             // 受影响主体：优先 target（属性增益给目标角色），费用修正等无 target 时用 source 的拥有者
             CardInstance subject = target ?? source;
@@ -542,14 +665,14 @@ namespace Script.Manager
         }
 
         /// <summary>卡级时效修正登记（P2）。</summary>
-        private static void RegisterTimedMod(TimedMod m) => _timedModStack.Add(m);
+        private void RegisterTimedMod(TimedMod m) => _timedModStack.Add(m);
 
         /// <summary>
         /// 回合结束还原（P2 核心）：撤销所有 ExpireTurn ≤ turn 的时效修正。
         /// 卡级（防御/关键字）调用 CardInstance.Revoke / 还原 CurrentDefense；玩家级费用修正直接出栈。
         /// 由 TurnManager.OnTurnEnded 订阅调用。
         /// </summary>
-        public static void ExpireTurnEndEffects(int turn)
+        public void ExpireTurnEndEffects(int turn)
         {
             for (int i = _timedModStack.Count - 1; i >= 0; i--)
             {
@@ -559,7 +682,7 @@ namespace Script.Manager
                 if (m.Kind == "CostMod")
                 {
                     GD.Print($"[EffectEngine] ⌛ 时效还原：玩家{m.PlayerId} 费用修正 +{m.Amount} 到期");
-                    CostModChanged?.Invoke();
+                    Script.Manager.UiNotificationBus.Instance?.NotifyCostModChanged();
                 }
                 else
                 {
@@ -584,27 +707,25 @@ namespace Script.Manager
             // 修复：所有到期项出栈完成后再统一刷新一次，避免末次 RefreshCostReduction 读到期中态（mod 偏大）被定格。
             // 循环内 CostModChanged 在 RemoveAt 之前触发，最后一项出栈前读到的仍是 mod=未出栈值；
             // 出栈后栈已空却无再次刷新，导致回合结束费用绿标残留。此处兜底刷一次终值。
-            CostModChanged?.Invoke();
+            Script.Manager.UiNotificationBus.Instance?.NotifyCostModChanged();
         }
 
         // ==================== 玩家级费用修正栈（P2，JC012 等） ====================
-
-        /// <summary>费用修正栈变化事件（登记/消费/到期），供 UI 刷新手牌减费提示（CardUI.RefreshCostReduction）。</summary>
-        public static event System.Action CostModChanged;
+        //【MVC 收口】费用修正变化通知改由 UiNotificationBus.CostModChanged 广播，本类不再持有 static 事件。
 
         /// <summary>登记玩家级费用修正（如"下一张帷幕守望牌费用-1"）。
         /// filterText 为空=全匹配；否则卡名包含该串 **或** 卡 Organization 等于该串才生效（2026-08-11 扩展 Organization 维度）。
         /// consumeOnce=true 表示"下一张"语义：打出/翻面符合条件牌一次后由 ConsumeCostModification 移除（回合结束未用则随 ExpireTurnEndEffects 出栈流失）。</summary>
-        public static void ApplyCostModification(int playerId, int amount, int expireTurn, string filterText, bool consumeOnce = false)
+        public void ApplyCostModification(int playerId, int amount, int expireTurn, string filterText, bool consumeOnce = false)
         {
                     _timedModStack.Add(new TimedMod { PlayerId = playerId, Kind = "CostMod", Amount = amount, ExpireTurn = expireTurn, FilterText = filterText ?? "", ConsumeOnce = consumeOnce });
             GD.Print($"[EffectEngine] ✓ 玩家{playerId} 费用修正 +{amount}（filter='{filterText}'，回合{expireTurn}到期，{(consumeOnce ? "一次性" : "整回合")}）");
-            CostModChanged?.Invoke();
+            Script.Manager.UiNotificationBus.Instance?.NotifyCostModChanged();
         }
 
         /// <summary>消费并移除玩家的一次性费用修正项（打出/翻面符合条件牌后调用，实现"下一张"语义）。
         /// 仅移除匹配 filterText 且 ConsumeOnce=true 的项；非一次性项（整回合全减免）不受影响。</summary>
-        public static void ConsumeCostModification(int playerId, string filterText)
+        public void ConsumeCostModification(int playerId, string filterText)
         {
             for (int i = _timedModStack.Count - 1; i >= 0; i--)
             {
@@ -614,14 +735,14 @@ namespace Script.Manager
                 {
                     GD.Print($"[EffectEngine] ⌛ 消费一次性费用修正：玩家{playerId} 的 '{m.FilterText}' 已使用，移除");
                     _timedModStack.RemoveAt(i);
-                    CostModChanged?.Invoke();
+                    Script.Manager.UiNotificationBus.Instance?.NotifyCostModChanged();
                 }
             }
         }
 
         /// <summary>查询玩家当前对某张即将打出的卡的费用减免额。
         /// 匹配：filterText 为空=全匹配；否则 cardName 含 filterText **或** organization == filterText（2026-08-11 扩展 Organization 维度）。</summary>
-        public static int GetCostModification(int playerId, string cardName, string organization = "")
+        public int GetCostModification(int playerId, string cardName, string organization = "")
         {
             int total = 0;
             foreach (var m in _timedModStack)
@@ -637,23 +758,23 @@ namespace Script.Manager
 
         // ==================== D2 威名去重（战斗对抗获胜放置势力标志） ====================
         // 维度：areaUid + 控制者，保证"同一控制者多个威名在同一地区只放置一个势力标志"。
-        // 单次战斗对抗只 Emit 一次 CombatWon（见 TriggerEmitPoints.CombatWon）；
+        // 单次战斗对抗只 Emit 一次 OnCombatWon（见 TriggerEmitPoints.OnCombatWon）；
         // 每次 Emit 前由 ResetCombatWonDedup 清空，结算 PlaceToken 时按维度查重。
-        private static readonly System.Collections.Generic.Dictionary<string, bool> _combatWonMarkPlaced
+        private readonly System.Collections.Generic.Dictionary<string, bool> _combatWonMarkPlaced
             = new System.Collections.Generic.Dictionary<string, bool>();
-        private static string _combatWonKey(string areaUid, int controller)
+        private string _combatWonKey(string areaUid, int controller)
             => $"{areaUid}|{controller}";
 
         /// <summary>清空威名放置去重表（每次战斗对抗 Emit 前调用，保证单次战斗维度内去重）。</summary>
-        public static void ResetCombatWonDedup() => _combatWonMarkPlaced.Clear();
+        public void ResetCombatWonDedup() => _combatWonMarkPlaced.Clear();
 
         // ==================== 对局级全量重置（B2：单场景常驻 + 显式 Reset） ====================
         // 一局结束、重开下一局前调用（由 GameInitializer.ResetMatch 编排，且必须先于 CardManager.Reset 调用）。
         // 作用：清空本引擎全部静态对局状态注册表 + 复位 CurrentTurn。
-        // 注意：仅清空"对局状态数据"，绝不清空模板级注册表（CardEffectFactory）与常驻注入引用/委托
-        // （TurnManagerRef/CardManagerRef/ZoneManagerRef/IsStackCircuitBroken/OnVisualDirty/PromptPayOrTap/CostModChanged）。
+        // 注意：仅清空"对局状态数据"，绝不清空模板级注册表（CardEffectFactory）与常驻注入引用
+        // （TurnManagerRef/CardManagerRef/ZoneManagerRef/IsStackCircuitBroken/UIHooks）。
         // 采用"直接清空"方案：B2 下第二局会重建全部 CardInstance，旧卡对象整体被抛弃，无需先 Revoke。
-        public static void ResetAll()
+        public void ResetAll()
         {
             _continuousRegistry.Clear();
             _activePrereqCards.Clear();
@@ -667,7 +788,7 @@ namespace Script.Manager
         }
 
         // ==================== 条件判定（最小） ====================
-        public static bool EvaluateCondition(string predicate, CardInstance source, CardInstance target, CardInstance contextCard = null, int triggeringPlayerId = -1, string triggeringAreaId = null)
+        public bool EvaluateCondition(string predicate, CardInstance source, CardInstance target, CardInstance contextCard = null, int triggeringPlayerId = -1, string triggeringAreaId = null)
         {
             // 最小实现：支持几种已明确谓词；其余默认视为满足，避免卡死
             switch (predicate)
@@ -702,10 +823,10 @@ namespace Script.Manager
                     return oppHand <= 3;
                 case "WinnerIsSelf":
                     // "X对抗获胜"类触发通用条件：本卡控制者 == 对抗获胜方（winnerId）。
-                    // 由 TriggerRegistry 收集 OnCombatWon/OnInvestigationWon/OnFactionWon 时，
-                    // 经 TriggerEffectInstance.WinnerId → StackEntry.WinnerId → ResolveEffect(winnerId) 透传；
+                    // 由 TriggerRegistry 收集 OnCombatWon/OnInvestigationWon/OnPowerWon 时，
+                    // 经 StackEffectInstance.WinnerId → StackEntry.WinnerId → ResolveEffect(winnerId) 透传；
                     // 非对抗路径（winnerId<0）或无来源卡时无法判定，视为不满足。
-                    // 命名规范：对应原始能力名 Combat/Investigation/Power（势力）三种对抗，本谓词对三者通用。
+                    // 命名规范：对应原始能力名 Strength/Investigation/Power（势力）三种对抗，本谓词对三者通用。
                     if (source == null) return false;
                     if (triggeringPlayerId < 0)
                     {
@@ -754,18 +875,18 @@ namespace Script.Manager
         /// 注册一张卡的所有持续效果（卡进入相关区域时调用，P1 实现）。
         // ==================== 持久效果监听集（D19-②：带前提的持续效果登记，前提变化时重判） ====================
         // 记录"因前提未满足而未生效"的卡引用，待相关区域（资产区/忠诚）变化时由 ReevaluatePrereqs 重算。
-        private static readonly System.Collections.Generic.HashSet<CardInstance> _pendingPrereqCards
+        private readonly System.Collections.Generic.HashSet<CardInstance> _pendingPrereqCards
             = new System.Collections.Generic.HashSet<CardInstance>();
 
         // ==================== 全局封锁秘密派遣表（JC068 阿格斯IV） ====================
         // 记录"被禁止秘密派遣行动的玩家ID"（即未横置阿格斯IV控制者的对手）。
         // 由带 BlockDeployCovert 且前提（自身未横置）满足的持续效果在 RegisterPersistent / ReevaluatePrereqs 时登记；
         // 前提丧失或离场时移除。TurnManager.DeployCovert / CanDeployCovert 经 IsDeployCovertBlocked 实时查询。
-        private static readonly System.Collections.Generic.HashSet<int> _blockDeployCovertPlayers
+        private readonly System.Collections.Generic.HashSet<int> _blockDeployCovertPlayers
             = new System.Collections.Generic.HashSet<int>();
 
         /// <summary>某玩家当前是否被"未横置阿格斯IV"封锁而禁止秘密派遣行动（JC068）。</summary>
-        public static bool IsDeployCovertBlocked(int playerId)
+        public bool IsDeployCovertBlocked(int playerId)
             => _blockDeployCovertPlayers.Contains(playerId);
 
         /// <summary>
@@ -777,7 +898,7 @@ namespace Script.Manager
         ///
         /// 手牌期（如"公开"拦截派遣暗藏）仍由 HasPublicKeyword 双层补判保证，不依赖本方法。
         /// </summary>
-        public static void RegisterPersistent(CardInstance card)
+        public void RegisterPersistent(CardInstance card)
         {
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return;
             // Z1 严格规则：附属卡仅 AttachedZone 生效。非 AttachedZone 的附属卡（如 AreaZone/资产/手牌/墓地）
@@ -791,7 +912,6 @@ namespace Script.Manager
                 GD.Print($"[EffectEngine][Z1] 附属卡 {tmpl.CardName}(UID={card.UID}) 不在附属区(Zone={card.CurrentZone})，跳过持久效果注册");
                 return;
             }
-            GD.Print($"[JC001DEBUG] RegisterPersistent 进入: {tmpl.CardName} (UID={card.UID}, 效果数={tmpl.EffectDataList.Count})");
             if (_continuousRegistry.ContainsKey(card.UID)) return; // 防重复注册
             var applied = new System.Collections.Generic.List<EffectGrant>();
 
@@ -801,7 +921,7 @@ namespace Script.Manager
                 {
                     // 静止/禁止效果：按生效区判定（默认争夺区/结附区；非对应区不生效）
                     // 【方案C】改为统一 IsEffectActiveInZone（效果粒度，尊重 e.Scope 声明）。
-                    // 原旧逻辑：`if (e.Scope != ZoneScope.ContestZone) continue;` 已在下方收敛为 IsEffectActiveInZone，
+                    // 原旧逻辑：`if (e.Scope != ZoneScope.AreaZone) continue;` 已在下方收敛为 IsEffectActiveInZone，
                     // 未来移除时勿漏（Static 效果也须过生效区判定）。
                     if (!IsEffectActiveInZone(e, card)) continue;
                     foreach (var s in e.StaticEffects ?? new Array<StaticEffect>())
@@ -827,8 +947,6 @@ namespace Script.Manager
                     // 全局封锁秘密派遣（JC068）：带 BlockDeployCovert 且前提（未横置）满足 → 登记封锁对手派遣。
                     if (HasBlockDeployCovert(e))
                     {
-                        // [DIAG] 追踪阿格斯封锁注册次数与实例，排查多实例（UI 只见一张但逻辑多个）
-                        GD.Print($"[DIAG 阿格斯IV] RegisterPersistent 效果B: UID={card.UID} Zone={card.CurrentZone} ctrl={card.ControllerId} 宿主={(card.AttachedTo?.UID ?? "∅")} 前提满足={prereqMet}");
                         SetBlockDeployCovert(card, active: true);
                         _activePrereqCards.Add(card); // 登记到已生效集合，供横置/竖置时 ReevaluatePrereqs 重判
                     }
@@ -868,7 +986,7 @@ namespace Script.Manager
         }
 
         /// <summary>读取某卡控制者在指定区域（默认资产区）的某领域忠诚点数 N（线性计量用）。</summary>
-        private static int GetPrereqLoyaltyValue(CardInstance card, ContinuousPrereqSpec spec)
+        private int GetPrereqLoyaltyValue(CardInstance card, ContinuousPrereqSpec spec)
         {
             var pm = TurnManagerRef?.PlayerManagerRef;
             if (pm == null) return 0;
@@ -878,13 +996,13 @@ namespace Script.Manager
         }
 
         /// <summary>卡类型默认生效区（方案C 声明式 Scope 的默认推导）。
-        /// 未声明 Scope（Specified）的效果回退到此处：附属→AttachTarget（严格=仅 AttachedZone）；角色→ContestZone（仅 AreaZone）。
+        /// 未声明 Scope（Specified）的效果回退到此处：附属→AttachTarget（严格=仅 AttachedZone）；角色→AreaZone（仅 AreaZone）。
         /// 未来扩展（墓地/手牌生效等）在此加判断，或让具体效果声明 Scope 覆盖。</summary>
-        public static ZoneScope GetDefaultScope(CardInstance card)
+        public ZoneScope GetDefaultScope(CardInstance card)
         {
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return ZoneScope.Specified;
             bool isAttachment = (tmpl.CategoryFlag & CardCategory.Attachment) != 0;
-            return isAttachment ? ZoneScope.AttachTarget : ZoneScope.ContestZone;
+            return isAttachment ? ZoneScope.AttachTarget : ZoneScope.AreaZone;
         }
 
         /// <summary>某效果在其来源卡当前所在区是否生效（方案C 统一判定，替代三处散落的"卡类型+CurrentZone"）。
@@ -892,13 +1010,13 @@ namespace Script.Manager
         /// 接入点：RegisterPersistent（持续/静止）、TriggerRegistry（触发）、ActivateEligibility（激活）。
         /// 注意：AttachTarget 采用严格规则=仅 AttachedZone（Z1/Z4，AreaZone 附属暂不生效）。
         /// 未来加"某区生效"只需在 switch 增分支，勿在调用处重复写区判断（避免遗漏）。</summary>
-        public static bool IsEffectActiveInZone(EffectData e, CardInstance card)
+        public bool IsEffectActiveInZone(EffectData e, CardInstance card)
         {
             if (card == null || e == null) return false;
             ZoneScope scope = (e.Scope == ZoneScope.Specified) ? GetDefaultScope(card) : e.Scope;
             switch (scope)
             {
-                case ZoneScope.ContestZone:  return card.CurrentZone == CardZone.AreaZone;
+                case ZoneScope.AreaZone:     return card.CurrentZone == CardZone.AreaZone;
                 case ZoneScope.AttachTarget: return card.CurrentZone == CardZone.AttachedZone; // 严格版（Z1/Z4）
                 case ZoneScope.HandZone:     return card.CurrentZone == CardZone.Hand;
                 case ZoneScope.AssetZone:    return card.CurrentZone == CardZone.AssetZone;
@@ -910,7 +1028,7 @@ namespace Script.Manager
 
         /// <summary>结构化前提判定（D19-②）。PrereqSpec 优先；无则回退旧文本（仅"常驻"生效）。
         /// 注意：ScaleByLoyalty=true 时视为"线性计量"——N&gt;0 即满足，授予量由调用方按 N 缩放。</summary>
-        public static bool EvaluatePrereq(CardInstance card, EffectData e)
+        public bool EvaluatePrereq(CardInstance card, EffectData e)
         {
             if (e.PrereqSpec != null && e.PrereqSpec.Kind != PrereqKind.None)
             {
@@ -919,7 +1037,6 @@ namespace Script.Manager
                 {
                     // 查询控制者在该区域（默认资产区）的某领域忠诚
                     int n = GetPrereqLoyaltyValue(card, spec);
-                    GD.Print($"[JC001DEBUG] EvaluatePrereq 领域忠诚: 卡={card.PlayerTemplate?.CardName} 控制者={card.ControllerId} 领域={spec.Domain} 当前={n} 需≥{spec.Amount} → {(n >= spec.Amount ? "满足" : "不满足")}");
                     if (spec.ScaleByLoyalty) return n > 0;          // 线性计量：有 1 点即满足
                     return n >= spec.Amount;                         // 布尔开关：≥阈值才满足
                 }
@@ -936,7 +1053,7 @@ namespace Script.Manager
 
         /// <summary>判断某持续效果是否携带"全局封锁秘密派遣"（BlockDeployCovert）静止标记（JC068）。
         /// 效果B 用 Continuous+PrereqSpec(SelfUntapped) 表达动态前提，StaticEffects 承载封锁意图。</summary>
-        private static bool HasBlockDeployCovert(EffectData e)
+        private bool HasBlockDeployCovert(EffectData e)
         {
             if (e?.StaticEffects == null) return false;
             foreach (var s in e.StaticEffects)
@@ -947,13 +1064,10 @@ namespace Script.Manager
         /// <summary>按来源卡登记/撤销"封锁其控制者的对手秘密派遣"（JC068 阿格斯IV）。
         /// active=true：前提（未横置）满足，把 controlPlayer 的对手记入封锁表；active=false：移除。
         /// 规则：阿格斯IV的控制者为 X，则 X 的对手（另一玩家）被封锁。</summary>
-        private static void SetBlockDeployCovert(CardInstance card, bool active)
+        private void SetBlockDeployCovert(CardInstance card, bool active)
         {
             if (card == null) return;
             int opponent = card.ControllerId == 1 ? 2 : 1;
-            // [DIAG] 打印阿格斯IV完整实例信息：UID、Zone、控制者、拥有者、宿主(AttachedTo)、是否横置
-            // 用于排查 UI 只见一张但逻辑存在多个实例的问题（同一阿格斯不应出现两个 UID 的封锁登记）。
-            GD.Print($"[DIAG 阿格斯IV] 封锁开关 active={active} 卡={card.PlayerTemplate?.CardName}(UID={card.UID}) Zone={card.CurrentZone} ctrl={card.ControllerId} owner={card.OwnerId} 宿主AttachedTo={(card.AttachedTo?.PlayerTemplate?.CardName ?? "∅")}(UID={(card.AttachedTo?.UID ?? "∅")}) IsTapped={card.IsTapped} → 封锁玩家{opponent}");
             if (active)
             {
                 _blockDeployCovertPlayers.Add(opponent);
@@ -969,7 +1083,7 @@ namespace Script.Manager
         /// <summary>前提变化重判（D19-②）：资产区/忠诚变动或控制者变化（跨区 MOVE）后调用，
         /// 对「已生效」与「待定」的持续效果卡全集用当前控制者重新判定，开关授予。
         /// 注意：必须包含 _continuousRegistry 中的卡，否则已生效的卡在控制者变更/资产减少后不会被撤销。</summary>
-        public static void ReevaluatePrereqs(int playerId)
+        public void ReevaluatePrereqs(int playerId)
         {
             // 全集 = 已生效(activePrereqCards) + 待定(pending)。去重后逐张用当前 ControllerId 重判。
             var allCards = new System.Collections.Generic.HashSet<CardInstance>(_pendingPrereqCards);
@@ -996,7 +1110,7 @@ namespace Script.Manager
                         bool alreadyActive = _continuousRegistry.ContainsKey(card.UID);
                         if (alreadyActive && mult == 1) continue; // 非缩放且已生效：维持
 
-                        // 已生效的线性计量卡：先按旧量撤销，再按新量授予，避免 CurrentCombat 等重复叠加
+                        // 已生效的线性计量卡：先按旧量撤销，再按新量授予，避免 CurrentStrength 等重复叠加
                         if (alreadyActive)
                         {
                             if (_continuousRegistry.TryGetValue(card.UID, out var oldApplied))
@@ -1044,7 +1158,7 @@ namespace Script.Manager
         }
 
         /// <summary>注销一张卡的持久效果（卡离场/被封印/被消灭时调用，精确还原 + 清除静止标记）。</summary>
-        public static void UnregisterPersistent(CardInstance card)
+        public void UnregisterPersistent(CardInstance card)
         {
             if (card == null) return;
             _pendingPrereqCards.Remove(card);
@@ -1099,7 +1213,7 @@ namespace Script.Manager
         /// <summary>持续光环（D19-③）应用：对源卡控制者争夺区内"符合条件"的其他角色授予 e.ContinuousGrants。
         /// 条件：target != 源卡 且 target 当前实例 MagicDomains 不含 e.AuraFilterExcludeDomain（如 JC060 排除已有心灵领域者）。
         /// 受影响的(源→他者)授予记录进 _auraGrants，供精确还原。</summary>
-        private static void ApplyAura(CardInstance source, EffectData e)
+        private void ApplyAura(CardInstance source, EffectData e)
         {
             if (source == null || e?.ContinuousGrants == null) return;
             var zm = ZoneManagerRef;
@@ -1134,7 +1248,7 @@ namespace Script.Manager
 
         /// <summary>持续光环重算（D19-③）：某玩家区域变动（角色进场/离场/夺控）后调用，对所有含光环的源卡重算其受影响集合。
         /// 差量：新符合条件者补授；已不符合者（离场/夺控/已获领域）撤销本源授予。挂在 ZoneManager.OnPostMove / 夺控后。</summary>
-        public static void ReevaluateAuras(int playerId)
+        public void ReevaluateAuras(int playerId)
         {
             var zm = ZoneManagerRef;
             if (zm == null) return;
@@ -1207,19 +1321,19 @@ namespace Script.Manager
             }
             // 光环补授/撤销已改写 MagicDomains/攻击力/调查力等数据，经总线通知表现层刷新
             // StatsLabel 与卡面动态标签（夺控场景下 OnPostMove 的 SyncDerivedUI 早于本调用，故需此处二次收口）。
-            OnVisualDirty?.Invoke();
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
         }
 
         // 兼容别名（旧调用点 RegisterContinuous / UnregisterContinuous 仍可用）
-        public static void RegisterContinuous(CardInstance card) => RegisterPersistent(card);
-        public static void UnregisterContinuous(CardInstance card) => UnregisterPersistent(card);
+        public void RegisterContinuous(CardInstance card) => RegisterPersistent(card);
+        public void UnregisterContinuous(CardInstance card) => UnregisterPersistent(card);
 
         /// <summary>查询某卡当前是否有已注册的持续效果（调试/规则用）。</summary>
-        public static bool HasContinuous(CardInstance card)
+        public bool HasContinuous(CardInstance card)
             => card != null && _continuousRegistry.ContainsKey(card.UID);
 
         /// <summary>查询某卡是否带某静止/禁止标记（D19-⑤ 消费入口，如 CannotBeAttached）。</summary>
-        public static bool HasStaticFlag(CardInstance card, StaticKind flag)
+        public bool HasStaticFlag(CardInstance card, StaticKind flag)
             => card != null && card.HasStaticFlag(flag);
 
         // ==================== 触发收集（供 TurnManager 桥接） ====================
@@ -1228,7 +1342,7 @@ namespace Script.Manager
         /// 从卡实例的 EffectDataList 收集指定时机的触发效果（进场/现身）。
         /// 返回 EffectData 列表，由调用方（TurnManager 桥接或通过 GameEventBus 总线）决定是否入堆叠。
         /// </summary>
-        public static System.Collections.Generic.List<EffectData> CollectTriggers(CardInstance card, EffectTiming timing)
+        public System.Collections.Generic.List<EffectData> CollectTriggers(CardInstance card, EffectTiming timing)
         {
             var result = new System.Collections.Generic.List<EffectData>();
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return result;
@@ -1245,7 +1359,7 @@ namespace Script.Manager
         /// 角色/附属激活能力入堆叠（D9 激活框架接驳点）：将一条激活型 EffectData 包装为 Trigger 类
         /// StackEntry 入堆叠，统一走 ResolveEntry 的 Trigger 分支执行（含 D16 目标丢失校验）。
         /// </summary>
-        public static void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null,
+        public void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null,
             string sourceZoneDetailSnapshot = null, int sourceControllerSnapshot = -1)
         {
             if (sm == null || card == null || ability == null) return;
@@ -1259,8 +1373,8 @@ namespace Script.Manager
                 EffectDataEffect = ability,
                 EffectText = ability.EffectId,
                 // 参照 TurnManager.PushTriggerToStack：填充 TriggerInstance，
-                // 使 StackEntryUI 能经 entry.TriggerInstance.Source.PlayerTemplate 取到来源卡，渲染卡图。
-                TriggerInstance = new Script.Data.Effects.TriggerEffectInstance
+                // 使 StackEntryUI 能经 entry.StackEffect.Source.PlayerTemplate 取到来源卡，渲染卡图。
+                StackEffect = new Script.Data.Effects.StackEffectInstance
                 {
                     Source = card,
                     OwnerPlayerId = card.OwnerId,
@@ -1274,7 +1388,7 @@ namespace Script.Manager
             {
                 entry.Targets.Add(new Script.Game.Entities.StackTargetRef
                 {
-                    Kind = Script.Game.Entities.StackTargetRef.TargetKind.Card,
+                    Kind = Script.Game.Entities.StackTargetRef.RefKind.Card,
                     CardUid = target.UID,
                 });
             }
@@ -1302,14 +1416,14 @@ namespace Script.Manager
 
         // ==================== 事务卡便捷入口 ====================
 
-        /// <summary>事务卡打出结算：执行卡上所有 SpellCast 效果（F组）。</summary>
-        public static void ResolveSorcery(CardInstance sorcery, string targetUid, int targetVersionId = -1)
+        /// <summary>事务卡打出结算：执行卡上所有 OnSorceryCast 效果（F组）。</summary>
+        public void ResolveSorcery(CardInstance sorcery, string targetUid, int targetVersionId = -1)
         {
             if (sorcery?.PlayerTemplate is not PlayerCardData tmpl) return;
             var spells = new System.Collections.Generic.List<EffectData>();
             foreach (var e in tmpl.EffectDataList)
             {
-                if (e.Timing == EffectTiming.SpellCast) spells.Add(e);
+                if (e.Timing == EffectTiming.OnSorceryCast) spells.Add(e);
             }
             if (spells.Count == 0) return;
             CardInstance target = string.IsNullOrEmpty(targetUid) ? null : CardManager.Instance?.GetInstance(targetUid);
@@ -1335,7 +1449,7 @@ namespace Script.Manager
         /// 角色/附属激活能力执行入口（D9 激活框架未实现，这里提供执行体）。
         /// 调用方需先校验 ActivateCondition/Cost（激活许可），校验通过再调本方法。
         /// </summary>
-        public static void ActivateAbility(CardInstance source, EffectData data, CardInstance target)
+        public void ActivateAbility(CardInstance source, EffectData data, CardInstance target)
         {
             if (data.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated or EffectTiming.ManeuverTrigger or EffectTiming.CouncilActivated))
             {
@@ -1416,7 +1530,7 @@ namespace Script.Manager
                     return;
                 }
                 pm.SpendMana(source.ControllerId, cost);
-                OnVisualDirty?.Invoke();   // 费用支付（横置资产卡）已改模型，刷新 UI
+                Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();   // 费用支付（横置资产卡）已改模型，刷新 UI
             }
 
             // 4.5) 捕获来源（发动地）快照：必须在"横置/牺牲"代价前取 source.ZoneDetailId。
@@ -1432,7 +1546,7 @@ namespace Script.Manager
             {
                 source.SetTapped(true);    // SetTapped 发 TappedChanged → 持续效果重判（阿格斯封锁即时开关）
                 GD.Print($"[EffectEngine] ↻ {tmpl.CardName} 因激活横置");
-                OnVisualDirty?.Invoke();   // 本角色横置已改模型，刷新 UI
+                Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();   // 本角色横置已改模型，刷新 UI
             }
 
             // 3.5) 激活条件：牺牲本角色（付出代价，离场类）
@@ -1447,7 +1561,7 @@ namespace Script.Manager
                 {
                     GD.Print($"[EffectEngine] ✝ {tmpl.CardName} 因激活牺牲自身（入堆叠前代价）");
                     CardManager.Instance.MoveCardToGraveyard(source);
-                    OnVisualDirty?.Invoke();
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                 }
                 else
                 {

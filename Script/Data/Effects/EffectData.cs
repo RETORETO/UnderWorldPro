@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Godot.Collections;
 using Script.Enums;
 
@@ -22,7 +22,24 @@ namespace Script.Data.Effects
     /// </summary>
     public enum CovertTriggerMode { FaceUp, CovertOnly, Either }
 
-    /// <summary>效果时机/触发源。区分"持续常驻（B组）"与"进场后引发的结算（C/F组）"。</summary>
+    /// <summary>
+    /// 效果时机/触发源。一个枚举承载四类语义（历史演进的自然结果），按性质分组如下：
+    ///
+    /// 【B组·持续/静止】不入堆叠、不授出/结算，注册表常驻：
+    ///   Continuous（持续效果）、Static（静止/禁止规则约束）。
+    ///
+    /// 【C组·激活能力】玩家主动发动，需费用/优先权/门槛，发动后进堆叠结算：
+    ///   CharacterActivated（角色激活）、AttachmentActivated（附属激活）、CouncilActivated（秘社激活）。
+    ///
+    /// 【C组·触发时机】事件被动触发，经 GameEventBus 广播 → TriggerRegistry 收集 → 入堆叠：
+    ///   EnterTrigger（进场）、UncoverTrigger（现身）、ManeuverTrigger（机动）、
+    ///   以及下方所有 OnXxx 总线扩展时机（OnCardPlayed/OnCardDied/OnAreaWon/.../OnCombatWon）。
+    ///
+    /// 【F组·打出结算】事务卡打出即结算，完即入墓地：
+    ///   OnSorceryCast（事务打出）。当前走 ResolveSorcery 专属路径，未接总线（见该条 TODO）。
+    ///
+    /// 注：本枚举值顺序一经发布须保持稳定（新增值追加末尾），详见下方"总线扩展时机"注释块。
+    /// </summary>
     public enum EffectTiming
     {
         Continuous,            // 持续效果（B组）：入注册表，按位置实时增删，不入堆叠
@@ -32,7 +49,9 @@ namespace Script.Data.Effects
         CharacterActivated,    // 角色激活能力（C组）
         AttachmentActivated,   // 附属激活能力（C组）
         ManeuverTrigger,       // 机动触发（C组，玩家可选，非强制）
-        SpellCast,             // 事务卡打出结算（F组）：打出即结算，完即入墓地
+        OnSorceryCast,         // 事务卡打出结算（F组）：打出即结算，完即入墓地。
+                               // TODO（命名/架构）：本时机当前走 ResolveSorcery 专属路径，未接入 GameEventBus 总线触发——
+                               // 若需"反应类时机（如 OnCardPlayed）能响应事务打出"，须后续接入总线（见 EffectEngine.ResolveSorcery）。
         OnCardPlayed,          // 反应触发：当任意卡被打出时，旁观者卡触发（如 XG01 打出事务牌时抓牌）
         OnTurnEnded,           // 回合结束触发：结束步骤（EndCleanup）广播，此时堆叠仍可结算
 
@@ -66,13 +85,13 @@ namespace Script.Data.Effects
 
         /// <summary>反应触发：当本角色/玩家抓牌（抽牌）时，旁观者卡触发。对应 GameEvent.OnDraw。
         /// 覆盖卡文："当你抓牌时""抓牌触发"（全卡"抓牌" ~18 处）。典型如抓牌时额外放置指示物、抓牌上限相关。
-        /// 【待接】触点：EffectEngine.Draw（抽牌动作原语）执行后调用 GameEventBus.Emit(OnDraw, ctx)。
+        /// 【待接】触点：EffectEngine.Instance.Draw（抽牌动作原语）执行后调用 GameEventBus.Emit(OnDraw, ctx)。
         /// 区别于 OnCardPlayed（打牌）：抓牌是被动作，打牌是主动打出。</summary>
         OnDraw,
 
         /// <summary>触发：当卡牌被弃置（从手牌进入墓地/弃牌堆）时广播。对应 GameEvent.OnDiscard。
         /// 覆盖卡文："手牌触发""当你弃牌时"（全卡"手牌触发" ~5 对样例）。典型如弃牌时触发效果、弃牌视为某种代价结算。
-        /// 【待接】触点：手牌弃牌结算处（HandManager/EffectEngine.Discard）调用 GameEventBus.Emit(OnDiscard, ctx)。
+        /// 【待接】触点：手牌弃牌结算处（HandManager/EffectEngine.Instance.Discard）调用 GameEventBus.Emit(OnDiscard, ctx)。
         /// 区别于 OnCardDied（场上死亡）：此处特指手牌区弃置。</summary>
         OnDiscard,
 
@@ -105,15 +124,15 @@ namespace Script.Data.Effects
         /// 与 OnCardDied 区分：死亡=进墓地；离场=任意原因离开战场（含死亡，但此处仅指"非死亡离场"以保持互斥清晰）。</summary>
         OnCardLeft,
 
-        /// <summary>触发：战斗对抗（Battle 类型）获胜时广播。对应 GameEvent.CombatWon。
-        /// 触发语义：CombatManager.ResolveWinner 结算战斗对抗分出胜者后，经 TriggerEmitPoints.CombatWon 广播；
+        /// <summary>触发：战斗对抗（Strength 类型）获胜时广播。对应 GameEvent.OnCombatWon。
+        /// 触发语义：CombatManager.ResolveWinner 结算战斗对抗分出胜者后，经 TriggerEmitPoints.OnCombatWon 广播；
         /// 由威名类效果（JC018 等）响应，条件 WinnerIsSelf 判定"本卡控制者是否为对抗获胜方"。
         /// 放置逻辑参考 JC035 的 PlaceToken 势力标记落点（ZoneDetailId）。
-        /// 【后续拓展·B 预留】调查对抗获胜 → OnInvestigationWon；势力对抗(Power)获胜 → OnFactionWon；
-        /// 二者复用同一 WinnerIsSelf 条件与 TriggerEffectInstance.WinnerId 透传链路，仅需新增枚举 + EventToTiming 映射 + TriggerEmitPoints.Emit 方法。</summary>
+        /// 【后续拓展·B 预留】调查对抗获胜 → OnInvestigationWon；势力对抗(Power)获胜 → OnPowerWon；
+        /// 二者复用同一 WinnerIsSelf 条件与 StackEffectInstance.WinnerId 透传链路，仅需新增枚举 + EventToTiming 映射 + TriggerEmitPoints.Emit 方法。</summary>
         OnCombatWon,
 
-        /// <summary>议会（秘社）激活能力（C组衍生）。对应玩家双击秘社 UI 弹出激活窗口、选择某激活选项后发动。
+        /// <summary>秘社激活能力（C组衍生）。对应玩家双击秘社 UI 弹出激活窗口、选择某激活选项后发动。
         /// 与 CharacterActivated/AttachmentActivated 并列，但来源是 CouncilZone 中的秘社实例；非快速行动、需门槛判定、进堆叠。
         /// 触点：CouncilCardUI 双击 → PlayerActionService 激活入口（门槛判定 + 进堆叠 + TargetRules 选目标）。
         /// 注意：秘社卡可含多个激活选项（ActivationOptions），每个选项视为一条独立的 CouncilActivated 效果流。</summary>
@@ -129,12 +148,12 @@ namespace Script.Data.Effects
     }
 
     /// <summary>效果生效位置（ZoneScope，声明式生效区）。
-    /// 方案C（声明式 Scope）默认推导见 EffectEngine.GetDefaultScope/IsEffectActiveInZone。
+    /// 方案C（声明式 Scope）默认推导见 EffectEngine.Instance.GetDefaultScope/IsEffectActiveInZone。
     /// 每个 EffectData 可声明其生效区；Specified=未声明，回退到卡类型默认区。
     /// 未来扩展（如"墓地/卡组生效"）在此枚举补值并在 GetDefaultScope/IsEffectActiveInZone 加分支即可。</summary>
     public enum ZoneScope
     {
-        ContestZone,   // 争夺区（角色默认生效位置）
+        AreaZone,      // 争夺区（角色默认生效位置）
         HandZone,      // 手牌区（如"公开"关键字仅约束手牌派遣暗藏）
         AttachTarget,  // 结附于合法目标时（附属默认；严格规则下=仅 AttachedZone）
         AssetZone,     // 资产区
@@ -212,10 +231,6 @@ namespace Script.Data.Effects
         /// 注意：GetLocalZoneTargets 在收集候选时据此决定是否排除 t.Source。</summary>
         [Export] public bool CanTargetSelf { get; set; } = false;
 
-        /// <summary>目标丢失处置模式（2026-08-07）。默认 Counter=丢失即反击/不结算；
-        /// 预留 Optional 给未来多目标（丢几个都行）。单目标卡/效果保持默认即原行为。</summary>
-        [Export] public TargetLossMode LossMode { get; set; } = TargetLossMode.Counter;
-
         /// <summary>是否限定"本地区"：目标须与来源同 AREASLOT（规则⑥）。默认 false。</summary>
         [Export] public bool IsLocalZone { get; set; } = false;
 
@@ -274,10 +289,14 @@ namespace Script.Data.Effects
         [Export] public int Cost { get; set; } = 0;                 // 费用数字（快速行动N 中的 N）
         [Export] public bool Forced { get; set; } = false;          // 是否强制（不可跳过）
         [Export] public CovertTriggerMode TriggerCovertMode { get; set; } = CovertTriggerMode.FaceUp; // 触发对暗藏状态的要求（默认仅正面朝上可触发）
+        /// <summary>结算前校验【来源卡版本号】是否未变（默认 false）。设 true 时，入栈时记录来源卡 VersionId，
+        /// 结算时若来源卡 VersionId 已变（离场/翻面/进手牌/进墓地等触发 BumpVersion），则跳过结算。
+        /// 争夺区→争夺区移动不 BumpVersion，故不影响此类效果结算。机动（Maneuver）等依赖来源卡身份稳定的效果设 true。</summary>
+        [Export] public bool RequireSourceVersionUnchanged { get; set; } = false;
 
         // ---- 持续专用（B组） ----
-        // 默认 Specified：由 IsEffectActiveInZone 走 GetDefaultScope（附属→AttachTarget，角色→ContestZone），
-        // 实现"附属默认在附属区生效、角色默认在争夺区生效"。此前默认 ContestZone 会让未声明 Scope 的
+        // 默认 Specified：由 IsEffectActiveInZone 走 GetDefaultScope（附属→AttachTarget，角色→AreaZone），
+        // 实现"附属默认在附属区生效、角色默认在争夺区生效"。此前默认 AreaZone 会让未声明 Scope 的
         // 附属卡激活效果被误当角色区判定而失效（D46）。显式声明 Scope 的效果按声明。
         [Export] public ZoneScope Scope { get; set; } = ZoneScope.Specified;
         [Export] public string ContinuousPrereq { get; set; } = "常驻"; // 持续前提（常驻/心灵领域忠诚≥2…），兼容旧文本

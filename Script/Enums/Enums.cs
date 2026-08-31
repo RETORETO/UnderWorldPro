@@ -46,25 +46,6 @@ namespace Script.Enums
     }
 
     /// <summary>
-    /// 目标丢失处置模式（目标系统·丢失规则，2026-08-07）。
-    /// 用于区分"单目标丢失即反击"与"未来多目标可部分丢失"。
-    /// 注意（2026-08-11）：当前结算处置实际由 TurnManager.ResolveEntryTargetIsLost 按 ResolveKind 分派，
-    /// 而非读取本字段——等价语义为：
-    ///   - 事务卡/附属（卡）打出丢失目标 → 取消打出、进墓地（EventListenerToGraveyard / Attachment 分支）；
-    ///   - 反应触发/激活（效果）丢失目标 → 仅跳过结算、卡留场（Trigger 分支）。
-    /// 该分派结果恰好等价于 LossMode=Counter 的本意（卡/效果丢失目标即不结算），故本字段目前为声明性标注，
-    /// Optional 多目标模式预留未启用（单目标卡/效果保持默认 Counter 即原行为）。
-    /// 若未来需按本字段精确分派（而非 ResolveKind），可在 ResolveEntryTargetIsLost 读取 entry.LossMode。
-    /// </summary>
-    public enum TargetLossMode
-    {
-        /// <summary>丢失即反击/整卡不结算（默认；单目标卡/效果的标准行为）。</summary>
-        Counter,
-        /// <summary>可选：丢失的目标跳过，其余照常结算（预留给未来多目标；单目标不会用到）。</summary>
-        Optional,
-    }
-
-    /// <summary>
     /// 卡牌状态变更种类（事件总线 OnCardStateChanged 的 changeKind 参数）。
     /// 仅列出当前机制真正会触发的三类；封印/翻面归入区域移动(Moved)与暗藏变更(CovertChanged)，
     /// 不单列 SealedChanged/Flipped 事件（详见目标系统·丢失规则设计）。
@@ -96,10 +77,10 @@ namespace Script.Enums
         /// <summary>目标离开合法区域（角色/暗藏者离场、附属离宿主、封印离封印区）。</summary>
         LeftZone,
         /// <summary>目标正面→背面（进入暗藏/covert），朝向变为丢失。对应 flip 动作的一个方向。</summary>
-        COVERT,
+        Covert,
         /// <summary>目标背面→正面（解除暗藏/uncover），朝向变为丢失。对应 flip 动作的另一方向。
         /// 按规则③"翻面仍丢"，背面→正面同样使目标非法。</summary>
-        UNCOVER,
+        Uncover,
         /// <summary>本地区限定下来源移动，目标不再"本地区"。</summary>
         OutOfLocalZone,
         /// <summary>目标获得屏障等使其非法（实现上等同丢失）。</summary>
@@ -123,7 +104,7 @@ namespace Script.Enums
         Character,  // 角色（场上正面角色）
         Attachment, // 附属
         Asset,      // 资产
-        Council,    // 议会（同 CouncilCardData / CouncilZone）
+        Council,    // 秘社（同 CouncilCardData / CouncilZone）
         Area,       // 地区（争夺区槽位）
         StackCard,  // 堆叠内的卡
         Covert,     // 暗藏者（场上背面角色）
@@ -140,60 +121,6 @@ namespace Script.Enums
         Default,    // 按卡类别默认推导
         Required,   // 强制需要目标
         None,       // 强制不需要目标
-    }
-
-    /// <summary>
-    /// 【已废弃】旧触发系统的时机枚举（TriggerEffectData / ICardTriggerBehavior / TriggerEffectCollector 已删除）。
-    /// 新系统统一使用 Script.Data.Effects.EffectTiming（EffectData.Timing）。
-    /// 保留仅为兼容 Godot 元数据/历史序列化，任何新代码不应再引用本枚举。
-    /// </summary>
-    [Obsolete("旧系统枚举，使用 EffectTiming 替代")]
-    public enum TriggerTiming
-    {
-        OnCardPlayed,      // 打出卡牌后
-        OnCardResolved,    // 结算卡牌后
-        OnEffectUsed,      // 使用效果后
-        OnEffectResolved,  // 结算效果后
-        OnInvestigation,   // 调查对抗后
-        OnCombat,          // 战斗对抗后
-        OnPower,           // 势力对抗后
-        OnAreaWonStep2,    // 赢取地区流程步骤2后
-        OnAreaWonStep3,    // 赢取地区流程步骤3后
-        OnAreaWonStep4,    // 赢取地区流程步骤4后
-        OnAreaWonStep5,    // 赢取地区流程步骤5后
-        PreCombat,         // 对抗前（机动触发等）
-    }
-
-    /// <summary>【已废弃】旧系统触发目标类型枚举，新系统用 TargetKind（EffectData.Target.Kind）。保留仅为兼容元数据。</summary>
-    [Obsolete("旧系统枚举，使用 TargetKind 替代")]
-    public enum TriggerTargetType
-    {
-        None,           // 不需要目标
-        Self,           // 触发来源自己
-        AnyCard,        // 任意卡
-        Character,      // 场上角色
-        Attachment,     // 场上附属
-        Asset,          // 资产
-        Council,        // 秘社卡
-        Area,           // 地区卡（作为场上卡对象的地区牌）
-        AreaSlot,       // 地区槽位（争夺区位置，机动效果选择移动的目标地）
-        Covert,         // 暗藏者
-        AttachedHost,   // 所结附的宿主（角色/地区）
-        Player,         // 玩家
-    }
-
-    /// <summary>【已废弃】旧系统触发条件分类枚举，新系统用 EffectCondition 类（EffectData.Condition）。保留仅为兼容元数据。</summary>
-    [Obsolete("旧系统枚举，使用 EffectCondition 替代")]
-    public enum TriggerCondition
-    {
-        Always,              // 无条件
-        WhenEntersPlay,      // 当来源入战场
-        WhenLeavesPlay,      // 当来源离场
-        WhenTargetLeaves,    // 当某目标离场
-        WhenAreaWon,         // 当地区被赢取
-        WhenCombatResolved,  // 当对抗结算
-        WhenEffectResolved,  // 当效果结算
-        Custom,              // 自定义条件（由 ConditionParam 解释）
     }
 
 }

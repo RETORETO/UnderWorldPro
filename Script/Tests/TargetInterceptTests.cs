@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -23,7 +23,7 @@ namespace Script.Tests
                     new EffectData
                     {
                         EffectId = "SP1",
-                        Timing = EffectTiming.SpellCast,
+                        Timing = EffectTiming.OnSorceryCast,
                         Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true },
                         Actions = new Array<EffectAction> { new EffectAction { Verb = ActionVerb.Destroy } },
                         Duration = "瞬时",
@@ -84,7 +84,7 @@ namespace Script.Tests
             var spell = new SpellCard();
             var src = NewInstance(spell);
             // 目标丢失（null）
-            var res = EffectEngine.ValidateTargetAtResolve(spell.EffectDataList[0], src, null);
+            var res = EffectEngine.Instance.ValidateTargetAtResolve(spell.EffectDataList[0], src, null);
             Assert.AreEqual(EffectEngine.TargetValidation.Lost, res, "事务卡目标丢失应返回 Lost");
         }
 
@@ -94,7 +94,7 @@ namespace Script.Tests
             var src = NewInstance(spell);
             var tgt = NewInstance(new CharCard(), "u2");
             tgt.CurrentZone = CardZone.AreaZone; // 角色目标需置于争夺区方为合法结算目标
-            var res = EffectEngine.ValidateTargetAtResolve(spell.EffectDataList[0], src, tgt);
+            var res = EffectEngine.Instance.ValidateTargetAtResolve(spell.EffectDataList[0], src, tgt);
             Assert.AreEqual(EffectEngine.TargetValidation.Ok, res, "目标存在应返回 Ok");
         }
 
@@ -102,7 +102,7 @@ namespace Script.Tests
         {
             var ch = new CharCard();
             var src = NewInstance(ch);
-            var res = EffectEngine.ValidateTargetAtResolve(
+            var res = EffectEngine.Instance.ValidateTargetAtResolve(
                 new EffectData { Timing = EffectTiming.Continuous, Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false } },
                 src, null);
             Assert.AreEqual(EffectEngine.TargetValidation.NoTarget, res, "无目标效果应返回 NoTarget");
@@ -117,7 +117,7 @@ namespace Script.Tests
             Assert.KnownRedline(true, redline,
                 "D16 反击规则已实现（2026-08-11 复核）：TurnManager.ResolveEntryTargetIsLost 按 ResolveKind 分派——" +
                 "事务卡/附属(卡)丢失目标→取消打出、进墓地（EventListenerToGraveyard / Attachment 分支）；" +
-                "反应触发/激活(效果)丢失目标→仅跳过结算、卡留场（Trigger 分支）。与 LossMode=Counter 语义一致，" +
+                "反应触发/激活(效果)丢失目标→仅跳过结算、卡留场（Trigger 分支）。" +
                 "补偿逻辑已由该私有方法覆盖，本红线仅标注其私有性需集成测试，不再标注'未实现'。");
         }
     }

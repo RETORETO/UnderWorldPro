@@ -15,4 +15,9 @@
   <ItemGroup>
     <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.2" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 排除独立的纯托管 ServerCore 子项目，避免其源码/生成文件被 UWPro 重复编译 -->
+    <Compile Remove="ServerCore/**/*.cs" />
+    <Compile Remove="ServerCore/**/*.cs.uid" />
+  </ItemGroup>
 </Project>

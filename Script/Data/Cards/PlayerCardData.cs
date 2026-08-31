@@ -53,8 +53,8 @@ namespace Script.Data.Cards
         /// <summary>基础调查值（Investigation）—— 用于调查类行动的能力值</summary>
         [Export] public int Investigation { get; set; }
 
-        /// <summary>基础战斗值（Combat）—— 用于战斗类行动的能力值</summary>
-        [Export] public int Combat { get; set; }
+        /// <summary>基础战力值（Strength）—— 用于战斗对抗的能力值（战力，与"势力 Power/调查 Investigation"并列的能力属性）</summary>
+        [Export] public int Strength { get; set; }
 
         /// <summary>基础力量值（Power）—— 代表影响力</summary>
         [Export] public int Power { get; set; }
@@ -62,8 +62,8 @@ namespace Script.Data.Cards
         /// <summary>先攻调查加成（FirstStrikeInvestigation）—— 在先攻时额外增加的调查值</summary>
         [Export] public int FirstStrikeInvestigation { get; set; }
 
-        /// <summary>先攻战斗加成（FirstStrikeCombat）—— 在先攻时额外增加的战斗值</summary>
-        [Export] public int FirstStrikeCombat { get; set; }
+        /// <summary>先攻战力加成（FirstStrikeStrength）—— 在先攻时额外增加的战力值</summary>
+        [Export] public int FirstStrikeStrength { get; set; }
 
         /// <summary>先攻力量加成（FirstStrikePower）—— 在先攻时额外增加的影响力</summary>
         [Export] public int FirstStrikePower { get; set; }
@@ -226,12 +226,16 @@ namespace Script.Data.Cards
             if (AllowedTargets != null && AllowedTargets.Count > 0)
                 return new System.Collections.Generic.List<TargetKind>(AllowedTargets);
 
-            // 2. 从 EffectDataList 聚合所有 Target.Kind（事务卡 F 组 / 角色·附属激活 C 组统一从此读取）
+            // 2. 从 EffectDataList 聚合【打出时机】目标大类（仅事务卡 OnSorceryCast 打出结算）。
+            //【打出/效果目标分离】角色/附属的激活、触发能力目标（CharacterActivated/AttachmentActivated/
+            // EnterTrigger 等）是"激活时"选，与"打出时"无关，绝不在此聚合——否则 JC003（角色·激活能力）、
+            // JC020/JC012（附属·激活能力）的激活目标会污染打出允许目标大类。
             var fromEffects = new System.Collections.Generic.List<TargetKind>();
             if (EffectDataList != null)
             {
                 foreach (var e in EffectDataList)
                 {
+                    if (e == null || e.Timing != EffectTiming.OnSorceryCast) continue;
                     var t = e?.Target;
                     if (t == null || t.Kind == TargetKind.None) continue;
                     if (!fromEffects.Contains(t.Kind)) fromEffects.Add(t.Kind);
@@ -279,13 +283,16 @@ namespace Script.Data.Cards
                                 return true;
                     }
 
-                    // 从 EffectDataList 聚合：任一效果 Target.NeedsSelection 为 true 即需要目标
+                    // 从 EffectDataList 聚合【打出时机】目标（仅事务卡 OnSorceryCast 打出结算）。
+                    //【打出/效果目标分离】激活/触发能力目标（CharacterActivated 等）是"激活时"选，
+                    // 与"打出时"无关，绝不在此判定——否则 JC003 角色卡会被其激活能力误判为"需要目标"。
                     if (EffectDataList != null)
                     {
                         bool anyNeeds = false;
                         bool anyTarget = false;
                         foreach (var e in EffectDataList)
                         {
+                            if (e == null || e.Timing != EffectTiming.OnSorceryCast) continue;
                             var t = e?.Target;
                             if (t == null || t.Kind == TargetKind.None) continue;
                             anyTarget = true;
@@ -323,8 +330,8 @@ namespace Script.Data.Cards
         /// <summary>获取总调查值（基础 + 先攻加成，若为先攻）</summary>
         public int GetTotalInvestigation(bool isFirst) => Investigation + (isFirst ? FirstStrikeInvestigation : 0);
 
-        /// <summary>获取总战斗值（基础 + 先攻加成，若为先攻）</summary>
-        public int GetTotalCombat(bool isFirst) => Combat + (isFirst ? FirstStrikeCombat : 0);
+        /// <summary>获取总战力值（基础 + 先攻加成，若为先攻）</summary>
+        public int GetTotalStrength(bool isFirst) => Strength + (isFirst ? FirstStrikeStrength : 0);
 
         /// <summary>获取总力量值（基础 + 先攻加成，若为先攻）</summary>
         public int GetTotalPower(bool isFirst) => Power + (isFirst ? FirstStrikePower : 0);

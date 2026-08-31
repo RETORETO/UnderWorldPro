@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Cards;
 using Script.Enums;
 using Script.IO;
@@ -8,6 +8,9 @@ using System.Collections.Generic;
 
 public partial class DeckManager : Node
 {
+    /// <summary>抽卡/洗牌级诊断日志开关（降噪）。默认 false；调试时置 true 可见抽牌明细。不影响逻辑。</summary>
+    public static bool VerboseMoves = false;
+
     // 两个玩家的卡组（存储 CardInstance）
     private List<CardInstance> _player1Deck = new List<CardInstance>();
     private List<CardInstance> _player2Deck = new List<CardInstance>();
@@ -93,12 +96,12 @@ public partial class DeckManager : Node
             }
         }
 
-        if (playerId == 0 || playerId == 1) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
-        if (playerId == 0 || playerId == 2) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
+        if (playerId == 0 || playerId == 1) if (VerboseMoves) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
+        if (playerId == 0 || playerId == 2) if (VerboseMoves) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
 
         if (playerId == 0 || playerId == 1) ShufflePlayer1();
         if (playerId == 0 || playerId == 2) ShufflePlayer2();
-        GD.Print("✅ 卡组已洗牌");
+        if (VerboseMoves) GD.Print("✅ 卡组已洗牌");
     }
 
     /// <summary>
@@ -134,12 +137,12 @@ public partial class DeckManager : Node
             }
         }
 
-        if (playerId == 0 || playerId == 1) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
-        if (playerId == 0 || playerId == 2) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
+        if (playerId == 0 || playerId == 1) if (VerboseMoves) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
+        if (playerId == 0 || playerId == 2) if (VerboseMoves) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
 
         if (playerId == 0 || playerId == 1) ShufflePlayer1();
         if (playerId == 0 || playerId == 2) ShufflePlayer2();
-        GD.Print("✅ 卡组已洗牌");
+        if (VerboseMoves) GD.Print("✅ 卡组已洗牌");
     }
 
     // ============================================================
@@ -168,7 +171,7 @@ public partial class DeckManager : Node
         var card = _player1Deck[0];
         _player1Deck.RemoveAt(0);
         // 注意：CurrentZone 由 ZoneManager.MoveToHand 统一设置，本类只负责牌库列表增删
-        GD.Print($"🃏 玩家1抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player1Deck.Count} 张)");
+        if (VerboseMoves) GD.Print($"🃏 玩家1抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player1Deck.Count} 张)");
         return card;
     }
 
@@ -182,7 +185,7 @@ public partial class DeckManager : Node
         var card = _player2Deck[0];
         _player2Deck.RemoveAt(0);
         // 注意：CurrentZone 由 ZoneManager.MoveToHand 统一设置，本类只负责牌库列表增删
-        GD.Print($"🃏 玩家2抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player2Deck.Count} 张)");
+        if (VerboseMoves) GD.Print($"🃏 玩家2抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player2Deck.Count} 张)");
         return card;
     }
 
@@ -196,7 +199,7 @@ public partial class DeckManager : Node
         }
         var card = _player1Deck[_player1Deck.Count - 1];
         _player1Deck.RemoveAt(_player1Deck.Count - 1);
-        GD.Print($"🃏 玩家1从牌库底抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player1Deck.Count} 张)");
+        if (VerboseMoves) GD.Print($"🃏 玩家1从牌库底抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player1Deck.Count} 张)");
         return card;
     }
 
@@ -210,7 +213,7 @@ public partial class DeckManager : Node
         }
         var card = _player2Deck[_player2Deck.Count - 1];
         _player2Deck.RemoveAt(_player2Deck.Count - 1);
-        GD.Print($"🃏 玩家2从牌库底抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player2Deck.Count} 张)");
+        if (VerboseMoves) GD.Print($"🃏 玩家2从牌库底抽到卡牌: {card.PlayerTemplate?.CardName} (剩余 {_player2Deck.Count} 张)");
         return card;
     }
 
@@ -227,7 +230,7 @@ public partial class DeckManager : Node
             _player1Deck.Insert(0, card);
         else
             _player1Deck.Add(card);
-        GD.Print($"↩️ 卡牌 {card.PlayerTemplate?.CardName} 返回玩家1卡组{(toTop ? "（顶部）" : "（底部）")}");
+        if (VerboseMoves) GD.Print($"↩️ 卡牌 {card.PlayerTemplate?.CardName} 返回玩家1卡组{(toTop ? "（顶部）" : "（底部）")}");
     }
 
     public void ReturnToDeckPlayer2(CardInstance card, bool toTop = false)
@@ -240,7 +243,7 @@ public partial class DeckManager : Node
             _player2Deck.Insert(0, card);
         else
             _player2Deck.Add(card);
-        GD.Print($"↩️ 卡牌 {card.PlayerTemplate?.CardName} 返回玩家2卡组{(toTop ? "（顶部）" : "（底部）")}");
+        if (VerboseMoves) GD.Print($"↩️ 卡牌 {card.PlayerTemplate?.CardName} 返回玩家2卡组{(toTop ? "（顶部）" : "（底部）")}");
     }
 
     /// <summary>从对应玩家的牌库移除该卡（按 OwnerId 定位），供 ZoneManager 移动时同步牌组计数</summary>

@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Game.Entities;
 using Script.Manager;
 using Script.UI;
@@ -38,7 +38,7 @@ public partial class Arena : Control
         // CardManager 事件
         _cardManager.OnCardDied += OnCardDiedHandler;
         // 选目标高光总线：进入/退出选目标时刷新可选目标卡的黄色高光（MVC：纯读集合重绘）
-        CardManager.OnTargetSelectionChanged += OnTargetSelectionChangedHandler;
+        _cardManager.OnTargetSelectionChanged += OnTargetSelectionChangedHandler;
 
         // AreaManager 事件
         _areaManager.OnAreaWon += OnAreaWonHandler;
@@ -51,11 +51,12 @@ public partial class Arena : Control
         // 效果引擎：结算/激活改动了卡牌横置等可见状态时通知表现层刷新
         // （复用资产变化处理器：同步资产区+争夺区横置视觉并重排卡牌；
         //  同时刷新激活高光，使"发动后横置"的卡立即取消可发动高光/拖拽箭头）
-        Script.Manager.EffectEngine.OnVisualDirty += OnVisualDirtyHandler;
+        //【MVC 收口】OnVisualDirty 已迁至 UiNotificationBus 实例单例，此处订阅其事件。
+        Script.Manager.UiNotificationBus.Instance.OnVisualDirty += OnVisualDirtyHandler;
 
         // 翻面（暗藏↔公开）影响持续光环生效范围：源卡背面→整光环注销；目标卡背面→仅撤销该目标。
-        // 经 CardManager 全局总线捕获 CovertChanged（CardManager 位于全局命名空间），重算光环并刷新 UI。
-        CardManager.OnCardStateChanged += OnCardStateChangedHandler;
+        // 经 CardManager 实例事件捕获 CovertChanged，重算光环并刷新 UI。
+        _cardManager.OnCardStateChanged += OnCardStateChangedHandler;
     }
 
     /// <summary>OnVisualDirty 具名处理器（匿名 lambda 无法用 -= 反订阅，须具名化以支持 _ExitTree 清理）。</summary>
@@ -75,12 +76,12 @@ public partial class Arena : Control
         if (card == null) return;
         if (kind == Script.Enums.CardChangeKind.CovertChanged)
         {
-            Script.Manager.EffectEngine.ReevaluateAuras(card.ControllerId);
+            Script.Manager.EffectEngine.Instance.ReevaluateAuras(card.ControllerId);
         }
         // 横置/重置：JC068 阿格斯IV"未横置封锁"依赖此即时开关（横置→解除封锁，竖置→恢复封锁）
         else if (kind == Script.Enums.CardChangeKind.TappedChanged)
         {
-            Script.Manager.EffectEngine.ReevaluatePrereqs(card.ControllerId);
+            Script.Manager.EffectEngine.Instance.ReevaluatePrereqs(card.ControllerId);
         }
     }
 

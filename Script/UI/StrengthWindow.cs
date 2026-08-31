@@ -4,14 +4,14 @@ using Script.UI;
 using System.Collections.Generic;
 
 /// <summary>
-/// 战斗对抗窗口（BattleWindow）。
-/// 战斗对抗胜利后由 Battle 调用 Configure(winnerPlayer, totalDamage, areaUid) 弹出。
+/// 战斗对抗窗口（StrengthWindow）。
+/// 战斗对抗胜利后由 Strength 调用 Configure(winnerPlayer, totalDamage, areaUid) 弹出。
 /// 窗口只显示剩余可分配伤害；玩家点击【主战场真实 CardUI】分配伤害
 /// （左键 +1，右键 -1），分配写入 CardInstance.Damage 并触发既有死亡流程。
 /// 仅允许分配"败方在指定地区(areaUid)内的角色卡"。
 /// 伤害结算统一经由 CardManager.DealDamageToInstance，避免 View 直接改 Model。
 /// </summary>
-public partial class BattleWindow : Window
+public partial class StrengthWindow : Window
 {
     private Label _titleLabel;
     private Label _remainingLabel;
@@ -60,7 +60,7 @@ public partial class BattleWindow : Window
     public int WinnerPlayer => _winnerPlayer;
     public string AreaUid => _areaUid;
 
-    /// <summary>主战场卡被点击时由 Battle 调用。buttonIndex: 1=左键(+1)，2=右键(-1)。</summary>
+    /// <summary>主战场卡被点击时由 Strength 调用。buttonIndex: 1=左键(+1)，2=右键(-1)。</summary>
     public bool TryAllocate(CardUI cardUI, int buttonIndex)
     {
         if (cardUI?.Instance == null) return false;
@@ -69,7 +69,7 @@ public partial class BattleWindow : Window
         // 合法承伤目标判定交由 CombatManager（规则层），View 不内嵌游戏规则。
         // 兜底：未注入 CombatManager 时保留原判定逻辑，避免崩溃。
         bool legal = CombatManager != null
-            ? CombatManager.IsLegalBattleTarget(inst, _loserPlayer, _areaUid)
+            ? CombatManager.IsLegalStrengthTarget(inst, _loserPlayer, _areaUid)
             : (inst.ControllerId == _loserPlayer
                && inst.CurrentZone == Script.Enums.CardZone.AreaZone
                && inst.ZoneDetailId == _areaUid
@@ -154,10 +154,10 @@ public partial class BattleWindow : Window
         QueueFree();
     }
 
-    /// <summary>确认结算后回调（供 Battle 刷新显示 / 推进流程）。</summary>
+    /// <summary>确认结算后回调（供 Strength 刷新显示 / 推进流程）。</summary>
     public System.Action OnResolved { get; set; }
 
-    // Battle 注入：根据实例找主战场 CardUI（用于清显示）
+    // Strength 注入：根据实例找主战场 CardUI（用于清显示）
     public System.Func<CardInstance, CardUI> FindCardUI { get; set; }
 
     /// <summary>伤害结算统一入口（由 Arena 注入）。View 不直接修改 CardInstance 的伤害字段。</summary>

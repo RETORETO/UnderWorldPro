@@ -33,7 +33,7 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC030_C_BloodEyes",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 ContinuousPrereq = "血领域忠诚≥2",
                 PrereqSpec = new ContinuousPrereqSpec
                 {

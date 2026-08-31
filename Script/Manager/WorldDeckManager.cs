@@ -83,4 +83,45 @@ public partial class WorldDeckManager : Node
     }
 
     public IReadOnlyList<CardInstance> GetAllAreas() => _deck.AsReadOnly();
+
+    /// <summary>注入 CardManager 引用（客户端投影用：ApplySnapshotUids 需按 UID 命中实例）。</summary>
+    public void SetCardManager(CardManager cardManager) => _cardManager = cardManager;
+
+    // ==================== C/S 化·第三批：世界牌库投影 ====================
+    /// <summary>导出地区牌堆剩余卡快照（自顶向下顺序，含 TemplateUid），供快照下行。
+    /// 用 ZoneCardRef 而非纯 UID，使跨进程客户端可从模板重建地区卡实例。</summary>
+    public System.Collections.Generic.List<Script.Net.ZoneCardRef> ToSnapshotUids()
+    {
+        var list = new System.Collections.Generic.List<Script.Net.ZoneCardRef>();
+        foreach (var c in _deck)
+        {
+            if (c == null) continue;
+            list.Add(new Script.Net.ZoneCardRef
+            {
+                Uid = c.UID,
+                TemplateUid = c.Template?.UID ?? "",
+                OwnerId = c.OwnerId,
+                Zone = Script.Enums.CardZone.Deck,
+            });
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// 从快照重建客户端投影的地区牌堆（仅联网投影/重连调用，对单机零影响）。
+    /// 用 CardManager.RebuildFromRef 解析实例：同进程共享 CardManager 直接命中；跨进程独立
+    /// CardManager（NetClientCardManager）走 ResolveInstance 从模板按权威 UID 重建。
+    /// </summary>
+    public void ApplySnapshotUids(System.Collections.Generic.List<Script.Net.ZoneCardRef> refs)
+    {
+        _deck.Clear();
+        if (refs != null)
+        {
+            foreach (var r in refs)
+            {
+                var inst = _cardManager?.RebuildFromRef(r); // 命中或从模板重建
+                if (inst != null) _deck.Add(inst);
+            }
+        }
+    }
 }

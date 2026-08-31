@@ -25,6 +25,10 @@ namespace Script.Game.Entities
         // 与 UID 互补：UID=身份（整局不变，定位"哪张卡"）；VersionId=状态版本（判"是否还是入栈时那张合法目标"）。
         public int VersionId { get; private set; } = 0;
         public void BumpVersion() => VersionId++;
+        // C/S 化·第一批：快照重建时按权威态恢复版本号（覆盖自增，保证双端一致）
+        internal void SyncVersion(int v) => VersionId = v;
+        // C/S 化·第一批：快照重建时按权威态恢复 UID（极端路径：实例晚于快照建立）
+        internal void SetUid(string uid) => UID = uid;
 
         // ---------- 所属与控制 ----------
         public int OwnerId { get; set; }
@@ -36,7 +40,7 @@ namespace Script.Game.Entities
 
         // ---------- 动态能力值（当前实际值） ----------
         public int CurrentInvestigation { get; set; }
-        public int CurrentCombat { get; set; }
+        public int CurrentStrength { get; set; }
         public int CurrentPower { get; set; }
         public int CurrentDefense { get; set; }
 
@@ -49,7 +53,7 @@ namespace Script.Game.Entities
         // ---------- 先手能力值（当前实际值，含持续效果加成） ----------
         // 白眼=先手调查能力：持续效果满足前提时，每"白眼"给 FirstStrikeInvestigation +1（对应卡文"白眼白眼"叠加）。
         public int CurrentFirstStrikeInvestigation { get; set; }
-        public int CurrentFirstStrikeCombat { get; set; }
+        public int CurrentFirstStrikeStrength { get; set; }
 
         // ---------- 静止/禁止标记（D19-⑤） ----------
         // 与持续关键字授予(_granted*)分离：静止效果是规则约束（不能被装备结附等），常驻、不授出能力。
@@ -67,6 +71,12 @@ namespace Script.Game.Entities
         public bool HasGuard { get; set; }
         public bool IsCovert { get; set; }        // 暗藏状态(背面朝上,场上暗藏者)
         public bool ExtraCostPaid { get; set; }   // 额外费用是否已支付(结算时玩家选择)
+
+        // ---------- C/S 化·第一批：快照补全字段 ----------
+        // 这两项为卡的回合级状态，原仅存在于运行时（无持久属性），快照需携带以免重连后
+        // 进场时机判定（EnterTrigger 过滤）与能力使用限制失真。
+        public bool EnteredThisTurn { get; set; }
+        public bool AbilityUsedThisTurn { get; set; }
 
         // ---------- 状态变更中枢（Model 自身事件，供 Controller 订阅转发） ----------
         // 【MVC 修复】原实现直接调用 CardManager.Notify* 静态总线，形成 Model→Controller 反向依赖。
@@ -172,8 +182,8 @@ namespace Script.Game.Entities
                     if (value == "先手调查") CurrentFirstStrikeInvestigation += amount;
                     // 黑眼=调查：每"黑眼"(Attribute="调查")给基础调查+1（JC030 等，不受先手限制）
                     else if (value == "调查") CurrentInvestigation += amount;
-                    // 黑刀=战斗：每"黑刀"(Attribute="战斗")给基础战斗+1（JC060 光环，对称调查做法；实际结算经 AreaStatsCalculator 读 CurrentCombat）
-                    else if (value == "战斗") CurrentCombat += amount;
+                    // 黑刀=战力：每"黑刀"(Attribute="战斗")给基础战力+1（JC060 光环，对称调查做法；实际结算经 AreaStatsCalculator 读 CurrentStrength）
+                    else if (value == "战斗") CurrentStrength += amount;
                     break;
                 case "MagicDomain":
                     // JC060 光环：给被影响角色实例层追加魔法领域（如"心"=心灵领域），供其他效果/UI 识别
@@ -210,8 +220,8 @@ namespace Script.Game.Entities
                     if (value == "先手调查") CurrentFirstStrikeInvestigation -= amount;
                     // 黑眼=调查：撤销时回退基础调查
                     else if (value == "调查") CurrentInvestigation -= amount;
-                    // 黑刀=战斗：撤销时回退基础战斗
-                    else if (value == "战斗") CurrentCombat -= amount;
+                    // 黑刀=战力：撤销时回退基础战力
+                    else if (value == "战斗") CurrentStrength -= amount;
                     break;
                 case "MagicDomain":
                     // JC060 光环撤销：仅移除"运行时授予"的域（来自 _grantedDomains），模板固有域不动
@@ -236,13 +246,13 @@ namespace Script.Game.Entities
         public int Damage
         {
             get => _damage;
-            private set => _damage = Math.Max(0, value);
+            internal set => _damage = Math.Max(0, value);
         }
         private int _trauma = 0;
         public int Trauma
         {
             get => _trauma;
-            private set => _trauma = Math.Max(0, value);
+            internal set => _trauma = Math.Max(0, value);
         }
 
         // ---------- 关联关系 ----------
@@ -271,7 +281,7 @@ namespace Script.Game.Entities
             if (PlayerTemplate != null)
             {
                 CurrentInvestigation = PlayerTemplate.Investigation;
-                CurrentCombat = PlayerTemplate.Combat;
+                CurrentStrength = PlayerTemplate.Strength;
                 CurrentPower = PlayerTemplate.Power;
                 CurrentDefense = PlayerTemplate.Defense >= 0 ? PlayerTemplate.Defense : -1;
                 // 初始化当前子类型集合：拷贝模板静态 SubCategories（后续持续效果可追加运行时子类型）
@@ -286,17 +296,17 @@ namespace Script.Game.Entities
         {
             if (PlayerTemplate == null) return;
             CurrentInvestigation = PlayerTemplate.GetTotalInvestigation(isFirstPlayer);
-            CurrentCombat = PlayerTemplate.GetTotalCombat(isFirstPlayer);
+            CurrentStrength = PlayerTemplate.GetTotalStrength(isFirstPlayer);
             CurrentPower = PlayerTemplate.GetTotalPower(isFirstPlayer);
             CurrentDefense = PlayerTemplate.Defense >= 0 ? PlayerTemplate.Defense : -1;
             // 黑眼=调查：基础调查 + 当前已授予的"调查"属性（不受先手限制，保证重算后持续效果不丢失）
             CurrentInvestigation += GetAttribute("调查");
-            // 黑刀=战斗：基础战斗 + 当前已授予的"战斗"属性（JC060 光环 +1 战斗，对称调查做法，保证重算后不丢失）
-            CurrentCombat += GetAttribute("战斗");
+            // 黑刀=战力：基础战力 + 当前已授予的"战斗"属性（JC060 光环 +1 战力，对称调查做法，保证重算后不丢失）
+            CurrentStrength += GetAttribute("战斗");
             // 先手值：基础 FirstStrike + 当前已授予的"先手调查"属性（白眼叠加），保证重算后持续效果不丢失
             int whiteEyes = GetAttribute("先手调查");
             CurrentFirstStrikeInvestigation = PlayerTemplate.FirstStrikeInvestigation + whiteEyes;
-            CurrentFirstStrikeCombat = PlayerTemplate.FirstStrikeCombat;
+            CurrentFirstStrikeStrength = PlayerTemplate.FirstStrikeStrength;
             // 实例魔法领域：模板固有（过滤-1哨兵）+ 运行时授予（_grantedDomains，JC060 光环等）两部分。
             // 对称 JC001 白眼机制：重算时从"模板固有 + 授予集合"直接重建，不依赖反推，避免每回合先手重算冲刷光环授予的域。
             MagicDomains.Clear();
@@ -356,8 +366,7 @@ namespace Script.Game.Entities
 
         // ============================================================
         // 计数器管理（纯数据写入，不含规则判定）
-        // 注：原"被封印(IsSealed)的卡不可加指示物"规则已上移至 Controller 层
-        //     （CardManager.AddCounter），本类只负责字典增删。
+        // 本类只负责字典增删。
         // ============================================================
         public void AddCounter(string type, int amount = 1)
         {
@@ -433,11 +442,11 @@ namespace Script.Game.Entities
             if (PlayerTemplate != null)
             {
                 CurrentInvestigation = PlayerTemplate.Investigation;
-                CurrentCombat = PlayerTemplate.Combat;
+                CurrentStrength = PlayerTemplate.Strength;
                 CurrentPower = PlayerTemplate.Power;
                 CurrentDefense = PlayerTemplate.Defense >= 0 ? PlayerTemplate.Defense : -1;
                 CurrentFirstStrikeInvestigation = PlayerTemplate.FirstStrikeInvestigation;
-                CurrentFirstStrikeCombat = PlayerTemplate.FirstStrikeCombat;
+                CurrentFirstStrikeStrength = PlayerTemplate.FirstStrikeStrength;
             }
 
             // 注意：结附关系(AttachedCards/AttachedTo)与封印关系(SealedCards/SealedBy)的清除

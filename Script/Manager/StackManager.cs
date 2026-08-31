@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Game.Entities;
 using System.Collections.Generic;
 
@@ -15,7 +15,7 @@ public partial class StackManager : Node
     // 目的：任何取目标效果经 Push 入栈时，自动把目标卡当前 VersionId 记入 entry.TargetVersionId，
     // 供结算时 D16 版本号比对（目标翻面/移动/夺控/子类别变更均 BumpVersion → 版本号不一致即判丢失）。
     // 此前只有 TurnManager.CaptureTargetSnapshot（触发/出牌入栈）会登记，激活能力入栈
-    // （EffectEngine.PushActivationToStack）绕过它导致漏记；统一收口到 Push 后所有入栈路径都不可能漏。
+    // （EffectEngine.Instance.PushActivationToStack）绕过它导致漏记；统一收口到 Push 后所有入栈路径都不可能漏。
     // 依赖：CardManager 引用（运行时由 GameInitializer 注入；无注入的单测跳过登记，不影响行为）。
     // ─────────────────────────────────────────────────────────────
     private CardManager _cardManager;
@@ -90,7 +90,6 @@ public partial class StackManager : Node
             if (target != null)
             {
                 entry.TargetVersionId = target.VersionId;
-                GD.Print($"[DIAG][Stack.Push] 效果 {entry.EffectText} 登记目标 {target.PlayerTemplate?.CardName ?? "?"}(UID={entry.TargetCardUid}) 版本号={target.VersionId} ctrl={target.ControllerId} zone={target.CurrentZone}");
             }
         }
 
@@ -138,4 +137,47 @@ public partial class StackManager : Node
     /// <summary>占位兼容旧调用</summary>
 
     public void PassPriority(int playerId) => GD.Print($"玩家{playerId}让过");
+
+    // ==================== C/S 化·第二批：客户端投影堆叠恢复 ====================
+    /// <summary>
+    /// 从服务端堆叠快照重建客户端投影的堆叠（仅联网投影/重连调用，对单机零影响）。
+    /// 按 SourceUid 从 CardManager 解析卡片型条目的 SourceCard；效果型仅保留 EffectText。
+    /// 重建不触发 OnStackChanged（纯数据覆盖，避免投影刷新反向驱动 UI）。
+    /// </summary>
+    public void ApplySnapshot(System.Collections.Generic.List<Script.Net.StackEntrySnap> entries)
+    {
+        _stack.Clear();
+        _sequenceCount = 0;
+        if (entries != null)
+        {
+            foreach (var s in entries)
+            {
+                if (s == null) continue;
+                var entry = new Script.Game.Entities.StackEntry(s.OwnerId, s.EffectText ?? "");
+                if (!string.IsNullOrEmpty(s.SourceUid) && _cardManager != null)
+                    entry.SourceCard = _cardManager.GetInstance(s.SourceUid);
+                entry.SourceCardUid = s.SourceUid;
+                _stack.Add(entry);
+            }
+        }
+    }
+
+
+    // ==================== C/S 化 P1-A：堆叠快照导出 ====================
+    /// <summary>导出当前堆叠为纯数据结构（避开不可序列化的 OnResolve 委托，仅取结构化 Kind+负载）。</summary>
+    public List<Script.Net.StackEntrySnap> ToSnapshot()
+    {
+        var list = new System.Collections.Generic.List<Script.Net.StackEntrySnap>();
+        foreach (var e in _stack)
+        {
+            if (e == null) continue;
+            list.Add(new Script.Net.StackEntrySnap
+            {
+                OwnerId = e.OwnerId,
+                SourceUid = e.SourceCardUid,
+                EffectText = e.EffectText,
+            });
+        }
+        return list;
+    }
 }

@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -25,6 +25,17 @@ public partial class ZoneManager : Node
     // ============================================================
     private CardManager _cardManager;
     private DeckManager _deckManager;
+    //【MVC 收口】触发广播封装层实例（由 Composition Root 装配注入）
+    private TriggerEmitPoints _triggerEmitPoints;
+
+    /// <summary>
+    /// 移动级诊断日志开关（降噪）。默认 false：测试/联机/正常运行只保留必要日志，避免刷屏；
+    /// 规则调试时置 true 可重新看到每次区域移动 / 版本号变更 / 夺控 的明细。不影响任何逻辑。
+    /// </summary>
+    public static bool VerboseMoves = false;
+
+    /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
+    public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
 
     /// <summary>卡牌移动完成后触发，供 UI 层同步卡牌节点归属。参数: (card, toZone, playerId, detailId)</summary>
     public event Action<CardInstance, CardZone, int, string> OnCardMoved;
@@ -112,17 +123,20 @@ public partial class ZoneManager : Node
     /// 当卡【离开争夺区(AreaZone)】前往非争夺区时，其结附的附属（及附属的附属，递归）按当前连带模式处置：
     /// - Normal（卡因效果/伤害离场）→ 附属进入弃牌堆（用户规则）。
     /// - AreaWon（地区被赢取特例）→ 附属返回各自拥有者牌库底。
-    /// 封印卡跟随逻辑预留钩子 DetachSealedCards（封印系统未实现，本期不调用）。</summary>
+    /// 封印卡跟随逻辑由 DetachSealedCards 处理（封印系统已实装，见下方调用）。</summary>
     private void RemoveFromAllZones(CardInstance card, CardZone targetZone)
     {
         bool leavingArea = card.CurrentZone == CardZone.AreaZone && targetZone != CardZone.AreaZone;
         if (card.CurrentZone == CardZone.Deck)
-            _deckManager.RemoveFromDeck(card);   // 按旧 OwnerId 定位玩家牌库并移除
+            _deckManager?.RemoveFromDeck(card);   // 按旧 OwnerId 定位玩家牌库并移除（_deckManager 未注入时安全跳过）
+        // 按 UID 移除所有匹配实例（而非 list.Remove(card) 只移一个引用）。
+        // 防御跨进程下可能出现"同 UID 但不同引用/重复 entry"的残留：移动卡（如建立资产）时必须把该 UID 的所有
+        // 副本从源桶清干净，否则快照手牌桶仍残留该卡，UI 会显示"建立资产的卡回到手牌"。
         foreach (var dict in new[] { _hand, _graveyard, _asset, _score, _council })
-            foreach (var list in dict.Values) list.Remove(card);
-        _area.Remove(card);
-        _attached.Remove(card);
-        _sealed.Remove(card);
+            foreach (var list in dict.Values) list.RemoveAll(c => c.UID == card.UID);
+        _area.RemoveAll(c => c.UID == card.UID);
+        _attached.RemoveAll(c => c.UID == card.UID);
+        _sealed.RemoveAll(c => c.UID == card.UID);
 
         // D19-⑦：离开争夺区时注销该卡自身的持久效果（清除授予与静止标记，并从注册表移除），
         // 避免残留的 _continuousRegistry 在卡再次 MOVE 回场时触发 RegisterPersistent 的防重 return，
@@ -132,8 +146,7 @@ public partial class ZoneManager : Node
         bool leavingAttach = card.CurrentZone == CardZone.AttachedZone && targetZone != CardZone.AttachedZone;
         if (leavingArea || leavingAttach)
         {
-            GD.Print($"[JC001DEBUG] 离场注销持久效果: {card.PlayerTemplate?.CardName} (UID={card.UID})");
-            Script.Manager.EffectEngine.UnregisterPersistent(card);
+            Script.Manager.EffectEngine.Instance.UnregisterPersistent(card);
         }
 
         // D49：附属自身离场（AttachedZone → 其他区，如 JC020 牺牲进墓地）——清结附关系。
@@ -151,7 +164,6 @@ public partial class ZoneManager : Node
         }
 
         // D49：封印卡自身离场（SealedZone → 其他区）——清封印关系（与附属对称）。
-        // 封印系统未实装（DetachSealedCards 为空实现），此分支当前不影响运行；封印实装后需测试确认。
         if (card.CurrentZone == CardZone.SealedZone && targetZone != CardZone.SealedZone)
         {
             var sealedTarget = card.SealedBy;
@@ -162,21 +174,20 @@ public partial class ZoneManager : Node
             }
         }
 
-        // D49：被封印的卡（IsSealed）离场——其封印卡（SealedCards）按规则返回拥有者手牌（预留钩子 DetachSealedCards）。
-        // 封印系统未实装，此分支随封印实装后需测试确认（封印卡是否应回拥有者手牌）。
+        // D49：被封印的卡（IsSealed）离场——其封印卡（SealedCards）按规则返回拥有者手牌。
         if (card.IsSealed && targetZone != CardZone.SealedZone)
         {
             DetachSealedCards(card);
         }
 
-        // 离开场上：附属按连带模式处置（递归），封印卡跟随预留钩子
+        // 离开场上：附属按连带模式处置（递归），封印卡跟随宿主回拥有者手牌
         if (leavingArea)
         {
             if (_detachMode == DetachMode.AreaWon)
                 DetachAttachmentsToDeckBottom(card);
             else
                 DetachAttachmentsToGraveyard(card);
-            DetachSealedCards(card);   // 预留：封印未实现，空实现（模式同理）
+            DetachSealedCards(card);
         }
     }
 
@@ -244,7 +255,7 @@ public partial class ZoneManager : Node
         // 下方 FireMoved(card) 已触发 BumpVersion，结算时比对 TargetVersionId 不一致即判丢失，无需再发目标相关总线事件。
         // 注（2026-08-11·二次收口）：争夺区内的夺控换边【不刷版本号】——控制者变化对绝大多数卡的目标合法性无影响；
         // 要求"本方/敌方角色"的效果改由结算时 TargetValidity.CheckRestrictions 以入栈来源控制者快照复检（与"本地区"同构）。
-        GD.Print($"[夺控LOG] TransferOwnership: {card.PlayerTemplate?.CardName}(UID={card.UID}) {oldController}→{playerId} 旧区={card.CurrentZone}，版本号 {verBefore}→{card.VersionId}(FireMoved后, bump={bumpVersion})");
+        if (VerboseMoves) GD.Print($"[夺控LOG] TransferOwnership: {card.PlayerTemplate?.CardName}(UID={card.UID}) {oldController}→{playerId} 旧区={card.CurrentZone}，版本号 {verBefore}→{card.VersionId}(FireMoved后, bump={bumpVersion})");
         // 夺控影响持续光环（D19-③）：控制权变更后必须重算光环集合，否则
         // 旧控制者一侧的"对他者授予"不会被撤销，反复夺控会叠加攻击力。
         // 复用 FireMoved 统一出口：先 ReevaluatePrereqs（改写数据），再 OnPostMove→ReevaluateAuras(old)+ReevaluateAuras(new)，
@@ -253,7 +264,7 @@ public partial class ZoneManager : Node
         FireMoved(card, zone, playerId, "夺控", bumpVersion);
         // 旧控制者侧也需重算，撤销其曾授予他者的光环效果
         if (oldController != playerId)
-            EffectEngine.ReevaluateAuras(oldController);
+            EffectEngine.Instance.ReevaluateAuras(oldController);
     }
 
     /// <summary>
@@ -268,7 +279,7 @@ public partial class ZoneManager : Node
         // PM 命令的 MoveAreaToArea 等专用方法都经此出口，而 MoveCard 也走 MoveToX，故只需在此一处）。
         // 注意顺序：必须先 ReevaluatePrereqs（用新控制者/新忠诚重算并改写数据），再 RefreshFirstStrikeStats
         // （把最新数据刷到 UI）；反之 UI 会显示重算前的旧值，表现为"数据变了 UI 没刷"。
-        Script.Manager.EffectEngine.ReevaluatePrereqs(playerId);
+        Script.Manager.EffectEngine.Instance.ReevaluatePrereqs(playerId);
         TurnManager.Instance?.RefreshFirstStrikeStats();
         // 【MVC 收口】所有 move 路径（MoveToX / MoveCard / PM 命令专用移动）经此唯一出口，
         // 由 View 层订阅后统一刷新派生 UI（资产区领域忠诚、地区能力统计、分数、持续效果态），
@@ -282,15 +293,15 @@ public partial class ZoneManager : Node
         if (bumpVersion)
         {
             card.BumpVersion();
-            GD.Print($"🔢 [版本号] FireMoved BumpVersion: {card.PlayerTemplate?.CardName}(UID={card.UID}) 版本号 {fireMovedVerBefore}→{card.VersionId}（区域移动触发）");
+            if (VerboseMoves) GD.Print($"🔢 [版本号] FireMoved BumpVersion: {card.PlayerTemplate?.CardName}(UID={card.UID}) 版本号 {fireMovedVerBefore}→{card.VersionId}（区域移动触发）");
         }
         else
         {
-            GD.Print($"🔢 [版本号] 争夺区→争夺区移动，不刷新版本号（当前={card.VersionId}）：{card.PlayerTemplate?.CardName}(UID={card.UID})");
+            if (VerboseMoves) GD.Print($"🔢 [版本号] 争夺区→争夺区移动，不刷新版本号（当前={card.VersionId}）：{card.PlayerTemplate?.CardName}(UID={card.UID})");
         }
         // 目标丢失总线：区域移动(进/出墓地、手牌、封印区、换宿主、离场)统一经此发 Moved，
         // 覆盖丢失规则 ①②④⑤⑧⑨ 的"离开原区域"。订阅方 TurnManager 扫描堆叠置目标丢失标记。
-        CardManager.NotifyCardStateChanged(card, CardChangeKind.Moved);
+        _cardManager.NotifyCardStateChanged(card, CardChangeKind.Moved);
     }
 
     /// <summary>
@@ -338,14 +349,14 @@ public partial class ZoneManager : Node
     /// 卡从原区（通常是争夺区）移入堆叠区，但不重置状态（卡已在入栈前翻面为正面）；
     /// 离开争夺区按连带模式处置附属/封印（与 Normal 离场一致，满足需求③/④）。
     /// 此移动使 CurrentZone 变为 Stack，结算时 MoveToArea 的 fromZone != AreaZone
-    /// 自然触发 EnterPlay（“回地区触发进场触发是正常情况”）。</summary>
+    /// 自然触发 EnterTrigger（“回地区触发进场触发是正常情况”）。</summary>
     public void MoveToStack(CardInstance card, int playerId)
     {
         if (card == null) return;
         RemoveFromAllZones(card, CardZone.Stack);
         card.CurrentZone = CardZone.Stack;
         card.ZoneDetailId = null;
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入堆叠区 (玩家{playerId})");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入堆叠区 (玩家{playerId})");
         FireMoved(card, CardZone.Stack, playerId, null);
     }
 
@@ -359,7 +370,7 @@ public partial class ZoneManager : Node
         card.CurrentZone = CardZone.Hand;
         card.ZoneDetailId = null;
         Ensure(_hand, playerId).Add(card);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入玩家{playerId}手牌");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入玩家{playerId}手牌");
         FireMoved(card, CardZone.Hand, playerId, null);
     }
 
@@ -373,7 +384,7 @@ public partial class ZoneManager : Node
         card.CurrentZone = CardZone.Graveyard;
         card.ZoneDetailId = null;
         Ensure(_graveyard, playerId).Add(card);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入墓地");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入墓地");
         FireMoved(card, CardZone.Graveyard, playerId, null);
     }
 
@@ -387,7 +398,7 @@ public partial class ZoneManager : Node
         card.CurrentZone = CardZone.AssetZone;
         card.ZoneDetailId = null;
         Ensure(_asset, playerId).Add(card);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入玩家{playerId}资产区");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入玩家{playerId}资产区");
         FireMoved(card, CardZone.AssetZone, playerId, null);
     }
 
@@ -396,7 +407,7 @@ public partial class ZoneManager : Node
     {
         if (card == null) return;
         // 进场判定依据：进入场地区前的来源区（此时 card.CurrentZone 仍为旧区，尚未被下方赋值覆盖）。
-        // 仅当"非场地区 → 争夺区"时才视为进场（触发 EnterPlay）；
+        // 仅当"非场地区 → 争夺区"时才视为进场（触发 EnterTrigger）；
         // 争夺区→争夺区移动（机动/夺控转移）fromZone 也是 AreaZone，不触发——符合规则（D37）。
         CardZone fromZone = card.CurrentZone;
         // 目标版本号策略（2026-08-11）：争夺区→争夺区的移动【不刷新版本号】，
@@ -416,21 +427,17 @@ public partial class ZoneManager : Node
             att.ZoneDetailId = areaDetailId;
         }
         _area.Add(card);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName}(UID={card.UID}) 进入地区 {areaDetailId} (玩家{playerId})，当前版本号={card.VersionId}");
-        // [DIAG 阿格斯IV] 追踪阿格斯进入争夺区（AreaZone）的实例，排查多实例问题
-        if (card.PlayerTemplate?.CardName == "阿格斯IV")
-            GD.Print($"[DIAG 阿格斯IV] 阿格斯进入AreaZone: UID={card.UID} ctrl={card.ControllerId} owner={card.OwnerId} fromZone={fromZone} 宿主AttachedTo={(card.AttachedTo?.UID ?? "∅")}");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName}(UID={card.UID}) 进入地区 {areaDetailId} (玩家{playerId})，当前版本号={card.VersionId}");
         FireMoved(card, CardZone.AreaZone, playerId, areaDetailId, bumpVersion);
         if (fromZone != CardZone.AreaZone)
         {
-            // 规范化进场触发封装点（D39）：手牌/封印区/墓地/资产区 → 争夺区 均经 TriggerEmitPoints 统一触发 EnterPlay。
+            // 规范化进场触发封装点（D39）：手牌/封印区/墓地/资产区 → 争夺区 均经 TriggerEmitPoints 统一触发 EnterTrigger。
             // 注释(后续)：JC012 等涉及"卡进入场地区"的时机可直接复用此路径。
-            Script.Manager.TriggerEmitPoints.EnterPlay(card, playerId, areaDetailId, card.AttachedTo);
+            _triggerEmitPoints?.EnterTrigger(card, playerId, areaDetailId, card.AttachedTo);
             // D19 统一注册：通过 MOVE 命令（非结算路径）进入争夺区的卡，同样需要注册持续/静止效果
             // （如 JC001 通灵猫头鹰的"不能被装备结附"与"白眼=先手调查"）。与 TurnManager.ResolveEntry
             // 的 PlayToArea 分支保持一致，避免"MOVE 进场不生效"的漏注册。
-            GD.Print($"[JC001DEBUG] MOVE 进场注册持久效果: {card.PlayerTemplate?.CardName} (UID={card.UID}, 效果数={card.PlayerTemplate?.EffectDataList.Count ?? 0})");
-            Script.Manager.EffectEngine.RegisterPersistent(card);
+            Script.Manager.EffectEngine.Instance.RegisterPersistent(card);
         }
     }
 
@@ -450,13 +457,9 @@ public partial class ZoneManager : Node
         // 对无持续/静止效果的普通附属是无副作用空操作；防重复由 RegisterPersistent 内部去重。
         if (fromZone != CardZone.AttachedZone)
         {
-            GD.Print($"[JC001DEBUG] 附属结附注册持久效果: {card.PlayerTemplate?.CardName} (UID={card.UID})");
-            Script.Manager.EffectEngine.RegisterPersistent(card);
+            Script.Manager.EffectEngine.Instance.RegisterPersistent(card);
         }
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
-        // [DIAG 阿格斯IV] 追踪阿格斯进入附属区（AttachedZone）的实例，排查多实例问题
-        if (card.PlayerTemplate?.CardName == "阿格斯IV")
-            GD.Print($"[DIAG 阿格斯IV] 阿格斯进入AttachedZone: UID={card.UID} ctrl={card.ControllerId} owner={card.OwnerId} fromZone={fromZone} 宿主AttachedTo={(card.AttachedTo?.UID ?? "∅")}");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
         FireMoved(card, CardZone.AttachedZone, playerId, areaDetailId);
     }
 
@@ -471,7 +474,7 @@ public partial class ZoneManager : Node
         card.CurrentZone = CardZone.SealedZone;
         card.ZoneDetailId = areaDetailId;
         _sealed.Add(card);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入封印子区域(地区 {areaDetailId})");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入封印子区域(地区 {areaDetailId})");
         FireMoved(card, CardZone.SealedZone, playerId, areaDetailId);
     }
 
@@ -515,7 +518,7 @@ public partial class ZoneManager : Node
         card.ZoneDetailId = null;
         if (playerId == 1) _deckManager.ReturnToDeckPlayer1(card, toTop);
         else _deckManager.ReturnToDeckPlayer2(card, toTop);
-        GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 返回玩家{playerId}牌库");
+        if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 返回玩家{playerId}牌库");
         FireMoved(card, CardZone.Deck, playerId, null);
     }
 
@@ -527,6 +530,13 @@ public partial class ZoneManager : Node
         switch (zone)
         {
             case CardZone.Hand: return Filter(_hand, playerId);
+            case CardZone.Deck:
+            {
+                // 牌库卡存在独立 DeckManager（_deckManager）中，不在本类列表桶。
+                // 补此分支使 ToSnapshot()/ExportBucket(Deck) 能导出牌库、客户端投影能还原牌库。
+                if (_deckManager == null) return new List<CardInstance>();
+                return playerId == 2 ? _deckManager.GetDeckPlayer2() : _deckManager.GetDeckPlayer1();
+            }
             case CardZone.Graveyard: return Filter(_graveyard, playerId);
             case CardZone.AssetZone: return Filter(_asset, playerId);
             case CardZone.ScoreZone: return Filter(_score, playerId);
@@ -711,5 +721,144 @@ public partial class ZoneManager : Node
         // 若再触发 OnCardMoved 会让 SyncCardUIToZone 把卡 ReturnCardUI 回 DeckZone，与 RebuildFromOrdered 重复，
         // 导致 DeckZone 卡列表出现重复/错位。
         OnDeckReordered?.Invoke(playerId, ordered);
+    }
+
+    // ==================== C/S 化 P1-A：状态快照导出 ====================
+    // 将本局"区域真相"抽取为纯数据（Script.Net.GameSnapshot），供服务端序列化下发/重连恢复。
+    // 注意：本方法仅读取区域桶，不依赖 Godot；生成的 ZoneCardRef 不含任何 Godot 类型。
+
+    /// <summary>导出整局所有区域的卡投影（手牌/牌库/墓地/资产/分数/秘社按 playerId 分桶；争夺区/附属/封印为全局桶）。</summary>
+    public List<Script.Net.ZoneCardRef> ToSnapshot()
+    {
+        var result = new System.Collections.Generic.List<Script.Net.ZoneCardRef>();
+        // 按 playerId 分桶的区域
+        foreach (var pid in new[] { 1, 2 })
+        {
+            result.AddRange(ExportBucket(CardZone.Hand, pid));
+            result.AddRange(ExportBucket(CardZone.Deck, pid));
+            result.AddRange(ExportBucket(CardZone.Graveyard, pid));
+            result.AddRange(ExportBucket(CardZone.AssetZone, pid));
+            result.AddRange(ExportBucket(CardZone.ScoreZone, pid));
+            result.AddRange(ExportBucket(CardZone.CouncilZone, pid));
+        }
+        // 全局桶（无 playerId 分桶）
+        foreach (var c in _area) result.Add(ToCardRef(c, CardZone.AreaZone, -1));
+        foreach (var c in _attached) result.Add(ToCardRef(c, CardZone.AttachedZone, -1));
+        foreach (var c in _sealed) result.Add(ToCardRef(c, CardZone.SealedZone, -1));
+        return result;
+    }
+
+    private System.Collections.Generic.List<Script.Net.ZoneCardRef> ExportBucket(CardZone zone, int playerId)
+    {
+        var list = new System.Collections.Generic.List<Script.Net.ZoneCardRef>();
+        foreach (var c in GetZoneCards(zone, playerId))
+            list.Add(ToCardRef(c, zone, playerId));
+        return list;
+    }
+
+    /// <summary>单卡运行时状态 → ZoneCardRef 投影（纯数据映射，字段对齐 CardInstance 运行时属性）。</summary>
+    private Script.Net.ZoneCardRef ToCardRef(CardInstance c, CardZone zone, int playerId)
+    {
+        if (c == null) return null;
+        return new Script.Net.ZoneCardRef
+        {
+            Uid = c.UID,
+            TemplateUid = c.Template?.UID,
+            ControllerId = c.ControllerId,
+            OwnerId = c.OwnerId,
+            Zone = zone,
+            ZoneOwnerId = playerId,
+            ZoneDetailId = c.ZoneDetailId,
+            IsCovert = c.IsCovert,
+            IsSealed = c.IsSealed,
+            IsAttached = c.IsAttached,
+            IsSeal = c.IsSeal,
+            IsTapped = c.IsTapped,
+            Damage = c.Damage,
+            Trauma = c.Trauma,
+            CurrentInvestigation = c.CurrentInvestigation,
+            CurrentStrength = c.CurrentStrength,
+            CurrentPower = c.CurrentPower,
+            CurrentDefense = c.CurrentDefense,
+            MagicDomains = new System.Collections.Generic.List<Script.Enums.MagicDomain>(c.MagicDomains),
+            // 目标有效性/状态版本号补全（C/S 化·第一批）：之前 ToSnapshot 漏导出的三个运行时字段，
+            // 不补则重连后结算判丢失（D16 版本号）与进场时机判定会失真。
+            EnteredThisTurn = c.EnteredThisTurn,
+            VersionId = c.VersionId,
+            AbilityUsedThisTurn = c.AbilityUsedThisTurn,
+        };
+    }
+
+    // ==================== C/S 化·第一批：状态快照导入（重建区域真相） ====================
+    // 与 ToSnapshot() 对称：将纯数据 ZoneCardRef 列表还原为本局区域桶。
+    // 设计约束（最小侵入、不破坏单机红线）：
+    //  - 实例新建/注册已由 CardManager.RebuildFromRef 负责（以 UID 为键，复用牌库/卡组已加载的实例）；
+    //  - 本方法只负责"按 Zone/ZoneOwnerId/ZoneDetailId 把实例归位到对应桶"，并刷新各桶；
+    //  - 单机路径不会调用此方法（仅服务端权威重建 / 客户端重连恢复时调用），对单机零影响。
+    public void ApplySnapshot(System.Collections.Generic.List<Script.Net.ZoneCardRef> refs)
+    {
+        if (refs == null) return;
+
+        // 1) 清空所有区域桶（Dictionary.Clear 移除全部 key/value；归位时 Ensure 会按需重建 key）
+        _hand.Clear(); _graveyard.Clear(); _asset.Clear();
+        _score.Clear(); _council.Clear();
+        _area.Clear(); _attached.Clear(); _sealed.Clear();
+        if (_deckManager != null)
+        {
+            _deckManager.GetDeckPlayer1().Clear();
+            _deckManager.GetDeckPlayer2().Clear();
+        }
+
+        // 2) 逐条归位
+        foreach (var r in refs)
+        {
+            if (r == null) continue;
+            var inst = _cardManager?.RebuildFromRef(r);
+            if (inst == null) continue; // 实例重建失败（如模板缺失）则跳过，避免空引用
+            PlaceIntoBucket(inst, r);
+        }
+    }
+
+    /// <summary>把已重建实例按快照区域信息放入对应桶（与 MoveToX 的桶分配保持一致，但不触发移动事件/规则）。</summary>
+    private void PlaceIntoBucket(CardInstance inst, Script.Net.ZoneCardRef r)
+    {
+        inst.CurrentZone = r.Zone;
+        inst.ZoneDetailId = r.ZoneDetailId;
+        inst.OwnerId = r.OwnerId;
+        inst.ControllerId = r.ControllerId;
+        int pid = r.ZoneOwnerId >= 1 ? r.ZoneOwnerId : (r.ControllerId >= 1 ? r.ControllerId : 1);
+
+        // 秘社卡强制归位秘社区（CouncilZone）：秘社卡 Template 为 CouncilCardData（PlayerTemplate 为 null），
+        // 只应存在于各自秘社区，绝不进手牌/牌库/墓地。若快照 zone 字段错乱，这里按实例类型兜底纠正，
+        // 避免秘社卡混入玩家手牌/牌库导致 UI 渲染时报"PlayerTemplate 为 null"。
+        if (inst.CouncilTemplate != null)
+        {
+            Ensure(_council, pid).Add(inst);
+            return;
+        }
+
+        switch (r.Zone)
+        {
+            case CardZone.Hand:
+                Ensure(_hand, pid).Add(inst);
+                break;
+            case CardZone.Graveyard: Ensure(_graveyard, pid).Add(inst); break;
+            case CardZone.AssetZone: Ensure(_asset, pid).Add(inst); break;
+            case CardZone.ScoreZone: Ensure(_score, pid).Add(inst); break;
+            case CardZone.CouncilZone: Ensure(_council, pid).Add(inst); break;
+            case CardZone.Deck:
+                if (_deckManager != null)
+                {
+                    if (pid == 1) _deckManager.GetDeckPlayer1().Add(inst);
+                    else _deckManager.GetDeckPlayer2().Add(inst);
+                }
+                break;
+            case CardZone.AreaZone: _area.Add(inst); break;
+            case CardZone.AttachedZone: _attached.Add(inst); break;
+            case CardZone.SealedZone: _sealed.Add(inst); break;
+            default:
+                GD.PrintErr($"[ZoneManager] ApplySnapshot: 不支持重建的区域 {r.Zone}（UID={r.Uid}）");
+                break;
+        }
     }
 }

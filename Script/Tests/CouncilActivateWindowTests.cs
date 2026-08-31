@@ -33,7 +33,7 @@ namespace Script.Tests
             TurnManager.TurnPhase.ActionSecond,
             TurnManager.TurnPhase.PreCombat,
             TurnManager.TurnPhase.CombatInvestigation,
-            TurnManager.TurnPhase.CombatBattle,
+            TurnManager.TurnPhase.CombatStrength,
             TurnManager.TurnPhase.CombatPower,
             TurnManager.TurnPhase.EndCleanup,
             TurnManager.TurnPhase.EndRecover,

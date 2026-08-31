@@ -38,6 +38,7 @@ public partial class AreaManager : Node
     private WorldDeckManager _worldDeckManager;
     private ZoneManager _zoneManager;
     private StackManager _stackManager;
+    private CardManager _cardManager; // 跨进程投影：ApplySnapshot 用 RebuildFromRef 重建地区卡实例
 
     // 势力标记数据：按地区 UID 记录双方标记数（不实现赢取，仅累记）
     private Dictionary<string, (int p1, int p2)> _marks = new Dictionary<string, (int p1, int p2)>();
@@ -68,7 +69,6 @@ public partial class AreaManager : Node
             Score = data.Score,
             Instance = instance,
         };
-        GD.Print($"[AreaManager] 注册地区: {areaUid} 槽位{slotIndex} 需求力{data.RequiredPower} 分{data.Score} 类别{data.Category}");
     }
 
     /// <summary>移除一个地区（任务地区销毁时调用）</summary>
@@ -84,6 +84,17 @@ public partial class AreaManager : Node
     {
         var list = _areas.Keys.ToList();
         list.Sort((a, b) => _areas[a].SlotIndex.CompareTo(_areas[b].SlotIndex));
+        return list;
+    }
+
+    /// <summary>返回当前所有地区卡实例，按【真实槽位编号 SlotIndex 升序】排列。
+    /// 供 UI（含联机 ArenaOl 快照驱动）按场上顺序渲染地区槽位。</summary>
+    public List<CardInstance> GetOrderedAreaInstances()
+    {
+        var ordered = GetOrderedAreaUids();
+        var list = new List<CardInstance>(ordered.Count);
+        foreach (var uid in ordered)
+            if (_areas.TryGetValue(uid, out var info)) list.Add(info.Instance);
         return list;
     }
 
@@ -375,5 +386,70 @@ public partial class AreaManager : Node
         foreach (var kv in _marks)
             OnMarksChanged?.Invoke(kv.Key, 0, 0);
         _marks.Clear();
+    }
+
+    // ==================== C/S 化·第三批：地区投影 ====================
+    /// <summary>注入 CardManager 引用（跨进程投影：ApplySnapshot 用 RebuildFromRef 重建地区卡实例）。</summary>
+    public void SetCardManager(CardManager cardManager) => _cardManager = cardManager;
+
+    /// <summary>导出已注册地区卡快照（含槽位），供快照下行（客户端从模板重建地区卡并注册）。</summary>
+    public System.Collections.Generic.List<Script.Net.ZoneCardRef> ToSnapshot()
+    {
+        var list = new System.Collections.Generic.List<Script.Net.ZoneCardRef>();
+        foreach (var kv in _areas)
+        {
+            var info = kv.Value;
+            if (info?.Instance == null) continue;
+            list.Add(new Script.Net.ZoneCardRef
+            {
+                Uid = kv.Key,
+                TemplateUid = info.Instance.Template?.UID ?? "",
+                OwnerId = info.Instance.OwnerId,
+                Zone = Script.Enums.CardZone.AreaZone,
+                ZoneDetailId = info.SlotIndex.ToString(), // 槽位编号（1-based）
+            });
+        }
+        return list;
+    }
+
+    /// <summary>导出各地区势力标记，供快照下行。</summary>
+    public System.Collections.Generic.List<Script.Net.AreaMarkSnap> ToSnapshotMarks()
+    {
+        var list = new System.Collections.Generic.List<Script.Net.AreaMarkSnap>();
+        foreach (var kv in _marks)
+            list.Add(new Script.Net.AreaMarkSnap { AreaUid = kv.Key, P1 = kv.Value.p1, P2 = kv.Value.p2 });
+        return list;
+    }
+
+    /// <summary>
+    /// 从快照重建客户端投影的地区注册表与势力标记（仅联网投影/重连调用，对单机零影响）。
+    /// 地区注册表：从快照 AreaCards（含模板+槽位）用 CardManager.RebuildFromRef 重建地区卡实例再 RegisterArea，
+    ///   跨进程独立 CardManager（NetClientCardManager）走 ResolveInstance 从模板按权威 UID 重建；
+    ///   不再依赖 ZoneManager 的 AreaZone（地区卡本就不进 Zone 桶）。
+    /// 势力标记：从 AreaMarkSnap 快照直接恢复。
+    /// </summary>
+    public void ApplySnapshot(System.Collections.Generic.List<Script.Net.ZoneCardRef> areaCards,
+        System.Collections.Generic.List<Script.Net.AreaMarkSnap> marks)
+    {
+        // 1) 重建地区注册表（从快照 AreaCards 重建实例 + 槽位）
+        _areas.Clear();
+        if (areaCards != null)
+        {
+            foreach (var r in areaCards)
+            {
+                var inst = _cardManager?.RebuildFromRef(r); // 命中共享实例或从模板重建
+                if (inst == null || inst.AreaTemplate == null) continue;
+                int slot = 0;
+                if (r.ZoneDetailId != null) foreach (char c in r.ZoneDetailId) if (c >= '0' && c <= '9') slot = slot * 10 + (c - '0');
+                RegisterArea(r.Uid, slot, inst);
+            }
+        }
+        // 2) 恢复势力标记
+        _marks.Clear();
+        if (marks != null)
+        {
+            foreach (var m in marks)
+                if (!string.IsNullOrEmpty(m.AreaUid)) _marks[m.AreaUid] = (m.P1, m.P2);
+        }
     }
 }

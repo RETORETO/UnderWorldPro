@@ -8,8 +8,9 @@ namespace Script.UI
     public enum ModalWindow
     {
         Investigation,
-        Battle,
+        Strength,
         TriggerOrder,
-        TieBreak
+        TieBreak,
+        TargetSelection   // 选目标窗口（JC014机动/JC012激活②/JC005事务卡 等触发/激活选目标）
     }
 }

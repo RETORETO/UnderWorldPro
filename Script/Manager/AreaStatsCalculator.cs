@@ -28,7 +28,7 @@ namespace Script.Manager
             {
                 // 暗藏者：调查=0、战斗=0、势力=1（+先手势力）
                 if (type == CombatManager.CombatType.Investigation) return 0;
-                if (type == CombatManager.CombatType.Battle) return 0;
+                if (type == CombatManager.CombatType.Strength) return 0;
                 var t = card.PlayerTemplate;
                 int firstPower = (t != null && isFirst) ? t.FirstStrikePower : 0;
                 return 1 + firstPower;
@@ -45,8 +45,8 @@ namespace Script.Manager
                 //  - 白眼=先手调查：仅当结算者为先手玩家时叠加（每白眼+1，卡文"白眼白眼"叠加）。
                 CombatManager.CombatType.Investigation => card.CurrentInvestigation
                     + (isFirst ? card.GetAttribute("先手调查") : 0),
-                // 战斗结算读实例当前战斗值（含 JC060 光环授予的"战斗"属性 +1），而非仅模板 GetTotalCombat
-                CombatManager.CombatType.Battle => card.CurrentCombat,
+                // 战斗结算读实例当前战力值（含 JC060 光环授予的"战斗"属性 +1），而非仅模板 GetTotalStrength
+                CombatManager.CombatType.Strength => card.CurrentStrength,
                 CombatManager.CombatType.Power => tmpl.GetTotalPower(isFirst),
                 _ => 0
             };
@@ -83,7 +83,7 @@ namespace Script.Manager
                 if (!IsStatParticipant(card)) continue;      // 仅角色/附属/暗藏者参与
 
                 inv += ValueOf(card, CombatManager.CombatType.Investigation, playerManager);
-                bat += ValueOf(card, CombatManager.CombatType.Battle, playerManager);
+                bat += ValueOf(card, CombatManager.CombatType.Strength, playerManager);
                 pow += ValueOf(card, CombatManager.CombatType.Power, playerManager);
             }
             return (inv, bat, pow);

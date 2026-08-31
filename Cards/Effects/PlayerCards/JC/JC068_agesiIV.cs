@@ -46,7 +46,7 @@ namespace Cards.Effects.PlayerCards.JC
                 EffectId = "JC068_B_BlockDeployCovert",
                 Timing = EffectTiming.Continuous,
                 // 生效区：AttachTarget（结附于目标时）。阿格斯IV是结附于本方秘社的附属，在 AttachedZone 生效。
-                // 【方案C】原误写 ContestZone（角色卡模板遗留），导致 IsEffectActiveInZone 判 AreaZone 为 false、
+                // 【方案C】原误写 AreaZone（角色卡模板遗留），导致 IsEffectActiveInZone 判 AreaZone 为 false、
                 // 附属于 AttachedZone 时封锁不注册。改为 AttachTarget 与附属身份/生效位置一致。
                 Scope = ZoneScope.AttachTarget,
                 Duration = "常驻",

@@ -1,4 +1,4 @@
-using Script.Game.Entities;
+﻿using Script.Game.Entities;
 using Script.Data.Effects;
 using System.Collections.Generic;
 
@@ -84,13 +84,18 @@ namespace Script.Game.Entities
         /// <summary>结算负载（Kind=AreaWon）：赢取该地区的玩家 ID</summary>
         public int WinnerId { get; set; }
 
-        /// <summary>结算负载（Kind=Trigger）：关联的触发效果实例（含来源、目标、强制标记等运行时状态）。</summary>
-        public TriggerEffectInstance TriggerInstance { get; set; }
+        /// <summary>结算负载（Kind=Trigger）：关联的入堆叠效果实例（含来源、目标、强制标记等运行时状态）。</summary>
+        public StackEffectInstance StackEffect { get; set; }
 
         /// <summary>结算负载（Kind=Trigger）：新效果系统（EffectData）触发的直接承载。
-        /// 非空时 ResolveEntry 的 Trigger 分支优先按其执行 EffectEngine.ResolveEffect（实现"效果入堆叠"）。
+        /// 非空时 ResolveEntry 的 Trigger 分支优先按其执行 EffectEngine.Instance.ResolveEffect（实现"效果入堆叠"）。
         /// 与 TriggerInstance 互斥，二者择一；新 JC 卡触发统一走本字段。</summary>
         public Script.Data.Effects.EffectData EffectDataEffect { get; set; }
+
+        /// <summary>入栈时【来源卡版本号】快照（默认 -1=未记录）。仅当 EffectData.RequireSourceVersionUnchanged=true 时，
+        /// 入栈记录来源卡 VersionId；结算时若来源卡 VersionId 已变（离场/翻面/进手牌等触发 BumpVersion），跳过结算。
+        /// 争夺区→争夺区移动不 BumpVersion，故不影响此类效果。见 TurnManager.PushTriggerToStack / ResolveEntry。</summary>
+        public int SourceVersionId { get; set; } = -1;
 
         /// <summary>
         /// 可选钩子：结构化结算之外的特殊逻辑（预留接口，如复杂触发效果）。
@@ -149,9 +154,11 @@ namespace Script.Game.Entities
     /// </summary>
     public class StackTargetRef
     {
-        public enum TargetKind { Card, Area, Player }
+        /// <summary>堆叠目标引用种类：Card=指向卡实例 / Area=指向地区槽位 / Player=指向玩家。
+        /// 注意与 Enums.TargetKind（打出/效果目标的"目标种类"，规则层 14 值）区分——本枚举是数据层的引用存储类型。</summary>
+        public enum RefKind { Card, Area, Player }
 
-        public TargetKind Kind { get; set; }
+        public RefKind Kind { get; set; }
         /// <summary>目标卡 UID（Kind=Card 时有效）</summary>
         public string CardUid { get; set; }
         /// <summary>目标地区槽位编号（Kind=Area 时有效，由 ParseAreaSlotId 解析，失败时回退查 AreaUid）</summary>

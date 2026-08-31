@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -29,19 +29,19 @@ namespace Script.Tests
         {
             var card = NewJC001();
             Assert.IsFalse(card.HasStaticFlag(StaticKind.CannotBeAttached), "注册前不应有静止标记");
-            EffectEngine.RegisterPersistent(card);
+            EffectEngine.Instance.RegisterPersistent(card);
             Assert.IsTrue(card.HasStaticFlag(StaticKind.CannotBeAttached),
                 "注册后应有 CannotBeAttached 静止标记（争夺区生效）");
-            Assert.IsTrue(EffectEngine.HasStaticFlag(card, StaticKind.CannotBeAttached),
+            Assert.IsTrue(EffectEngine.Instance.HasStaticFlag(card, StaticKind.CannotBeAttached),
                 "HasStaticFlag 查询入口应返回 true");
         }
 
         public void TestCannotBeAttachedClearedOnUnregister()
         {
             var card = NewJC001();
-            EffectEngine.RegisterPersistent(card);
+            EffectEngine.Instance.RegisterPersistent(card);
             Assert.IsTrue(card.HasStaticFlag(StaticKind.CannotBeAttached));
-            EffectEngine.UnregisterPersistent(card);
+            EffectEngine.Instance.UnregisterPersistent(card);
             Assert.IsFalse(card.HasStaticFlag(StaticKind.CannotBeAttached),
                 "注销后应清除静止标记（D19-⑦ 防泄漏）");
         }
@@ -49,7 +49,7 @@ namespace Script.Tests
         public void TestWhiteEyeGrantsFirstStrikeInvestigation()
         {
             var card = NewJC001();
-            // 直接模拟持续授予"白眼=先手调查+1"（同 EffectEngine.RegisterPersistent 满足前提时的 Grant）
+            // 直接模拟持续授予"白眼=先手调查+1"（同 EffectEngine.Instance.RegisterPersistent 满足前提时的 Grant）
             int before = card.CurrentFirstStrikeInvestigation;
             card.Grant("Attribute", "先手调查", 1);
             Assert.AreEqual(before + 1, card.CurrentFirstStrikeInvestigation,

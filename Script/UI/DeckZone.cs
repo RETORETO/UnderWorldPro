@@ -26,12 +26,10 @@ public partial class DeckZone : Control
     // 从 DeckManager 取出后注入，DeckZone 不持有任何 Manager 引用，彻底切断 View→Manager 反向依赖。
     public void Initialize(List<CardInstance> deckInstances, PackedScene cardUIScene, int playerId = 1)
     {
-        GD.Print($"【DeckZone】初始化开始，deckInstances={deckInstances?.Count ?? 0}, cardUIScene={cardUIScene != null}");
         _cardUIScene = cardUIScene;
         _playerId = playerId;
         _deckCards.Clear();
 
-        GD.Print($"【DeckZone】获取到 {deckInstances?.Count ?? 0} 个实例");
         if (deckInstances != null)
         {
             foreach (var instance in deckInstances)
@@ -42,7 +40,6 @@ public partial class DeckZone : Control
                 cardUI.SetFace(false);
                 _deckCards.Add(cardUI);
             }
-            GD.Print($"【DeckZone】创建了 {_deckCards.Count} 张卡牌 UI");
             ArrangeCards();
             UpdateCount();
         }

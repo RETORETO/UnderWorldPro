@@ -15,7 +15,7 @@ namespace Script.Tests
     ///
     /// 验证的完整链路（B 层 · 真实组件，仅以 mock 视图绕过 UI 弹窗）：
     ///   构造 JC002 风格卡（进场触发，目标限定本地区角色且可指定自身）
-    ///   → MoveToArea 进场触发 EnterPlay 事件
+    ///   → MoveToArea 进场触发 EnterTrigger 事件
     ///   → 触发注册表收集进场触发 → TurnManager 触发阶段（排序窗口）
     ///   → 弹选目标（mock 自动选自身）→ 入堆叠 + 写来源地区快照
     ///   → 结算前自身移动到另一地区 → FireMoved → 移动事件总线 → 比对快照 → 置“目标已丢失”
@@ -27,14 +27,14 @@ namespace Script.Tests
         private class 自动选自身视图 : ITriggerView
         {
             public List<string> 最近有效目标;
-            public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<TriggerEffectInstance> triggers,
-                Action<List<TriggerEffectInstance>> onEnterStack, Action onDone)
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<StackEffectInstance> triggers,
+                Action<List<StackEffectInstance>> onEnterStack, Action onDone)
             {
                 // 排序窗口：直接按原顺序入栈
                 onEnterStack?.Invoke(triggers);
                 onDone?.Invoke();
             }
-            public void RequestTargetSelection(TriggerEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
+            public void RequestTargetSelection(StackEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
             {
                 最近有效目标 = validTargetUids;
                 // JC002 可指定自身：选有效目标中等于来源自身的 UID（即“目标=自身”场景）
@@ -42,7 +42,7 @@ namespace Script.Tests
                 var 选中 = validTargetUids.Contains(自身UID) ? 自身UID : (validTargetUids.Count > 0 ? validTargetUids[0] : "");
                 onPicked?.Invoke(选中);
             }
-            public void RemoveOrderEntries(List<TriggerEffectInstance> pushed) { }
+            public void RemoveOrderEntries(List<StackEffectInstance> pushed) { }
         }
 
         private TurnManager _tm;
@@ -79,6 +79,15 @@ namespace Script.Tests
             _地区管理器.RegisterArea("areaB", 2, _cm.CreateCardInstance(new AreaCardData(), 0));
             _tm.SetAreaManager(_地区管理器);
             _tm.SetTriggerView(new 自动选自身视图());
+
+            //【MVC 收口】触发系统三实例（原 static class → 实例）：测试自行装配注入，
+            // 使 ZoneManager.MoveToArea → EnterTrigger → TriggerRegistry.HandleEvent 完整链路可达。
+            var eventBus = new Script.Manager.GameEventBus();
+            var emitPoints = new Script.Manager.TriggerEmitPoints(eventBus);
+            var registry = new Script.Manager.TriggerRegistry(eventBus);
+            _tm.SetTriggerSystem(registry, emitPoints, eventBus);
+            _zm.SetTriggerEmitPoints(emitPoints);
+            _cm.SetTriggerEmitPoints(emitPoints);
         }
 
         /// <summary>构造一张 JC002 风格的玩家卡：进场触发，目标本地区角色，可指定自身。</summary>
@@ -128,11 +137,10 @@ namespace Script.Tests
             // 1) 构造 JC002 风格卡并放到手牌（模拟即将进场）
             var 卡片 = 创建JC002风格卡(1, 地区A);
 
-            // 诊断：确认事件总线已注入（Dispatch 为 null 时 Emit 会静默降级，导致 0 入栈且不报错）
-            Assert.IsTrue(GameEventBus.Dispatch != null,
-                "GameEventBus.Dispatch 未注入（TurnManager.Initialize 未执行或静态委托被覆盖），进场事件被静默丢弃");
+            // 诊断：触发系统三实例已在搭建测试环境中注入（SetTriggerSystem + SetTriggerEmitPoints），
+            // TriggerRegistry 构造时即订阅总线（SetDispatch(HandleEvent)），故 Dispatch 一定已就绪。
 
-            // 2) 进场：MoveToArea 触发 EnterPlay → 收集 → 排序窗口 → 选自身 → 入栈（写来源地区快照 地区A）
+            // 2) 进场：MoveToArea 触发 EnterTrigger → 收集 → 排序窗口 → 选自身 → 入栈（写来源地区快照 地区A）
             _zm.MoveToArea(卡片, 地区A, 1);
 
             // 3) 断言：已有一张 JC002 进场触发入栈，且目标=自身

@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -10,7 +10,7 @@ using Script.Enums;
 using Script.Manager;
 using Script.Interfaces;
 
-public partial class Arena : Control
+public partial class Arena : Control, Script.Interfaces.IGameUIHooks, Script.Net.ISnapshotView
 {
     // ============================================================
     // 区域引用
@@ -99,7 +99,7 @@ public partial class Arena : Control
 
     // 对抗窗口预制体
     [Export] private PackedScene _investigationWindowScene;
-    [Export] private PackedScene _battleWindowScene;
+    [Export] private PackedScene _strengthWindowScene;
     [Export] private PackedScene _tieBreakWindowScene;   // 先手破平确认窗口（2026-08-05）
     // 当前拖拽中的手牌卡状态已迁移至 CardDragController（MVC 修复 M-08），Arena 不再持有。
 
@@ -196,6 +196,8 @@ public partial class Arena : Control
 
     // 逻辑→UI 同步
     private Dictionary<string, CardUI> _cardUIMap = new Dictionary<string, CardUI>();
+    // 【C/S 化 P3·模块B】快照渲染驱动（网络模式）。单机默认未启用（_snapshotDriver 为 null，走事件驱动）。
+    private Script.Net.SnapshotRenderDriver _snapshotDriver;
     // 议会（秘社）UI 单独管理（与玩家卡 _cardUIMap 解耦，避免类型冲突）
     private Dictionary<string, CouncilCardUI> _councilCardUIs = new Dictionary<string, CouncilCardUI>();
     private Control _scoreContainer1, _scoreContainer2;
@@ -278,8 +280,8 @@ public partial class Arena : Control
             _areaCardUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/AreaCardUI.tscn");
         if (_investigationWindowScene == null)
             _investigationWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/InvestigationWindow.tscn");
-        if (_battleWindowScene == null)
-            _battleWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/BattleWindow.tscn");
+        if (_strengthWindowScene == null)
+            _strengthWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/StrengthWindow.tscn");
         if (_tieBreakWindowScene == null)
             _tieBreakWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/CombatResolution/TieBreakWindow.tscn");
         if (_stackEntryScene == null)
@@ -326,59 +328,11 @@ public partial class Arena : Control
         }
         _initializer.InitializeAll();
         _zoneManager = _initializer.ZoneManager;
-        // 持续光环（D19-③）依赖 ZoneManager 读取区域卡集合，注入引用供 EffectEngine 使用
-        EffectEngine.ZoneManagerRef = _zoneManager;
-        // 持续光环的撤销/补授需跨控制者按 UID 找回实例（夺控场景），必须注入 CardManagerRef；
-        // 此前漏注入导致 CardManagerRef 为 null，ReevaluateAuras/UnregisterPersistent 内所有 GetInstance 查找静默失败，
-        // 表现为 JC060 对他者授予不生效、夺控后不撤销（攻击力叠加/领域不取消）。
-        EffectEngine.CardManagerRef = _initializer.CardManager;
-        // JC068 阿格斯IV 准备维护询问：弹出"支付N/横置阿格斯IV"二选一窗。
-        // 弹窗为异步模态，支付/横置的实际动作在各自 OnChosen 回调内执行（与 JC012 激活选择一致）。
-        EffectEngine.PromptPayOrTap = (source, payAmount) =>
-        {
-            if (source == null) return;
-            var pm = _initializer.PlayerManager;
-            bool canPay = pm != null && pm.GetAvailableMana(source.ControllerId) >= payAmount;
-            var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
-            if (win != null)
-            {
-                var items = new System.Collections.Generic.List<ActivationChoiceItem>();
-                // 支付选项：费用不足时置灰（此时只能选横置；阿格斯IV已未横置故横置总是可选）
-                items.Add(new ActivationChoiceItem
-                {
-                    Label = $"支付{payAmount}（横置1张资产区牌）",
-                    Disabled = !canPay,
-                    OnChosen = () =>
-                    {
-                        pm?.SpendMana(source.ControllerId, payAmount);
-                        GD.Print($"[Arena] 阿格斯IV 准备维护：玩家{source.ControllerId} 支付 {payAmount}，保持未横置");
-                        EffectEngine.OnVisualDirty?.Invoke();
-                    },
-                });
-                items.Add(new ActivationChoiceItem
-                {
-                    Label = "横置阿格斯IV",
-                    OnChosen = () =>
-                    {
-                        source.SetTapped(true);   // 横置阿格斯IV（发 TappedChanged → 解除对手派遣封锁）
-                        GD.Print($"[Arena] 阿格斯IV 准备维护：被横置，玩家{source.ControllerId} 的对手恢复秘密派遣权");
-                        EffectEngine.OnVisualDirty?.Invoke();
-                    },
-                });
-                // 强制选择：阿格斯准备维护为强制触发，玩家必须二选一（不能取消/点窗外关闭）
-                win.ForceChoice = true;
-                win.Init(items);
-                AddChild(win);
-                win.PopupCentered();
-            }
-            else
-            {
-                // 无窗口兜底：能付则付，否则横置
-                if (canPay) pm?.SpendMana(source.ControllerId, payAmount);
-                else source.SetTapped(true);
-                EffectEngine.OnVisualDirty?.Invoke();
-            }
-        };
+        //【MVC 收口】ZoneManagerRef / CardManagerRef 已由 GameInitializer（Composition Root）注入，
+        // View 不再装配 Controller 依赖。JC068「准备维护」的 UI 询问改由本 Arena 实现 IGameUIHooks 接口，
+        // 经 RegisterUIHooks(this) 注入（依赖倒置：Controller 依赖接口，View 实现接口），
+        // 弹窗只负责「展示二选一 + 收集选择」，业务动作（支付/横置）统一回交 Controller（ResolvePrepareUpkeep）。
+        _initializer.RegisterUIHooks(this);
         _zoneManager.OnCardMoved += SyncCardUIToZone;
         //【MVC 收口】派生 UI 聚合刷新（资产区领域忠诚/地区能力统计/分数/横置视觉/持续效果态）
         // 统一经 ZoneManager.OnPostMove 事件驱动，所有 move 路径（move/PM 命令/结算）自动刷新，
@@ -397,9 +351,8 @@ public partial class Arena : Control
         _cardManager = _initializer.CardManager;
         //【MVC 收口-堆叠箭头】目标状态变更（翻面/离场/屏障）驱动箭头重绘；
         // 丢失目标的条目因 entry.TargetWasLost 跳过其箭头（方案 B：与结算丢失走同一条总线）。
-        // 注意：OnCardStateChanged 是 static 事件，须用类型名 CardManager 限定，不能用实例引用。
         // 匿名 lambda 无法用 -= 反订阅，故具名化以支持 _ExitTree 清理。
-        CardManager.OnCardStateChanged += OnCardStateChangedRedrawArrows;
+        _cardManager.OnCardStateChanged += OnCardStateChangedRedrawArrows;
         _playerManager = _initializer.PlayerManager;
         // 订阅游戏结束事件：胜利/失败瞬间由 Manager 广播（不经过堆叠），UI 仅展示 LABEL 并延时回主界面
         if (_playerManager != null) _playerManager.OnGameOver += OnGameOverHandler;
@@ -411,7 +364,8 @@ public partial class Arena : Control
         // D9 激活框架：优先权变化时刷新“可发动”高亮边框
         _turnManager.OnPriorityChanged += RefreshActivateHighlights;
         // 2026-08-11：费用修正栈变化（JC012 登记/消费/到期）时刷新手牌减费提示
-        EffectEngine.CostModChanged += RefreshHandCostReductions;
+        //【MVC 收口】CostModChanged 已迁至 UiNotificationBus 实例单例。
+        Script.Manager.UiNotificationBus.Instance.CostModChanged += RefreshHandCostReductions;
         // 阶段 C：Arena 加载时主动同步双方议会（秘社）UI。
         // 注意：SetupCouncils 在 InitializeAll 阶段（Arena 未加载）已把秘社移入 CouncilZone，
         // 事件早于本订阅触发，故此处主动重放一次，而非依赖 OnCardMoved 事件。
@@ -432,7 +386,9 @@ public partial class Arena : Control
                 _areaSlots,
                 (pos) => _cardDragController?.PickAreaCardAt(pos),
                 () => LockModal(ModalWindow.TriggerOrder),
-                () => UnlockModal(ModalWindow.TriggerOrder));
+                () => UnlockModal(ModalWindow.TriggerOrder),
+                () => LockModal(ModalWindow.TargetSelection),
+                () => UnlockModal(ModalWindow.TargetSelection));
             _turnManager.SetTriggerView(_triggerCoordinator);
             GD.Print("  ✅ TriggerInteractionCoordinator（ITriggerView）已注入 TurnManager");
         }
@@ -450,11 +406,11 @@ public partial class Arena : Control
         _modalCoordinator = new Script.UI.Interaction.ModalWindowCoordinator();
         AddChild(_modalCoordinator);
         _modalCoordinator.Configure(
-            _investigationWindowScene, _battleWindowScene, _tieBreakWindowScene, _areaSlots,
+            _investigationWindowScene, _strengthWindowScene, _tieBreakWindowScene, _areaSlots,
             _initializer.CombatManager, _cardManager, _actionService,
             FindCardUIByUID,
             LockModal, UnlockModal);
-        _modalCoordinator.SetBattleResolvedCallback(() =>
+        _modalCoordinator.SetStrengthResolvedCallback(() =>
         {
             RefreshDamageDisplay();
             RefreshArenaStats();
@@ -620,11 +576,58 @@ public partial class Arena : Control
     private void OnPostMoveSyncDerivedUI(CardInstance card, CardZone zone, int playerId, string detailId) => SyncDerivedUI();
 
     private void OnPostMoveReevaluateAuras(CardInstance card, CardZone zone, int playerId, string detailId)
-        => Script.Manager.EffectEngine.ReevaluateAuras(playerId);
+        => Script.Manager.EffectEngine.Instance.ReevaluateAuras(playerId);
 
     private void OnPostMoveRedrawArrows(CardInstance card, CardZone zone, int playerId, string detailId) => RedrawAllArrows();
 
     private void OnCardStateChangedRedrawArrows(CardInstance card, Script.Enums.CardChangeKind kind) => RedrawAllArrows();
+
+    /// <summary>
+    /// 【MVC 收口】实现 IGameUIHooks 接口：JC068 阿格斯IV「准备维护」的 UI 询问。
+    /// Controller（EffectEngine）经注入的接口发起，View 只负责「展示二选一 + 收集选择」，
+    /// 业务动作（支付/横置）统一回交 Controller（ResolvePrepareUpkeep），View 不写 Model。
+    /// </summary>
+    public void PromptPayOrTap(CardInstance source, int payAmount)
+    {
+        if (source == null) return;
+        bool canPay = EffectEngine.Instance.CanPayPrepareUpkeep(source, payAmount);
+        var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+        if (win != null)
+        {
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            // 支付选项：费用不足时置灰（此时只能选横置；阿格斯IV已未横置故横置总是可选）
+            items.Add(new ActivationChoiceItem
+            {
+                Label = $"支付{payAmount}（横置1张资产区牌）",
+                Disabled = !canPay,
+                OnChosen = () =>
+                {
+                    EffectEngine.Instance.ResolvePrepareUpkeep(source, payAmount, pay: true);
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                },
+            });
+            items.Add(new ActivationChoiceItem
+            {
+                Label = "横置阿格斯IV",
+                OnChosen = () =>
+                {
+                    EffectEngine.Instance.ResolvePrepareUpkeep(source, payAmount, pay: false);
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                },
+            });
+            // 强制选择：阿格斯准备维护为强制触发，玩家必须二选一（不能取消/点窗外关闭）
+            win.ForceChoice = true;
+            win.Init(items);
+            AddChild(win);
+            win.PopupCentered();
+        }
+        else
+        {
+            // 无窗口兜底：交由 Controller 决策（能付则付，否则横置）
+            EffectEngine.Instance.ResolvePrepareUpkeep(source, payAmount, pay: canPay);
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+        }
+    }
 
     /// <summary>退出场景时反订阅全部逻辑层/静态事件，避免残留回调访问已释放节点。</summary>
     public override void _ExitTree()
@@ -657,10 +660,12 @@ public partial class Arena : Control
         if (_initializer?.CombatManager != null)
             _initializer.CombatManager.OnAssetsChanged -= OnAssetsChangedHandler;
         if (_cardManager != null)
+        {
             _cardManager.OnCardDied -= OnCardDiedHandler;
-        CardManager.OnTargetSelectionChanged -= OnTargetSelectionChangedHandler;
-        CardManager.OnCardStateChanged -= OnCardStateChangedHandler;
-        CardManager.OnCardStateChanged -= OnCardStateChangedRedrawArrows;
+            _cardManager.OnTargetSelectionChanged -= OnTargetSelectionChangedHandler;
+            _cardManager.OnCardStateChanged -= OnCardStateChangedHandler;
+            _cardManager.OnCardStateChanged -= OnCardStateChangedRedrawArrows;
+        }
         if (_areaManager != null)
         {
             _areaManager.OnAreaWon -= OnAreaWonHandler;
@@ -670,8 +675,9 @@ public partial class Arena : Control
             _areaManager.OnWorldDeckChanged -= OnWorldDeckChangedHandler;
             _areaManager.OnAreaWonResolved -= OnAreaWonResolvedHandler;
         }
-        Script.Manager.EffectEngine.OnVisualDirty -= OnVisualDirtyHandler;
-        Script.Manager.EffectEngine.CostModChanged -= RefreshHandCostReductions;
+        //【MVC 收口】UI 通知总线反订阅（OnVisualDirty/CostModChanged 已从 EffectEngine 迁移至此）
+        Script.Manager.UiNotificationBus.Instance.OnVisualDirty -= OnVisualDirtyHandler;
+        Script.Manager.UiNotificationBus.Instance.CostModChanged -= RefreshHandCostReductions;
         if (_zoneManager != null)
         {
             _zoneManager.OnCardMoved -= SyncCardUIToZone;
@@ -684,14 +690,13 @@ public partial class Arena : Control
             _playerManager.OnGameOver -= OnGameOverHandler;
         if (_stackManager != null)
             _stackManager.OnStackChanged -= RefreshStackUI;
-        // 清理静态 UI 回调委托：PromptPayOrTap 由本 Arena 注入（捕获本实例），
-        // Arena 销毁后置空，避免旧实例残留（第二局会由新 Arena 重新注入）。
-        if (Script.Manager.EffectEngine.PromptPayOrTap != null)
-            Script.Manager.EffectEngine.PromptPayOrTap = null;
+        //【MVC 收口】IGameUIHooks 接口由 RegisterUIHooks 注入，Arena 销毁后由下一局重新注册覆盖；
+        // 不再需要手动置空 static 委托。
     }
 
     /// <summary>
-    /// 重绘所有堆叠条目 → 目标的箭头。目标节点通过 CardUID / 地区槽位 / 玩家 实时查询全局中心点。
+    /// 【事件驱动】重建堆叠条目 → 目标的箭头实例（增删）。何时增删由逻辑事件决定（OnStackChanged /
+    /// OnPostMove / OnCardStateChanged 等），不在每帧做。端点的实时跟随由 UpdateArrowEndpoints 负责。
     /// </summary>
     private void RedrawAllArrows()
     {
@@ -728,21 +733,53 @@ public partial class Arena : Control
             if (uiLost)
                 continue;
             if (entry.Targets == null) continue;
-            Vector2 from = entryUI.GetGlobalCenter();
             // 箭头按控制者（ControllerId）着色（核心需求 / D31）：夺控场景下控制者颜色，而非拥有者颜色。
             Color col = entry.ControllerId == 1 ? Colors.OrangeRed : Colors.CornflowerBlue;
 
             foreach (var target in entry.Targets)
             {
-                Vector2? to = ResolveTargetCenter(target);
-                if (to == null) continue;
+                // 创建箭头实例（不在此设端点，端点交由 UpdateArrowEndpoints 每帧跟随）
                 var arrow = _stackArrowScene.Instantiate<StackArrow>();
                 arrow.ZIndex = 4095;
                 arrow.ZAsRelative = false;   // 绝对 ZIndex
                 _arrowLayer.AddChild(arrow);
                 arrow.SetColor(col);
-                arrow.SetPoints(from, to.Value);
                 oldArrows.Add(arrow);
+            }
+        }
+
+        // 实例增删完成后立即做一次端点跟随，避免本帧内箭头无端点（闪空）
+        UpdateArrowEndpoints();
+    }
+
+    /// <summary>
+    /// 【每帧跟随】更新已存在箭头的起点/终点，使箭头贴紧卡实体/效果条目实时坐标。
+    /// 起点 = 堆叠条目 UI 全局中心（随 VBox 布局/平滑移动实时变化）；终点 = 目标卡/地区/玩家实时中心。
+    /// 仅更新端点并 QueueRedraw，不增删箭头实例（增删归 RedrawAllArrows 事件驱动）。
+    /// 这是 MTGA 式「表现层每帧 reconcile」——事件驱动决定「有哪些箭头」，每帧跟随决定「端点画在哪」。
+    /// </summary>
+    private void UpdateArrowEndpoints()
+    {
+        if (_arrowLayer == null) return;
+
+        foreach (var kv in _stackArrows)
+        {
+            var entry = kv.Key;
+            var arrows = kv.Value;
+            if (arrows == null || arrows.Count == 0) continue;
+            if (!_stackEntryUIMap.TryGetValue(entry, out var entryUI)) continue;
+            if (entry.Targets == null) continue;
+
+            // 起点 = 条目 UI 全局中心（每帧实时读，覆盖 VBox 布局延迟 / 未来平滑移动）
+            Vector2 from = entryUI.GetGlobalCenter();
+
+            // 箭头与 entry.Targets 按创建顺序一一对应（RedrawAllArrows 内按 Targets 顺序 Add）
+            int n = Mathf.Min(arrows.Count, entry.Targets.Count);
+            for (int i = 0; i < n; i++)
+            {
+                Vector2? to = ResolveTargetCenter(entry.Targets[i]);
+                if (to == null) continue;
+                arrows[i].SetPoints(from, to.Value);
             }
         }
     }
@@ -752,14 +789,14 @@ public partial class Arena : Control
     {
         switch (target.Kind)
         {
-            case StackTargetRef.TargetKind.Card:
+            case StackTargetRef.RefKind.Card:
                 if (_cardUIMap.TryGetValue(target.CardUid, out var cardUI))
                 {
                     // 使用旋转后视觉包围盒中心，兼容横置卡（90° 旋转后视觉中心已偏离逻辑中心）
                     return cardUI.GetVisualGlobalRect().GetCenter();
                 }
                 return null;
-            case StackTargetRef.TargetKind.Area:
+            case StackTargetRef.RefKind.Area:
                 // 优先用 AreaUid 精确定位（AreaSlot 节点命名 AreaSlot_<编号>，编号由 AreaUID 映射）
                 Control slotNode = null;
                 if (!string.IsNullOrEmpty(target.AreaUid))
@@ -773,7 +810,7 @@ public partial class Arena : Control
                     slotNode = _areasContainer.GetNodeOrNull<Control>($"AreaSlot_{target.AreaSlotId}");
                 if (slotNode != null) return slotNode.GlobalPosition + slotNode.GetRect().Size / 2f;
                 return null;
-            case StackTargetRef.TargetKind.Player:
+            case StackTargetRef.RefKind.Player:
                 // 玩家区中心（用对应 PlayerArea 的全局中心近似）
                 var pArea = GetNodeOrNull<Control>(target.PlayerId == 1 ? "Player1Area" : "Player2Area");
                 if (pArea != null) return pArea.GlobalPosition + pArea.GetRect().Size / 2f;
@@ -795,11 +832,11 @@ public partial class Arena : Control
         if (_cardDragController != null && _cardDragController.IsActivating)
             _cardDragController.UpdateActivateDrag(GetGlobalMousePosition());
 
-        // 堆叠箭头刷新已改为事件驱动（OnPostMove 随目标移动、OnCardStateChanged 随目标状态变更），
-        // 不再每帧全量轮询。仅拖拽交互进行中（目标卡实时拖动）保留每帧跟随，避免拖拽时箭头滞后。
-        if (_cardDragController != null && _cardDragController.IsActivating
-            && _stackManager != null && !_stackManager.IsEmpty && _arrowLayer != null)
-            RedrawAllArrows();
+        // 堆叠箭头：事件驱动负责「增删箭头实例」（RedrawAllArrows），每帧跟随负责「更新端点」（UpdateArrowEndpoints）。
+        // 堆叠非空即每帧更新端点，使箭头贴紧条目/目标实时坐标（覆盖 VBox 布局延迟，并为未来平滑移动铺路）。
+        // 空堆叠/无箭头时零开销（UpdateArrowEndpoints 内部空循环直接返回）。
+        if (_stackManager != null && !_stackManager.IsEmpty && _arrowLayer != null)
+            UpdateArrowEndpoints();
     }
 
     // [诊断] 用于确认输入事件分发链路：打印鼠标按下时 Arena 是否收到、以及当前鼠标下命中的卡牌
@@ -930,11 +967,11 @@ public partial class Arena : Control
             (CombatManager.CombatType type, int winner, int x, int areaNo) =>
             {
                 // 按对抗类型路由到对应窗口：调查对抗走调查窗口（取牌分配+抽1），战斗对抗走战斗窗口（伤害分配）。
-                // 原实现硬编码调用 OpenBattleWindow，导致 investigation 命令也误用战斗对抗逻辑，违反核心需求 6.4。
+                // 原实现硬编码调用 OpenStrengthWindow，导致 investigation 命令也误用战斗对抗逻辑，违反核心需求 6.4。
                 if (type == CombatManager.CombatType.Investigation)
                     _modalCoordinator.OpenInvestigationWindow(winner, x, areaNo, null);
                 else
-                    _modalCoordinator.OpenBattleWindow(winner, x, areaNo, null);
+                    _modalCoordinator.OpenStrengthWindow(winner, x, areaNo, null);
             },
             _areaManager,
             () => DrawAndAddNewArea(),
@@ -1031,16 +1068,20 @@ public partial class Arena : Control
     }
 
     /// <summary>
-    /// 附属结附在地区内角色上时刷新该角色及其附属的对抗属性显示（接口，附属系统暂未实现）。
-    /// 后续附属实现后：结附在角色上的附属会为当前地区提供对抗属性，应在此统一重算
+    /// 附属结附在地区内角色上时刷新该角色及其附属的对抗属性显示。
+    /// 结附在角色上的附属会为当前地区提供对抗属性，在此统一重算
     /// 角色 + 其所有附属的显示能力值（实例 CurrentXxx 与 UI StatsContainer）。
     /// </summary>
     private void RefreshAttachedStats(CardInstance character)
     {
         if (character == null) return;
-        // 当前版本附属系统未实现，保留接口：
-        // 1. _turnManager?.RefreshFirstStrikeStats(); character.RefreshStats();
-        // 2. 对每个 AttachedCards 中的附属：_turnManager?.RefreshFirstStrikeStats(); attached.RefreshStats();
+        // 重算角色本体与其附属的先攻/对抗属性显示（RefreshFirstStrikeStats 为 TurnManager 既有方法）。
+        // 卡牌实例本身的 UI 刷新由 UiNotificationBus 总线处理，此处不重复调用实例方法。
+        _turnManager?.RefreshFirstStrikeStats();
+        foreach (var attached in character.AttachedCards ?? new System.Collections.Generic.List<CardInstance>())
+        {
+            _turnManager?.RefreshFirstStrikeStats();
+        }
     }
 
     // 布局引擎（ArrangeAllCards / ArrangeAllAttachments / ArrangeAllSeals / ArrangeCouncilCards /
@@ -1160,7 +1201,7 @@ public partial class Arena : Control
     // 对抗窗口生命周期（MVC 修复 M-08）
     // 事件路由与窗口实例化逻辑已迁移至 ModalWindowCoordinator，
     // Arena 仅保留：OnDeckReorderedHandler（牌库按序重绘）、RefreshFirstStrikeFlags（先手加成数值刷新）、
-    // PickBattleCardAt（命中测试，经协调器读取当前战斗窗口）、GetAreaNo。
+    // PickStrengthCardAt（命中测试，经协调器读取当前战斗窗口）、GetAreaNo。
 
     /// <summary>OnDeckReordered 处理器：按 ZoneManager 编排后的有序牌库列表，重建对应 DeckZone 的 CardUI 顺序（纯重绘）。</summary>
     private void OnDeckReorderedHandler(int playerId, List<CardInstance> orderedDeck)
@@ -1203,8 +1244,6 @@ public partial class Arena : Control
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
                 bool can = ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
                 ui.SetActivatableHighlight(can);
-                if (inst.IsAttached)
-                    GD.Print($"[ActHL] 附属 {inst.PlayerTemplate?.CardName}({inst.UID}) CurrentZone={inst.CurrentZone} CanActivate={can}");
                 // 【MVC 收口-问题A】仅对“可发动”的卡预计算其合法目标集合，供拖拽控制器只读查询
                 if (can)
                 {
@@ -1424,6 +1463,72 @@ public partial class Arena : Control
                 });
         }
 
+    /// <summary>
+    /// 事务卡（需选目标）拖出后的弹窗选目标入口（复用 JC012 激活弹窗模式）。
+    /// 收集场上合法目标（争夺区角色 + 附属区附属 + 秘社）；完全无合法目标则退回手牌；
+    /// 否则弹窗让玩家选目标，选完回调 PlayCard 入栈。
+    /// 与 BeginAttachmentActivateWithTarget 并列，均属"交互层收集目标 → 弹窗 → Controller 收口"。
+    /// </summary>
+    internal void BeginSorceryTargetSelection(CardInstance sorcery, CardUI cardUI, int playerId, List<CardUI> hand)
+    {
+        if (_cardManager == null || _zoneManager == null || _triggerCoordinator == null) return;
+
+        // 弹窗前预校验费用（与 TurnManager.PlayCard 一致，含时效费用修正），不足则直接退回手牌、不弹选目标窗。
+        int cost = sorcery.PlayerTemplate.Cost
+            - Script.Manager.EffectEngine.Instance.GetCostModification(playerId, sorcery.PlayerTemplate.CardName, sorcery.PlayerTemplate.Organization);
+        if (cost < 0) cost = 0;
+        if (cost > 0 && _playerManager.GetAvailableMana(playerId) < cost)
+        {
+            GD.Print($"❌ 事务卡 {sorcery.PlayerTemplate?.CardName} 费用不足（需{cost}），不弹选目标窗，退回手牌");
+            _actionService.ReturnCardToHand(playerId, sorcery.UID);
+            ArrangeAllCardsInternal();
+            return;
+        }
+
+        var validUids = new System.Collections.Generic.List<string>();
+        // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类）
+        var candidates = new List<CardInstance>(_zoneManager.GetZoneCards(CardZone.AreaZone, 0));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.AttachedZone, 0));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.CouncilZone, 0));
+
+        foreach (var t in candidates)
+        {
+            if (t == null || t == sorcery) continue;
+            if (_cardManager.IsLegalPlayTarget(sorcery, t))
+                validUids.Add(t.UID);
+        }
+
+        // 场上完全无合法目标 → 拒绝打出，退回手牌
+        if (validUids.Count == 0)
+        {
+            GD.Print($"❌ 事务卡 {sorcery.PlayerTemplate?.CardName} 无合法目标，退回手牌");
+            _actionService.ReturnCardToHand(playerId, sorcery.UID);
+            ArrangeAllCardsInternal();
+            return;
+        }
+
+        // 弹窗选目标；选完回调入栈（PlayCard 一次性完成费用支付 + 目标校验 + 入栈）
+        _triggerCoordinator.RequestActivateTargetSelection(
+            sorcery.PlayerTemplate?.CardName ?? "事务",
+            isArea: false,
+            validUids,
+            (uid) =>
+            {
+                bool success = _actionService.PlayCard(playerId, sorcery.UID, null, uid);
+                if (!success)
+                {
+                    _actionService.ReturnCardToHand(playerId, sorcery.UID);
+                    ArrangeAllCardsInternal();
+                    return;
+                }
+                hand.Remove(cardUI);
+                if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
+                cardUI.CanDrag = false;   // 进入堆叠后不可拖拽
+                ArrangeAllCardsInternal();
+                UpdateTurnUIInternal();
+            });
+    }
+
     /// <summary>将地区 UID 转为 1-based 地区序号（供 CombatManager 调用窗口使用）。</summary>
     public int GetAreaNo(string areaUid)
     {
@@ -1434,21 +1539,21 @@ public partial class Arena : Control
 
     /// <summary>命中测试：取出点击位置下的合法战斗承伤目标。
     /// 【MVC 修复 M-04】原先在此内联复现 ControllerId/CurrentZone/ZoneDetailId/IsCovert 四项判据，
-    /// 与 CombatManager.IsLegalBattleTarget 重复且漏掉了 HasDefense（两份规则已实际漂移）；
+    /// 与 CombatManager.IsLegalStrengthTarget 重复且漏掉了 HasDefense（两份规则已实际漂移）；
     /// 现统一委托 Controller 判定，View 只负责几何命中测试。</summary>
-    private CardUI PickBattleCardAt(Vector2 globalPos)
+    private CardUI PickStrengthCardAt(Vector2 globalPos)
     {
         // 【MVC 修复 M-08】当前战斗窗口改由 ModalWindowCoordinator 持有，此处经协调器读取。
-        var battleWindow = _modalCoordinator?.ActiveBattleWindow;
-        if (battleWindow == null) return null;
+        var strengthWindow = _modalCoordinator?.ActiveStrengthWindow;
+        if (strengthWindow == null) return null;
         var combatManager = _initializer?.CombatManager;
         if (combatManager == null) return null;
-        int loser = battleWindow.WinnerPlayer == 1 ? 2 : 1;
-        string areaUid = battleWindow.AreaUid;
+        int loser = strengthWindow.WinnerPlayer == 1 ? 2 : 1;
+        string areaUid = strengthWindow.AreaUid;
         foreach (var card in _areaCardUIs)
         {
             // 合法性判定上收 Controller（单一真相源），此处仅做 UI 层几何命中
-            if (!combatManager.IsLegalBattleTarget(card.Instance, loser, areaUid)) continue;
+            if (!combatManager.IsLegalStrengthTarget(card.Instance, loser, areaUid)) continue;
             if (card.GetVisualGlobalRect().HasPoint(globalPos)) return card;
         }
         return null;
@@ -1551,14 +1656,14 @@ public partial class Arena : Control
 
         // 战斗对抗窗口打开时，路由主战场卡点击分配伤害（左键+1 / 右键-1）
         // 【MVC 修复 M-08】当前战斗窗口改由 ModalWindowCoordinator 持有，此处经协调器读取。
-        if (_modalCoordinator != null && _modalCoordinator.ActiveBattleWindow != null && @event is InputEventMouseButton mb && mb.Pressed)
+        if (_modalCoordinator != null && _modalCoordinator.ActiveStrengthWindow != null && @event is InputEventMouseButton mb && mb.Pressed)
         {
             if (mb.ButtonIndex == MouseButton.Left || mb.ButtonIndex == MouseButton.Right)
             {
                 var card = _cardDragController.PickAreaCardAt(mb.GlobalPosition);
                 if (card != null)
                 {
-                    _modalCoordinator.ActiveBattleWindow.TryAllocate(card, mb.ButtonIndex == MouseButton.Right ? 2 : 1);
+                    _modalCoordinator.ActiveStrengthWindow.TryAllocate(card, mb.ButtonIndex == MouseButton.Right ? 2 : 1);
                     AcceptEvent();
                     return;
                 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -232,8 +232,8 @@ namespace Script.Tests
 
         public void TestJC001_A_静止标记作用域()
         {
-            // JC001-A 静止 CannotBeAttached：静止效果（Scope=ContestZone）仅在争夺区（AreaZone）注册生效。
-            // 构造 JC001 风格卡（静止效果，Scope=ContestZone），验证 RegisterPersistent 的生效区判定。
+            // JC001-A 静止 CannotBeAttached：静止效果（Scope=AreaZone）仅在争夺区（AreaZone）注册生效。
+            // 构造 JC001 风格卡（静止效果，Scope=AreaZone），验证 RegisterPersistent 的生效区判定。
             var tmpl = new PlayerCardData
             {
                 CardName = "JC001_测试卡",
@@ -243,7 +243,7 @@ namespace Script.Tests
             {
                 EffectId = "JC001_A_Test",
                 Timing = EffectTiming.Static,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 StaticEffects = new Godot.Collections.Array<StaticEffect>
                 {
                     new StaticEffect { Kind = StaticKind.CannotBeAttached, Param = "" }
@@ -253,13 +253,13 @@ namespace Script.Tests
             // 争夺区实例：注册后应有 CannotBeAttached
             var inArea = new CardInstance(tmpl, "jc001a");
             inArea.ControllerId = 1; inArea.OwnerId = 1; inArea.CurrentZone = CardZone.AreaZone;
-            EffectEngine.RegisterPersistent(inArea);
+            EffectEngine.Instance.RegisterPersistent(inArea);
             Assert.IsTrue(inArea.HasStaticFlag(StaticKind.CannotBeAttached), "JC001-A 争夺区应获得 CannotBeAttached 静止标记");
 
             // 手牌实例：不在生效区，不应注册（静止仅争夺区）
             var inHand = new CardInstance(tmpl, "jc001h");
             inHand.ControllerId = 1; inHand.OwnerId = 1; inHand.CurrentZone = CardZone.Hand;
-            EffectEngine.RegisterPersistent(inHand);
+            EffectEngine.Instance.RegisterPersistent(inHand);
             Assert.IsFalse(inHand.HasStaticFlag(StaticKind.CannotBeAttached), "JC001-A 手牌不应获得 CannotBeAttached（静止仅争夺区生效）");
         }
 

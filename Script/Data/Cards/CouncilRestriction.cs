@@ -19,8 +19,8 @@ namespace Script.Data.Cards
         [Export] public bool FilterByOrganization { get; set; }
         [Export] public string TargetOrganization { get; set; }
 
-        [Export] public bool FilterByCombat { get; set; }
-        [Export] public int MinCombat { get; set; } = 0;
+        [Export] public bool FilterByStrength { get; set; }
+        [Export] public int MinStrength { get; set; } = 0;
 
         [Export] public bool FilterByInvestigation { get; set; }
         [Export] public int MinInvestigation { get; set; } = 0;
@@ -48,7 +48,7 @@ namespace Script.Data.Cards
                 if (FilterByCategory && !card.CategoryFlag.HasFlag(TargetCategoryFlag)) match = false;
                 if (FilterBySubCategory && !card.SubCategories.Contains(TargetSubCategory)) match = false;
                 if (FilterByOrganization && card.Organization != TargetOrganization) match = false;
-                if (FilterByCombat && card.Combat < MinCombat) match = false;
+                if (FilterByStrength && card.Strength < MinStrength) match = false;
                 if (FilterByInvestigation && card.Investigation < MinInvestigation) match = false;
                 if (FilterByDomain && !card.MagicDomains.Contains(TargetDomain)) match = false;
                 if (match) count++;

@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -71,10 +71,11 @@ namespace Script.Tests
             var src = NewInstance("骑士_src", 1);
             var ability = MakeTemplate().EffectDataList[1];   // 机动：Target.Kind=Area
 
-            // 机动目标为地区：MapInstanceToTargetKind 对 AreaCardData（无 PlayerTemplate）返回 None，
-            // IsLegalActivateTarget 无法验证"地区合法"；改为验证目标大类聚合含 Area（数据层真相源）。
-            var allowed = MakeTemplate().GetAllowedTargets();
-            Assert.IsTrue(allowed.Contains(TargetKind.Area), $"机动目标大类应含 Area，实际={string.Join(",", allowed)}");
+            //【MVC 收口·打出/效果目标分离】机动目标是"触发时"目标，不属"打出时"目标，
+            // 故不再经 GetAllowedTargets()（打出目标方法）间接验证，改为直接断言机动效果自身的目标配置
+            // （数据层真相源）。GetAllowedTargets 现已正确排除 ManeuverTrigger 等非打出时机目标。
+            Assert.AreEqual(TargetKind.Area, ability.Target.Kind, "机动目标大类应为 Area");
+            Assert.IsTrue(ability.Target.NeedsSelection, "机动需要选地区");
 
             // 目标为角色 → 非法（Kind 不匹配：Character ≠ Area）
             var charTarget = new CardInstance(new PlayerCardData { CardName = "某角色", CategoryFlag = CardCategory.Character }, "char_t");
@@ -87,10 +88,10 @@ namespace Script.Tests
         {
             // 注册后"公开"关键字授予仍可被模板固有判定捕获（数据层不依赖运行时持续注册时机）
             var card = NewInstance("骑士_a", 1);
-            EffectEngine.RegisterPersistent(card);
+            EffectEngine.Instance.RegisterPersistent(card);
             var tmpl = card.PlayerTemplate as PlayerCardData;
             Assert.IsTrue(tmpl.HasInherentKeyword("公开"), "注册后模板固有公开判定仍为 true");
-            EffectEngine.UnregisterPersistent(card);
+            EffectEngine.Instance.UnregisterPersistent(card);
         }
     }
 
@@ -175,39 +176,39 @@ namespace Script.Tests
 
         public void TestJC068_T3_效果B未横置封锁对手派遣()
         {
-            EffectEngine.ResetAll();   // 隔离静态封锁状态（避免跨测试污染 _blockDeployCovertPlayers）
+            EffectEngine.Instance.ResetAll();   // 隔离静态封锁状态（避免跨测试污染 _blockDeployCovertPlayers）
             var card = NewAttached("agesi_a", 1);   // 未横置
             // 前提 SelfUntapped 满足 → RegisterPersistent 应封锁对手2
-            EffectEngine.RegisterPersistent(card);
-            Assert.IsTrue(EffectEngine.IsDeployCovertBlocked(2), "未横置时应对手2被封锁（秘密派遣）");
-            Assert.IsFalse(EffectEngine.IsDeployCovertBlocked(1), "己方(1)不应被封锁");
+            EffectEngine.Instance.RegisterPersistent(card);
+            Assert.IsTrue(EffectEngine.Instance.IsDeployCovertBlocked(2), "未横置时应对手2被封锁（秘密派遣）");
+            Assert.IsFalse(EffectEngine.Instance.IsDeployCovertBlocked(1), "己方(1)不应被封锁");
         }
 
         public void TestJC068_T4_横置解除封锁竖置恢复()
         {
-            EffectEngine.ResetAll();   // 隔离静态封锁状态（避免 T3 的 agesi_a 持续封锁玩家2）
+            EffectEngine.Instance.ResetAll();   // 隔离静态封锁状态（避免 T3 的 agesi_a 持续封锁玩家2）
             var card = NewAttached("agesi_b", 1);
-            EffectEngine.RegisterPersistent(card);
-            Assert.IsTrue(EffectEngine.IsDeployCovertBlocked(2), "前置：未横置应封锁对手2");
+            EffectEngine.Instance.RegisterPersistent(card);
+            Assert.IsTrue(EffectEngine.Instance.IsDeployCovertBlocked(2), "前置：未横置应封锁对手2");
 
             // 横置 → 前提 SelfUntapped 丧失 → 解除封锁
             card.SetTapped(true);
-            EffectEngine.ReevaluatePrereqs(1);
-            Assert.IsFalse(EffectEngine.IsDeployCovertBlocked(2), "横置后应解除对手2封锁");
+            EffectEngine.Instance.ReevaluatePrereqs(1);
+            Assert.IsFalse(EffectEngine.Instance.IsDeployCovertBlocked(2), "横置后应解除对手2封锁");
 
             // 竖置 → 前提恢复 → 重新封锁
             card.SetTapped(false);
-            EffectEngine.ReevaluatePrereqs(1);
-            Assert.IsTrue(EffectEngine.IsDeployCovertBlocked(2), "竖置后应恢复对手2封锁");
+            EffectEngine.Instance.ReevaluatePrereqs(1);
+            Assert.IsTrue(EffectEngine.Instance.IsDeployCovertBlocked(2), "竖置后应恢复对手2封锁");
         }
 
         public void TestJC068_T5_未结附不生效()
         {
-            EffectEngine.ResetAll();   // 隔离静态封锁状态（避免前面测试已封锁玩家2导致断言失真）
+            EffectEngine.Instance.ResetAll();   // 隔离静态封锁状态（避免前面测试已封锁玩家2导致断言失真）
             // 阿格斯在 AreaZone（未结附）→ Z1 判定不生效，封锁不注册
             var card = NewAttached("agesi_c", 1, CardZone.AreaZone);
-            EffectEngine.RegisterPersistent(card);
-            Assert.IsFalse(EffectEngine.IsDeployCovertBlocked(2), "未结附（AreaZone）时封锁不应注册");
+            EffectEngine.Instance.RegisterPersistent(card);
+            Assert.IsFalse(EffectEngine.Instance.IsDeployCovertBlocked(2), "未结附（AreaZone）时封锁不应注册");
         }
     }
 }

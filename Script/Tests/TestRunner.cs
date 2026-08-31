@@ -14,6 +14,18 @@ namespace Script.Tests
         protected readonly List<string> _failures = new();
         protected readonly List<string> _passed = new();
 
+        /// <summary>
+        /// 【MVC 收口·测试隔离】每个测试方法运行前，重新实例化 EffectEngine 单例。
+        /// EffectEngine 由 static class 改为实例后，测试环境不再自动持有实例；此处为每个测试
+        /// 提供一个全新实例（8 个对局状态集合随旧实例丢弃），彻底隔离测试间状态污染，
+        /// 替代旧架构下各测试手写 `EffectEngine.Instance.ResetAll()` 的隔离方式。
+        /// </summary>
+        protected void EnsureFreshEffectEngine()
+        {
+            var ee = new Script.Manager.EffectEngine();
+            ee.ResetAll();
+        }
+
         /// <summary>运行所有以 Test 开头的方法（无参，返回 void，内部用 Assert）。</summary>
         public void RunAll()
         {
@@ -23,6 +35,7 @@ namespace Script.Tests
             foreach (var m in methods)
             {
                 if (!m.Name.StartsWith("Test") || m.GetParameters().Length != 0) continue;
+                EnsureFreshEffectEngine();   // 每个测试前重建 EffectEngine 实例，隔离状态
                 try
                 {
                     m.Invoke(this, null);

@@ -55,8 +55,6 @@ public partial class WorldDeckZone : Control
 
         if (_countLabel != null)
             _countLabel.Text = _countCache.ToString();
-
-        GD.Print($"[WorldDeckZone] RefreshDisplay 完成: 显示 {displayCount} 张卡背");
     }
 
     public int Count => _countCache;

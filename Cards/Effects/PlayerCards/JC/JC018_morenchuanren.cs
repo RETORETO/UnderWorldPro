@@ -22,7 +22,7 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC018_A_XinLingHeiDao",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 ContinuousPrereq = "资产区心灵领域忠诚每点+1黑刀",
                 PrereqSpec = new ContinuousPrereqSpec
                 {

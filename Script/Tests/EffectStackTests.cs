@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -58,7 +58,7 @@ namespace Script.Tests
             sm.Clear();
             var card = NewInstance(new CharCard());
             var ability = new EffectData { EffectId = "ACT1", Timing = EffectTiming.CharacterActivated };
-            EffectEngine.PushActivationToStack(sm, card, ability, null);
+            EffectEngine.Instance.PushActivationToStack(sm, card, ability, null);
             Assert.IsFalse(sm.IsEmpty, "激活能力应压入 1 条");
             Assert.AreEqual("ACT1", sm.Top.EffectDataEffect.EffectId);
         }
@@ -89,7 +89,7 @@ namespace Script.Tests
 
             // 激活能力（PushActivationToStack）此前绕过 CaptureTargetSnapshot，是漏记重灾区
             var ability = new EffectData { EffectId = "ACT1", Timing = EffectTiming.CharacterActivated };
-            EffectEngine.PushActivationToStack(sm, src, ability, target);
+            EffectEngine.Instance.PushActivationToStack(sm, src, ability, target);
 
             Assert.IsFalse(sm.IsEmpty, "激活能力应压入 1 条");
             var entry = sm.Top;

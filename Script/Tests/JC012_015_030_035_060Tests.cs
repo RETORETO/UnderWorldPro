@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -143,13 +143,13 @@ namespace Script.Tests
         {
             // 用独立玩家 id 避免污染其他测试
             int pid = 77;
-            EffectEngine.ApplyCostModification(pid, -1, 5, "帷幕守望", consumeOnce: true);
+            EffectEngine.Instance.ApplyCostModification(pid, -1, 5, "帷幕守望", consumeOnce: true);
 
-            Assert.AreEqual(-1, EffectEngine.GetCostModification(pid, "帷幕守望", ""), "匹配卡名应减免 1");
-            Assert.AreEqual(0, EffectEngine.GetCostModification(pid, "其他牌", ""), "非匹配卡不应减免");
+            Assert.AreEqual(-1, EffectEngine.Instance.GetCostModification(pid, "帷幕守望", ""), "匹配卡名应减免 1");
+            Assert.AreEqual(0, EffectEngine.Instance.GetCostModification(pid, "其他牌", ""), "非匹配卡不应减免");
 
-            EffectEngine.ConsumeCostModification(pid, "帷幕守望");
-            Assert.AreEqual(0, EffectEngine.GetCostModification(pid, "帷幕守望", ""), "一次性消费后应归零");
+            EffectEngine.Instance.ConsumeCostModification(pid, "帷幕守望");
+            Assert.AreEqual(0, EffectEngine.Instance.GetCostModification(pid, "帷幕守望", ""), "一次性消费后应归零");
         }
 
         public void TestJC012_T4_激活一无目标()
@@ -331,7 +331,7 @@ namespace Script.Tests
             {
                 EffectId = "JC030_B_CannotBeAttached",
                 Timing = EffectTiming.Static,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 StaticEffects = new Array<StaticEffect> { new StaticEffect { Kind = StaticKind.CannotBeAttached, Param = "" } },
             });
             // JC030-C 条件持续：血忠诚≥2 → 黑眼(调查+1) + 吸血鬼
@@ -339,7 +339,7 @@ namespace Script.Tests
             {
                 EffectId = "JC030_C_BloodEyes",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 ContinuousPrereq = "血领域忠诚≥2",
                 PrereqSpec = new ContinuousPrereqSpec
                 {
@@ -372,9 +372,9 @@ namespace Script.Tests
         {
             var card = NewInstance("蝙蝠_a");
             Assert.IsFalse(card.HasStaticFlag(StaticKind.CannotBeAttached), "注册前不应有静止标记");
-            EffectEngine.RegisterPersistent(card);
+            EffectEngine.Instance.RegisterPersistent(card);
             Assert.IsTrue(card.HasStaticFlag(StaticKind.CannotBeAttached), "注册后应有 CannotBeAttached（争夺区生效）");
-            EffectEngine.UnregisterPersistent(card);
+            EffectEngine.Instance.UnregisterPersistent(card);
             Assert.IsFalse(card.HasStaticFlag(StaticKind.CannotBeAttached), "注销后应清除静止标记");
         }
 
@@ -477,7 +477,7 @@ namespace Script.Tests
             var card = new CardInstance(MakeTemplate(), "jc035_a");
             card.ControllerId = 1;
             // 不实际构造手牌，仅确认条件分支可调用（对手手牌>3 时返回 false）
-            bool met = EffectEngine.EvaluateCondition("OpponentHandLe3", card, null);
+            bool met = EffectEngine.Instance.EvaluateCondition("OpponentHandLe3", card, null);
             // 由于测试环境无 CardManager 实例注入，GetHandCardsByOwner 返回 0（≤3），应为 true
             Assert.IsTrue(met, "对手手牌(0)≤3，OpponentHandLe3 条件应满足");
         }
@@ -492,13 +492,13 @@ namespace Script.Tests
             var attached = new CardInstance(tmpl, "jc035_att");
             attached.ControllerId = 1; attached.OwnerId = 1;
             attached.CurrentZone = CardZone.AttachedZone;
-            Assert.IsTrue(EffectEngine.IsEffectActiveInZone(ability, attached), "附属在 AttachedZone 应生效");
+            Assert.IsTrue(EffectEngine.Instance.IsEffectActiveInZone(ability, attached), "附属在 AttachedZone 应生效");
 
             // 未结附（AreaZone）不生效
             var area = new CardInstance(tmpl, "jc035_area");
             area.ControllerId = 1; area.OwnerId = 1;
             area.CurrentZone = CardZone.AreaZone;
-            Assert.IsFalse(EffectEngine.IsEffectActiveInZone(ability, area), "附属在 AreaZone（未结附）不应生效");
+            Assert.IsFalse(EffectEngine.Instance.IsEffectActiveInZone(ability, area), "附属在 AreaZone（未结附）不应生效");
         }
     }
 
@@ -517,7 +517,7 @@ namespace Script.Tests
             {
                 EffectId = "JC060_Aura",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 IsAura = true,
                 AuraRequiresNoDomain = true,
                 AuraFilterExcludeDomain = MagicDomain.Mind,
@@ -537,8 +537,8 @@ namespace Script.Tests
             var zm = new ZoneManager(); zm.Initialize(cm, null);   // 无牌库管理器
             cm.SetZoneManager(zm);
             // 注入引擎引用（光环 ApplyAura 需 ZoneManagerRef；还原需 CardManagerRef）
-            EffectEngine.ZoneManagerRef = zm;
-            EffectEngine.CardManagerRef = cm;
+            EffectEngine.Instance.ZoneManagerRef = zm;
+            EffectEngine.Instance.CardManagerRef = cm;
 
             // 源卡（JC060 自身，无领域）
             src = new CardInstance(MakeTemplate(), "jc060_src");
@@ -570,13 +570,13 @@ namespace Script.Tests
         {
             搭建光环环境(out var src, out var noDomain, out var hasDomain, out var enemy);
 
-            EffectEngine.RegisterPersistent(src);
+            EffectEngine.Instance.RegisterPersistent(src);
 
             // 无领域本方角色 A：获得心图标、战斗+1、魔法领域 Mind
             Assert.IsTrue(noDomain.HasIcon("心"), "无领域角色应获得【心】图标");
             Assert.AreEqual(1, noDomain.GetAttribute("战斗"), "无领域角色应战斗+1（黑刀）");
             Assert.IsTrue(noDomain.HasMagicDomain(MagicDomain.Mind), "无领域角色应获得心灵领域");
-            Assert.AreEqual(1, noDomain.CurrentCombat, "无领域角色 CurrentCombat 应+1");
+            Assert.AreEqual(1, noDomain.CurrentStrength, "无领域角色 CurrentStrength 应+1");
 
             // 已有领域角色 B：不受影响（不追加心/战斗；其固有心灵领域保持）
             Assert.IsFalse(hasDomain.HasIcon("心"), "已有领域角色不应获得【心】");
@@ -590,10 +590,10 @@ namespace Script.Tests
         public void TestJC060_T2_光环撤销()
         {
             搭建光环环境(out var src, out var noDomain, out var hasDomain, out var enemy);
-            EffectEngine.RegisterPersistent(src);
+            EffectEngine.Instance.RegisterPersistent(src);
             Assert.IsTrue(noDomain.HasIcon("心"), "前置：授予应生效");
 
-            EffectEngine.UnregisterPersistent(src);
+            EffectEngine.Instance.UnregisterPersistent(src);
             Assert.IsFalse(noDomain.HasIcon("心"), "撤销后应移除【心】图标");
             Assert.AreEqual(0, noDomain.GetAttribute("战斗"), "撤销后应还原战斗");
             Assert.IsFalse(noDomain.HasMagicDomain(MagicDomain.Mind), "撤销后应移除运行时授予的心灵领域");
@@ -602,7 +602,7 @@ namespace Script.Tests
         public void TestJC060_T3_源卡自身不授予()
         {
             搭建光环环境(out var src, out var noDomain, out var hasDomain, out var enemy);
-            EffectEngine.RegisterPersistent(src);
+            EffectEngine.Instance.RegisterPersistent(src);
             // 源卡 JC060 自身（无领域）不应被自身光环授予
             Assert.IsFalse(src.HasIcon("心"), "源卡自身不应获得光环授予（ApplyAura 排除源卡）");
             Assert.AreEqual(0, src.GetAttribute("战斗"), "源卡自身不应战斗+1");

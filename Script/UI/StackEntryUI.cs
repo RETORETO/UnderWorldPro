@@ -111,7 +111,7 @@ namespace Script.UI
                 _effectText.Text = entry.EffectText ?? "效果发动";
 
                 // 触发效果：尝试显示来源卡 UI（如银钥探求者的卡图）
-                var sourceTemplate = entry.TriggerInstance?.Source?.PlayerTemplate;
+                var sourceTemplate = entry.StackEffect?.Source?.PlayerTemplate;
                 if (_triggerCardArt != null && sourceTemplate != null && !string.IsNullOrEmpty(sourceTemplate.UID))
                 {
                     string path = ResolveCardImagePath(sourceTemplate.UID);

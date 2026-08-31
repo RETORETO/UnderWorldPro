@@ -60,7 +60,7 @@ namespace Script.UI.Interaction
         public bool TryBeginDragAt(Vector2 globalPos)
         {
             // 战斗对抗窗口打开期间不抢手牌拖拽（由 ModalWindowCoordinator 处理伤害分配点击）
-            if (_draggingHandCard == null && (_modalCoordinator?.ActiveBattleWindow == null))
+            if (_draggingHandCard == null && (_modalCoordinator?.ActiveStrengthWindow == null))
             {
                 CardUI hit = PickHandCardAt(globalPos);
                 if (hit != null && hit.CanDrag)
@@ -143,47 +143,93 @@ namespace Script.UI.Interaction
             }
             else
             {
-                // 命中结算：先判争夺区槽位（结附地区），再判秘社区（结附秘社）。
-                // 此前仅检测 AreaSlots，导致结附秘社卡放下时永远取不到 targetCardUid 而报"未检测到合法目标"。
-                // 地区落点仅当 dragging 卡允许结附地区（GetAllowedTargets 含 Area）时接受；否则不放 targetAreaName，
-                // 避免"只能结附角色的附属"（如 JC020）被拖到地区而错误结附地区（D48）。
-                bool allowsArea = _cardManager != null
-                    && cardUI.Instance?.PlayerTemplate is PlayerCardData pcd
-                    && pcd.GetAllowedTargets().Contains(TargetKind.Area);
-                foreach (var slot in _arena.AreaSlots)
+                //【打出/效果目标分离】角色卡打出落点=己方争夺区（slot 中属于 playerId 的那块），
+                // 与附属/事务卡「选结附/结算目标」是两套独立逻辑，不能共用 GetAllowedTargets 判定。
+                bool isCharacter = cardUI.Instance?.PlayerTemplate is PlayerCardData pcd
+                    && (pcd.CategoryFlag & CardCategory.Character) != 0;
+
+                if (isCharacter)
                 {
-                    var container = slot.GetTargetContainer(mousePos);
-                    if (container != null)
+                    // 角色卡：仅拖到"己方争夺区"有效（playerId==1→Player1Area，playerId==2→Player2Area），
+                    // 拖到敌方争夺区/空白处 targetAreaName 保持空，交由下方校验退回手牌。
+                    foreach (var slot in _arena.AreaSlots)
                     {
-                        if (allowsArea)
+                        var ownArea = playerId == 2 ? slot.Player2Area : slot.Player1Area;
+                        if (ownArea != null && ownArea.GetGlobalRect().HasPoint(mousePos))
                         {
                             targetAreaName = slot.AreaUID;
+                            break;
                         }
-                        break;
                     }
                 }
-
-                if (string.IsNullOrEmpty(targetAreaName))
+                else
                 {
-                    var councilContainer = _arena.GetCouncilContainer(playerId);
-                    if (councilContainer != null && councilContainer.GetGlobalRect().HasPoint(mousePos))
+                    // 附属/事务：命中结算，先判争夺区槽位（结附地区），再判秘社区（结附秘社）。
+                    // 此前仅检测 AreaSlots，导致结附秘社卡放下时永远取不到 targetCardUid 而报"未检测到合法目标"。
+                    // 地区落点仅当 dragging 卡允许结附地区（GetAllowedTargets 含 Area）时接受；否则不放 targetAreaName，
+                    // 避免"只能结附角色的附属"（如 JC020）被拖到地区而错误结附地区（D48）。
+                    bool allowsArea = _cardManager != null
+                        && cardUI.Instance?.PlayerTemplate is PlayerCardData pcd2
+                        && pcd2.GetAllowedTargets().Contains(TargetKind.Area);
+                    foreach (var slot in _arena.AreaSlots)
                     {
-                        var councilInst = _arena.GetCouncilInstance(playerId);
-                        if (councilInst != null && _cardManager != null
-                            && _cardManager.IsLegalPlayTarget(cardUI.Instance, councilInst))
+                        var container = slot.GetTargetContainer(mousePos);
+                        if (container != null)
                         {
-                            targetCardUid = councilInst.UID;
-                            GD.Print($"[DragController.DragEnd] 命中玩家{playerId}秘社区，秘社实例={councilInst.CouncilTemplate?.CardName} 作为结附目标");
+                            if (allowsArea)
+                            {
+                                targetAreaName = slot.AreaUID;
+                            }
+                            break;
                         }
-                        else
+                    }
+
+                    if (string.IsNullOrEmpty(targetAreaName))
+                    {
+                        var councilContainer = _arena.GetCouncilContainer(playerId);
+                        if (councilContainer != null && councilContainer.GetGlobalRect().HasPoint(mousePos))
                         {
-                            GD.Print($"[DragController.DragEnd] 命中秘社区但非合法目标（IsLegalPlayTarget=false 或无秘社实例）");
+                            var councilInst = _arena.GetCouncilInstance(playerId);
+                            if (councilInst != null && _cardManager != null
+                                && _cardManager.IsLegalPlayTarget(cardUI.Instance, councilInst))
+                            {
+                                targetCardUid = councilInst.UID;
+                                GD.Print($"[DragController.DragEnd] 命中玩家{playerId}秘社区，秘社实例={councilInst.CouncilTemplate?.CardName} 作为结附目标");
+                            }
+                            else
+                            {
+                                GD.Print($"[DragController.DragEnd] 命中秘社区但非合法目标（IsLegalPlayTarget=false 或无秘社实例）");
+                            }
                         }
                     }
                 }
             }
 
             bool requiresTarget = instance.PlayerTemplate?.GetRequiresTarget() ?? false;
+            bool isCharacterCard = instance.PlayerTemplate is PlayerCardData pcdC
+                && (pcdC.CategoryFlag & CardCategory.Character) != 0;
+            bool isSorceryCard = instance.PlayerTemplate is PlayerCardData pcdS
+                && (pcdS.CategoryFlag & CardCategory.Sorcery) != 0;
+
+            // 角色卡：必须落在己方争夺区，否则退回手牌（拖到敌方争夺区/空白处均为非法落点）
+            if (isCharacterCard && string.IsNullOrEmpty(targetAreaName))
+            {
+                GD.Print("❌ 角色卡需落在己方争夺区，退回手牌");
+                ClearDragTargetHighlights();
+                ReturnCardToHand(cardUI);
+                return;
+            }
+
+            // 事务卡（需选目标）：不再要求精确落在目标上，改为拖出后弹窗选目标（复用 JC012 激活弹窗模式）。
+            // 若仍拖到了合法目标卡上（targetCardUid 非空），则沿用原有"落点即目标"快速路径。
+            if (isSorceryCard && requiresTarget
+                && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaName))
+            {
+                ClearDragTargetHighlights();
+                _arena.BeginSorceryTargetSelection(instance, cardUI, playerId, hand);
+                return;
+            }
+
             if (requiresTarget && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaName))
             {
                 GD.Print("❌ 该卡需要目标，但未检测到合法目标（场上卡/地区）");
@@ -359,12 +405,17 @@ namespace Script.UI.Interaction
             return _cardManager != null && _cardManager.IsLegalPlayTarget(dragging.Instance, target.Instance);
         }
 
-        /// <summary>按全局坐标命中检测场上卡（争夺区内所有卡，含附属），返回最上层命中卡。</summary>
+        /// <summary>按全局坐标命中检测场上卡（争夺区角色 + 附属区附属），返回最上层命中卡。</summary>
         public CardUI PickAreaCardAt(Vector2 globalPos)
         {
             for (int i = _arena.AreaCardUIs.Count - 1; i >= 0; i--)
             {
                 var c = _arena.AreaCardUIs[i];
+                if (c != null && c.GetVisualGlobalRect().HasPoint(globalPos)) return c;
+            }
+            // 扩展：命中附属卡（AttachedZone），使选目标/激活拖拽能点中附属
+            foreach (var c in _arena.AttachedCardUIs)
+            {
                 if (c != null && c.GetVisualGlobalRect().HasPoint(globalPos)) return c;
             }
             return null;

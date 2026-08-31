@@ -1,3 +1,4 @@
+﻿using Godot;
 using Script.Data.Effects;
 using Script.Enums;
 using Script.Game.Entities;
@@ -22,7 +23,7 @@ namespace Script.Manager
     /// 以上规则可经新增 checker 扩展，调用方不感知。
     ///
     /// 注意：本类只判定"是否仍合法"，不负责"丢失后怎么处置"（进墓地/不结算/部分跳过），
-    /// 那是调用方（TurnManager.ResolveEntryTargetIsLost / EffectEngine.ValidateTargetAtResolve）按 LossMode 决定的事。
+    /// 那是调用方（TurnManager.ResolveEntryTargetIsLost / EffectEngine.Instance.ValidateTargetAtResolve）按 ResolveKind 决定的事。
     ///
     /// 关于"结算前属性变化"（控制者变化/子类别获得失去）：本类不再做方向性过程记忆判定，
     /// 而由 D16 版本号方案在 TurnManager 统一覆盖（见 IsTargetLost 比对 TargetVersionId；BumpVersion 由
@@ -30,6 +31,11 @@ namespace Script.Manager
     /// </summary>
     public static class TargetValidity
     {
+        /// <summary>注入的 PlayerManager 引用（由 GameInitializer 在装配时赋值）。
+        /// 用于"条件式限制"（如 AttachedToCharacterIfNoMind）在取目标阶段评估"资产区是否具【心】"等打出时状态。
+        /// 与 EffectEngine.Instance / TurnManager.Instance 同一注入风格；结算复检阶段这些限制跳过（见 Check）。</summary>
+        public static PlayerManager PlayerManagerRef;
+
         /// <summary>
         /// 入栈时【来源】快照（结算复检的比较基准）。由 TurnManager.CaptureTargetSnapshot 在目标锁定入栈时记录。
         ///
@@ -102,10 +108,29 @@ namespace Script.Manager
             //    来源自身事后被夺控不改变入栈时确定的敌我关系。
             int sourceController = snapshot?.SourceControllerId ?? -1;
             if (sourceController < 0) sourceController = source?.ControllerId ?? -1;
-            if (!CheckRestrictions(desc.Restrictions, desc.Param, target, sourceController))
+            // 结算复检前剔除"仅取目标阶段"的条件式限制（如 AttachedToCharacterIfNoMind）——
+            // 其"【心】"判定只在打出（选目标）时做，结算时不复检（用户规则：结算时【心】是否仍在不影响）。
+            // 其余 Restrictions（Friendly/Enemy/子类别/费用等）照常复检。
+            var resolveRestrictions = ExcludePlayTimeOnlyRestrictions(desc.Restrictions);
+            if (!CheckRestrictions(resolveRestrictions, desc.Param, target, sourceController))
                 return (false, TargetLossReason.Illegal);
 
             return (true, TargetLossReason.None);
+        }
+
+        /// <summary>剔除"仅取目标阶段"类限制（结算复检跳过），返回剩余限制列表。</summary>
+        private static System.Collections.Generic.List<TargetRestriction> ExcludePlayTimeOnlyRestrictions(
+            System.Collections.Generic.IEnumerable<TargetRestriction> restrictions)
+        {
+            var list = new System.Collections.Generic.List<TargetRestriction>();
+            if (restrictions == null) return list;
+            foreach (var r in restrictions)
+            {
+                // 条件式限制（【心】判定）仅在取目标阶段评估，结算复检跳过
+                if (r == TargetRestriction.AttachedToCharacterIfNoMind) continue;
+                list.Add(r);
+            }
+            return list;
         }
 
         /// <summary>
@@ -172,6 +197,24 @@ namespace Script.Manager
                     case TargetRestriction.LocalZone:
                         // 本地区：比较基准随阶段不同，交由调用方判定（结算侧见 Check 规则⑥），此处跳过。
                         break;
+                    case TargetRestriction.AttachedToCharacterIfNoMind:
+                        // 条件式：仅取目标(打出)阶段评估。资产区【无】【心】(心灵领域忠诚≥1) 时，
+                        // 目标须结附于角色（AttachedTo 为角色）；有【心】时放行任意附属。
+                        // 结算复检阶段此限制【跳过】（见 Check 的过滤），故这里不区分阶段、直接按实时【心】判定——
+                        // 因本方法只在取目标阶段被调用（结算侧 Check 会先剔除本限制再进 CheckRestrictions）。
+                        {
+                            bool hasMind = HasMindDomain(sourceController);
+                            if (hasMind) break;  // 有【心】→ 放行
+                            // 无【心】→ 目标必须"结附于角色"：宿主存在、且为玩家卡（PlayerTemplate 非空）、且类别含 Character。
+                            // 秘社宿主 PlayerTemplate 为 null（用 CouncilTemplate），地区附属 AttachedTo 为 null，均应拦截。
+                            var host = t.AttachedTo;
+                            bool attachedToCharacter = host != null
+                                && host.PlayerTemplate != null
+                                && (host.PlayerTemplate.CategoryFlag & CardCategory.Character) != 0;
+                            if (!attachedToCharacter)
+                                return false;
+                        }
+                        break;
                     default:
                         Godot.GD.Print($"[CheckRestrictions] 未实现的 TargetRestriction={res}，暂视为不通过");
                         return false;
@@ -195,13 +238,13 @@ namespace Script.Manager
                     if (target.CurrentZone != CardZone.AreaZone)
                         return (false, TargetLossReason.LeftZone);
                     if (!includeCovert && target.IsCovert)
-                        return (false, TargetLossReason.COVERT);
+                        return (false, TargetLossReason.Covert);
                     return (true, TargetLossReason.None);
 
                 case TargetKind.Covert:
                     // 暗藏者须背面在争夺区（AreaZone 且 IsCovert）；解除暗藏(背面→正面)即丢失
                     if (target.CurrentZone != CardZone.AreaZone || !target.IsCovert)
-                        return (false, TargetLossReason.UNCOVER);
+                        return (false, TargetLossReason.Uncover);
                     return (true, TargetLossReason.None);
 
                 case TargetKind.Attachment:
@@ -255,6 +298,15 @@ namespace Script.Manager
                     // 玩家/无目标：不判区域丢失
                     return (true, TargetLossReason.None);
             }
+        }
+
+        /// <summary>判定某控制者资产区是否具【心】（心灵领域忠诚 ≥ 1）。取目标阶段的条件式限制评估用。</summary>
+        private static bool HasMindDomain(int controllerId)
+        {
+            var pm = PlayerManagerRef;
+            if (pm == null || controllerId < 0) return false;
+            var loyalty = pm.GetDomainLoyalty(controllerId);
+            return loyalty.TryGetValue(MagicDomain.Mind, out int v) && v >= 1;
         }
     }
 }

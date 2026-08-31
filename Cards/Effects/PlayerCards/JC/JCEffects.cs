@@ -12,6 +12,7 @@ namespace Cards.Effects.PlayerCards.JC
             JC001_tonglingmaotouying_Effects.Register();
             JC002_jushizhenkanhuren_Effects.Register();
             JC003_weimuhuwei_Effects.Register();
+            JC005_liejieshu_Effects.Register();
             JC012_weimushouwanghuiji_Effects.Register();
             JC014_gongluqishi_Effects.Register();
             JC015_qumoren_Effects.Register();

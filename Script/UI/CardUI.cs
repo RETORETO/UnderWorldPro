@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Script.Enums;
@@ -242,7 +242,7 @@ namespace Script.UI
             RefreshSubCategoriesLabel();
             RefreshMagicDomainsLabel();
             if (_combatLabel != null)
-                _combatLabel.Text = $"战 {instance.CurrentCombat}";
+                _combatLabel.Text = $"战 {instance.CurrentStrength}";
             if (_powerLabel != null)
                 _powerLabel.Text = $"势 {instance.CurrentPower}";
             if (_defenseLabel != null)
@@ -281,19 +281,7 @@ namespace Script.UI
             }
 
             SetFace(true);
-
-            // 诊断：仅前 3 次 Setup 打印正面/卡图节点状态（排查 DeckBuilder 卡图不显示）
-            if (_diagCount < 3)
-            {
-                _diagCount++;
-                GD.Print($"[CardUI][诊断{_diagCount}] UID={template.UID} " +
-                         $"frontface.Vis={(_frontface?.Visible ?? false)} frontface.Tex={(_frontface?.Texture != null)} " +
-                         $"cardImage.Vis={(_cardImage?.Visible ?? false)} cardImage.Tex={(_cardImage?.Texture != null)} " +
-                         $"backface.Vis={(_backface?.Visible ?? false)}");
-            }
         }
-
-        private static int _diagCount = 0;
 
     public void RefreshStats()
     {
@@ -308,7 +296,7 @@ namespace Script.UI
             int blackEyes = _instance.GetAttribute("调查");
             string blackEyeTag = (blackEyes > 0) ? $" (调查+{blackEyes})" : "";
             if (_investigationLabel != null) _investigationLabel.Text = $"调 {_instance.CurrentInvestigation}{whiteEyeTag}{blackEyeTag}";
-            if (_combatLabel != null) _combatLabel.Text = $"战 {_instance.CurrentCombat}";
+            if (_combatLabel != null) _combatLabel.Text = $"战 {_instance.CurrentStrength}";
             // 子类型随持续效果授予/撤销刷新（如 JC030 在场获得"吸血鬼"）
             RefreshSubCategoriesLabel();
             // 魔法领域随光环授予/撤销刷新（如 JC060 给无领域角色加"心"=心灵领域）
@@ -323,9 +311,8 @@ namespace Script.UI
             if (_costLabel == null || _instance == null || _instance.PlayerTemplate == null) return;
             var tmpl = _instance.PlayerTemplate;
             int mod = 0;
-            try { mod = Script.Manager.EffectEngine.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
+            try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
             catch (System.Exception) { mod = 0; }
-            GD.Print($"[CardUI] RefreshCostReduction {tmpl.CardName} org='{tmpl.Organization}' ctrl={_instance.ControllerId} mod={mod} baseCost={tmpl.Cost}");
             if (tmpl.Cost >= 0)
             {
                 int shown = Mathf.Max(0, tmpl.Cost - mod);

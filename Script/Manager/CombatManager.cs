@@ -32,6 +32,11 @@ public partial class CombatManager : Node
     private PlayerManager _playerManager;
     private ZoneManager _zoneManager;
     private AreaManager _areaManager;
+    //【MVC 收口】触发广播封装层实例（由 Composition Root 装配注入）
+    private TriggerEmitPoints _triggerEmitPoints;
+
+    /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
+    public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
 
     public void Initialize(CardManager cardManager, PlayerManager playerManager,
                            ZoneManager zoneManager, AreaManager areaManager)
@@ -150,18 +155,25 @@ public partial class CombatManager : Node
             return;
         }
 
-        // 调查/战斗对抗：打开交互窗口，窗口关闭后回调
-        // 战斗对抗获胜广播（威名类触发）：在原子操作结算完毕、窗口关闭后（onComplete 由 TurnManager 原子释放后调度）
-        // 广播 CombatWon 事件；胜者玩家写入 TriggeringPlayerId，战斗地区写入 TargetAreaId。
-        // 按 D1 约定：此处不填 SourceCard（由 TriggerRegistry 收集时按"在场威名卡"各自注入 source）。
-        if (type == CombatType.Battle)
+        // 调查/战斗对抗：打开交互窗口，窗口关闭后回调。
+        // 战斗对抗（Strength）获胜广播（威名类触发）：必须在伤害分配窗口关闭后才广播 OnCombatWon，
+        // 否则威名排序窗口会与伤害分配窗口背靠背同时弹出（两个开窗请求均非阻塞），
+        // 且威名效果会提前改变场上状态，导致玩家基于错误状态分配伤害（规则顺序应为"先分配伤害 → 再结算威名"）。
+        // 按 D1 约定：OnCombatWon 不填 SourceCard（由 TriggerRegistry 收集时按"在场威名卡"各自注入 source）。
+        if (type == CombatType.Strength)
         {
-            TriggerEmitPoints.CombatWon(winner, areaUid);
+            OpenCombatWindow(type, areaUid, areaNo, winner, diff, () =>
+            {
+                _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+                onComplete?.Invoke();
+            });
+            return;
         }
         OpenCombatWindow(type, areaUid, areaNo, winner, diff, onComplete);
     }
 
-    public enum CombatType { Investigation, Battle, Power }
+    /// <summary>对抗类型：Investigation=调查对抗、Strength=战斗对抗（以"战力 Strength"比对的对抗）、Power=势力对抗。</summary>
+    public enum CombatType { Investigation, Strength, Power }
 
     /// <summary>计算某地区该对抗类型的胜负与差值。纯计算语义：平局返回 (0, 0)，不含破平决策。
     /// 破平（先手破平特权）由 ResolveAreaCombat 在平局分支中依据规则异步处理。</summary>
@@ -198,16 +210,16 @@ public partial class CombatManager : Node
     private static string TypeName(CombatType type) => type switch
     {
         CombatType.Investigation => "调查对抗",
-        CombatType.Battle => "战斗对抗",
+        CombatType.Strength => "战斗对抗",
         _ => "势力对抗"
     };
 
     // ============================================================
-    // 战斗对抗合法承伤目标判定（规则层，原内嵌于 BattleWindow.TryAllocate）
+    // 战斗对抗合法承伤目标判定（规则层，原内嵌于 StrengthWindow.TryAllocate）
     // 规则（核心需求 6.4-b）：仅"败方在指定地区(AreaZone)内、且拥有防御值"的角色卡可被分配伤害。
     // ============================================================
     /// <summary>校验某卡是否为合法承伤目标（供 View 转发判定，规则本身由 Controller 持有）。</summary>
-    public bool IsLegalBattleTarget(CardInstance inst, int loserPlayer, string areaUid)
+    public bool IsLegalStrengthTarget(CardInstance inst, int loserPlayer, string areaUid)
     {
         if (inst == null) return false;
         if (inst.ControllerId != loserPlayer) return false;
@@ -222,13 +234,13 @@ public partial class CombatManager : Node
     }
 
     /// <summary>获取某地区内败方所有合法承伤目标（供 UI 预检是否有可分配对象）。</summary>
-    public int CountLegalBattleTargets(int winnerPlayer, string areaUid)
+    public int CountLegalStrengthTargets(int winnerPlayer, string areaUid)
     {
         int loser = winnerPlayer == 1 ? 2 : 1;
         if (_zoneManager == null) return 0;
         int count = 0;
         foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
-            if (IsLegalBattleTarget(c, loser, areaUid)) count++;
+            if (IsLegalStrengthTarget(c, loser, areaUid)) count++;
         return count;
     }
 }

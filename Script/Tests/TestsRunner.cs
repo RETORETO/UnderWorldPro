@@ -35,6 +35,17 @@ namespace Script.Tests
                 new JC014Tests(),                 // JC014 公路骑士（持续公开手牌区/机动触发结构与目标）
                 new JC068Tests(),                 // JC068 阿格斯IV（强制准备触发/持续封锁前提/横置解除/未结附不生效）
                 new JC020Tests(),                 // JC020 隐蔽的飞刀（打出结附正面角色/两效果本地区限定/牺牲清结附关系）
+                new JC005Tests(),                 // JC005 裂解术（取目标阶段【心】判定/三种附属靶标/结算复检跳过/事务卡聚合）
+                new NetCSTests(),                  // C/S 化 P0/P1 内核验证（异步输入链路 + 快照序列化往返）
+                new NetP2Tests(),                  // C/S 化 P2 端到端验证（NetworkInputGateway + LoopbackTransport）
+                new NetGodotTests(),               // C/S 化 P3·模块A 真实 ENet 联机回环验证
+                new NetP3CTests(),                 // C/S 化 P3·模块C 意图指令通道（DTO序列化 + 服务端权威校验 + 回环闭环）
+                new NetP3BTests(),                 // C/S 化 P3·模块B 客户端渲染切换（快照差异引擎 + 渲染驱动路由）
+                new NetP3ETests(),                 // C/S 化 P3·模块E 断线重连（可复原PRNG + 随机源Hub + 重连管线）
+                new NetP3DTests(),                 // C/S 化 P3·模块D 渲染事件→网络消息映射（EventToMessageMapper + 序列化）
+                new NetP1Batch1Tests(),            // C/S 化·第一批迁移三方验证（Loopback端到端 / 单机回归 / Enet真实联机）
+                new NetP1Batch1MatchTests(),        // C/S 化·第一批迁移端到端联机（NetworkMatchLauncher 回环 + 客户端投影一致）
+                new NetCrossProcessSimTests(),      // 【临时】伪跨进程 + ResolveInstance 从模板重建验证（跨进程联机核心点，验证后移除）
             };
 
             var redlines = new List<string>();

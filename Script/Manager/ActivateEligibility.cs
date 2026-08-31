@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -110,7 +110,7 @@ namespace Script.Manager
                 if (e.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)) continue;
                 // 方案C：激活效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                 // 显式声明 Scope 的效果按声明（如未来墓地/手牌激活）。不在此区则跳过该效果。
-                if (!EffectEngine.IsEffectActiveInZone(e, card)) continue;
+                if (!EffectEngine.Instance.IsEffectActiveInZone(e, card)) continue;
                 if (e.Cost > mana) continue;
                 // 窗口门禁（D9）：行动类激活仅限【自己行动步骤 + 堆叠为空 + 有行动权】
                 // （先手→ActionFirst，后手→ActionSecond，复用 CanEnterBasicActionMask）。
@@ -203,21 +203,15 @@ namespace Script.Manager
                 return !hasMatchingRule; // 无匹配 rule 时退化为纯大类粗筛（JC012 激活②走此路径）
             }
 
-            // 未配置 TargetRules 时：按大类粗筛（GetAllowedTargets 聚合 EffectDataList 的 Target.Kind）+ 暗藏者 Filter 回退。
-            // 与上方 TargetRules 分支同为受支持的正式路径，二者按卡牌配置择一，无优先/新旧之分。
-            var allowedB = tmpl.GetAllowedTargets();
-            if (allowedB.Count == 0) return false;
+            // 未配置 TargetRules 时：直接以激活能力自身声明的目标规则粗筛，不再依赖 GetAllowedTargets()。
+            // GetAllowedTargets() 是"打出"语义（已把激活/触发能力目标排除），用于激活目标会判空（JC003 角色卡）。
+            var actTargetB = ability.Target;
+            if (actTargetB == null || actTargetB.Kind == TargetKind.None) return false;
             var kindB = CardManager.MapInstanceToTargetKind(target);
-            if (allowedB.Contains(kindB)) return true;
-            // 回退：激活效果的 Target.Filter 显式声明"或暗藏者"时，暗藏者（TargetKind.Covert）亦合法
-            if (ability.Target != null &&
-                !string.IsNullOrEmpty(ability.Target.Filter) &&
-                ability.Target.Filter.Contains("暗藏者") &&
-                kindB == TargetKind.Covert)
-            {
-                return true;
-            }
-            return false;
+            // 大类匹配：目标种类 == 声明种类；或 IncludeCovert 放宽暗藏者（暗藏者被映射为 TargetKind.Covert，
+            // 而非 Character，故声明 Kind=Character 的 JC003 需靠 IncludeCovert 覆盖暗藏者，符合"无视地区"规则）。
+            return (kindB == actTargetB.Kind) ||
+                (actTargetB.IncludeCovert && kindB == TargetKind.Covert);
         }
 
         public static bool HasLegalTarget(CardInstance source, EffectData ability, CardManager cm)

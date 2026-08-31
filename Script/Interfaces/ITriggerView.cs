@@ -15,12 +15,12 @@ namespace Script.Interfaces
     {
         /// <summary>打开触发排序窗口。ownerPlayerId 为排序归属玩家；triggers 为已过滤（含合法目标）的触发实例；
         /// onEnterStack 为入堆叠回调（已排定顺序），onDone 为本组排序完成回调。</summary>
-        void OpenTriggerOrderForPlayer(int ownerPlayerId, System.Collections.Generic.List<Script.Data.Effects.TriggerEffectInstance> triggers, Action<System.Collections.Generic.List<Script.Data.Effects.TriggerEffectInstance>> onEnterStack, Action onDone);
+        void OpenTriggerOrderForPlayer(int ownerPlayerId, System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance> triggers, Action<System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance>> onEnterStack, Action onDone);
 
         /// <summary>请求玩家为触发效果选择合法目标；onPicked(targetUid) 在选完后回调。</summary>
-        void RequestTargetSelection(TriggerEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked);
+        void RequestTargetSelection(StackEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked);
 
         /// <summary>触发实际入栈后调用：从排序窗口的 OrderZone 移除已入栈条目（取目标触发延后到选目标完成后调用）。</summary>
-        void RemoveOrderEntries(List<TriggerEffectInstance> pushed);
+        void RemoveOrderEntries(List<StackEffectInstance> pushed);
     }
 }

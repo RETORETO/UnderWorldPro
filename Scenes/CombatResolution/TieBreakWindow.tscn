@@ -1,13 +1,15 @@
 [gd_scene format=3 uid="uid://ui8nxp1ppwub"]
 
-[ext_resource type="Script" path="res://Script/UI/TieBreakWindow.cs" id="1_tb"]
+[ext_resource type="Script" uid="uid://clbqf84sk7dk7" path="res://Script/UI/TieBreakWindow.cs" id="1_tb"]
 
-[node name="TieBreakWindow" type="Window"]
+[node name="TieBreakWindow" type="Window" unique_id=1065183288]
+oversampling_override = 1.0
 title = "先手破平特权"
+position = Vector2i(0, 36)
 size = Vector2i(460, 240)
 script = ExtResource("1_tb")
 
-[node name="RootControl" type="Control" parent="."]
+[node name="RootControl" type="Control" parent="." unique_id=1515570216]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -16,7 +18,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 1
 
-[node name="TitleLabel" type="Label" parent="RootControl"]
+[node name="TitleLabel" type="Label" parent="RootControl" unique_id=690909348]
 layout_mode = 0
 offset_left = 20.0
 offset_top = 16.0
@@ -24,15 +26,16 @@ offset_right = 440.0
 offset_bottom = 46.0
 text = "⚖ 先手破平特权"
 
-[node name="PromptLabel" type="Label" parent="RootControl"]
+[node name="PromptLabel" type="Label" parent="RootControl" unique_id=30886475]
 layout_mode = 0
 offset_left = 20.0
 offset_top = 56.0
 offset_right = 440.0
 offset_bottom = 140.0
-text = "地区X 对抗打平。\n是否使用先手破平特权？"
+text = "地区X 对抗打平。
+是否使用先手破平特权？"
 
-[node name="CancelButton" type="Button" parent="RootControl"]
+[node name="CancelButton" type="Button" parent="RootControl" unique_id=1139486279]
 layout_mode = 0
 offset_left = 20.0
 offset_top = 168.0
@@ -40,7 +43,7 @@ offset_right = 200.0
 offset_bottom = 208.0
 text = "取消"
 
-[node name="ConfirmButton" type="Button" parent="RootControl"]
+[node name="ConfirmButton" type="Button" parent="RootControl" unique_id=771401234]
 layout_mode = 0
 offset_left = 260.0
 offset_top = 168.0

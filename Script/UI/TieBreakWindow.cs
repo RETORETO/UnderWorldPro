@@ -41,7 +41,7 @@ public partial class TieBreakWindow : Window
         string typeName = type switch
         {
             CombatManager.CombatType.Investigation => "调查",
-            CombatManager.CombatType.Battle => "战斗",
+            CombatManager.CombatType.Strength => "战斗",
             CombatManager.CombatType.Power => "势力",
             _ => "未知"
         };

@@ -17,9 +17,9 @@ namespace Script.UI.Interaction
     /// 本类统一负责：
     /// - 订阅 CombatManager.OnCombatWindowRequired，按类型路由到对应窗口（事件驱动，非 Arena 命令式转发）；
     /// - 调查窗口 / 战斗窗口的实例化、配置、模态锁、关闭回调；
-    /// - 持有当前战斗窗口引用（ActiveBattleWindow），供 Arena 全局输入路由做伤害分配点击转发。
+    /// - 持有当前战斗窗口引用（ActiveStrengthWindow），供 Arena 全局输入路由做伤害分配点击转发。
     ///
-    /// Arena 仅保留：输入路由中读取 ActiveBattleWindow 做点击转发、PickBattleCardAt 命中测试。
+    /// Arena 仅保留：输入路由中读取 ActiveStrengthWindow 做点击转发、PickStrengthCardAt 命中测试。
     /// 依赖方向仍保持：UI → 接口/Manager，协调器引用 CombatManager/CardManager/PlayerActionService 均属 Controller 层，
     /// 未引入 Controller → 具体 View 的反向引用。
     /// </summary>
@@ -27,7 +27,7 @@ namespace Script.UI.Interaction
     {
         // ---- 由 Arena 注入的依赖 ----
         private PackedScene _investigationWindowScene;
-        private PackedScene _battleWindowScene;
+        private PackedScene _strengthWindowScene;
         private PackedScene _tieBreakWindowScene;
         private List<AreaSlot> _areaSlots = new List<AreaSlot>();
         private CombatManager _combatManager;
@@ -38,12 +38,12 @@ namespace Script.UI.Interaction
         private Action<ModalWindow> _unlockModal;
 
         /// <summary>当前打开的战斗窗口（供 Arena 输入路由转发伤害分配点击）。</summary>
-        public BattleWindow ActiveBattleWindow { get; private set; }
+        public StrengthWindow ActiveStrengthWindow { get; private set; }
 
         /// <summary>装配：注入窗口预制体、地区槽位、Controller 引用、命中委托与模态锁委托。</summary>
         public void Configure(
             PackedScene investigationWindowScene,
-            PackedScene battleWindowScene,
+            PackedScene strengthWindowScene,
             PackedScene tieBreakWindowScene,
             List<AreaSlot> areaSlots,
             CombatManager combatManager,
@@ -54,7 +54,7 @@ namespace Script.UI.Interaction
             Action<ModalWindow> unlockModal)
         {
             _investigationWindowScene = investigationWindowScene;
-            _battleWindowScene = battleWindowScene;
+            _strengthWindowScene = strengthWindowScene;
             _tieBreakWindowScene = tieBreakWindowScene;
             _areaSlots = areaSlots ?? new List<AreaSlot>();
             _combatManager = combatManager;
@@ -138,8 +138,8 @@ namespace Script.UI.Interaction
                 case CombatManager.CombatType.Investigation:
                     OpenInvestigationWindow(winnerPlayer, x, areaNo, onResolved);
                     break;
-                case CombatManager.CombatType.Battle:
-                    OpenBattleWindow(winnerPlayer, x, areaNo, onResolved);
+                case CombatManager.CombatType.Strength:
+                    OpenStrengthWindow(winnerPlayer, x, areaNo, onResolved);
                     break;
                 default:
                     GD.PrintErr($"⚠️ [ModalCoordinator] 未知对抗类型 {type}，跳过");
@@ -195,9 +195,9 @@ namespace Script.UI.Interaction
         // ============================================================
 
         /// <summary>打开战斗对抗窗口：败方在指定地区的角色可被点击分配 X 点伤害。</summary>
-        public void OpenBattleWindow(int winnerPlayer, int x, int areaNo, System.Action onResolved = null)
+        public void OpenStrengthWindow(int winnerPlayer, int x, int areaNo, System.Action onResolved = null)
         {
-            if (_battleWindowScene == null) return;
+            if (_strengthWindowScene == null) return;
             if (areaNo < 1 || areaNo > _areaSlots.Count)
             {
                 GD.PrintErr($"❌ 无效地区编号 area{areaNo}（当前共 {_areaSlots.Count} 个）");
@@ -208,7 +208,7 @@ namespace Script.UI.Interaction
 
             // 若该地区内败方没有任何可承伤对象，则不弹窗，伤害直接流失
             // 合法目标判定交由 CombatManager（规则层）
-            if (_combatManager != null && _combatManager.CountLegalBattleTargets(winnerPlayer, areaUid) == 0)
+            if (_combatManager != null && _combatManager.CountLegalStrengthTargets(winnerPlayer, areaUid) == 0)
             {
                 int loser = winnerPlayer == 1 ? 2 : 1;
                 GD.Print($"【ModalCoordinator】地区 area{areaNo} 内玩家P{loser} 无可分配伤害的对象，{x} 点伤害流失，跳过战斗对抗窗口");
@@ -216,31 +216,31 @@ namespace Script.UI.Interaction
                 return;
             }
 
-            var window = _battleWindowScene.Instantiate<BattleWindow>();
+            var window = _strengthWindowScene.Instantiate<StrengthWindow>();
             AddChild(window);
             // 水平居中、顶边位于实际视口垂直中点偏下 150px
             var vpSize = GetViewport().GetVisibleRect().Size;
             window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
             window.Popup();
-            _lockModal?.Invoke(ModalWindow.Battle);
-            window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Battle);
+            _lockModal?.Invoke(ModalWindow.Strength);
+            window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Strength);
             window.Configure(winnerPlayer, x, areaUid, areaNo);
             window.FindCardUI = (inst) => _findCardUIByUID?.Invoke(inst.UID);
             window.CardManager = _cardManager;   // 注入伤害结算入口，避免窗口直接改 Model
             window.CombatManager = _combatManager;   // 注入合法目标判定（规则层）
             window.OnResolved = () =>
             {
-                ActiveBattleWindow = null;
-                _onBattleResolved?.Invoke();
+                ActiveStrengthWindow = null;
+                _onStrengthResolved?.Invoke();
                 onResolved?.Invoke();   // 本区结算完成，通知 CombatManager 推进
             };
-            ActiveBattleWindow = window;
-            window.CloseRequested += () => { ActiveBattleWindow = null; };
+            ActiveStrengthWindow = window;
+            window.CloseRequested += () => { ActiveStrengthWindow = null; };
             GD.Print($"【ModalCoordinator】战斗对抗窗口已打开（胜者P{winnerPlayer}，X={x}，地区 {areaUid}）");
         }
 
         // ---- 战斗结算后的 UI 刷新钩子（由 Arena 注入：刷新伤害显示 + 全局统计）----
-        private Action _onBattleResolved;
-        public void SetBattleResolvedCallback(Action onResolved) => _onBattleResolved = onResolved;
+        private Action _onStrengthResolved;
+        public void SetStrengthResolvedCallback(Action onResolved) => _onStrengthResolved = onResolved;
     }
 }

@@ -27,12 +27,16 @@ namespace Script.Data.Effects
         // 注意：2026-08-11 起，原 ControllerChangedToEnemy/Friendly、SubCategoryGained/Lost 等"结算前变化"类枚举已删除——
         // 其语义（控制者/子类别变化即判丢失）现由 D16 版本号方案统一覆盖：任何控制者/子类别变化都会 BumpVersion ，
         // 结算时比对入栈 TargetVersionId 不一致即判丢失，方向性记忆不再单独维护（无需目标相关总线）。
-        CombatCapable,      // 目标【当前拥有战斗能力】(如具 CombatPower / 可参与战斗)。
-                            // 用途示例："目标带战斗能力的角色"。候选合法性 + 结算前丢失均可复用。
+        CombatCapable,      // 目标【当前拥有战力】(即 Strength 属性，可参与战斗对抗)。
+                            // 用途示例："目标带战力的角色"。候选合法性 + 结算前丢失均可复用。
                             // 【逻辑暂缓未实现】：需在 CardManager.MatchesRule 加此 case，
-                            // 读 CardInstance 的战斗能力字段（参考 CostAtLeast 写法，读 PlayerTemplate/运行时战斗属性），
-                            // 满足"有战斗能力"才通过；结算前若失去战斗能力（版本号方案会判丢失）无需额外处理。
-        // 未来扩展位（按需添加 case）：Tapped, Untapped, HasKeyword, HasAttribute, LoyaltyColor, Domain, CombatPowerAtLeast...
+                            // 读 CardInstance 的战力字段（参考 CostAtLeast 写法，读 PlayerTemplate.Strength/CurrentStrength），
+                            // 满足"有战力"才通过；结算前若失去战力（版本号方案会判丢失）无需额外处理。
+        AttachedToCharacterIfNoMind, // 条件式：资产区【无】【心】(心灵领域忠诚≥1) 时，目标须结附于角色；
+                            // 有【心】时此限制不生效（放行任意附属）。用于 JC005 裂解术：
+                            // "消灭目标结附于角色的附属；若资产区有【心】则改为消灭目标附属"。
+                            // 仅在【取目标(打出)阶段】评估（结算时不复检，见 TargetValidity.Check 规则）。
+        // 未来扩展位（按需添加 case）：Tapped, Untapped, HasKeyword, HasAttribute, LoyaltyColor, Domain, StrengthAtLeast...
     }
 
     /// <summary>
@@ -44,7 +48,6 @@ namespace Script.Data.Effects
     {
         TargetKind Kind { get; }
         bool NeedsSelection { get; }
-        TargetLossMode LossMode { get; }
         /// <summary>精筛条件列表（全部满足才通过）。空=仅按大类。校验链据此推导 IsLocalZone 等静态/位置类判定。</summary>
         Godot.Collections.Array<TargetRestriction> Restrictions { get; }
         /// <summary>条件参数（子类型名/卡名/数值等，配合带参 Restrictions 使用，如 CostAtLeast 的门槛值）。</summary>
@@ -60,7 +63,7 @@ namespace Script.Data.Effects
     /// 一条目标规则（声明式，可在 tres Inspector 直接配置，也可在 cs 里构造）。
     /// 一条规则 = 一个粗筛大类(Kind) + 任意个精筛条件(Restrictions, AND 关系)。
     /// 卡牌的合法目标 = 满足【任一】TargetRule 即可（OR 关系，见 CardManager.IsLegalPlayTarget）。
-    /// 实现 ITargetDesc：玩家卡单目标固定 LossMode=Counter，IsLocalZone 由 Restrictions 推导。
+    /// 实现 ITargetDesc：IsLocalZone 由 Restrictions 推导。
     /// </summary>
     [GlobalClass]
     public partial class TargetRule : Resource, ITargetDesc
@@ -81,7 +84,6 @@ namespace Script.Data.Effects
 
         // ---- ITargetDesc 实现（玩家卡单目标，固定语义）----
         bool ITargetDesc.NeedsSelection => Kind != TargetKind.None;
-        TargetLossMode ITargetDesc.LossMode => TargetLossMode.Counter; // 玩家卡永远单目标：丢失即反击
         bool ITargetDesc.IsLocalZone => Restrictions.Contains(TargetRestriction.LocalZone);
         bool ITargetDesc.IncludeCovert => IncludeCovert;
 

@@ -13,7 +13,7 @@ namespace Script.Tests
             // 关键枚举值存在且可序列化
             Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.Continuous));
             Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.EnterTrigger));
-            Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.SpellCast));
+            Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.OnSorceryCast));
             Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.CharacterActivated));
             Assert.IsTrue(System.Enum.IsDefined(typeof(EffectTiming), EffectTiming.AttachmentActivated));
         }

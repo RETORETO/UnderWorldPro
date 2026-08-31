@@ -186,7 +186,7 @@ public partial class Arena : Control
             TurnManager.TurnPhase.ActionSecond => "后手行动",
             // 对抗阶段按地区逐个进行（地区N 调查→战斗→势力），标注当前地区序号
             TurnManager.TurnPhase.CombatInvestigation => $"地区{_turnManager.CurrentCombatAreaNo} 调查对抗",
-            TurnManager.TurnPhase.CombatBattle => $"地区{_turnManager.CurrentCombatAreaNo} 战斗对抗",
+            TurnManager.TurnPhase.CombatStrength => $"地区{_turnManager.CurrentCombatAreaNo} 战斗对抗",
             TurnManager.TurnPhase.CombatPower => $"地区{_turnManager.CurrentCombatAreaNo} 势力对抗",
             TurnManager.TurnPhase.EndCleanup => "结束",
             TurnManager.TurnPhase.EndRecover => "恢复",

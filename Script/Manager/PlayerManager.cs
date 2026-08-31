@@ -47,10 +47,26 @@ public partial class PlayerManager : Node
     public PlayerData Player1 { get; private set; }
     public PlayerData Player2 { get; private set; }
 
-    public override void _Ready()
+    /// <summary>
+    /// 初始化玩家数据。抽成独立方法以便构造函数与 _Ready 复用：
+    /// 测试中直接 new PlayerManager() 不经 Godot 场景树（_Ready 不触发），
+    /// 故构造函数中预建 Player1/Player2，避免 StartGame→SetFirstPlayer 访问到 null。
+    /// _Ready 中再调一次保持幂等（场景树晚绑定覆盖）。
+    /// </summary>
+    private void InitPlayers()
     {
         Player1 = new PlayerData { PlayerId = 1, Name = "玩家1" };
         Player2 = new PlayerData { PlayerId = 2, Name = "玩家2" };
+    }
+
+    public PlayerManager()
+    {
+        InitPlayers();
+    }
+
+    public override void _Ready()
+    {
+        InitPlayers();
         GD.Print("✅ PlayerManager 初始化完成");
     }
 
@@ -331,5 +347,24 @@ public partial class PlayerManager : Node
 
     /// <summary>注入 StackManager 引用，供 TriggerGameOver 丢弃未结算效果（避免硬依赖构造顺序）</summary>
     public void SetStackManager(StackManager stackManager) => _stackManager = stackManager;
+
+    // ============================================================
+    // C/S 化·第二批：客户端投影恢复（仅联网重连/投影重建调用，对单机零影响）
+    // AvailableMana 为派生值（由 ZoneManager 资产区实时计算），客户端重建资产区后自动正确，无需写回；
+    // 这里只恢复无法派生的状态：先手标志、游戏是否结束、基础行动次数。
+    // ============================================================
+    /// <summary>从服务端玩家快照恢复客户端投影的玩家运行时状态（不触发 OnGameOver 事件，纯数据覆盖）。
+    /// 注意：先手标志不在此恢复——它由 TurnManager.FirstPlayerId 派生，launcher 会在恢复 TurnManager 后
+    /// 调用 SetFirstPlayer(firstPlayerId) 统一设置，避免此处读取不可靠的快照字段。</summary>
+    public void ApplySnapshot(System.Collections.Generic.List<Script.Net.PlayerSnapshot> players)
+    {
+        if (players == null) return;
+        foreach (var p in players)
+        {
+            var data = GetPlayer(p.PlayerId);
+            if (data == null) continue;
+            if (p.IsGameOver) _isGameOver = true;
+        }
+    }
 }
 

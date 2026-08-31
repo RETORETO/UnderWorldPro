@@ -20,7 +20,7 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC060_Aura",
                 Timing = EffectTiming.Continuous,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 IsAura = true,
                 ContinuousEffect = "所有未印刷魔法领域图标的本方角色获得【心】图标与［黑刀］(+1战斗)",
                 AuraRequiresNoDomain = true,

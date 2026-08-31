@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Godot.Collections;
 using Script.Enums;
 
@@ -22,8 +22,8 @@ namespace Script.Data.Effects
         /// <summary>
         /// 机动（Maneuver）：对抗阶段开始时（ManeuverTrigger），选择另一地区并将角色移动过去。
         /// 对应卡文："机动（在对抗阶段开始时，你可以将该角色移动至另一个地区。）"
-        /// 由 TurnManager 在对抗前 Emit(PreCombat) → TriggerRegistry 收为 ManeuverTrigger，
-        /// 引擎推导目标地区（IsAreaTarget），由 EffectEngine.ExecuteVerb 的 Move 执行机动移动。
+        /// 由 TurnManager 在对抗前 Emit(ManeuverTrigger) → TriggerRegistry 收为 ManeuverTrigger，
+        /// 引擎推导目标地区（IsAreaTarget），由 EffectEngine.Instance.ExecuteVerb 的 Move 执行机动移动。
         /// </summary>
         /// <param name="forced">是否强制（默认 false，玩家可选）。</param>
         public static EffectData Maneuver(bool forced = false)
@@ -42,7 +42,9 @@ namespace Script.Data.Effects
                     new EffectAction { Verb = ActionVerb.Move }
                 },
                 Duration = "瞬时",
-                FaqNote = "玩家可选"
+                FaqNote = "玩家可选",
+                // 结算前校验来源卡版本号未变：离场/翻面/进手牌/进墓地则跳过结算（争夺区→争夺区移动不影响）。
+                RequireSourceVersionUnchanged = true
             };
         }
 
@@ -80,7 +82,7 @@ namespace Script.Data.Effects
             return new EffectData
             {
                 Timing = EffectTiming.Static,
-                Scope = ZoneScope.ContestZone,
+                Scope = ZoneScope.AreaZone,
                 Duration = "常驻",
                 StaticEffects = new Array<StaticEffect>
                 {
@@ -93,13 +95,13 @@ namespace Script.Data.Effects
         /// 袭击（Strike）：现身触发（UncoverTrigger）关键词——角色从暗藏者状态现身进场并进场成功后触发，
         /// 对【同一 AREASLOT 内】的某一角色造成 amount 点伤害。
         /// 对应卡文："袭击N（现身进场成功后，对同一地区的目标角色造成 N 点伤害）"。
-        /// 触发链路：CardManager.RevealCard → TriggerEmitPoints.Uncover → 引擎收该卡 UncoverTrigger 效果
+        /// 触发链路：CardManager.RevealCard → TriggerEmitPoints.UncoverTrigger → 引擎收该卡 UncoverTrigger 效果
         ///           → 入堆叠 → 双方让过 → ResolveEffect，执行 DealDamage。
         /// 目标约束（由引擎自动保证，无需在工厂里手写过滤）：
         ///  - 仅同 AREASLOT：GetLocalZoneTargets 取来源卡所在 SLOT 下全部争夺区，天然限定"同一地区"；
         ///  - 仅角色、排除暗藏者与附属：TargetKind.Character 映射时过滤掉 Covert（暗藏者）与 Attachment（附属）。
         /// 现身触发自身限制（D40）保证只收集"巨型蝙蝠自身"的现身效果，不波及他人。
-        /// 注意：DealDamage 执行器已在 EffectEngine.ExecuteVerb 落地（EffectEngine.cs:276）。
+        /// 注意：DealDamage 执行器已在 EffectEngine.Instance.ExecuteVerb 落地（EffectEngine.Instance.cs:276）。
         /// </summary>
         /// <param name="amount">伤害点数（默认 1，即"袭击1"）。</param>
         public static EffectData Strike(int amount = 1)
@@ -126,10 +128,10 @@ namespace Script.Data.Effects
         }
 
         /// <summary>
-        /// 威名（WeiMing）：战斗对抗获胜触发关键词——当本卡控制者赢得一场战斗对抗（Battle 类型）后，
+        /// 威名（WeiMing）：战斗对抗获胜触发关键词——当本卡控制者赢得一场战斗对抗（Strength 类型）后，
         /// 在【本地区】（威名卡当前所在地区，= source.ZoneDetailId）放置一个本方势力标志。
         /// 对应卡文："威名（当你在一场战斗中获胜时，在该地区放置一个势力标记。）"
-        /// 触发链路：CombatManager.ResolveWinner（战斗类型）→ TriggerEmitPoints.CombatWon 广播
+        /// 触发链路：CombatManager.ResolveWinner（战斗类型）→ TriggerEmitPoints.OnCombatWon 广播
         ///           → TriggerRegistry 收为 OnCombatWon（按"在场威名卡"各自注入 source）
         ///           → 条件 WinnerIsSelfInSameArea 判定：
         ///                 ① 本卡控制者 == 战斗获胜方（WinnerIsSelf）；

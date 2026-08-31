@@ -34,7 +34,7 @@ public partial class CardTest : Node
         GD.Print($"  类别标志: {cardData.CategoryFlag}");
         GD.Print($"  防御: {(cardData.Defense >= 0 ? cardData.Defense.ToString() : "无防御")}");
         GD.Print($"  调查: {cardData.Investigation}, 先手调查: {cardData.FirstStrikeInvestigation}");
-        GD.Print($"  战斗: {cardData.Combat}, 先手战斗: {cardData.FirstStrikeCombat}");
+        GD.Print($"  战斗: {cardData.Strength}, 先手战斗: {cardData.FirstStrikeStrength}");
         GD.Print($"  势力: {cardData.Power}, 先手势力: {cardData.FirstStrikePower}");
 
         // ==================== 第三步：忠诚需求验证 ====================
@@ -65,11 +65,11 @@ public partial class CardTest : Node
 
         // 测试先手
         instance.ResetToBaseValues(isFirstPlayer: true);
-        GD.Print($"  先手状态：调查={instance.CurrentInvestigation}, 战斗={instance.CurrentCombat}, 势力={instance.CurrentPower}, 防御={instance.CurrentDefense}");
+        GD.Print($"  先手状态：调查={instance.CurrentInvestigation}, 战斗={instance.CurrentStrength}, 势力={instance.CurrentPower}, 防御={instance.CurrentDefense}");
 
         // 测试后手
         instance.ResetToBaseValues(isFirstPlayer: false);
-        GD.Print($"  后手状态：调查={instance.CurrentInvestigation}, 战斗={instance.CurrentCombat}, 势力={instance.CurrentPower}, 防御={instance.CurrentDefense}");
+        GD.Print($"  后手状态：调查={instance.CurrentInvestigation}, 战斗={instance.CurrentStrength}, 势力={instance.CurrentPower}, 防御={instance.CurrentDefense}");
 
         // ==================== 第五步：伤害与死亡逻辑 ====================
         GD.Print("【步骤5】测试伤害与死亡判定 ...");

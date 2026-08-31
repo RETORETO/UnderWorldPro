@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -23,7 +23,7 @@ namespace Script.Tests
                     {
                         EffectId = name + "_C",
                         Timing = EffectTiming.Continuous,
-                        Scope = ZoneScope.ContestZone, // 角色卡在争夺区生效（方案C：Continuous 也按 Scope 判定）
+                        Scope = ZoneScope.AreaZone, // 角色卡在争夺区生效（方案C：Continuous 也按 Scope 判定）
                         ContinuousPrereq = "常驻",
                         ContinuousGrants = new Array<EffectGrant>
                         {
@@ -48,19 +48,19 @@ namespace Script.Tests
         {
             var card = NewInstance(new GrantCard("JC001", "先手调查"), "inst_a");
             Assert.IsFalse(card.HasKeyword("先手调查"), "注册前不应有关键字");
-            EffectEngine.RegisterContinuous(card);
+            EffectEngine.Instance.RegisterContinuous(card);
             Assert.IsTrue(card.HasKeyword("先手调查"), "注册后应获关键字");
-            Assert.IsTrue(EffectEngine.HasContinuous(card), "HasContinuous 应为 true");
+            Assert.IsTrue(EffectEngine.Instance.HasContinuous(card), "HasContinuous 应为 true");
         }
 
         public void TestUnregisterRevokesKeyword()
         {
             var card = NewInstance(new GrantCard("JC001", "先手调查"), "inst_b");
-            EffectEngine.RegisterContinuous(card);
+            EffectEngine.Instance.RegisterContinuous(card);
             Assert.IsTrue(card.HasKeyword("先手调查"));
-            EffectEngine.UnregisterContinuous(card);
+            EffectEngine.Instance.UnregisterContinuous(card);
             Assert.IsFalse(card.HasKeyword("先手调查"), "注销后应还原关键字");
-            Assert.IsFalse(EffectEngine.HasContinuous(card), "HasContinuous 应为 false");
+            Assert.IsFalse(EffectEngine.Instance.HasContinuous(card), "HasContinuous 应为 false");
         }
 
         public void TestSameKeywordMultiSource()
@@ -68,25 +68,27 @@ namespace Script.Tests
             // 两个来源授予同一关键字，应精确计数
             var c1 = NewInstance(new GrantCard("A", "公开"), "m1");
             var c2 = NewInstance(new GrantCard("B", "公开"), "m2");
-            EffectEngine.RegisterContinuous(c1);
-            EffectEngine.RegisterContinuous(c2);
+            EffectEngine.Instance.RegisterContinuous(c1);
+            EffectEngine.Instance.RegisterContinuous(c2);
             Assert.IsTrue(c1.HasKeyword("公开"));
-            EffectEngine.UnregisterContinuous(c1);   // 仅注销一个来源
+            EffectEngine.Instance.UnregisterContinuous(c1);   // 仅注销一个来源
             Assert.IsTrue(c2.HasKeyword("公开"), "另一来源仍应保有该关键字");
-            EffectEngine.UnregisterContinuous(c2);
+            EffectEngine.Instance.UnregisterContinuous(c2);
             Assert.IsFalse(c2.HasKeyword("公开"), "全部注销后还原");
         }
 
         /// <summary>持续效果系统红线（D19 部分已打通后的剩余缺口）。
         /// 已打通：条件持续前提（PrereqSpec + ReevaluatePrereqs）、静止/禁止标记（CannotBeAttached）、
-        /// 白眼=先手调查接入 AreaStatsCalculator。剩余：ZoneScope 仅 Static 按 ContestZone 生效、
-        /// 持续效果自身的区域联动（如手牌区数值类）仍有限、UI 图标展示未接。</summary>
+        /// 白眼=先手调查接入 AreaStatsCalculator、影响他者光环（JC060，2026-08-09 打通且 UI 收口）、
+        /// 停止类全局封锁（JC068 阿格斯IV）、持续授予属性/图标 UI 展示（ReevaluateAuras + OnVisualDirty 收口）。
+        /// 剩余：ZoneScope 仅 Static 按 AreaZone 生效、持续效果自身的区域联动（如手牌区数值类）仍有限、
+        /// 替代效果(Replacement)缺失、封印态/地区机动未单独触发重判。</summary>
         public void TestRedlines()
         {
             var redline = new List<string>();
-            Assert.KnownRedline(true, redline, "ZoneScope 仅 Static 按 ContestZone 校验生效；持续效果(Continuous)仍不按 Scope 联动区域");
-            Assert.KnownRedline(true, redline, "持续授予的属性/图标尚未接 UI 展示，仅数据层与对抗计算生效");
-            Assert.KnownRedline(true, redline, "影响他者的光环/静止类（不能被锁定等）尚未实现，仅 CannotBeAttached 单例打通");
+            Assert.KnownRedline(true, redline, "ZoneScope 仅 Static 按 AreaZone 校验生效；持续效果(Continuous)仍不按 Scope 联动区域");
+            Assert.KnownRedline(true, redline, "替代效果(Replacement)缺失，仅 Cancelled 取消类可用");
+            Assert.KnownRedline(true, redline, "ReevaluatePrereqs 仅资产/控制权变动触发，封印态/地区机动变动未单独重判");
         }
     }
 }

@@ -12,15 +12,15 @@ namespace Script.Data.Effects
         OnCardPlayed,
 
         /// <summary>对抗前优先权窗口（机动触发）。映射到 EffectTiming.ManeuverTrigger。</summary>
-        PreCombat,
+        ManeuverTrigger,
 
         // ===== 以下为后续可扩展时机（总线已就绪，待对应业务点 Emit 即可接入） =====
 
         /// <summary>卡牌进入争夺区/场上。映射到 EffectTiming.EnterTrigger。</summary>
-        EnterPlay,
+        EnterTrigger,
 
         /// <summary>卡牌现身（暗藏→公开）。映射到 EffectTiming.UncoverTrigger。</summary>
-        Uncover,
+        UncoverTrigger,
 
         /// <summary>卡牌死亡/离场。后续可新增 EffectTiming.OnCardDied 并映射。</summary>
         OnCardDied,
@@ -71,10 +71,10 @@ namespace Script.Data.Effects
         OnCardLeft,
 
         /// <summary>战斗对抗获胜事件发生。映射到 EffectTiming.OnCombatWon。
-        /// 触发语义：CombatManager.ResolveWinner 结算战斗(Battle 类型)对抗分出胜者后广播，
+        /// 触发语义：CombatManager.ResolveWinner 结算战斗(Strength 类型)对抗分出胜者后广播，
         /// 供威名类效果（战斗对抗获胜触发）响应。ctx.TriggeringPlayerId=胜者玩家Id，ctx.TargetAreaId=战斗地区UID。
-        /// 【后续拓展·B 预留】调查对抗获胜 → InvestigationWon；势力对抗(Power)获胜 → FactionWon；
+        /// 【后续拓展·B 预留】调查对抗获胜 → OnInvestigationWon；势力对抗(Power)获胜 → OnPowerWon；
         /// 同样携带 TriggeringPlayerId(胜者)+TargetAreaId(地区)，复用 WinnerIsSelf 条件链路。</summary>
-        CombatWon,
+        OnCombatWon,
     }
 }

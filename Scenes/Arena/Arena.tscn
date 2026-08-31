@@ -5,6 +5,7 @@
 [ext_resource type="Script" uid="uid://bvdfchlwxfovv" path="res://Script/UI/GraveyardZone.cs" id="3_rremj"]
 [ext_resource type="Script" uid="uid://bfgeuvespoao7" path="res://Script/UI/WorldDeckZone.cs" id="4_odh8s"]
 [ext_resource type="Script" uid="uid://dgr1br6sy02w6" path="res://Script/Manager/GameInitializer.cs" id="5_init"]
+[ext_resource type="Script" uid="uid://6xpx7r0oyog7" path="res://Script/Net/Godot/NetMatchDemo.cs" id="6_ner4r"]
 
 [node name="Arena" type="Control" unique_id=343814793 node_paths=PackedStringArray("_scoreZone", "_deckZone", "_graveyardZone")]
 layout_mode = 3
@@ -285,7 +286,6 @@ offset_bottom = 40.0
 grow_horizontal = 2
 
 [node name="CardContainer" type="Control" parent="Player2Area/DeckZone" unique_id=1320850009]
-z_index = 600
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -315,7 +315,6 @@ offset_bottom = 40.0
 grow_horizontal = 2
 
 [node name="CardContainer" type="Control" parent="Player2Area/GraveyardZone" unique_id=627346527]
-z_index = 600
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -434,3 +433,8 @@ mouse_filter = 2
 
 [node name="GameInitializer" type="Node" parent="." unique_id=200001004]
 script = ExtResource("5_init")
+
+[node name="NetMatchDemo" type="Node" parent="." unique_id=1657805648]
+script = ExtResource("6_ner4r")
+AutoRun = false
+metadata/_custom_type_script = "uid://6xpx7r0oyog7"

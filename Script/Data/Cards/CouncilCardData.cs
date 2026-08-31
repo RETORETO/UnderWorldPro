@@ -7,8 +7,8 @@ using Script.Enums;
 namespace Script.Data.Cards
 {
     /// <summary>
-    /// 议会卡牌数据（CouncilCardData）
-    /// 代表一种特殊的“议会”卡牌，用于定义套牌构筑限制、起始手牌数等。
+    /// 秘社卡牌数据（CouncilCardData）
+    /// 代表一种特殊的“秘社”卡牌，用于定义套牌构筑限制、起始手牌数等。
     /// 继承自基础卡牌数据（BaseCardData）。
     /// </summary>
         [GlobalClass]
@@ -20,7 +20,7 @@ namespace Script.Data.Cards
             /// <summary>套牌构筑限制列表（Restrictions）—— 每个限制定义了套牌必须满足的条件（构筑限制暂缓，方法保留）</summary>
             [Export] public Array<CouncilRestriction> Restrictions { get; set; } = new Array<CouncilRestriction>();
 
-            /// <summary>效果列表（Effects）—— 议会卡牌自身产生的效果ID或描述（牌面文本备用）</summary>
+            /// <summary>效果列表（Effects）—— 秘社卡牌自身产生的效果ID或描述（牌面文本备用）</summary>
             [Export] public Array<string> Effects { get; set; } = new Array<string>();
 
             // ==================== 展示元数据（参考 AreaCardData / PlayerCardData，从卡牌 XML 解析填入） ====================

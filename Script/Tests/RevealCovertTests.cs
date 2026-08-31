@@ -20,7 +20,7 @@ namespace Script.Tests
     ///   → 忠诚/费用校验（按控制者 ControllerId）
     ///   → 进堆叠即翻面（IsCovert=false），Model 层卡移入 Stack 区
     ///   → 构造 AmbushReveal 结算条目，箭头 Targets 指向原暗藏地区
-    ///   → 结算（ResolveStackTop）→ 卡回争夺区（MoveToArea 自动触发 EnterPlay）+ 广播 Uncover
+    ///   → 结算（ResolveStackTop）→ 卡回争夺区（MoveToArea 自动触发 EnterTrigger）+ 广播 UncoverTrigger
     ///
     /// 覆盖：门禁拒绝（无行动权）、非暗藏者拒绝、费用不足拒绝、成功现身全流程。
     /// </summary>
@@ -57,14 +57,21 @@ namespace Script.Tests
             _tm.SetAreaManager(_地区管理器);
             _tm.SetTriggerView(new 空视图());
 
-            // 捕获 EnterPlay / Uncover 广播（覆盖 Initialize 注入的 HandleEvent，本测试卡无触发效果，不影响）
+            //【MVC 收口】触发系统三实例（原 static class → 实例）：测试自行装配，注入各 Manager，
+            // 并覆盖总线 Dispatch 捕获 EnterTrigger/UncoverTrigger 广播（本测试卡无触发效果，不影响）。
             _enterPlayCount = 0;
             _uncoverCount = 0;
-            GameEventBus.Dispatch = (evt, ctx) =>
+            var eventBus = new Script.Manager.GameEventBus();
+            var emitPoints = new Script.Manager.TriggerEmitPoints(eventBus);
+            var registry = new Script.Manager.TriggerRegistry(eventBus);
+            _tm.SetTriggerSystem(registry, emitPoints, eventBus);
+            _zm.SetTriggerEmitPoints(emitPoints);
+            _cm.SetTriggerEmitPoints(emitPoints);
+            eventBus.SetDispatch((evt, ctx) =>
             {
-                if (evt == GameEvent.EnterPlay) _enterPlayCount++;
-                if (evt == GameEvent.Uncover) _uncoverCount++;
-            };
+                if (evt == GameEvent.EnterTrigger) _enterPlayCount++;
+                if (evt == GameEvent.UncoverTrigger) _uncoverCount++;
+            });
 
             // 默认行动权归玩家1（先手），满足现身门禁
             设优先权(1);
@@ -81,12 +88,12 @@ namespace Script.Tests
         /// <summary>空视图：不弹任何窗口（现身无目标选择/排序窗口需求）</summary>
         private class 空视图 : ITriggerView
         {
-            public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<TriggerEffectInstance> triggers,
-                Action<List<TriggerEffectInstance>> onEnterStack, Action onDone)
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<StackEffectInstance> triggers,
+                Action<List<StackEffectInstance>> onEnterStack, Action onDone)
                 => onDone?.Invoke();
-            public void RequestTargetSelection(TriggerEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
+            public void RequestTargetSelection(StackEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
                 => onPicked?.Invoke("");
-            public void RemoveOrderEntries(List<TriggerEffectInstance> pushed) { }
+            public void RemoveOrderEntries(List<StackEffectInstance> pushed) { }
         }
 
         /// <summary>构造一张暗藏者卡：IsCovert=true，置于指定争夺区，控制者=拥有者。</summary>
@@ -128,7 +135,7 @@ namespace Script.Tests
             var 条目 = _sm.Entries[0];
             Assert.AreEqual(ResolveKind.AmbushReveal, 条目.Kind, "条目 Kind 应为 AmbushReveal");
             Assert.AreEqual(地区A, 条目.TargetAreaId, "TargetAreaId 应为原暗藏地区");
-            Assert.IsTrue(条目.Targets.Exists(t => t.Kind == StackTargetRef.TargetKind.Area && t.AreaUid == 地区A),
+            Assert.IsTrue(条目.Targets.Exists(t => t.Kind == StackTargetRef.RefKind.Area && t.AreaUid == 地区A),
                 "条目箭头 Targets 应指向原暗藏地区 areaA");
             Assert.AreEqual(卡.UID, 条目.SourceCardUid, "SourceCard 应为该暗藏者");
 
@@ -136,7 +143,7 @@ namespace Script.Tests
             Assert.IsFalse(卡.IsCovert, "进堆叠瞬间应已翻面（IsCovert=false）");
             Assert.AreEqual(CardZone.Stack, 卡.CurrentZone, "进堆叠期间 Model 层卡应处于 Stack 区（离开争夺区）");
 
-            // 结算：回地区 + EnterPlay + Uncover
+            // 结算：回地区 + EnterTrigger + UncoverTrigger
             int beforeEnter = _enterPlayCount;
             int beforeUncover = _uncoverCount;
             结算堆叠顶();
@@ -144,8 +151,8 @@ namespace Script.Tests
             Assert.AreEqual(CardZone.AreaZone, 卡.CurrentZone, "结算后卡应回到争夺区");
             Assert.AreEqual(地区A, 卡.ZoneDetailId, "结算后卡应回到原暗藏地区");
             Assert.IsFalse(卡.IsCovert, "结算后应保持正面");
-            Assert.IsTrue(_enterPlayCount > beforeEnter, "回地区应触发进场触发（EnterPlay 广播）");
-            Assert.IsTrue(_uncoverCount > beforeUncover, "现身应广播 Uncover 信号");
+            Assert.IsTrue(_enterPlayCount > beforeEnter, "回地区应触发进场触发（EnterTrigger 广播）");
+            Assert.IsTrue(_uncoverCount > beforeUncover, "现身应广播 UncoverTrigger 信号");
         }
 
         // —— 用例2：无行动权拒绝 ——

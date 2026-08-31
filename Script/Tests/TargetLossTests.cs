@@ -47,7 +47,7 @@ namespace Script.Tests
             var tgt = NewInstance("t1", CardZone.AreaZone, isCovert: true);
             var desc = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true };
             var (valid, reason) = TargetValidity.Check(src, tgt, desc);
-            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.COVERT, reason);
+            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.Covert, reason);
         }
 
         public void TestCharacterLostWhenLeftArea()
@@ -75,7 +75,7 @@ namespace Script.Tests
             var tgt = NewInstance("t1", CardZone.AreaZone, isCovert: false);
             var desc = new TargetSpec { Kind = TargetKind.Covert, NeedsSelection = true };
             var (valid, reason) = TargetValidity.Check(src, tgt, desc);
-            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.UNCOVER, reason);
+            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.Uncover, reason);
         }
 
         public void TestCovertValidWhenCovertInArea()
@@ -312,7 +312,7 @@ namespace Script.Tests
             var tgt = NewInstance("t1", CardZone.AreaZone, isCovert: true);
             var rule = TargetRule.Make(TargetKind.Character);
             var (valid, reason) = TargetValidity.Check(src, tgt, rule);
-            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.COVERT, reason);
+            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.Covert, reason);
         }
 
         // ---------- 反应触发（Trigger）承载 EffectData 的目标丢失（对应 JC003 场景） ----------
@@ -324,7 +324,7 @@ namespace Script.Tests
             var tgt = NewInstance("t1", CardZone.AreaZone, isCovert: true);   // 角色翻面成暗藏
             var desc = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true }; // 模拟 EffectData.Target
             var (valid, reason) = TargetValidity.Check(src, tgt, desc);
-            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.COVERT, reason);
+            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.Covert, reason);
         }
 
         public void TestTriggerEffectTargetLostWhenUncover()
@@ -333,7 +333,7 @@ namespace Script.Tests
             var tgt = NewInstance("t1", CardZone.AreaZone, isCovert: false); // 暗藏者翻回正面
             var desc = new TargetSpec { Kind = TargetKind.Covert, NeedsSelection = true };
             var (valid, reason) = TargetValidity.Check(src, tgt, desc);
-            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.UNCOVER, reason);
+            Assert.IsFalse(valid); Assert.AreEqual(TargetLossReason.Uncover, reason);
         }
 
         public void TestTriggerEffectTargetLostWhenLeftZone()
@@ -407,7 +407,7 @@ namespace Script.Tests
             tgt.BumpVersion();
             var (validAfter, reasonAfter) = TargetValidity.Check(src, tgt, desc);
             Assert.IsFalse(validAfter, "翻面为暗藏者后应判丢失");
-            Assert.AreEqual(TargetLossReason.COVERT, reasonAfter);
+            Assert.AreEqual(TargetLossReason.Covert, reasonAfter);
         }
 
         /// <summary>取目标前后：目标从争夺区移动到墓地（规则③），Check 由合法变丢失（LeftZone）。</summary>

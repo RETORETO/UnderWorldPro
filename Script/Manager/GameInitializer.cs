@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Enums;
@@ -10,8 +10,13 @@ using Script.IO;
 /// GameInitializer — 负责创建和注入所有 Manager 依赖
 /// Arena UI 通过此类获取已初始化的 Manager 引用，避免初始化逻辑散落在 UI 层
 /// </summary>
+[GlobalClass]
 public partial class GameInitializer : Node
 {
+    /// <summary>装配级诊断日志开关（降噪）。默认 false：测试/联机只保留必要日志，避免刷屏；
+    /// 调试装配流程时置 true 可看到逐条 ✅ 明细。不影响任何逻辑。</summary>
+    public static bool VerboseSetup = false;
+
     // ============================================================
     // Manager 引用（只读，初始化后不可变）
     // ============================================================
@@ -58,44 +63,64 @@ public partial class GameInitializer : Node
         // 0. 注册全部卡效果（必须在任何卡加载/实例化之前，供 CardEffectFactory.EnsureEffects 查表）。
         //    按扩展包迭代时，可改为只注册当前系列（如 Cards.Effects.PlayerCards.JC.JCEffects.RegisterAll()）。
         Cards.Effects.AllEffects.RegisterAll();
-        GD.Print("  ✅ 已注册全部卡效果构建器");
+        if (VerboseSetup) GD.Print("  ✅ 已注册全部卡效果构建器");
 
         // 0.5 随机源（必须最先创建：DeckManager / WorldDeckManager 洗牌都依赖它）
         //    DebugSeed >= 0 时使用固定种子，牌序可复现；否则自动生成。
         RandomSource = new SeededRandomSource(DebugSeed >= 0 ? DebugSeed : (int?)null);
-        GD.Print($"  🎲 RandomSource 种子 = {((SeededRandomSource)RandomSource).Seed}" +
+        if (VerboseSetup) GD.Print($"  🎲 RandomSource 种子 = {((SeededRandomSource)RandomSource).Seed}" +
                  (DebugSeed >= 0 ? "（固定种子，牌序可复现）" : "（自动生成，记录此值可复现本局）"));
+
+        // 0.8【MVC 收口】触发系统三实例（原 static class → 实例，统一由本 Composition Root 装配）。
+        //   依赖顺序：GameEventBus → TriggerEmitPoints(bus) → TriggerRegistry(bus)。
+        //   TriggerRegistry 构造时自动订阅 bus（SetDispatch(HandleEvent)）。
+        var eventBus = new Script.Manager.GameEventBus();
+        var triggerEmitPoints = new Script.Manager.TriggerEmitPoints(eventBus);
+        var triggerRegistry = new Script.Manager.TriggerRegistry(eventBus);
+        if (VerboseSetup) GD.Print("  ✅ 触发系统三实例（GameEventBus / TriggerEmitPoints / TriggerRegistry）");
+
+        // 0.9【MVC 收口】EffectEngine 实例（原 static class → 实例 + Instance 单例）。
+        // 由本 Composition Root 创建；8 个对局状态集合（持续注册表/光环/时效修正/封锁等）
+        // 从 static 字段改为实例字段后，实例随场景释放即清空，根治"跨局封锁残留"类问题。
+        var effectEngine = new Script.Manager.EffectEngine();
+        if (VerboseSetup) GD.Print("  ✅ EffectEngine（实例化，状态随实例生命周期）");
 
         // 1. CardManager（卡牌实例的创建、移动、查询）
         CardManager = new CardManager();
         AddChild(CardManager);
-        GD.Print("  ✅ CardManager");
+        CardManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
+        if (VerboseSetup) GD.Print("  ✅ CardManager");
 
         // 2. PlayerManager（玩家状态：能量、先手标志）
         PlayerManager = new PlayerManager();
         AddChild(PlayerManager);
-        GD.Print("  ✅ PlayerManager");
+        // 注入到 TargetValidity（静态目标校验链），供条件式限制（如 AttachedToCharacterIfNoMind）
+        // 在取目标阶段评估"资产区是否具【心】"（心灵领域忠诚）。
+        Script.Manager.TargetValidity.PlayerManagerRef = PlayerManager;
+        if (VerboseSetup) GD.Print("  ✅ PlayerManager");
 
         // 3. DeckManager（卡组管理：洗牌、抽牌）
         DeckManager = new DeckManager();
         DeckManager.Initialize(CardManager, RandomSource);
         AddChild(DeckManager);
-        GD.Print("  ✅ DeckManager");
+        if (VerboseSetup) GD.Print("  ✅ DeckManager");
 
         // 3.5 ZoneManager（统一区域移动，单一真相源）
         ZoneManager = new ZoneManager();
         AddChild(ZoneManager);
         ZoneManager.Initialize(CardManager, DeckManager);
+        ZoneManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
         CardManager.SetZoneManager(ZoneManager);
         PlayerManager.SetZoneManager(ZoneManager);   // 忠诚/费用来自资产区
-        GD.Print("  ✅ ZoneManager");
+        if (VerboseSetup) GD.Print("  ✅ ZoneManager");
 
         // 4. TurnManager（回合流程、阶段切换）
         TurnManager = new TurnManager();
         AddChild(TurnManager);
         TurnManager.Initialize(DeckManager, PlayerManager, CardManager);
         TurnManager.SetZoneManager(ZoneManager);   // 基础行动收口需驱动 ZoneManager 移动
-        GD.Print("  ✅ TurnManager");
+        TurnManager.SetTriggerSystem(triggerRegistry, triggerEmitPoints, eventBus);   //【MVC 收口】注入触发系统三实例
+        if (VerboseSetup) GD.Print("  ✅ TurnManager");
 
 
         // 5. WorldDeckManager（世界牌库：地区卡牌堆）
@@ -103,7 +128,7 @@ public partial class GameInitializer : Node
         // 以满足"玩家卡 → 秘社 → 地区"的实例化顺序（地区卡 CreateCardInstance 延后）。
         WorldDeckManager = new WorldDeckManager();
         AddChild(WorldDeckManager);
-        GD.Print($"  ✅ WorldDeckManager (对象已创建，地区卡实例化延后至秘社之后)");
+        if (VerboseSetup) GD.Print($"  ✅ WorldDeckManager (对象已创建，地区卡实例化延后至秘社之后)");
 
         // 6. AreaManager（地区生命周期管理）—— 需在 StackManager 之后（赢取检查依赖堆叠）
         // 6.6 StackManager（堆叠区：LIFO，响应窗口驱动）先创建
@@ -112,25 +137,26 @@ public partial class GameInitializer : Node
         StackManager.SetCardManager(CardManager);     // 注入：D16 统一收口，Push 时自动登记目标版本号
         TurnManager.SetStackManager(StackManager);   // 注入：打出卡/让过结算依赖堆叠
         PlayerManager.SetStackManager(StackManager);  // 注入：游戏结束即时结算时清空未结算堆叠
-        GD.Print("  ✅ StackManager");
+        if (VerboseSetup) GD.Print("  ✅ StackManager");
 
         AreaManager = new AreaManager();
         AddChild(AreaManager);
         AreaManager.Initialize(WorldDeckManager, ZoneManager, StackManager);
         TurnManager.SetAreaManager(AreaManager);     // 注入：赢取地区检查/结算依赖
-        GD.Print("  ✅ AreaManager");
+        if (VerboseSetup) GD.Print("  ✅ AreaManager");
 
         // 6.7 PlayerActionService（玩家意图统一通道）
         // 依赖 TurnManager / CardManager / ZoneManager / AreaManager / PlayerManager，故须在 AreaManager 之后创建
         PlayerActionService = new PlayerActionService(TurnManager, CardManager, ZoneManager, AreaManager, PlayerManager);
-        GD.Print("  ✅ PlayerActionService");
+        if (VerboseSetup) GD.Print("  ✅ PlayerActionService");
 
         // 6.5 CombatManager（三种对抗计算与势力标记产出，依赖 ZoneManager + AreaManager）
         CombatManager = new CombatManager();
         AddChild(CombatManager);
         CombatManager.Initialize(CardManager, PlayerManager, ZoneManager, AreaManager);
+        CombatManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
         TurnManager.SetCombatManager(CombatManager);
-        GD.Print("  ✅ CombatManager");
+        if (VerboseSetup) GD.Print("  ✅ CombatManager");
 
         // 7. 加载卡组（依赖 CardManager + DeckManager）+ 初始化双方秘社
         ReloadDecks();
@@ -140,12 +166,24 @@ public partial class GameInitializer : Node
         // 顺序要求：玩家卡(InitTestDecks) → 秘社(SetupCouncils) → 地区(此处)，故延迟至此。
         IWorldDeckProvider provider = new LocalWorldDeckProvider();
         WorldDeckManager.Initialize(provider, RandomSource, CardManager);
-        GD.Print($"  ✅ WorldDeckManager (共 {WorldDeckManager.Count} 张地区卡)");
+        if (VerboseSetup) GD.Print($"  ✅ WorldDeckManager (共 {WorldDeckManager.Count} 张地区卡)");
 
         // 8. PM 调试命令管理器：创建并纳入本节点生命周期（UI 回调由 Arena 注入）
         PMCommandManager = new PMCommandManager();
         AddChild(PMCommandManager);
-        GD.Print("  ✅ PMCommandManager");
+        if (VerboseSetup) GD.Print("  ✅ PMCommandManager");
+
+        // 8.5【MVC 收口】EffectEngine 的管理器引用注入收归本 Composition Root，不再由 View（Arena）装配。
+        // 持续光环（D19-③）依赖 ZoneManager 读取区域卡集合；撤销/补授需跨控制者按 UID 找回实例（夺控场景）
+        // 必须注入 CardManagerRef（此前漏注入会致 JC060 对他者授予/夺控撤销静默失效）。
+        effectEngine.ZoneManagerRef = ZoneManager;
+        effectEngine.CardManagerRef = CardManager;
+        effectEngine.TurnManagerRef = TurnManager;   // 抓牌/费用等需回合管理器参与的全局操作
+
+        // 8.6【MVC 收口】UI 通知总线（实例单例）：承载 Controller 的"状态已变请刷新"广播
+        // （OnVisualDirty / CostModChanged），取代 EffectEngine 的 static 委托。须早于任何 OnVisualDirty 触发。
+        new Script.Manager.UiNotificationBus();
+        if (VerboseSetup) GD.Print("  ✅ UiNotificationBus");
 
         GD.Print("=== GameInitializer: 所有 Manager 初始化完成 ===");
     }
@@ -221,7 +259,7 @@ public partial class GameInitializer : Node
             {
                 var inst = CardManager.CreateCardInstance(councilData, playerId);
                 ZoneManager.MoveToCouncil(inst, playerId);
-                GD.Print($"  ✅ 玩家{playerId} 秘社就位: {councilData.CardName}");
+                if (VerboseSetup) GD.Print($"  ✅ 玩家{playerId} 秘社就位: {councilData.CardName}");
             }
         }
     }
@@ -237,7 +275,7 @@ public partial class GameInitializer : Node
     /// 对局级重置（B2：单场景常驻 + 显式 Reset，供"再来一局"场景内重开调用）。
     /// 前置条件：InitializeAll() 已完成（Manager 实例常驻，本方法不重建对象，仅清状态复用）。
     /// 顺序要求：
-    ///   1. 必须先 EffectEngine.ResetAll() 清静态效果注册表，早于 CardManager.Reset()，
+    ///   1. 必须先 EffectEngine.Instance.ResetAll() 清静态效果注册表，早于 CardManager.Reset()，
     ///      避免新卡 UID（_nextUID 归 1）与旧注册表残留 key 冲突、旧 CardInstance 强引用泄漏。
     ///   2. 清各 Manager 对局状态 → 重建卡组/秘社/世界牌库 → 发牌起局。
     /// 本方法不改变当前"游戏结束切主界面"流程，仅提供能力；弹窗（再来一局）接入后由 UI 调用。
@@ -245,8 +283,8 @@ public partial class GameInitializer : Node
     public void ResetMatch()
     {
         GD.Print("=== GameInitializer: 对局重置 (ResetMatch) ===");
-        // 1. 先清静态效果注册表（最关键）
-        Script.Manager.EffectEngine.ResetAll();
+        // 1. 先清效果注册表（最关键）
+        Script.Manager.EffectEngine.Instance?.ResetAll();
         // 2. 清各 Manager 对局状态（不重建对象，复用常驻实例）
         CardManager.Reset();
         PlayerManager.Reset();
@@ -255,6 +293,8 @@ public partial class GameInitializer : Node
         WorldDeckManager.Reset();
         StackManager.ClearAll();
         TurnManager.Reset();
+        // 2.5【MVC 收口】清空 UI 通知总线订阅（旧 Arena 节点重建会重新订阅，避免残留叠加）
+        Script.Manager.UiNotificationBus.Instance?.Clear();
         // 3. 重建玩家卡组 + 世界牌库 + 秘社（ZoneManager.Reset 已清 CouncilZone，需重放秘社）
         ReloadDecks();
         SetupCouncils();
@@ -284,6 +324,60 @@ public partial class GameInitializer : Node
         PlayerActionService.DrawCards(1, hand1);
         PlayerActionService.DrawCards(2, hand2);
         PlayerActionService.StartGame();
+    }
+
+    /// <summary>
+    /// 【MVC 收口】View 就绪后注册 UI 交互钩子（依赖倒置：View 实现 IGameUIHooks 接口，供 Controller 调用）。
+    /// 由 Arena 在 _Ready 里 InitializeAll() 完成后调用；Controller 依赖接口，而非 View 往 Controller 塞委托。
+    /// </summary>
+    public void RegisterUIHooks(Script.Interfaces.IGameUIHooks hooks)
+    {
+        Script.Manager.EffectEngine.Instance.UIHooks = hooks;
+        // C/S 化 P0-B：若已装配输入网关，则同步注入到引擎/回合管理器（向后兼容：未装配则保持 null）。
+        if (_inputGateway != null)
+        {
+            Script.Manager.EffectEngine.Instance.InputGateway = _inputGateway;
+            TurnManager.Instance.InputGateway = _inputGateway;
+        }
+        if (VerboseSetup) GD.Print("  ✅ IGameUIHooks 已注册（Arena 实现注入）");
+    }
+
+    // ==================== C/S 化 P0-B 输入网关装配 ====================
+    // 服务端权威模式下，在 RegisterUIHooks 之前调用本方法注入网关：
+    // - 单机模式：不调用（_inputGateway 保持 null，引擎走本地 UIHooks 弹窗，行为不变）
+    // - Headless 测试/服务端：注入 AutoInputGateway / NetworkInputGateway
+    // 注入后，引擎在"需玩家决策"处（PrepareUpkeep / 触发排序）经网关异步请求-响应，而非同步弹窗。
+    private Script.Net.IInputGateway _inputGateway;
+
+    /// <summary>
+    /// 设置全局输入网关。应在 RegisterUIHooks 之前调用以生效于本局装配。
+    /// 传入 null 等同于回退单机模式（本地 UIHooks 弹窗）。
+    /// </summary>
+    public void SetInputGateway(Script.Net.IInputGateway gateway)
+    {
+        _inputGateway = gateway;
+        Script.Manager.EffectEngine.Instance.InputGateway = gateway;
+        TurnManager.Instance.InputGateway = gateway;
+        GD.Print(gateway != null
+            ? "  ✅ IInputGateway 已注入（C/S 异步输入模式）"
+            : "  ⚪ IInputGateway 已清除（回退单机弹窗模式）");
+    }
+
+    // ==================== C/S 化 P1-A：整局快照聚合入口 ====================
+    /// <summary>
+    /// 构建当前整局状态快照（纯数据，可序列化下发/重连）。
+    /// 实际聚合逻辑在 TurnManager.ToSnapshot()（已汇总 ZoneManager + StackManager + 回合字段）。
+    /// </summary>
+    public Script.Net.GameSnapshot BuildSnapshot()
+    {
+        // 用本实例持有的 TurnManager（而非静态 TurnManager.Instance，后者在测试/联机启动器场景未被赋值）
+        var snap = TurnManager?.ToSnapshot();
+        if (snap == null) return null;
+        // 第三批：补充世界牌库（地区牌堆）、地区卡注册表与势力标记
+        snap.WorldDeckCards = WorldDeckManager?.ToSnapshotUids() ?? snap.WorldDeckCards;
+        snap.AreaCards = AreaManager?.ToSnapshot() ?? snap.AreaCards;
+        snap.AreaMarks = AreaManager?.ToSnapshotMarks() ?? snap.AreaMarks;
+        return snap;
     }
 
     /// <summary>查询玩家起手数：若有秘社则用其 StartingHandSize，否则回退默认 InitialHandSize</summary>

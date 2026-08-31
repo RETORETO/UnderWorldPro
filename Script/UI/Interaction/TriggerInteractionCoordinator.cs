@@ -37,6 +37,9 @@ namespace Script.UI.Interaction
         /// <summary>模态锁（指向 Arena 的 LockModal/UnlockModal，内部已通知 Controller 维护原子锁）。</summary>
         private Action _lockTriggerOrderModal;
         private Action _unlockTriggerOrderModal;
+        /// <summary>选目标窗口模态锁（独立类型 TargetSelection，与触发排序 TriggerOrder 区分，避免 HashSet 去重冲突）。</summary>
+        private Action _lockTargetSelectionModal;
+        private Action _unlockTargetSelectionModal;
 
         /// <summary>装配：注入窗口/场景引用、地区槽位、命中测试与模态锁委托。</summary>
         public void Configure(
@@ -46,7 +49,9 @@ namespace Script.UI.Interaction
             List<AreaSlot> areaSlots,
             Func<Vector2, CardUI> pickAreaCardAt,
             Action lockTriggerOrderModal,
-            Action unlockTriggerOrderModal)
+            Action unlockTriggerOrderModal,
+            Action lockTargetSelectionModal,
+            Action unlockTargetSelectionModal)
         {
             _triggerOrderWindow = triggerOrderWindow;
             _targetSelectionWindow = targetSelectionWindow;
@@ -55,6 +60,8 @@ namespace Script.UI.Interaction
             _pickAreaCardAt = pickAreaCardAt;
             _lockTriggerOrderModal = lockTriggerOrderModal;
             _unlockTriggerOrderModal = unlockTriggerOrderModal;
+            _lockTargetSelectionModal = lockTargetSelectionModal;
+            _unlockTargetSelectionModal = unlockTargetSelectionModal;
         }
 
         // ============================================================
@@ -62,8 +69,8 @@ namespace Script.UI.Interaction
         // ============================================================
 
         /// <summary>打开触发排序窗口。ownerPlayerId 为排序归属玩家；triggers 为已过滤（含合法目标）的触发实例。</summary>
-        public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<TriggerEffectInstance> triggers,
-            Action<List<TriggerEffectInstance>> onEnterStack, Action onDone)
+        public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<StackEffectInstance> triggers,
+            Action<List<StackEffectInstance>> onEnterStack, Action onDone)
         {
             if (_triggerOrderWindow == null || _triggerEntryScene == null) return;
 
@@ -81,9 +88,9 @@ namespace Script.UI.Interaction
 
             _triggerOrderWindow.OnEnterStack = (orderedObjs) =>
             {
-                var ordered = new List<TriggerEffectInstance>();
+                var ordered = new List<StackEffectInstance>();
                 foreach (var o in orderedObjs)
-                    if (o is TriggerEffectInstance ti) ordered.Add(ti);
+                    if (o is StackEffectInstance ti) ordered.Add(ti);
                 onEnterStack?.Invoke(ordered);
             };
             _triggerOrderWindow.OnDone = () =>
@@ -99,7 +106,7 @@ namespace Script.UI.Interaction
 
         /// <summary>触发实际入栈后由 TurnManager 调用：从 OrderZone 移除已入栈条目。
         /// 取目标触发在玩家选完目标后才触发本方法，故条目保留到选目标完成（修复"卡提前从 OrderZone 消失"）。</summary>
-        public void RemoveOrderEntries(List<TriggerEffectInstance> pushed)
+        public void RemoveOrderEntries(List<StackEffectInstance> pushed)
         {
             _triggerOrderWindow?.RemoveEntries(pushed);
         }
@@ -108,7 +115,7 @@ namespace Script.UI.Interaction
         /// 请求玩家为触发效果选择合法目标。打开选目标提示窗口，记录合法目标集合；
         /// 玩家点选合法卡/地区后回调 onPicked(targetUid) 并关闭窗口。窗口为模态独占。
         /// </summary>
-        public void RequestTargetSelection(TriggerEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
+        public void RequestTargetSelection(StackEffectInstance trigger, List<string> validTargetUids, Action<string> onPicked)
         {
             if (_targetSelectionWindow == null) return;
             _targetSelectionActive = true;
@@ -119,7 +126,7 @@ namespace Script.UI.Interaction
             _targetIsArea = trigger?.IsAreaTarget == true;
 
             // 进入选目标前先清残留高光（窗口打开瞬间即取消旧高光），避免上一次交互遗留。
-            CardManager.NotifyTargetSelectionChanged(null);
+            CardManager.Instance.NotifyTargetSelectionChanged(null);
 
             // 机动：高亮所有合法目标地区槽位（区别于"选场上卡"）。
             if (_targetIsArea)
@@ -137,7 +144,7 @@ namespace Script.UI.Interaction
             else
             {
                 // 卡目标：经总线广播合法目标集合，由 Arena 订阅后给对应 CardUI 上黄色高光（MVC 红线：Controller 不直接调 View）。
-                CardManager.NotifyTargetSelectionChanged(validTargetUids);
+                CardManager.Instance.NotifyTargetSelectionChanged(validTargetUids);
             }
 
             string hint = validTargetUids.Count == 0
@@ -150,13 +157,17 @@ namespace Script.UI.Interaction
             // 选目标期间禁用触发排序窗口的三个操作按钮
             _triggerOrderWindow?.SetButtonsEnabled(false);
 
+            // 选目标模态独占：加锁，禁止期间激活/出牌其他卡（原子锁，修复"选目标时还能激活"）
+            _lockTargetSelectionModal?.Invoke();
+
             // 注册一次性回调：选完关闭窗口并通知调用方
             _targetSelectionWindow.OnTargetPicked = (uid) =>
             {
                 GD.Print($"[TriggerCoordinator] OnTargetPicked 收到回调 UID={uid}，准备转发给调用方 _onTargetPicked（挂接={_onTargetPicked != null}）");
+                _unlockTargetSelectionModal?.Invoke();   // 先解锁（选目标已结束），再继续后续流程（入栈会自行 EnterAtomic）
                 _targetSelectionActive = false;
                 // 选目标窗口关闭：统一经总线取消高光（卡片目标 + 地区槽位）。
-                CardManager.NotifyTargetSelectionChanged(null);
+                CardManager.Instance.NotifyTargetSelectionChanged(null);
                 _validTargetUids.Clear();
                 _validAreaUids.Clear();
                 // 清除可能的地区高亮与可选状态
@@ -178,7 +189,7 @@ namespace Script.UI.Interaction
         }
 
         /// <summary>
-        /// 泛用选目标入口（激活效果/通用分支用，不依赖 TriggerEffectInstance）。
+        /// 泛用选目标入口（激活效果/通用分支用，不依赖 StackEffectInstance）。
         /// 复用同一套 TargetSelectionWindow 与卡高光总线，激活效果②（牺牲并横置目标角色）即走此路径。
         /// </summary>
         public void RequestActivateTargetSelection(string effectName, bool isArea, List<string> validTargetUids, Action<string> onPicked)
@@ -191,7 +202,7 @@ namespace Script.UI.Interaction
             _validAreaUids.Clear();
             _targetIsArea = isArea;
 
-            CardManager.NotifyTargetSelectionChanged(null);
+            CardManager.Instance.NotifyTargetSelectionChanged(null);
 
             if (_targetIsArea)
             {
@@ -207,7 +218,7 @@ namespace Script.UI.Interaction
             }
             else
             {
-                CardManager.NotifyTargetSelectionChanged(new List<string>(_validTargetUids));
+                CardManager.Instance.NotifyTargetSelectionChanged(new List<string>(_validTargetUids));
             }
 
             string hint = _validTargetUids.Count == 0
@@ -219,11 +230,15 @@ namespace Script.UI.Interaction
 
             _triggerOrderWindow?.SetButtonsEnabled(false);
 
+            // 选目标模态独占：加锁，禁止期间激活/出牌其他卡（原子锁，修复"选目标时还能激活"）
+            _lockTargetSelectionModal?.Invoke();
+
             _targetSelectionWindow.OnTargetPicked = (uid) =>
             {
                 GD.Print($"[TriggerCoordinator] 激活选目标 OnTargetPicked UID={uid}");
+                _unlockTargetSelectionModal?.Invoke();   // 先解锁（选目标已结束），再继续后续流程（入栈会自行 EnterAtomic）
                 _targetSelectionActive = false;
-                CardManager.NotifyTargetSelectionChanged(null);
+                CardManager.Instance.NotifyTargetSelectionChanged(null);
                 _validTargetUids.Clear();
                 _validAreaUids.Clear();
                 foreach (var slot in _areaSlots)

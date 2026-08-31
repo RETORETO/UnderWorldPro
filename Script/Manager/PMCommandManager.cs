@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -151,7 +151,7 @@ public partial class PMCommandManager : Node
             case "covert": ExecuteCovert(parts); break;
             case "printdeck": ExecuteDeck(parts); break;
             case "investigation": ExecuteInvestigation(parts); break;
-            case "battle": ExecuteBattle(parts); break;
+            case "battle": ExecuteStrength(parts); break;
             case "power": ExecutePower(parts); break;
             case "setassetfromdeck": ExecuteSetAssetFromDeck(parts); break;
             case "addarea": ExecuteAddArea(parts); break;
@@ -405,7 +405,6 @@ public partial class PMCommandManager : Node
     /// 翻面：对正面实例翻为背面，对背面实例翻为正面。
     /// 无论正反翻面，均清空卡上指示物/附属/封印：
     ///   指示物直接移除；附属进入弃牌堆；封印回到 OWNER 手牌。
-    /// （附属/封印当前未实现，保留接口。）
     /// 翻到正面时恢复卡牌正常属性（与正常打出一致）。
     /// </summary>
     private void ExecuteFlip(string[] parts)
@@ -461,7 +460,7 @@ public partial class PMCommandManager : Node
         }
         // 纯翻面（无区域移动）：显式触发 FireCovert 使目标版本号失效（D16 丢失目标新方案），
         // 复用 FireMoved 统一刷新出口保持 UI 一致。
-        Script.Manager.EffectEngine.ZoneManagerRef?.FireCovert(instance);
+        Script.Manager.EffectEngine.Instance.ZoneManagerRef?.FireCovert(instance);
         // 同步 UI 表现：翻面 + 刷新数值，避免数据/UI 不一致
         _setFaceUp?.Invoke(instance.UID, toFaceUp);
         if (toFaceUp) _refreshCardUI?.Invoke(instance.UID);
@@ -534,12 +533,12 @@ public partial class PMCommandManager : Node
             var inst = deck[i];
             if (inst == null) { GD.Print($"[{i,2}] <null>"); continue; }
             var t = inst.PlayerTemplate;
-            GD.Print($"[{i,2}] {t?.CardName ?? "?"} | UID={inst.UID} | 模板={t?.UID ?? "?"} | 费{t?.Cost} 调{inst.CurrentInvestigation} 战{inst.CurrentCombat} 势{inst.CurrentPower} 防{(inst.HasDefense ? inst.CurrentDefense.ToString() : "无")}");
+            GD.Print($"[{i,2}] {t?.CardName ?? "?"} | UID={inst.UID} | 模板={t?.UID ?? "?"} | 费{t?.Cost} 调{inst.CurrentInvestigation} 战{inst.CurrentStrength} 势{inst.CurrentPower} 防{(inst.HasDefense ? inst.CurrentDefense.ToString() : "无")}");
         }
         GD.Print($"========== 玩家{playerId} 卡组打印结束 ==========");
     }
 
-    private void ExecuteBattle(string[] parts)
+    private void ExecuteStrength(string[] parts)
     {
         // 用法: battle <玩家 1|2> <地区 areaNo> <获胜点 X>
         if (parts.Length < 4) { GD.Print("❌ 用法: battle <玩家 1|2> <地区 areaNo> <获胜点 X>"); return; }
@@ -549,7 +548,7 @@ public partial class PMCommandManager : Node
 
         // 通过注入的回调打开窗口（不直接持有 Arena），保持 MVC 边界
         if (_openCombatWindow == null) { GD.Print("❌ 对抗窗口回调未初始化"); return; }
-        _openCombatWindow.Invoke(CombatManager.CombatType.Battle, winner, x, areaNo);
+        _openCombatWindow.Invoke(CombatManager.CombatType.Strength, winner, x, areaNo);
         GD.Print($"✅ 打开战斗对抗窗口（玩家P{winner}，地区area{areaNo}，获胜{x}点），点击败方该地区的角色分配伤害");
     }
 
@@ -708,7 +707,7 @@ public partial class PMCommandManager : Node
         seal.IsSeal = true;                // 标记本卡为封印卡（镜像 IsAttached），供地区赢取/UI 识别
         seal.IsSealed = false;             // IsSealed 标在【目标卡】上，封印卡自身不标
         target.SealedCards.Add(seal);      // 目标卡记录封印了哪些（对称 AttachedCards）
-        target.IsSealed = true;            // 标记被封印（功能压制/守卫用）
+        target.IsSealed = true;            // 标记被封印（供封印关系/触发触点识别）
         // 封印卡移动到封印子区域（不进 _area），CurrentZone=SealedZone，UI 在 ArrangeAllSeals 做向上偏移
         _zoneManager.MoveToSealedZone(seal, target.ZoneDetailId, seal.ControllerId == 0 ? 1 : seal.ControllerId);
         GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}) 封印目标 {target.PlayerTemplate?.CardName}({target.UID})（已移入封印子区域 {target.ZoneDetailId}）");
