@@ -5,6 +5,8 @@ using Script.Manager;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using Script.Net;
 
 /// <summary>
 /// CombatManager — 三种对抗（调查/战斗/势力）的计算与结算（纯逻辑层）。
@@ -37,6 +39,12 @@ public partial class CombatManager : Node
 
     /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
     public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
+
+    /// <summary>玩家意图服务引用（联机对抗网络化路径需要：调查取牌/放回/抽牌）。由 GameInitializer 注入。</summary>
+    public PlayerActionService ActionService { get; set; }
+
+    /// <summary>联机决策网关（服务端注入）。非空时对抗决策经网关下发/回收；单机保持 null 走事件窗口。</summary>
+    public IInputGateway InputGateway { get; set; }
 
     public void Initialize(CardManager cardManager, PlayerManager playerManager,
                            ZoneManager zoneManager, AreaManager areaManager)
@@ -139,6 +147,134 @@ public partial class CombatManager : Node
         }
 
         ResolveWinner(type, areaUid, areaNo, winner, diff, onComplete);
+    }
+
+    // ==================== C/S 化：联机对抗网络化结算（与单机事件路径并列） ====================
+    /// <summary>
+    /// 联机服务端版单地区单对抗结算：InputGateway 注入时走本方法，把对抗窗口转为 ChoiceRequest 下发/回收。
+    /// 单机保持 ResolveAreaCombat（事件外抛，行为不变）。决策语义以单机为准。
+    /// </summary>
+    public async Task ResolveAreaCombatAsync(CombatType type, string areaUid, int areaNo)
+    {
+        if (string.IsNullOrEmpty(areaUid)) return;
+
+        var (winner, diff) = ComputeResult(areaUid, type);
+
+        if (winner == 0)
+        {
+            int firstPlayer = (_playerManager != null && _playerManager.IsFirstPlayer(1)) ? 1 : 2;
+            int firstValue = SumPlayerValue(areaUid, firstPlayer, type);
+            if (firstValue == 0) return;   // 0:0 不可破平
+
+            if (_playerManager != null && _playerManager.CanTieBreak(firstPlayer))
+            {
+                var req = new ChoiceRequest
+                {
+                    PlayerId = firstPlayer,
+                    RequestKind = ChoiceRequest.Kind.TieBreak,
+                    Prompt = $"地区{areaNo} {TypeName(type)}打平，是否使用先手破平特权？",
+                    ForceChoice = false,
+                };
+                var result = await InputGateway.RequestChoice(firstPlayer, req);
+                if (result != null && !result.Cancelled)
+                {
+                    _playerManager.ConsumeTieBreak(firstPlayer);
+                    OnAssetsChanged?.Invoke();
+                    await ResolveWinnerAsync(type, areaUid, areaNo, firstPlayer, 1);
+                }
+            }
+            return;
+        }
+
+        await ResolveWinnerAsync(type, areaUid, areaNo, winner, diff);
+    }
+
+    /// <summary>网络化胜方结算：势力瞬时、战斗伤害分配、调查放回牌库 + 抽牌。</summary>
+    private async Task ResolveWinnerAsync(CombatType type, string areaUid, int areaNo, int winner, int diff)
+    {
+        GD.Print($"  🏆 地区{areaNo}({areaUid}) {TypeName(type)} 结算结果（网络化）— 获胜方: 玩家{winner}，获胜点数: {diff}");
+
+        if (type == CombatType.Power)
+        {
+            _areaManager?.AddPowerMark(areaUid, winner, diff);
+            return;
+        }
+
+        if (type == CombatType.Strength)
+        {
+            int loser = winner == 1 ? 2 : 1;
+            var targets = new List<CardInstance>();
+            if (_zoneManager != null)
+                foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
+                    if (IsLegalStrengthTarget(c, loser, areaUid)) targets.Add(c);
+
+            if (targets.Count == 0)
+            {
+                GD.Print($"  📍 地区{areaNo} 无可分配伤害对象，{diff} 点伤害流失");
+                _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+                return;
+            }
+
+            var req = new ChoiceRequest
+            {
+                // 联机模式：调查/战斗窗口统一推送给对抗获胜方（winner）操作（与单机主机操作语义对齐）。
+                // 合法承伤目标仍按规则取"败方在该地区的角色/附属"（loser 仅用于目标判定，不决定推送对象）。
+                PlayerId = winner,
+                RequestKind = ChoiceRequest.Kind.CombatStrength,
+                OptionUids = targets.ConvertAll(t => t.UID),
+                Amount = diff,
+                Prompt = $"地区{areaNo} 战斗对抗：分配 {diff} 点伤害",
+                ForceChoice = true,   // 对齐单机 StrengthWindow：必须分配完才能确认
+            };
+            var result = await InputGateway.RequestChoice(winner, req);
+            if (result == null || result.Cancelled)
+            {
+                GD.Print("  📍 战斗对抗未分配伤害（取消），伤害流失");
+                _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+                return;
+            }
+            for (int i = 0; i < result.SelectedUids.Count; i++)
+            {
+                var tgt = _cardManager?.GetInstance(result.SelectedUids[i]);
+                int amt = i < result.SelectedAmounts.Count ? result.SelectedAmounts[i] : 0;
+                if (tgt != null && amt > 0) _cardManager.DealDamageToInstance(tgt, amt);
+            }
+            _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+            return;
+        }
+
+        // 调查对抗
+        if (ActionService == null)
+        {
+            GD.PrintErr("  ❌ 调查对抗网络化需要注入 PlayerActionService");
+            return;
+        }
+        var cards = ActionService.TakeTopForInvestigation(winner, diff);
+        var reqInv = new ChoiceRequest
+        {
+            PlayerId = winner,
+            RequestKind = ChoiceRequest.Kind.CombatInvestigation,
+            OptionUids = cards.ConvertAll(c => c.UID),
+            Amount = diff,
+            Prompt = $"地区{areaNo} 调查对抗：选择放回牌库顶的卡（其余放底）",
+            ForceChoice = true,
+        };
+        var resInv = await InputGateway.RequestChoice(winner, reqInv);
+
+        // SelectedUids = 放牌库顶顺序；未选中的卡按原顺序放牌库底。
+        var selectedSet = new HashSet<string>(resInv?.SelectedUids ?? new List<string>());
+        var toTop = new List<CardInstance>();
+        foreach (var uid in (resInv?.SelectedUids ?? new List<string>()))
+        {
+            var c = cards.Find(x => x.UID == uid);
+            if (c != null) toTop.Add(c);
+        }
+        var toBottom = new List<CardInstance>();
+        foreach (var c in cards)
+            if (!selectedSet.Contains(c.UID)) toBottom.Add(c);
+
+        ActionService.ReturnAfterInvestigation(winner, toTop, toBottom);
+        ActionService.DrawCards(winner, 1);
     }
 
     /// <summary>胜方结算分支（从 ResolveAreaCombat 抽出，供平局破平后复用）。</summary>

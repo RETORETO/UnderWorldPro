@@ -28,8 +28,6 @@ namespace Script.Net.Godot
         [Export] public int AutoDrawCount { get; set; } = 2;
         /// <summary>AutoRun 用 ENet 监听端口（默认 18920）。</summary>
         [Export] public ushort Port { get; set; } = 18920;
-        /// <summary>是否把客户端收到的快照差异驱动到 Arena UI（快照差异渲染入口，联机演示用）。</summary>
-        [Export] public bool DriveArenaBySnapshot { get; set; } = true;
         /// <summary>【TEMPTEST】是否开启"持续让过+抽牌"自动循环（验收后移除）。</summary>
         [Export] public bool AutoLoopPassDraw { get; set; } = false;
         /// <summary>【TEMPTEST】AutoLoopPassDraw 的动作间隔（秒）。</summary>
@@ -169,23 +167,7 @@ namespace Script.Net.Godot
             {
                 _launcher.StartLocalLoopback(_gi, port);
             }
-            // 快照差异驱动 Arena UI：客户端收到服务端快照时，经 SnapshotDiff→RenderCommand 增量驱动 Arena 刷新。
-            // 单机模式 Arena 仍走 ZoneManager 事件总线；此处为联机演示叠加一层"快照差异渲染"入口。
-            if (DriveArenaBySnapshot)
-            {
-                var arena = GetParent() as Arena ?? GetParent()?.GetParent() as Arena;
-                if (arena == null)
-                    GD.PushWarning("[NetMatchDemo] 未找到 Arena，快照差异渲染未接入");
-                else
-                {
-                    _launcher.OnClientSnapshot += snap =>
-                    {
-                        arena.ApplySnapshot(snap); // SnapshotRenderDriver.Diff → ISnapshotView → Arena 现有刷新
-                        GD.Print($"[NetMatchDemo] 快照差异已驱动 Arena（第 {snap.TurnCount} 回合，总卡数={snap.Zones.Count}）");
-                    };
-                    GD.Print("[NetMatchDemo] 已接入快照差异渲染：OnClientSnapshot → Arena.ApplySnapshot");
-                }
-            }
+            // 联机客户端渲染统一由 ArenaOl（快照驱动·全量重建）负责；NetMatchDemo 仅作早期意图通道演示。
             GD.Print($"[NetMatchDemo] 联机演示已启动（useLoopback={useLoopback}）远程调用 DrawDemo() 触发客户端意图");
         }
 

@@ -99,7 +99,7 @@ namespace Script.Net
 
                 case PlayerIntent.Kind.DeployCovert:
                     // Args: cardUid, areaUid —— 暗藏会经 TurnManager 内部建实例，收集新 UID
-                    _router.MarkCreateWatch();
+                    MarkUidWatch();
                     _router.DeployCovert(intent.PlayerId, At(a, 0), At(a, 1));
                     CollectNewUid(result);
                     break;
@@ -109,7 +109,7 @@ namespace Script.Net
                     break;
 
                 case PlayerIntent.Kind.EstablishAsset:
-                    _router.MarkCreateWatch();
+                    MarkUidWatch();
                     _router.EstablishAsset(intent.PlayerId, At(a, 0));
                     CollectNewUid(result);
                     break;
@@ -152,16 +152,30 @@ namespace Script.Net
                     _router.ResetActionCharges(intent.PlayerId);
                     break;
 
+                case PlayerIntent.Kind.DebugCommand:
+                    // Args: 整行 PM 命令（客户端已作为单个参数上行，含空格）
+                    _router.DebugCommand(intent.PlayerId, At(a, 0) ?? "");
+                    break;
+
                 default:
                     throw new InvalidOperationException($"未支持的意图种类: {intent.IntentKind}");
             }
         }
 
+        /// <summary>若路由实现支持 UID 观察窗，则标记开始（仅 IUIDWatch 实现方响应）。</summary>
+        private void MarkUidWatch()
+        {
+            if (_router is IUIDWatch w) w.MarkCreateWatch();
+        }
+
         /// <summary>收集服务端在"建卡观察窗"内新建的实例 UID，回填到结果（解决 C/S UID 撞车）。</summary>
         private void CollectNewUid(IntentResult result)
         {
-            var uid = _router.ConsumeCreatedUid();
-            if (!string.IsNullOrEmpty(uid)) result.AssignedUids.Add(uid);
+            if (_router is IUIDWatch w)
+            {
+                var uid = w.ConsumeCreatedUid();
+                if (!string.IsNullOrEmpty(uid)) result.AssignedUids.Add(uid);
+            }
         }
 
         private static string At(List<string> args, int i) => i < args.Count ? args[i] : null;

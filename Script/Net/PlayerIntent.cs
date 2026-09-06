@@ -46,6 +46,7 @@ namespace Script.Net
             Concede,            // 投降（Args: 无，用 PlayerId）
             ActivateAbility,    // 发动能力（Args: sourceUid, effectId, targetUid[可空]）
             ResetActionCharges, // 重置行动次数（Args: 无）
+            DebugCommand,       // PM 调试命令（Args: 整行命令字符串；仅调试/验证用）
         }
 
         public Kind IntentKind;

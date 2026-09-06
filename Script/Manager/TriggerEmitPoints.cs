@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 
@@ -19,6 +19,12 @@ namespace Script.Manager
     public class TriggerEmitPoints
     {
         private readonly GameEventBus _bus;
+
+        /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+        public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+        /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+        private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
         public TriggerEmitPoints(GameEventBus bus)
         {
@@ -67,7 +73,7 @@ namespace Script.Manager
         {
             // D2：单次战斗对抗维度去重——每次 Emit 前清空威名放置去重表，
             // 保证同一控制者多个威名在同一地区只放置一个势力标志。
-            Script.Manager.EffectEngine.Instance.ResetCombatWonDedup();
+            EE.ResetCombatWonDedup();
 
             _bus.Emit(GameEvent.OnCombatWon, new TriggerContext
             {

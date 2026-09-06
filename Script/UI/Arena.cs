@@ -10,7 +10,7 @@ using Script.Enums;
 using Script.Manager;
 using Script.Interfaces;
 
-public partial class Arena : Control, Script.Interfaces.IGameUIHooks, Script.Net.ISnapshotView
+public partial class Arena : Control, Script.Interfaces.IGameUIHooks
 {
     // ============================================================
     // 区域引用
@@ -196,8 +196,6 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks, Script.Net
 
     // 逻辑→UI 同步
     private Dictionary<string, CardUI> _cardUIMap = new Dictionary<string, CardUI>();
-    // 【C/S 化 P3·模块B】快照渲染驱动（网络模式）。单机默认未启用（_snapshotDriver 为 null，走事件驱动）。
-    private Script.Net.SnapshotRenderDriver _snapshotDriver;
     // 议会（秘社）UI 单独管理（与玩家卡 _cardUIMap 解耦，避免类型冲突）
     private Dictionary<string, CouncilCardUI> _councilCardUIs = new Dictionary<string, CouncilCardUI>();
     private Control _scoreContainer1, _scoreContainer2;
@@ -902,7 +900,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks, Script.Net
 
     private void InitializeAreas()
     {
-        List<CardInstance> initialAreas = _actionService.DrawInitialAreas(3);
+        // 抽取+注册初始地区已收口到 PlayerActionService.SetupInitialAreas（与联机服务端 NetMatchEntry 共用）。
+        List<CardInstance> initialAreas = _actionService.SetupInitialAreas(3);
         _areaSlots.Clear();
         foreach (Node child in _areasContainer.GetChildren())
             child.QueueFree();
@@ -914,7 +913,6 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks, Script.Net
             slot.Name = $"AreaSlot_{i + 1}";
             ConfigureSlot(slot, initialAreas[i], i + 1);
             _areaSlots.Add(slot);
-            _actionService.RegisterArea(slot.AreaUID, i + 1, initialAreas[i]);
         }
         // AreaManager 已改为纯逻辑层，不再持有 UI 引用；标记/替换均通过事件通知本类刷新
         ArrangeAreas();

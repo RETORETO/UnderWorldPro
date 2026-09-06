@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -35,6 +35,12 @@ public class PlayerActionService
         _areaManager = areaManager;
         _playerManager = playerManager;
     }
+
+    /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+    public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+    private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
     // ---------- 回合意图 ----------
     public void Pass(int playerId) => _turnManager.Pass(playerId);
@@ -119,6 +125,16 @@ public class PlayerActionService
     public void RegisterArea(string areaUid, int slotIndex, CardInstance instance)
         => _areaManager.RegisterArea(areaUid, slotIndex, instance);
 
+    /// <summary>抽取并登记初始地区（DrawInitialAreas + RegisterArea 收口为单一意图），返回地区实例列表。
+    /// 供单机 Arena 与联机服务端 NetMatchEntry 共用，避免两处重复"抽地区→注册槽位"逻辑。</summary>
+    public List<CardInstance> SetupInitialAreas(int count = 3)
+    {
+        var areas = _areaManager.DrawInitialAreas(count);
+        for (int i = 0; i < areas.Count; i++)
+            _areaManager.RegisterArea(areas[i].UID, i + 1, areas[i]);
+        return areas;
+    }
+
     /// <summary>注销地区槽位。</summary>
     public void UnregisterArea(string areaUid) => _areaManager.UnregisterArea(areaUid);
 
@@ -139,7 +155,7 @@ public class PlayerActionService
     /// 此处透传参数，规则门禁（原子锁/优先权/窗口校验/堆叠熔断）仍由 EffectEngine 内部负责。
     /// </summary>
     public void ActivateAbility(CardInstance source, EffectData data, CardInstance target)
-        => EffectEngine.Instance.ActivateAbility(source, data, target);
+        => EE.ActivateAbility(source, data, target);
 
     /// <summary>回合开始重置玩家基础行动次数（派遣暗藏/建立资产/先手破平 各 1）。原由 Arena 直接调用 PlayerManager.ResetActionCharges。</summary>
     public void ResetActionCharges(int playerId) => _playerManager.ResetActionCharges(playerId);

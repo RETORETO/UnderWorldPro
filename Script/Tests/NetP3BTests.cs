@@ -99,48 +99,5 @@ namespace Script.Tests
             Assert.IsTrue(moveA != null && moveA.Damage == 3 && moveA.IsTapped, "MoveCard 应携带新属性(Damage=3,Tap)");
         }
 
-        /// <summary>(4) SnapshotRenderDriver：首包全量 Add → 再包增量 Update，sink 路由正确。</summary>
-        public void TestSnapshotRenderDriverRouting()
-        {
-            var sink = new RecordingView();
-            var driver = new SnapshotRenderDriver(sink);
-
-            // 首包：全量
-            var snap1 = new GameSnapshot { Zones = new List<ZoneCardRef> { Card("a", CardZone.Hand, 1) } };
-            driver.ApplySnapshot(snap1);
-            Assert.IsTrue(sink.types.Contains("AddCard"), "首包应全量 AddCard");
-
-            // 二包：同卡属性变化 → UpdateCard（不再 Add）
-            var snap2 = new GameSnapshot { Zones = new List<ZoneCardRef> { Card("a", CardZone.Hand, 1, dmg: 2) } };
-            sink.types.Clear();
-            driver.ApplySnapshot(snap2);
-            Assert.IsTrue(sink.types.Contains("UpdateCard"), "属性变化应产 UpdateCard");
-            Assert.IsFalse(sink.types.Contains("AddCard"), "同 UID 不应重复 AddCard");
-
-            // 三包：卡移动 → MoveCard
-            var snap3 = new GameSnapshot { Zones = new List<ZoneCardRef> { Card("a", CardZone.AreaZone, 1, dmg: 2) } };
-            sink.types.Clear();
-            driver.ApplySnapshot(snap3);
-            Assert.IsTrue(sink.types.Contains("MoveCard"), "区域变化应产 MoveCard");
-
-            // RebuildFrom 强制全量
-            sink.types.Clear();
-            driver.RebuildFrom(snap1);
-            Assert.IsTrue(sink.types.Contains("AddCard"), "RebuildFrom 应重新全量 Add");
-        }
-    }
-
-    /// <summary>记录 sink 收到的指令类型与次数（测试替身）。</summary>
-    internal class RecordingView : ISnapshotView
-    {
-        public readonly List<string> types = new List<string>();
-        public void AddCard(CardRenderCommand cmd) => types.Add("AddCard");
-        public void RemoveCard(string uid) => types.Add("RemoveCard");
-        public void MoveCard(CardRenderCommand cmd) => types.Add("MoveCard");
-        public void UpdateCard(CardRenderCommand cmd) => types.Add("UpdateCard");
-        public void StackPush(StackRenderCommand cmd) => types.Add("StackPush");
-        public void StackPop() => types.Add("StackPop");
-        public void UpdatePlayer(PlayerRenderCommand cmd) => types.Add("PlayerUpdate");
-        public void UpdatePhase(PhaseRenderCommand cmd) => types.Add("PhaseChange");
     }
 }

@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using System;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -72,6 +72,12 @@ public partial class CardManager : Node
 
     /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
     public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
+
+    /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+    public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>未显式注入时回退静态 Instance（向后兼容，测试/旧装配路径不因治理而破坏）。</summary>
+    private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
     public override void _Ready()
     {
@@ -165,7 +171,7 @@ public partial class CardManager : Node
     public void ReturnCardToHand(CardInstance instance)
     {
         if (instance == null) return;
-        Script.Manager.EffectEngine.Instance.UnregisterContinuous(instance); // P1：离场还原持续效果
+        EE?.UnregisterContinuous(instance); // P1：离场还原持续效果
         instance.ResetToBaseState();   // 规则/状态重置归属 Controller，不暴露给 View
         _zoneManager?.MoveToHand(instance, instance.OwnerId);
     }
@@ -206,7 +212,7 @@ public partial class CardManager : Node
     public void MoveCardToGraveyard(CardInstance instance)
     {
         if (instance == null) return;
-        Script.Manager.EffectEngine.Instance.UnregisterContinuous(instance); // P1：离场还原持续效果
+        EE?.UnregisterContinuous(instance); // P1：离场还原持续效果
         _zoneManager?.MoveToGraveyard(instance, instance.OwnerId);
     }
 
@@ -320,13 +326,28 @@ public partial class CardManager : Node
         return _lastCreatedUid;
     }
 
-    /// <summary>按卡 UID + 效果 Id 从其实例模板上查找对应 EffectData（供 ActivateAbility 意图路由）。</summary>
+    /// <summary>按卡 UID + 效果 Id 从其实例模板上查找对应 EffectData（供 ActivateAbility 意图路由）。
+    /// 兼容玩家卡（PlayerTemplate.EffectDataList）与秘社卡（CouncilTemplate.ActivationOptions 的各 EffectDataList）。</summary>
     public EffectData GetEffectData(string cardUid, string effectId)
     {
         var inst = GetInstance(cardUid);
-        if (inst?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return null;
-        foreach (var e in tmpl.EffectDataList)
-            if (e.EffectId == effectId) return e;
+        if (inst == null) return null;
+
+        if (inst.PlayerTemplate is PlayerCardData tmpl && tmpl.EffectDataList != null)
+        {
+            foreach (var e in tmpl.EffectDataList)
+                if (e != null && e.EffectId == effectId) return e;
+        }
+
+        if (inst.CouncilTemplate is CouncilCardData councilTmpl && councilTmpl.ActivationOptions != null)
+        {
+            foreach (var opt in councilTmpl.ActivationOptions)
+            {
+                if (opt?.EffectDataList == null) continue;
+                foreach (var e in opt.EffectDataList)
+                    if (e != null && e.EffectId == effectId) return e;
+            }
+        }
         return null;
     }
 
@@ -415,7 +436,7 @@ public partial class CardManager : Node
         // D19-⑤：静止效果"不能被装备结附"——仅当打出的是【装备】类附属卡（子类型含"装备"，含运行时授予）
         // 且目标带 CannotBeAttached 标记时，禁止将其选为目标（打出阶段即拦截，而非结算后才进墓地）。
         if (dragging.CurrentSubCategories.Contains("装备")
-            && Script.Manager.EffectEngine.Instance.HasStaticFlag(target, StaticKind.CannotBeAttached))
+            && EE != null && EE.HasStaticFlag(target, StaticKind.CannotBeAttached))
         {
             GD.Print($"⛔ [目标拦截] 装备 {tmpl.CardName} 不能以 {target.PlayerTemplate?.CardName} 为目标（不能被装备结附）");
             return false;

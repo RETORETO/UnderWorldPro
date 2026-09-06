@@ -57,6 +57,10 @@ namespace Script.Net.Godot
         /// <summary>客户端收到快照后回调（最小验证可用来断言投影一致性）。</summary>
         public Action<Script.Net.GameSnapshot> OnClientSnapshot;
 
+        /// <summary>客户端收到服务端下发的决策请求（ChoiceRequest）时回调。ArenaOl 订阅后弹出决策面板；
+        /// 玩家选择经 SendChoiceResult 上行回包。无订阅方时 OnClientMessage 自动回取消兜底。</summary>
+        public event Action<Script.Net.ChoiceRequest> OnClientChoiceRequest;
+
         /// <summary>
         /// 启动本地回环联机对局。
         /// serverGame：已由 Arena 装配好的 GameInitializer（持有真实 Manager，并已 StartMatch 起手）。
@@ -93,7 +97,10 @@ namespace Script.Net.Godot
             if (serverGame == null) throw new ArgumentNullException(nameof(serverGame));
             _serverGame = serverGame;
 
-            var router = new GodotIntentRouter(serverGame.PlayerActionService, serverGame.CardManager);
+            var pm = serverGame.PMCommandManager;
+            if (pm != null)
+                ConfigureServerPMCommands(serverGame, pm);
+            var router = new GodotIntentRouter(serverGame.PlayerActionService, serverGame.CardManager, pm);
             _hub = new IntentHub(router);
 
             _serverTransport = serverTransport ?? new GodotEnetTransport(EnetRole.Server) { Port = port };
@@ -103,17 +110,54 @@ namespace Script.Net.Godot
             // 注入规则层：注入后，*Async 决策入口（如触发排序窗口）改经网关向目标玩家下发请求并 await 回包；
             // 未注入时完全退化为同步，现有行为不变。
             serverGame.TurnManager.InputGateway = _gateway;
+            // 联机对抗（调查/战斗/破平）也走同一决策网关，替代单机的事件窗口。
+            serverGame.CombatManager.InputGateway = _gateway;
+            // 异步决策续算（触发排序/选目标等）完成后，主动广播最新快照，
+            // 避免客户端完成选择后 UI 无反馈（否则要等下一次意图才刷新）。
+            serverGame.TurnManager.OnAsyncSettlementCompleted += () => PushSnapshot();
             _serverTransport.OnMessageReceived(OnServerMessage);
             _serverTransport.Start();
             GD.Print($"[NetworkMatchLauncher] 服务端进程已启动（权威规则 + 端口 {port}，InputGateway 已注入）");
         }
 
+        /// <summary>服务端无 Arena 场景时，为 PMCommandManager 注入纯逻辑依赖（UI 回调置空），
+        /// 使服务端可经 DebugCommand 意图执行 PM 调试命令验证核心功能。</summary>
+        private void ConfigureServerPMCommands(GameInitializer serverGame, PMCommandManager pm)
+        {
+            pm.Initialize(
+                serverGame.CardManager,
+                serverGame.DeckManager,
+                () => serverGame.AreaManager?.GetOrderedAreaUids() ?? new System.Collections.Generic.List<string>(),
+                (pid, count) => serverGame.PlayerActionService?.DrawCards(pid, count),
+                serverGame.ZoneManager,
+                onZoneChanged: null,
+                refreshCardUI: null,
+                getFaceUp: null,
+                setFaceUp: null,
+                openCombatWindow: null,
+                areaManager: serverGame.AreaManager,
+                drawAndAddNewArea: () => DrawAndAddAreaForDebug(serverGame),
+                stackManager: serverGame.StackManager);
+        }
+
+        /// <summary>PM 命令 addarea 的纯逻辑实现：从世界牌库抽 1 张地区卡注册为新区（不建 UI）。</summary>
+        private static bool DrawAndAddAreaForDebug(GameInitializer serverGame)
+        {
+            if (serverGame?.PlayerActionService == null || serverGame.AreaManager == null) return false;
+            var initial = serverGame.PlayerActionService.DrawInitialAreas(1);
+            if (initial == null || initial.Count == 0) return false;
+            var area = initial[0];
+            int index = serverGame.AreaManager.GetOrderedAreaUids().Count + 1;
+            serverGame.PlayerActionService.RegisterArea(area.UID, index, area);
+            return true;
+        }
+
+
         /// <summary>
-        /// 【真跨进程·客户端进程】仅装配客户端投影侧：独立 CardManager（跨进程由子类从模板重建）+ 各投影 Manager + ENet 连接 + 消费快照。
-        /// 不建任何服务端规则。供独立 Client 进程启动（配合命令行为 --client）。
+        /// 集中装配客户端投影 Manager（Zone/Deck/Player/Stack/Turn/World/Area/Card）。
+        /// 客户端仅做快照投影，不驱动规则；投影装配知识集中于此，避免散落在 StartClientOnly 中。
         /// </summary>
-        public void StartClientOnly(CardManager clientCard, ushort port = 18920,
-            INetTransport clientTransport = null, int playerId = 1)
+        private void AssembleClientProjection(CardManager clientCard)
         {
             _clientCard = clientCard;
 
@@ -123,7 +167,7 @@ namespace Script.Net.Godot
             _clientZone.Initialize(_clientCard, _clientDeck);
             _clientCard.SetZoneManager(_clientZone);
 
-            // 客户端：独立投影的 PlayerManager / StackManager / TurnManager（仅状态投影，不驱动规则）
+            // 独立投影 PlayerManager / StackManager / TurnManager（仅状态投影，不驱动规则）
             _clientPlayer = new PlayerManager();
             _clientPlayer.SetZoneManager(_clientZone);
             _clientStack = new StackManager();
@@ -133,15 +177,24 @@ namespace Script.Net.Godot
             _clientTurn.SetZoneManager(_clientZone);
             _clientTurn.SetStackManager(_clientStack);
 
-            // 客户端：独立投影的世界牌库 + 地区（第三批）。
-            // 世界牌库/地区的地区卡（DQ）用【独立 CardManager】重建，与手牌/牌库/墓地（_clientCard）彻底隔离，
-            // 避免地区卡实例与玩家卡实例在共享 _allInstances 里串扰（否则 DQ 会污染 _clientZone 的手牌桶）。
-            var worldCard = new NetClientCardManager(); // 独立 CardManager：地区卡实例与玩家卡实例隔离
+            // 世界牌库/地区的地区卡（DQ）用【独立 CardManager】重建，与玩家卡（_clientCard）彻底隔离，
+            // 避免地区卡实例与玩家卡实例在共享 _allInstances 里串扰。
+            var worldCard = new NetClientCardManager();
             _clientWorld = new WorldDeckManager();
             _clientWorld.SetCardManager(worldCard);
             _clientArea = new AreaManager();
             _clientArea.Initialize(_clientWorld, _clientZone, _clientStack);
-            _clientArea.SetCardManager(worldCard); // 与世界牌库共用同一独立 CardManager（地区卡实例一致）
+            _clientArea.SetCardManager(worldCard);
+        }
+
+        /// <summary>
+        /// 【真跨进程·客户端进程】仅装配客户端投影侧：独立 CardManager（跨进程由子类从模板重建）+ 各投影 Manager + ENet 连接 + 消费快照。
+        /// 不建任何服务端规则。供独立 Client 进程启动（配合命令行为 --client）。
+        /// </summary>
+        public void StartClientOnly(CardManager clientCard, ushort port = 18920,
+            INetTransport clientTransport = null, int playerId = 1)
+        {
+            AssembleClientProjection(clientCard);
 
             _clientTransport = clientTransport ?? new GodotEnetTransport(EnetRole.Client)
             {
@@ -177,6 +230,19 @@ namespace Script.Net.Godot
                 return intent.IntentId;
             }
             return _client?.SendIntent(kind, args);
+        }
+
+        /// <summary>客户端上行一条决策回包（ChoiceResult），对应服务端 NetworkInputGateway 挂起的请求。</summary>
+        public void SendChoiceResult(Script.Net.ChoiceResult result)
+        {
+            if (result == null || _clientTransport == null) return;
+            // Loopback：直接经回环上送服务端分发方；其余传输经 Send 上行。
+            if (_loopbackClient != null)
+            {
+                _loopbackClient.ClientReply(_client?.LocalPlayerId ?? 1, Script.Net.ChoiceSerializer.SerializeResult(result));
+                return;
+            }
+            _clientTransport.Send(_client?.LocalPlayerId ?? 1, Script.Net.ChoiceSerializer.SerializeResult(result));
         }
 
         // —— 服务端收包：意图 → 路由 → 回执 → 广播快照 ——
@@ -230,20 +296,31 @@ namespace Script.Net.Godot
             }
 
             // 服务端经 NetworkInputGateway 下发的决策请求（ChoiceRequest）：客户端必须回复 ChoiceResult，
-            // 否则服务端 await 会 30s 超时挂起。当前无决策 UI，先自动回一个默认结果（取消），
-            // 保证服务端权威结算不阻塞；后续接真实决策弹窗时再替换此自动响应。
+            // 否则服务端 await 会 30s 超时挂起。已接入决策面板时派发事件由 ArenaOl 弹出；
+            // 无订阅方（纯投影客户端）保留自动取消兜底，保证服务端权威结算不阻塞。
             var req = Script.Net.ChoiceSerializer.DeserializeRequest(message);
             if (req != null && !string.IsNullOrEmpty(req.RequestId))
             {
+                // 定向校验：仅响应发给本进程玩家的请求（服务端已定向下发，此处二次防呆）
+                if (req.PlayerId != (_client?.LocalPlayerId ?? 1))
+                {
+                    GD.Print($"[NetworkMatchLauncher] 忽略发给玩家{req.PlayerId}的决策请求（本地玩家为{_client?.LocalPlayerId}）");
+                    return;
+                }
+                if (OnClientChoiceRequest != null)
+                {
+                    OnClientChoiceRequest.Invoke(req);
+                    return;
+                }
                 var result = new Script.Net.ChoiceResult
                 {
                     RequestId = req.RequestId,
                     SelectedUid = null,
                     Pay = false,
-                    Cancelled = true,   // 暂未接入决策 UI：自动取消，规则继续（不影响已完成的抽牌/让过等无决策操作）
+                    Cancelled = true,   // 兜底：无决策 UI 订阅，自动取消
                 };
-                _clientTransport.Send(playerId, Script.Net.ChoiceSerializer.SerializeResult(result));
-                GD.Print($"[NetworkMatchLauncher] 客户端已自动响应决策请求 {req.RequestKind}({req.RequestId})：取消");
+                SendChoiceResult(result);
+                GD.Print($"[NetworkMatchLauncher] 无决策 UI 订阅，自动响应决策请求 {req.RequestKind}({req.RequestId})：取消");
                 return;
             }
 

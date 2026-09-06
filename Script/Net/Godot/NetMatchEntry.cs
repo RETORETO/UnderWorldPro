@@ -93,14 +93,12 @@ namespace Script.Net.Godot
             }
         }
 
-        /// <summary>模拟 Arena.InitializeAreas 的纯逻辑部分：从世界牌库抽 3 张地区卡注册到 AreaManager（不碰 UI）。</summary>
+        /// <summary>摆放初始地区（纯逻辑，不碰 UI）。复用 PlayerActionService.SetupInitialAreas，与单机 Arena 同一入口。</summary>
         private void SetupInitialAreas(GameInitializer gi)
         {
             var svc = gi.PlayerActionService;
             if (svc == null) return;
-            var initial = svc.DrawInitialAreas(3);
-            for (int i = 0; i < initial.Count; i++)
-                svc.RegisterArea(initial[i].UID, i + 1, initial[i]);
+            var initial = svc.SetupInitialAreas(3);
             GD.Print($"[NetMatchEntry] 已摆放 {initial.Count} 个初始地区（供地区投影验证）");
         }
 

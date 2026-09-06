@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -64,12 +64,22 @@ public partial class ZoneManager : Node
     private List<CardInstance> _area = new List<CardInstance>();   // 争夺区
     private List<CardInstance> _attached = new List<CardInstance>(); // 附属子区域（实例独立附属区，不进 _area）
     private List<CardInstance> _sealed = new List<CardInstance>();   // 封印子区域（实例独立封印区，不进 _area）
+    private List<CardInstance> _stack = new List<CardInstance>();   // 堆叠区（快照导出/重建用；堆叠条目由 StackManager 管理）
 
     public void Initialize(CardManager cardManager, DeckManager deckManager)
     {
         _cardManager = cardManager;
         _deckManager = deckManager;
     }
+
+    /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+    public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+    private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
+
+    /// <summary>显式注入的 TurnManager 引用（静态单例治理：替代 TurnManager.Instance）。</summary>
+    public TurnManager TurnManagerRef { get; set; }
 
     /// <summary>
     /// 对局级重置（B2：单场景常驻 + 显式 Reset）。
@@ -137,6 +147,7 @@ public partial class ZoneManager : Node
         _area.RemoveAll(c => c.UID == card.UID);
         _attached.RemoveAll(c => c.UID == card.UID);
         _sealed.RemoveAll(c => c.UID == card.UID);
+        _stack.RemoveAll(c => c.UID == card.UID);
 
         // D19-⑦：离开争夺区时注销该卡自身的持久效果（清除授予与静止标记，并从注册表移除），
         // 避免残留的 _continuousRegistry 在卡再次 MOVE 回场时触发 RegisterPersistent 的防重 return，
@@ -146,7 +157,7 @@ public partial class ZoneManager : Node
         bool leavingAttach = card.CurrentZone == CardZone.AttachedZone && targetZone != CardZone.AttachedZone;
         if (leavingArea || leavingAttach)
         {
-            Script.Manager.EffectEngine.Instance.UnregisterPersistent(card);
+            EE?.UnregisterPersistent(card);
         }
 
         // D49：附属自身离场（AttachedZone → 其他区，如 JC020 牺牲进墓地）——清结附关系。
@@ -264,7 +275,7 @@ public partial class ZoneManager : Node
         FireMoved(card, zone, playerId, "夺控", bumpVersion);
         // 旧控制者侧也需重算，撤销其曾授予他者的光环效果
         if (oldController != playerId)
-            EffectEngine.Instance.ReevaluateAuras(oldController);
+            EE?.ReevaluateAuras(oldController);
     }
 
     /// <summary>
@@ -279,8 +290,8 @@ public partial class ZoneManager : Node
         // PM 命令的 MoveAreaToArea 等专用方法都经此出口，而 MoveCard 也走 MoveToX，故只需在此一处）。
         // 注意顺序：必须先 ReevaluatePrereqs（用新控制者/新忠诚重算并改写数据），再 RefreshFirstStrikeStats
         // （把最新数据刷到 UI）；反之 UI 会显示重算前的旧值，表现为"数据变了 UI 没刷"。
-        Script.Manager.EffectEngine.Instance.ReevaluatePrereqs(playerId);
-        TurnManager.Instance?.RefreshFirstStrikeStats();
+        EE?.ReevaluatePrereqs(playerId);
+        TurnManagerRef?.RefreshFirstStrikeStats();
         // 【MVC 收口】所有 move 路径（MoveToX / MoveCard / PM 命令专用移动）经此唯一出口，
         // 由 View 层订阅后统一刷新派生 UI（资产区领域忠诚、地区能力统计、分数、持续效果态），
         // 调用方无需再逐处手动调 SyncDerivedUI / RefreshStatsLabels。
@@ -356,6 +367,7 @@ public partial class ZoneManager : Node
         RemoveFromAllZones(card, CardZone.Stack);
         card.CurrentZone = CardZone.Stack;
         card.ZoneDetailId = null;
+        _stack.Add(card);   // 记入堆叠桶：供 ToSnapshot 导出 / 客户端投影重建卡实例
         if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入堆叠区 (玩家{playerId})");
         FireMoved(card, CardZone.Stack, playerId, null);
     }
@@ -437,7 +449,7 @@ public partial class ZoneManager : Node
             // D19 统一注册：通过 MOVE 命令（非结算路径）进入争夺区的卡，同样需要注册持续/静止效果
             // （如 JC001 通灵猫头鹰的"不能被装备结附"与"白眼=先手调查"）。与 TurnManager.ResolveEntry
             // 的 PlayToArea 分支保持一致，避免"MOVE 进场不生效"的漏注册。
-            Script.Manager.EffectEngine.Instance.RegisterPersistent(card);
+            EE?.RegisterPersistent(card);
         }
     }
 
@@ -457,7 +469,7 @@ public partial class ZoneManager : Node
         // 对无持续/静止效果的普通附属是无副作用空操作；防重复由 RegisterPersistent 内部去重。
         if (fromZone != CardZone.AttachedZone)
         {
-            Script.Manager.EffectEngine.Instance.RegisterPersistent(card);
+            EE?.RegisterPersistent(card);
         }
         if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
         FireMoved(card, CardZone.AttachedZone, playerId, areaDetailId);
@@ -559,6 +571,12 @@ public partial class ZoneManager : Node
             {
                 var result = new List<CardInstance>(_sealed);
                 if (!string.IsNullOrEmpty(detailId)) result.RemoveAll(c => c.ZoneDetailId != detailId);
+                if (playerId != 0) result.RemoveAll(c => c.ControllerId != playerId);
+                return result;
+            }
+            case CardZone.Stack:
+            {
+                var result = new List<CardInstance>(_stack);
                 if (playerId != 0) result.RemoveAll(c => c.ControllerId != playerId);
                 return result;
             }
@@ -745,6 +763,7 @@ public partial class ZoneManager : Node
         foreach (var c in _area) result.Add(ToCardRef(c, CardZone.AreaZone, -1));
         foreach (var c in _attached) result.Add(ToCardRef(c, CardZone.AttachedZone, -1));
         foreach (var c in _sealed) result.Add(ToCardRef(c, CardZone.SealedZone, -1));
+        foreach (var c in _stack) result.Add(ToCardRef(c, CardZone.Stack, -1));
         return result;
     }
 
@@ -773,6 +792,8 @@ public partial class ZoneManager : Node
             IsSealed = c.IsSealed,
             IsAttached = c.IsAttached,
             IsSeal = c.IsSeal,
+            AttachedToUid = c.AttachedTo?.UID,
+            SealedByUid = c.SealedBy?.UID,
             IsTapped = c.IsTapped,
             Damage = c.Damage,
             Trauma = c.Trauma,
@@ -803,6 +824,7 @@ public partial class ZoneManager : Node
         _hand.Clear(); _graveyard.Clear(); _asset.Clear();
         _score.Clear(); _council.Clear();
         _area.Clear(); _attached.Clear(); _sealed.Clear();
+        _stack.Clear();
         if (_deckManager != null)
         {
             _deckManager.GetDeckPlayer1().Clear();
@@ -816,6 +838,39 @@ public partial class ZoneManager : Node
             var inst = _cardManager?.RebuildFromRef(r);
             if (inst == null) continue; // 实例重建失败（如模板缺失）则跳过，避免空引用
             PlaceIntoBucket(inst, r);
+        }
+
+        // 3) 恢复附属/封印的双向宿主关系：快照只存宿主 UID，需等全部实例归位后再统一重建。
+        //    否则结附于秘社的附属（如 JC012）客户端 AttachedTo 为 null，UI 挂载不到宿主容器而"看不见"。
+        foreach (var r in refs)
+        {
+            if (r == null || _cardManager == null) continue;
+            var inst = _cardManager.GetInstance(r.Uid);
+            if (inst == null) continue;
+            // 清旧关系，避免重复快照累积
+            inst.AttachedTo = null;
+            inst.SealedBy = null;
+            inst.AttachedCards?.Clear();
+            inst.SealedCards?.Clear();
+        }
+        foreach (var r in refs)
+        {
+            if (r == null || _cardManager == null) continue;
+            var inst = _cardManager.GetInstance(r.Uid);
+            if (inst == null) continue;
+
+            if (!string.IsNullOrEmpty(r.AttachedToUid))
+            {
+                var host = _cardManager.GetInstance(r.AttachedToUid);
+                inst.AttachedTo = host;
+                if (host != null && !host.AttachedCards.Contains(inst)) host.AttachedCards.Add(inst);
+            }
+            if (!string.IsNullOrEmpty(r.SealedByUid))
+            {
+                var host = _cardManager.GetInstance(r.SealedByUid);
+                inst.SealedBy = host;
+                if (host != null && !host.SealedCards.Contains(inst)) host.SealedCards.Add(inst);
+            }
         }
     }
 
@@ -856,6 +911,7 @@ public partial class ZoneManager : Node
             case CardZone.AreaZone: _area.Add(inst); break;
             case CardZone.AttachedZone: _attached.Add(inst); break;
             case CardZone.SealedZone: _sealed.Add(inst); break;
+            case CardZone.Stack: _stack.Add(inst); break;
             default:
                 GD.PrintErr($"[ZoneManager] ApplySnapshot: 不支持重建的区域 {r.Zone}（UID={r.Uid}）");
                 break;

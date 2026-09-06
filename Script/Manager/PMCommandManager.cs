@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -64,6 +64,12 @@ public partial class PMCommandManager : Node
         _areaManager = areaManager;
         _stackManager = stackManager;
     }
+
+    /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+    public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+    private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
     /// <summary>实时获取当前按槽位顺序的地区 UID 列表（方案②：每次命令执行时查询，不持有过期快照）。</summary>
     private List<string> CurrentAreaUids => _getAreaUids != null ? _getAreaUids() : new List<string>();
@@ -149,7 +155,9 @@ public partial class PMCommandManager : Node
             case "untap": ExecuteUntap(parts); break;
             case "flip": ExecuteFlip(parts); break;
             case "covert": ExecuteCovert(parts); break;
-            case "printdeck": ExecuteDeck(parts); break;
+            case "printdeck": case "deck": ExecuteDeck(parts); break;
+            case "player1draw": ExecuteDrawAlias(parts, 1); break;
+            case "player2draw": ExecuteDrawAlias(parts, 2); break;
             case "investigation": ExecuteInvestigation(parts); break;
             case "battle": ExecuteStrength(parts); break;
             case "power": ExecutePower(parts); break;
@@ -301,6 +309,16 @@ public partial class PMCommandManager : Node
 
         int count = 1;
         if (parts.Length >= 3 && int.TryParse(parts[2], out int n) && n > 0)
+            count = n;
+        _onDraw?.Invoke(playerId, count);
+        GD.Print($"✅ 玩家{playerId} 抽牌 {count} 张（已加入手牌区）");
+    }
+
+    /// <summary>player1draw / player2draw 别名：固定玩家号，仅数量可变。</summary>
+    private void ExecuteDrawAlias(string[] parts, int playerId)
+    {
+        int count = 1;
+        if (parts.Length >= 2 && int.TryParse(parts[1], out int n) && n > 0)
             count = n;
         _onDraw?.Invoke(playerId, count);
         GD.Print($"✅ 玩家{playerId} 抽牌 {count} 张（已加入手牌区）");
@@ -460,7 +478,7 @@ public partial class PMCommandManager : Node
         }
         // 纯翻面（无区域移动）：显式触发 FireCovert 使目标版本号失效（D16 丢失目标新方案），
         // 复用 FireMoved 统一刷新出口保持 UI 一致。
-        Script.Manager.EffectEngine.Instance.ZoneManagerRef?.FireCovert(instance);
+        EE.ZoneManagerRef?.FireCovert(instance);
         // 同步 UI 表现：翻面 + 刷新数值，避免数据/UI 不一致
         _setFaceUp?.Invoke(instance.UID, toFaceUp);
         if (toFaceUp) _refreshCardUI?.Invoke(instance.UID);
@@ -774,17 +792,19 @@ public partial class PMCommandManager : Node
   list                        - 列出所有卡牌状态
   kill card <UID>             - 强制杀死卡牌
   heal card <UID> [数值]      - 清除伤害（不填则完全清除）
+  draw <玩家 1|2> [数量]      - 指定玩家抽牌（默认1张）
   player1draw [数量]          - 玩家1抽牌（默认1张）
   player2draw [数量]          - 玩家2抽牌（默认1张）
-  draw [数量]                 - 兼容命令，等同 player1draw
   move <UID> <玩家> <目标>    - 移动卡牌: 1..N(地区编号)/hand/grave/deck[top|bottom]/score/asset
   tap <UID>                   - 横置指定卡牌（实例 IsTapped=true）
   untap <UID>                 - 解除横置（实例 IsTapped=false）
   flip <UID>                  - 翻面（正反切换，清空指示物/附属/封印，翻到正面恢复基础属性）
   covert <UID> [on|off]      - 测试: 强制设/解除暗藏者(IsCovert)，用于验证暗藏者免疫伤害
-  deck [1|2]                  - 按卡组内真实顺序打印卡组内容（索引0=牌库顶，默认玩家1）
-  investigation <玩家 1|2> <X> <areaNo> - 打开调查对抗窗口（胜者从牌库顶查看X张分配放回）
-  battle <玩家 1|2> <X> <areaNo>       - 打开战斗对抗窗口（败方该地区角色分配X点伤害）
+  deck [1|2] / printdeck      - 按卡组内真实顺序打印卡组内容（索引0=牌库顶，默认玩家1）
+  investigation <玩家 1|2> <地区 areaNo> <X> - 打开调查对抗窗口（胜者从牌库顶查看X张分配放回）
+  battle <玩家 1|2> <地区 areaNo> <X>        - 打开战斗对抗窗口（败方该地区角色分配X点伤害）
+  power <玩家 1|2> <地区 areaNo> <点数>       - 势力对抗：直接为指定玩家在地区添加势力标记
+  setassetfromdeck <玩家 1|2> <num> - 从牌库顶部移 num 张卡到资产区
   addarea [数量]              - 从世界牌库抽地区卡并新建地区槽位（默认1个，自动重排/重叠）
   attach <附属UID> <宿主UID>   - 结附：把附属卡结附到场上目标卡（不移动区域）
   attacharea <附属UID> <地区>  - 结附地区：把附属卡结附到指定地区（移入争夺区）

@@ -45,6 +45,10 @@ namespace Script.Tests
             });
 
             var gateway = new NetworkInputGateway(transport);
+            // 统一分发方：服务端收到客户端上行 ChoiceResult 后，显式转发给网关完成挂起请求。
+            // （NetworkInputGateway 设计为不自行订阅 OnMessageReceived，避免与传输其他订阅者互相覆盖。）
+            transport.OnMessageReceived((pid, msg) => gateway.TryHandleResult(msg));
+
             var ee = new Script.Manager.EffectEngine();
             ee.InputGateway = gateway;
 

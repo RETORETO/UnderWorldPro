@@ -91,6 +91,21 @@ namespace Script.Tests
             // 服务端用 reportedPlayerId=2 裁决，意图声明 1 → 身份不符被拒（证明通道闭环 + 权威校验）
             Assert.IsFalse(received.Success, "连接映射与意图声明不符时应被服务端拒绝（通道闭环正确）");
         }
+
+        /// <summary>(4) DebugCommand 意图：含空格整行命令作为单个参数路由，内容不丢。</summary>
+        public void TestDebugCommandRouting()
+        {
+            var stub = new StubIntentRouter();
+            var hub = new IntentHub(stub);
+
+            var intent = PlayerIntent.Create(1, PlayerIntent.Kind.DebugCommand, "damage area 0 3");
+            var json = IntentSerializer.SerializeIntent(intent);
+            var respJson = hub.HandleIntent(reportedPlayerId: 1, json);
+            var resp = IntentSerializer.DeserializeResult(respJson);
+
+            Assert.IsTrue(resp.Success, "DebugCommand 应被路由为合法意图");
+            Assert.AreEqual("damage area 0 3", stub.LastDebugCommand, "整行命令应作为单个参数完整透传");
+        }
     }
 
     /// <summary>测试桩：实现 IIntentRouter，不触达任何业务逻辑（仅验证 IntentHub 反序列化/身份校验/路由分发）。</summary>
@@ -109,7 +124,7 @@ namespace Script.Tests
         public void Concede(int playerId) { }
         public void ActivateAbility(string sourceUid, string effectId, string targetUid) { }
         public void ResetActionCharges(int playerId) { }
-        public void MarkCreateWatch() { }
-        public string ConsumeCreatedUid() => null;
+        public string LastDebugCommand;
+        public void DebugCommand(int playerId, string commandLine) { LastDebugCommand = commandLine; }
     }
 }

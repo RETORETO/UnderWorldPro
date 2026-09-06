@@ -44,6 +44,7 @@ namespace Script.Net
         public int AvailableMana;
         public int StorybookCount;   // 故事书/资源计数（按实际字段定）
         public bool IsGameOver;
+        public int ScoreTotal;       // 胜利分数（分数区总分，联机客户端展示/结算用）
     }
 
     /// <summary>一张卡在某一时刻的运行时状态投影（纯数据）。</summary>
@@ -60,6 +61,10 @@ namespace Script.Net
         public bool IsSealed;
         public bool IsAttached;
         public bool IsSeal;          // 本卡是封印卡（镜像 IsAttached）
+        /// <summary>附属卡结附的宿主 UID（IsAttached=true 且结附于卡时有效；结附地区则为空）。</summary>
+        public string AttachedToUid;
+        /// <summary>封印卡封印的宿主 UID（IsSeal=true 且封印于卡时有效；封印地区则为空）。</summary>
+        public string SealedByUid;
         public bool IsTapped;
         public int Damage;
         public int Trauma;
@@ -85,6 +90,10 @@ namespace Script.Net
         public int OwnerId;
         public string EffectText;
         public string SourceUid;     // 来源卡 UID（若有）
+        /// <summary>true=卡片进堆叠（显示卡面）；false=效果进堆叠（显示文字）。</summary>
+        public bool IsCard;
+        /// <summary>ResolveKind 枚举值（PlayToArea / Trigger / AreaWon ...），客户端投影重建显示用。</summary>
+        public int Kind;
     }
 
     /// <summary>某地区的势力标记快照（第三批：p1=玩家1标记数，p2=玩家2标记数）。</summary>

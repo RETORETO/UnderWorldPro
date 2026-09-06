@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Enums;
@@ -53,6 +53,13 @@ public partial class GameInitializer : Node
     /// <summary>本局加载的卡组（含卡组与秘社），供 SetupCouncils 读取秘社。由 InitializeAll 加载并缓存。</summary>
     private DeckList _loadedDeck;
 
+    /// <summary>本局 EffectEngine 实例（静态单例治理：显式注入替代 EffectEngine.Instance）。</summary>
+    private Script.Manager.EffectEngine _effectEngine;
+
+    /// <summary>持续效果联动处理器（下沉到装配层，替代单机 Arena.Events 的 View 订阅，使联机服务端同样触发）。
+    /// 具名字段便于每次 InitializeAll 先反订阅再订阅，避免重复累加。</summary>
+    private System.Action<Script.Game.Entities.CardInstance, CardChangeKind> _cardStateContinuityHandler;
+
     // ============================================================
     // 初始化入口（由 Arena._Ready 调用）
     // ============================================================
@@ -83,12 +90,28 @@ public partial class GameInitializer : Node
         // 由本 Composition Root 创建；8 个对局状态集合（持续注册表/光环/时效修正/封锁等）
         // 从 static 字段改为实例字段后，实例随场景释放即清空，根治"跨局封锁残留"类问题。
         var effectEngine = new Script.Manager.EffectEngine();
+        _effectEngine = effectEngine;
         if (VerboseSetup) GD.Print("  ✅ EffectEngine（实例化，状态随实例生命周期）");
+
+        // 触发系统在 EffectEngine 之前创建：此处补齐注入 EffectEngine 引用（静态单例治理）。
+        triggerRegistry.EffectEngineRef = effectEngine;
+        triggerEmitPoints.EffectEngineRef = effectEngine;
 
         // 1. CardManager（卡牌实例的创建、移动、查询）
         CardManager = new CardManager();
         AddChild(CardManager);
         CardManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
+        CardManager.EffectEngineRef = effectEngine;            // 静态单例治理：显式注入 EffectEngine
+        // 持续效果联动下沉到装配层（原在单机 Arena.Events 的 View 订阅）：横置/翻面 → 重判持续前提/光环。
+        // 使联机服务端（无 Arena）同样触发，修复 JC068 阿格斯IV"TAP 后对手仍不能暗藏"。
+        _cardStateContinuityHandler = (card, kind) =>
+        {
+            if (card == null) return;
+            if (kind == CardChangeKind.TappedChanged) effectEngine.ReevaluatePrereqs(card.ControllerId);
+            else if (kind == CardChangeKind.CovertChanged) effectEngine.ReevaluateAuras(card.ControllerId);
+        };
+        CardManager.OnCardStateChanged -= _cardStateContinuityHandler;
+        CardManager.OnCardStateChanged += _cardStateContinuityHandler;
         if (VerboseSetup) GD.Print("  ✅ CardManager");
 
         // 2. PlayerManager（玩家状态：能量、先手标志）
@@ -110,6 +133,7 @@ public partial class GameInitializer : Node
         AddChild(ZoneManager);
         ZoneManager.Initialize(CardManager, DeckManager);
         ZoneManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
+        ZoneManager.EffectEngineRef = effectEngine;            // 静态单例治理：显式注入 EffectEngine
         CardManager.SetZoneManager(ZoneManager);
         PlayerManager.SetZoneManager(ZoneManager);   // 忠诚/费用来自资产区
         if (VerboseSetup) GD.Print("  ✅ ZoneManager");
@@ -119,6 +143,8 @@ public partial class GameInitializer : Node
         AddChild(TurnManager);
         TurnManager.Initialize(DeckManager, PlayerManager, CardManager);
         TurnManager.SetZoneManager(ZoneManager);   // 基础行动收口需驱动 ZoneManager 移动
+        TurnManager.EffectEngineRef = effectEngine;   // 静态单例治理：必须在 SetTriggerSystem 之前注入（其内部 EE.IsStackCircuitBroken）
+        ZoneManager.TurnManagerRef = TurnManager;     // 静态单例治理：替代 ZoneManager 内 TurnManager.Instance
         TurnManager.SetTriggerSystem(triggerRegistry, triggerEmitPoints, eventBus);   //【MVC 收口】注入触发系统三实例
         if (VerboseSetup) GD.Print("  ✅ TurnManager");
 
@@ -148,6 +174,7 @@ public partial class GameInitializer : Node
         // 6.7 PlayerActionService（玩家意图统一通道）
         // 依赖 TurnManager / CardManager / ZoneManager / AreaManager / PlayerManager，故须在 AreaManager 之后创建
         PlayerActionService = new PlayerActionService(TurnManager, CardManager, ZoneManager, AreaManager, PlayerManager);
+        PlayerActionService.EffectEngineRef = effectEngine;   // 静态单例治理：显式注入 EffectEngine
         if (VerboseSetup) GD.Print("  ✅ PlayerActionService");
 
         // 6.5 CombatManager（三种对抗计算与势力标记产出，依赖 ZoneManager + AreaManager）
@@ -155,6 +182,7 @@ public partial class GameInitializer : Node
         AddChild(CombatManager);
         CombatManager.Initialize(CardManager, PlayerManager, ZoneManager, AreaManager);
         CombatManager.SetTriggerEmitPoints(triggerEmitPoints);   //【MVC 收口】注入触发广播封装层
+        CombatManager.ActionService = PlayerActionService;       // 联机对抗网络化路径需要（调查取牌/放回/抽牌）
         TurnManager.SetCombatManager(CombatManager);
         if (VerboseSetup) GD.Print("  ✅ CombatManager");
 
@@ -171,6 +199,7 @@ public partial class GameInitializer : Node
         // 8. PM 调试命令管理器：创建并纳入本节点生命周期（UI 回调由 Arena 注入）
         PMCommandManager = new PMCommandManager();
         AddChild(PMCommandManager);
+        PMCommandManager.EffectEngineRef = effectEngine;   // 静态单例治理：显式注入 EffectEngine
         if (VerboseSetup) GD.Print("  ✅ PMCommandManager");
 
         // 8.5【MVC 收口】EffectEngine 的管理器引用注入收归本 Composition Root，不再由 View（Arena）装配。
@@ -284,7 +313,7 @@ public partial class GameInitializer : Node
     {
         GD.Print("=== GameInitializer: 对局重置 (ResetMatch) ===");
         // 1. 先清效果注册表（最关键）
-        Script.Manager.EffectEngine.Instance?.ResetAll();
+        _effectEngine?.ResetAll();
         // 2. 清各 Manager 对局状态（不重建对象，复用常驻实例）
         CardManager.Reset();
         PlayerManager.Reset();
@@ -332,12 +361,12 @@ public partial class GameInitializer : Node
     /// </summary>
     public void RegisterUIHooks(Script.Interfaces.IGameUIHooks hooks)
     {
-        Script.Manager.EffectEngine.Instance.UIHooks = hooks;
+        _effectEngine.UIHooks = hooks;
         // C/S 化 P0-B：若已装配输入网关，则同步注入到引擎/回合管理器（向后兼容：未装配则保持 null）。
         if (_inputGateway != null)
         {
-            Script.Manager.EffectEngine.Instance.InputGateway = _inputGateway;
-            TurnManager.Instance.InputGateway = _inputGateway;
+            _effectEngine.InputGateway = _inputGateway;
+            TurnManager.InputGateway = _inputGateway;
         }
         if (VerboseSetup) GD.Print("  ✅ IGameUIHooks 已注册（Arena 实现注入）");
     }
@@ -356,8 +385,8 @@ public partial class GameInitializer : Node
     public void SetInputGateway(Script.Net.IInputGateway gateway)
     {
         _inputGateway = gateway;
-        Script.Manager.EffectEngine.Instance.InputGateway = gateway;
-        TurnManager.Instance.InputGateway = gateway;
+        _effectEngine.InputGateway = gateway;
+        TurnManager.InputGateway = gateway;
         GD.Print(gateway != null
             ? "  ✅ IInputGateway 已注入（C/S 异步输入模式）"
             : "  ⚪ IInputGateway 已清除（回退单机弹窗模式）");

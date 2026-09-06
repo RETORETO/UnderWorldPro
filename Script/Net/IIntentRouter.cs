@@ -54,10 +54,22 @@ namespace Script.Net
         /// <summary>重置行动次数。</summary>
         void ResetActionCharges(int playerId);
 
-        /// <summary>标记"建卡观察窗"开始（用于收集本次意图新建实例的 UID）。</summary>
+        /// <summary>执行一条 PM 调试命令（仅调试/验证用；服务端权威执行，字符串为整行命令）。</summary>
+        void DebugCommand(int playerId, string commandLine);
+    }
+
+    /// <summary>
+    /// 【窄接口】建卡 UID 观察窗（C/S 化 UID 下发辅助）。
+    /// 从 IIntentRouter 拆出，避免把"实现细节"暴露在主路由契约上：
+    /// 仅当路由实现同时需要收集"本次意图新建实例 UID"时才实现本接口，
+    /// IntentHub 通过类型判断（is IUIDWatch）按需启用，不污染主路由抽象。
+    /// </summary>
+    public interface IUIDWatch
+    {
+        /// <summary>标记观察窗开始：其后第一次建卡产生的 UID 可被 ConsumeCreatedUid 取出。</summary>
         void MarkCreateWatch();
 
-        /// <summary>取出观察窗内新建的实例 UID（仅一次），无则返回 null。</summary>
+        /// <summary>取出观察窗内新建实例 UID（仅一次），无则返回 null。</summary>
         string ConsumeCreatedUid();
     }
 }

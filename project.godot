@@ -47,3 +47,9 @@ version_control/autoload_on_startup=true
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+
+[debug]
+
+file_logging/enable_file_logging=true
+file_logging/log_path="user://logs/uwpro.log"
+file_logging/max_log_files=5

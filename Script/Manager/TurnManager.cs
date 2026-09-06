@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -67,6 +67,10 @@ public partial class TurnManager : Node
     /// <summary>先手加成重算完成后触发，供 UI 统一刷新先手角标（避免在渲染过程中反向驱动 Controller 重算）</summary>
     public event Action OnFirstStrikeRecalculated;
 
+    /// <summary>C/S 化：网络化异步决策结算（触发排序/选目标等）全部完成后触发。
+    /// 服务端 NetworkMatchLauncher 订阅后主动广播快照，客户端才能及时看到续算结果。</summary>
+    public event Action OnAsyncSettlementCompleted;
+
     /// <summary>供外部（如 Arena 蒙版行动）触发资产变化刷新；封装 event 的 Invoke。</summary>
     public void NotifyAssetsChanged() => OnAssetsChanged?.Invoke();
 
@@ -87,6 +91,11 @@ public partial class TurnManager : Node
     // 而非依赖本地 _view 弹窗（解决 D17 联机窗口无输入隔离）。
     // 未注入（null）时所有 *Async 入口退化为同步行为，与现有逻辑完全一致。
     public Script.Net.IInputGateway InputGateway { get; set; }
+    /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+    public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+    private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
     //【MVC 收口】触发系统三实例（由 Composition Root 装配注入，取代原 static class）
     private TriggerRegistry _triggerRegistry;
     private TriggerEmitPoints _triggerEmitPoints;
@@ -162,7 +171,7 @@ public partial class TurnManager : Node
         //【MVC 收口】TurnManagerRef 注入已收归 GameInitializer（effectEngine.TurnManagerRef = TurnManager），
         // 此处不再重复注入（避免依赖 EffectEngine.Instance 已创建的时序脆弱性）。
         // P2：回合结束时还原所有"直到回合结束"的时效修正（持续/修正栈）
-        OnTurnEnded += (turn) => Script.Manager.EffectEngine.Instance?.ExpireTurnEndEffects(turn);
+        OnTurnEnded += (turn) => EE?.ExpireTurnEndEffects(turn);
         GD.Print("✅ TurnManager 单例初始化完成");
     }
 
@@ -200,7 +209,8 @@ public partial class TurnManager : Node
         _gameEventBus = bus;
 
         registry.GetAllInstances = () => _cardManager?.GetAllInstances() ?? new System.Collections.Generic.List<CardInstance>();
-        registry.RunTriggerPhase = (triggers) => RunTriggerPhase(triggers, onAllCompleted: () =>
+        // 联机（InputGateway 注入）走网络化异步流程；单机/测试仍走原同步流程，行为不变。
+        registry.RunTriggerPhase = (triggers) => RunTriggerPhaseDispatch(triggers, onAllCompleted: () =>
         {
             GD.Print($"[Trigger] 触发阶段结束，进入正常响应让过流程（总线驱动）");
         });
@@ -209,7 +219,7 @@ public partial class TurnManager : Node
         // 不再走"直接入栈"快捷路径。原 PushTriggerForCard 委托已废弃，保留字段兼容。
         // D-1 熔断查询：堆叠累计压入达上限后，TriggerRegistry 不再收集任何触发、EffectEngine 拒绝激活
         registry.IsCircuitBroken = () => _stackManager != null && _stackManager.IsCircuitBroken;
-        Script.Manager.EffectEngine.Instance.IsStackCircuitBroken = () => _stackManager != null && _stackManager.IsCircuitBroken;
+        EE.IsStackCircuitBroken = () => _stackManager != null && _stackManager.IsCircuitBroken;
     }
 
     /// <summary>
@@ -461,23 +471,24 @@ public partial class TurnManager : Node
     /// 窗口内点击"全部/第一张进入堆叠"会立即把对应触发入栈；点击"确认"关闭窗口并进入下一个所有者的窗口。
     /// 这样避免同一批触发被所有玩家重复处理（例如银钥探求者只应被其控制者处理一次）。
     /// </summary>
-    private void RunTriggerPhase(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
+    /// <summary>
+    /// 触发决策的公共分组规则（单机同步窗口与联机异步网关共用，单一真相源）：
+    /// 按 ControllerId 分组，再按"先手优先"排定各所有者的处理顺序（D32 修正：窗口归属以控制者为准）。
+    /// </summary>
+    private (System.Collections.Generic.Dictionary<int, List<Script.Data.Effects.StackEffectInstance>> byOwner, List<int> owners)
+        BuildTriggerOwnerGroups(List<Script.Data.Effects.StackEffectInstance> allTriggers)
     {
-        // 1. 按触发控制者分组（D32 修正：窗口归属以控制者为准，
-        //    只有 Controller==P1 的 JC014 才向 P1 推送窗口；Owner 不再参与分组判定）。
-        //    TODO(联机): 当前单机 hotseat 下窗口无输入隔离——逻辑上已按 ControllerId 正确分组
-        //    （Controller==P2 的触发只会打开 P2 的窗口），但同屏任何人都能操作该窗口。
-        //    接入第二个客户端时，需在 OpenTriggerOrderForPlayer 处增加
-        //    "仅允许 owner 对应的本地玩家操作" 的判定（如 IsLocalPlayerAllowed）。
         var byOwner = new System.Collections.Generic.Dictionary<int, List<Script.Data.Effects.StackEffectInstance>>();
-        foreach (var t in allTriggers)
+        if (allTriggers != null)
         {
-            int owner = t.ControllerId;
-            if (!byOwner.ContainsKey(owner)) byOwner[owner] = new List<Script.Data.Effects.StackEffectInstance>();
-            byOwner[owner].Add(t);
+            foreach (var t in allTriggers)
+            {
+                int owner = t.ControllerId;
+                if (!byOwner.ContainsKey(owner)) byOwner[owner] = new List<Script.Data.Effects.StackEffectInstance>();
+                byOwner[owner].Add(t);
+            }
         }
 
-        // 2. 按"先手优先"顺序排定各所有者窗口的处理次序。
         var owners = new List<int>(byOwner.Keys);
         int firstPlayer = FirstPlayerId;
         owners.Sort((a, b) =>
@@ -486,6 +497,13 @@ public partial class TurnManager : Node
             if (b == firstPlayer) return 1;
             return a.CompareTo(b);
         });
+        return (byOwner, owners);
+    }
+
+    private void RunTriggerPhase(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
+    {
+        // 1~2. 按控制者分组 + 先手优先排序：与联机异步流程共用同一份分组/排序规则（单一真相源）。
+        var (byOwner, owners) = BuildTriggerOwnerGroups(allTriggers);
 
         // 3. 顺序逐个打开各所有者的窗口；当前窗口 确认(onDone) 后处理下一个。
         System.Action processNext = null;
@@ -522,6 +540,24 @@ public partial class TurnManager : Node
     /// 这样既修复了 D17 多玩家编排的"窗口无输入隔离"问题（联机时由网关确保仅 owner 可操作），
     /// 又无需改动现有 _view 弹窗链路。
     /// </summary>
+    /// <summary>
+    /// 触发流程统一入口：单机（未注入 InputGateway）走原同步排序窗口；
+    /// 联机（已注入 InputGateway）走网络化异步流程。由 SetTriggerSystem 绑定到 TriggerRegistry.RunTriggerPhase。
+    /// </summary>
+    private void RunTriggerPhaseDispatch(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
+    {
+        if (InputGateway != null)
+        {
+            _ = RunTriggerPhaseAsync(allTriggers, () =>
+            {
+                onAllCompleted?.Invoke();
+                OnAsyncSettlementCompleted?.Invoke();
+            });
+            return;
+        }
+        RunTriggerPhase(allTriggers, onAllCompleted);
+    }
+
     private async System.Threading.Tasks.Task RunTriggerPhaseAsync(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
     {
         if (InputGateway == null)
@@ -530,61 +566,104 @@ public partial class TurnManager : Node
             return;
         }
 
-        var byOwner = new System.Collections.Generic.Dictionary<int, List<Script.Data.Effects.StackEffectInstance>>();
-        foreach (var t in allTriggers)
+        // 联机触发排序/选目标为原子操作：期间拒绝让过/出牌，与单机模态窗口 EnterAtomic 语义一致。
+        EnterAtomic();
+        try
         {
-            int owner = t.ControllerId;
-            if (!byOwner.ContainsKey(owner)) byOwner[owner] = new List<Script.Data.Effects.StackEffectInstance>();
-            byOwner[owner].Add(t);
-        }
+            var (byOwner, owners) = BuildTriggerOwnerGroups(allTriggers);
 
-        var owners = new List<int>(byOwner.Keys);
-        int firstPlayer = FirstPlayerId;
-        owners.Sort((a, b) =>
-        {
-            if (a == firstPlayer) return -1;
-            if (b == firstPlayer) return 1;
-            return a.CompareTo(b);
-        });
-
-        System.Action processNext = null;
-        int cursor = 0;
-        processNext = () =>
-        {
-            if (cursor >= owners.Count)
+            for (int i = 0; i < owners.Count; i++)
             {
-                PriorityPlayerId = GetPriorityPlayer();
-                _passCount = 0;
-                GD.Print($"⏳ [Trigger] 触发阶段结束（Async），优先权给优先玩家{PriorityPlayerId}");
-                OnPriorityChanged?.Invoke(PriorityPlayerId);
-                onAllCompleted?.Invoke();
+                int owner = owners[i];   // owner = 触发效果来源卡的 ControllerId（BuildTriggerOwnerGroups 已按 ControllerId 分组）
+                var triggers = byOwner[owner];
+                GD.Print($"[Trigger] 向玩家{owner}（controller）发起触发排序请求（Async，触发数={triggers.Count}）");
+
+                // 任一触发为强制（EffectData.Forced）时，该窗口不可整体放弃。
+                bool force = triggers.Exists(t => t.EffectDataRef != null && t.EffectDataRef.Forced);
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = owner,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTriggerOrder,
+                    OptionUids = triggers.ConvertAll(t => t.Source?.UID ?? t.DisplayName),
+                    Prompt = $"玩家{owner} 排序触发（{triggers.Count} 个）",
+                    ForceChoice = force,
+                };
+
+                var result = await InputGateway.RequestChoice(owner, req);
+                if (result != null && result.Cancelled)
+                {
+                    GD.Print($"[Trigger] 玩家{owner} 放弃剩余触发（{triggers.Count} 个），跳过入栈");
+                    continue;
+                }
+
+                // 逐个触发：需选目标的经网关选目标后入栈；无需目标的直接入栈。
+                foreach (var t in triggers)
+                    await EnsureTargetThenPushAsync(t);
+            }
+
+            PriorityPlayerId = GetPriorityPlayer();
+            _passCount = 0;
+            GD.Print($"⏳ [Trigger] 触发阶段结束（Async），优先权给优先玩家{PriorityPlayerId}");
+            OnPriorityChanged?.Invoke(PriorityPlayerId);
+            onAllCompleted?.Invoke();
+        }
+        catch (System.Exception ex)
+        {
+            GD.PrintErr($"[Trigger] 网络化触发流程异常: {ex.GetType().Name}: {ex.Message}");
+            onAllCompleted?.Invoke();
+        }
+        finally
+        {
+            ExitAtomicWhenIdle();
+        }
+    }
+
+    /// <summary>网络化触发入栈：逐个 await 选目标（若需），随后入栈。</summary>
+    private async System.Threading.Tasks.Task EnsureTargetThenPushAsync(Script.Data.Effects.StackEffectInstance t)
+    {
+        if (NeedSelectAnyTarget(t) && string.IsNullOrEmpty(t.SelectedTargetUid))
+        {
+            var valid = GetValidTargetUidsForTrigger(t);
+            if (valid.Count == 0)
+            {
+                GD.Print($"[Trigger] {t.DisplayName} 无合法目标，跳过入栈");
                 return;
             }
-            int owner = owners[cursor];
-            cursor++;
-            GD.Print($"[Trigger] 向玩家{owner} 发起触发排序请求（Async，触发数={byOwner[owner].Count}）");
+
+            // 推送目标：效果来源卡的 ControllerId（明确以 controller 为准，而非 Owner/触发者）。
+            int controller = t.Source?.ControllerId ?? t.ControllerId;
             var req = new Script.Net.ChoiceRequest
             {
-                PlayerId = owner,
-                RequestKind = Script.Net.ChoiceRequest.Kind.SelectTriggerOrder,
-                OptionUids = byOwner[owner].ConvertAll(t => t.Source?.UID ?? t.DisplayName),
-                Prompt = $"玩家{owner} 排序触发（{byOwner[owner].Count} 个）",
+                PlayerId = controller,
+                RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                SourceUid = t.Source?.UID,
+                OptionUids = valid,
+                Prompt = $"请为 {t.DisplayName} 选择目标",
+                ForceChoice = true,   // 对齐单机 TargetSelectionWindow：选目标不可取消/点窗外关闭，必须选一个
             };
-            // 异步等待该玩家排序结果（网关确保仅 owner 客户端可响应），拿到后再入栈。
-            InputGateway.RequestChoice(owner, req).ContinueWith(task =>
+            var result = await InputGateway.RequestChoice(controller, req);
+            if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
             {
-                var result = task.Result;
-                // 排序结果以 SelectedUid 代表"确认/排序完成"信号；实际顺序由网关透传。
-                // 这里沿用同步版入栈逻辑（PushOrderedTriggers 接受原列表，顺序差异由具体网关实现决定）。
-                PushOrderedTriggers(byOwner[owner], 0, () =>
-                {
-                    if (_view != null) _view.RemoveOrderEntries(byOwner[owner]);
-                    processNext();
-                });
-            }, System.Threading.Tasks.TaskScheduler.Default);
-        };
-        processNext();
-        await System.Threading.Tasks.Task.CompletedTask;
+                GD.Print($"[Trigger] {t.DisplayName} 玩家取消/未选目标，跳过入栈");
+                return;
+            }
+            t.SelectedTargetUid = result.SelectedUid;
+            PushTriggerToStack(t);
+            return;
+        }
+
+        PushTriggerToStack(t);
+    }
+
+    /// <summary>计算"需要选目标"触发的合法候选 UID（同步/异步选目标共用，单一真相源）。</summary>
+    private List<string> GetValidTargetUidsForTrigger(Script.Data.Effects.StackEffectInstance t)
+    {
+        if (t == null) return new List<string>();
+        if (t.IsAreaTarget && t.Source != null)
+            return GetOtherCombatAreaUids(t.Source.ZoneDetailId);
+        if (t.Source != null)
+            return GetLocalZoneTargets(t);
+        return new List<string>();
     }
 
     /// <summary>按列表顺序逐个触发：需目标且未选的先弹选目标窗口，选完再入栈；处理完所有后调用 onAllDone。</summary>
@@ -607,23 +686,8 @@ public partial class TurnManager : Node
             // 新系统地区目标（机动 ManeuverTrigger）：直接取"所有其他争夺区"作为候选。
             // 旧 TriggerEffectCollector 已随旧系统迁移删除，普通反应触发（如 XG01 抽牌）不进此分支
             // （其 RequiresTarget 为 false，见 StackEffectInstance）。
-            List<string> valid;
-            if (t.IsAreaTarget && t.Source != null)
-            {
-                // 机动：候选为"所有其他争夺区"。移动时 MoveCardToArea 以 instance.ControllerId 归属，
-                // 维持控制者不变，故无需按地区内是否含对手卡过滤。
-                valid = GetOtherCombatAreaUids(t.Source.ZoneDetailId);
-            }
-            else if (t.Source != null)
-            {
-                // JC002 类进场/现身触发：选"本地区（同 AREASLOT 争夺区）"内的目标卡。
-                // 候选 = 来源卡所在槽位的争夺区实例，按 EffectData.Target.Kind 过滤，排除来源自身。
-                valid = GetLocalZoneTargets(t);
-            }
-            else
-            {
-                valid = new List<string>();
-            }
+            // 候选计算与异步选目标共用 GetValidTargetUidsForTrigger（单一真相源）。
+            List<string> valid = GetValidTargetUidsForTrigger(t);
             if (valid.Count == 0)
             {
                 GD.Print($"[Trigger] {t.DisplayName} 无合法目标，跳过入栈");
@@ -1005,7 +1069,7 @@ public partial class TurnManager : Node
         if (ResolveEntryTargetIsLost(entry)) return;
 
         // P2：同步当前回合号，供时效修正栈登记到期回合
-        Script.Manager.EffectEngine.Instance.CurrentTurn = TurnCount;
+        EE.CurrentTurn = TurnCount;
 
         switch (entry.Kind)
         {
@@ -1019,7 +1083,7 @@ public partial class TurnManager : Node
                 // 进场触发已下沉至 ZoneManager.MoveToArea（D37）：非场地区→争夺区自动 Emit EnterTrigger，
                 // 此处不再重复广播。
                 // 新效果系统桥接：注册持续效果
-                Script.Manager.EffectEngine.Instance.RegisterContinuous(card);
+                EE.RegisterContinuous(card);
                 break;
             }
             case ResolveKind.EventToGraveyard:
@@ -1029,7 +1093,7 @@ public partial class TurnManager : Node
                 GD.Print($"[Resolve] 事务卡 {card.PlayerTemplate?.CardName} 结算 → 置入墓地");
                 _cardManager?.MoveCardToGraveyard(card);
                 // 新效果系统桥接（P0）：执行事务卡 F 组 EffectData（打出即结算）
-                Script.Manager.EffectEngine.Instance.ResolveSorcery(card, entry.TargetCardUid, entry.TargetVersionId);
+                EE.ResolveSorcery(card, entry.TargetCardUid, entry.TargetVersionId);
                 break;
             }
             case ResolveKind.Attachment:
@@ -1071,7 +1135,7 @@ public partial class TurnManager : Node
                     // 注：正常打出阶段已由 CardManager.IsLegalPlayTarget 拦截，此处为结算兜底，
                     // 避免绕过 UI 直接入栈或逻辑漏洞导致非法结附成功。
                     if (card.CurrentSubCategories.Contains("装备")
-                        && Script.Manager.EffectEngine.Instance.HasStaticFlag(target, StaticKind.CannotBeAttached))
+                        && EE.HasStaticFlag(target, StaticKind.CannotBeAttached))
                     {
                         GD.Print($"❌ [Resolve] 目标 {target.PlayerTemplate?.CardName} 不能被装备结附，装备 {card.PlayerTemplate?.CardName} 进墓地");
                         _cardManager?.MoveCardToGraveyard(card);
@@ -1108,7 +1172,7 @@ public partial class TurnManager : Node
                 // 进场触发已下沉至 ZoneManager.MoveToArea（D37）：非场地区→争夺区自动 Emit EnterTrigger，
                 // 此处不再重复广播。
                 // 新效果系统桥接：注册持续效果
-                Script.Manager.EffectEngine.Instance.RegisterContinuous(card);
+                EE.RegisterContinuous(card);
                 break;
             }
             case ResolveKind.NewArea:
@@ -1132,7 +1196,7 @@ public partial class TurnManager : Node
                     GD.Print($"[Resolve] 触发/激活效果（EffectData）结算: {entry.EffectDataEffect.EffectId}, 来源={src?.PlayerTemplate?.CardName}, 来源UID={entry.SourceCardUid}, src是否为null={(src == null)}, src.OwnerId={src?.OwnerId}, 目标={tgt?.PlayerTemplate?.CardName}");
                     // entry.WinnerId：对抗获胜方玩家 ID（威名等"X对抗获胜"触发由 TriggerRegistry 收集时经
                     // StackEffectInstance.WinnerId → PushTriggerToStack 写入），透传给 ResolveEffect 供 WinnerIsSelf 判定。
-                    Script.Manager.EffectEngine.Instance.ResolveEffect(entry.EffectDataEffect, src, tgt, entry.TargetAreaId ?? "", entry.WinnerId, entry.TargetVersionId);
+                    EE.ResolveEffect(entry.EffectDataEffect, src, tgt, entry.TargetAreaId ?? "", entry.WinnerId, entry.TargetVersionId);
                     break;
                 }
 
@@ -1272,8 +1336,8 @@ public partial class TurnManager : Node
         // 之前的阶段/行动权/费用校验等失败均不占用原子锁（修复：StartReset 拖拽误锁导致双方无法让过）。
         EnterAtomic();   // 标记本次打出为原子操作；若随后触发窗口打开，Arena 的 NotifyModalOpened 会维持锁
         // P2：先减玩家级时效费用修正（如 JC012 的"下一张帷幕守望牌费用-1"）
-        Script.Manager.EffectEngine.Instance.CurrentTurn = TurnCount;
-        int cost = tmpl.Cost - Script.Manager.EffectEngine.Instance.GetCostModification(playerId, tmpl.CardName, tmpl.Organization);
+        EE.CurrentTurn = TurnCount;
+        int cost = tmpl.Cost - EE.GetCostModification(playerId, tmpl.CardName, tmpl.Organization);
         if (cost < 0) cost = 0;
         if (cost > 0)
         {
@@ -1291,7 +1355,7 @@ public partial class TurnManager : Node
             }
             GD.Print($"[TurnManager] 玩家{playerId} 支付 {cost} 费用，剩余可用 {_playerManager.GetAvailableMana(playerId)}");
             // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项（整回合项不移除）
-            Script.Manager.EffectEngine.Instance.ConsumeCostModification(playerId, tmpl.Organization);
+            EE.ConsumeCostModification(playerId, tmpl.Organization);
         }
 
         // 资产横置状态已变化，通知 UI 刷新
@@ -1494,8 +1558,8 @@ public partial class TurnManager : Node
         EnterAtomic();
 
         // 费用校验与支付（按控制者，原始 Cost；额外费用本期不接）
-        Script.Manager.EffectEngine.Instance.CurrentTurn = TurnCount;
-        int cost = tmpl.Cost - Script.Manager.EffectEngine.Instance.GetCostModification(controller, tmpl.CardName, tmpl.Organization);
+        EE.CurrentTurn = TurnCount;
+        int cost = tmpl.Cost - EE.GetCostModification(controller, tmpl.CardName, tmpl.Organization);
         if (cost < 0) cost = 0;
         if (cost > 0)
         {
@@ -1513,7 +1577,7 @@ public partial class TurnManager : Node
             }
             GD.Print($"[TurnManager] 玩家{controller} 支付暗藏者现身费用 {cost}，剩余可用 {_playerManager.GetAvailableMana(controller)}");
             // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项
-            Script.Manager.EffectEngine.Instance.ConsumeCostModification(controller, tmpl.Organization);
+            EE.ConsumeCostModification(controller, tmpl.Organization);
             // 资产卡因付费被横置，经事件总线通知 UI 刷新横置表现（与打牌/派遣暗藏一致，MVC：逻辑层只发事件）。
             // 注：OnPostMove→SyncDerivedUI 只刷标签不刷横置旋转，横置视觉仅由 OnAssetsChangedHandler 驱动。
             OnAssetsChanged?.Invoke();
@@ -1646,7 +1710,7 @@ public partial class TurnManager : Node
     public bool CanPlayerDeployCovert(int playerId)
     {
         // 阿格斯IV全局封锁：未横置的阿格斯IV封锁其控制者的对手
-        return !Script.Manager.EffectEngine.Instance.IsDeployCovertBlocked(playerId);
+        return !EE.IsDeployCovertBlocked(playerId);
     }
 
     public bool CanDeployCovert(CardInstance instance)
@@ -1679,7 +1743,7 @@ public partial class TurnManager : Node
             return false;
         }
         // 2.3 全局封锁校验：玩家被"未横置阿格斯IV"封锁时禁止秘密派遣（JC068）
-        if (Script.Manager.EffectEngine.Instance.IsDeployCovertBlocked(playerId))
+        if (EE.IsDeployCovertBlocked(playerId))
         {
             GD.Print($"❌ [TurnManager] 玩家{playerId} 派遣暗藏被拒：对方未横置阿格斯IV封锁秘密派遣行动");
             return false;
@@ -1781,7 +1845,7 @@ public partial class TurnManager : Node
         _playerManager.ConsumeEstablishAsset(playerId);
 
         // 7. 资产区忠诚变动 → 重判监听中的条件持续效果（D19-②，如 JC001「心心」→白眼）
-        EffectEngine.Instance.ReevaluatePrereqs(playerId);
+        EE?.ReevaluatePrereqs(playerId);
 
         GD.Print($"[TurnManager] ✅ 玩家{playerId} 建立资产成功：{instance.PlayerTemplate?.CardName}");
         return true;
@@ -2141,8 +2205,38 @@ public partial class TurnManager : Node
         }
 
         if (VerboseSteps) GD.Print($"【{stepName}】结算地区{areaNo}（{areaUid}）的{stepName.Replace("步骤", "对抗")}");
+
+        // 联机服务端：对抗决策经 CombatManager 网络化异步结算（与单机事件窗口路径并列）。
+        if (InputGateway != null && _combatManager.InputGateway != null)
+        {
+            _ = ResolveCurrentAreaCombatAsync(type, stepName, areaUid, areaNo);
+            return;
+        }
+
         _combatManager.ResolveAreaCombat(type, areaUid, areaNo,
             () => GrantPriorityAfterCombatStep(stepName, areaNo));
+    }
+
+    /// <summary>联机服务端对抗异步结算：await 网关回收决策后，再走统一的让过收尾。</summary>
+    private async System.Threading.Tasks.Task ResolveCurrentAreaCombatAsync(
+        CombatManager.CombatType type, string stepName, string areaUid, int areaNo)
+    {
+        // 对抗窗口为原子操作：期间拒绝让过/出牌，与单机对抗窗口 EnterAtomic 语义一致。
+        EnterAtomic();
+        try
+        {
+            await _combatManager.ResolveAreaCombatAsync(type, areaUid, areaNo);
+        }
+        catch (System.Exception ex)
+        {
+            GD.PrintErr($"[TurnManager] 联机对抗结算异常: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            ExitAtomicWhenIdle();
+        }
+        GrantPriorityAfterCombatStep(stepName, areaNo);
+        OnAsyncSettlementCompleted?.Invoke();
     }
 
     /// <summary>
@@ -2174,7 +2268,7 @@ public partial class TurnManager : Node
         // 在结束步骤（而非 DoPassTurn）广播：此处后续还有优先权窗口可供双方响应、堆叠可正常结算；
         // DoPassTurn 紧接着 NextTurn()，此时入栈的触发将没有结算机会。
         // 系统级回合事件：无单一引发玩家（NoPlayer=-1）；ExtraInt 带回合号供条件判定使用。
-        Script.Manager.EffectEngine.Instance.CurrentTurn = TurnCount;
+        EE.CurrentTurn = TurnCount;
         _gameEventBus?.Emit(Script.Data.Effects.GameEvent.OnTurnEnded,
             new Script.Data.Effects.TriggerContext { ExtraInt = TurnCount });
 
@@ -2220,6 +2314,8 @@ public partial class TurnManager : Node
                 {
                     PlayerId = pid,
                     AvailableMana = pm.GetAvailableMana(pid),
+                    IsGameOver = pm.IsGameOver,
+                    ScoreTotal = pm.GetScoreTotal(pid),
                 });
             }
         }

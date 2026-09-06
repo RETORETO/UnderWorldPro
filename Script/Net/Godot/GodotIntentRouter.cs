@@ -1,3 +1,4 @@
+using Godot;
 using Script.Net;
 
 namespace Script.Net.Godot
@@ -11,15 +12,17 @@ namespace Script.Net.Godot
     ///
     /// 桥接层处理 IIntentRouter 纯数据签名 → CardInstance 实例/EffectData 的解析。
     /// </summary>
-    public class GodotIntentRouter : IIntentRouter
+    public class GodotIntentRouter : IIntentRouter, IUIDWatch
     {
         private readonly PlayerActionService _service;
         private readonly CardManager _cardManager;
+        private readonly PMCommandManager _pm;
 
-        public GodotIntentRouter(PlayerActionService service, CardManager cardManager)
+        public GodotIntentRouter(PlayerActionService service, CardManager cardManager, PMCommandManager pm = null)
         {
             _service = service;
             _cardManager = cardManager;
+            _pm = pm;
         }
 
         public void Pass(int playerId) => _service.Pass(playerId);
@@ -56,6 +59,17 @@ namespace Script.Net.Godot
         }
 
         public void ResetActionCharges(int playerId) => _service.ResetActionCharges(playerId);
+
+        public void DebugCommand(int playerId, string commandLine)
+        {
+            if (_pm == null)
+            {
+                GD.PrintErr("[GodotIntentRouter] PMCommandManager 未注入，DebugCommand 不可用");
+                return;
+            }
+            _pm.ExecuteCommand(commandLine);
+        }
+
         public void MarkCreateWatch() => _cardManager.MarkCreateWatch();
         public string ConsumeCreatedUid() => _cardManager.ConsumeCreatedUid();
     }

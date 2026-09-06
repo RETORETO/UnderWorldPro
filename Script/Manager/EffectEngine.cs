@@ -383,6 +383,8 @@ namespace Script.Manager
                         SourceUid = source?.UID,
                         PayAmount = payAmount,
                         Prompt = $"准备维护：支付{payAmount} 或 横置",
+                        // 单机语义：阿格斯IV 准备维护为强制触发，必须二选一（Arena.PromptPayOrTap 置 ForceChoice=true）。
+                        ForceChoice = true,
                     });
                 // 拿到选择后续算（与同步版 ResolvePrepareUpkeep 落地逻辑一致）
                 ResolvePrepareUpkeep(source, payAmount, pay: result.Pay);
@@ -1479,7 +1481,7 @@ namespace Script.Manager
 
             // 0) 规则层原子锁（核心需求 7.3）：原子操作（出牌/结算/触发排序/选目标窗口）执行期间
             // 冻结响应权，任何激活能力（含快速行动 JC003 类）均不可在原子期间发动；与 Pass/PlayCard 一致。
-            if (TurnManager.Instance != null && TurnManager.Instance.IsAtomicLocked)
+            if (TurnManagerRef != null && TurnManagerRef.IsAtomicLocked)
             {
                 GD.PrintErr($"[EffectEngine] ⛔ 原子操作进行中，拒绝激活 {data.EffectId}");
                 return;
@@ -1487,9 +1489,9 @@ namespace Script.Manager
 
             // 1) 优先权门禁：当前控制者拥有优先权（快速效果本身即“拥有优先权即可发动”）
             // 控制权语义（核心需求 / D28）：夺控场景下以 ControllerId 归属，而非 OwnerId。
-            if (TurnManager.Instance != null && TurnManager.Instance.PriorityPlayerId != source.ControllerId)
+            if (TurnManagerRef != null && TurnManagerRef.PriorityPlayerId != source.ControllerId)
             {
-                GD.PrintErr($"[EffectEngine] ⛔ 无优先权，拒绝激活 {data.EffectId}（Priority={TurnManager.Instance.PriorityPlayerId}, Controller={source.ControllerId}）");
+                GD.PrintErr($"[EffectEngine] ⛔ 无优先权，拒绝激活 {data.EffectId}（Priority={TurnManagerRef.PriorityPlayerId}, Controller={source.ControllerId}）");
                 return;
             }
 
@@ -1499,7 +1501,7 @@ namespace Script.Manager
             //     先手玩家→ActionFirst，后手玩家→ActionSecond（复用 CanEnterBasicActionMask 的精确判定）。
             if (data.ActivateWindow.Contains("行动"))
             {
-                var tm = TurnManager.Instance;
+                var tm = TurnManagerRef;
                 // 控制权语义（核心需求 / D29）：行动窗口归属以控制者为准，而非拥有者。
                 bool canAct = tm != null && tm.CanEnterBasicActionMask(source.ControllerId);
                 if (!canAct)
@@ -1521,7 +1523,7 @@ namespace Script.Manager
 
             // 3) 费用校验与扣除（控制权语义 / D29：由控制者付费，与 CanActivate 高亮判定对齐）
             int cost = data.Cost;
-            var pm = TurnManager.Instance?.PlayerManagerRef;
+            var pm = TurnManagerRef?.PlayerManagerRef;
             if (cost > 0 && pm != null)
             {
                 if (pm.GetAvailableMana(source.ControllerId) < cost)
@@ -1578,7 +1580,7 @@ namespace Script.Manager
             }
 
             // ===== 入堆叠（由堆叠统一结算，含优先权让过） =====
-            var sm = TurnManager.Instance?.StackManagerRef;
+            var sm = TurnManagerRef?.StackManagerRef;
             if (sm != null)
             {
                 PushActivationToStack(sm, source, data, target, srcZoneSnap, srcCtrlSnap);

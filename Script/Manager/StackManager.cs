@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Game.Entities;
 using System.Collections.Generic;
 
@@ -154,6 +154,8 @@ public partial class StackManager : Node
             {
                 if (s == null) continue;
                 var entry = new Script.Game.Entities.StackEntry(s.OwnerId, s.EffectText ?? "");
+                entry.IsCard = s.IsCard;
+                entry.Kind = (Script.Game.Entities.ResolveKind)s.Kind;
                 if (!string.IsNullOrEmpty(s.SourceUid) && _cardManager != null)
                     entry.SourceCard = _cardManager.GetInstance(s.SourceUid);
                 entry.SourceCardUid = s.SourceUid;
@@ -176,6 +178,8 @@ public partial class StackManager : Node
                 OwnerId = e.OwnerId,
                 SourceUid = e.SourceCardUid,
                 EffectText = e.EffectText,
+                IsCard = e.IsCard,
+                Kind = (int)e.Kind,
             });
         }
         return list;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Godot;
 using Script.Data.Effects;
@@ -28,6 +28,12 @@ namespace Script.Manager
     public class TriggerRegistry
     {
         private readonly GameEventBus _bus;
+
+        /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
+        public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+        /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
+        private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
         public TriggerRegistry(GameEventBus bus)
         {
@@ -154,7 +160,7 @@ namespace Script.Manager
                     if (data.Timing != timing) continue;
                     // 方案C：触发效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                     // 显式声明 Scope 的效果按声明（如未来墓地/手牌触发）。不在此区则跳过该效果。
-                    if (!Script.Manager.EffectEngine.Instance.IsEffectActiveInZone(data, card))
+                    if (EE == null || !EE.IsEffectActiveInZone(data, card))
                     {
                         skippedZone++;
                         continue;
@@ -191,7 +197,7 @@ namespace Script.Manager
                     // ContextCard 为空时回落 SourceCard，见 TriggerContext.EffectiveContextCard）
                     // 威名触发(OnCombatWon)需传入 ctx.TriggeringPlayerId 供 WinnerIsSelf 判定（D1：Emit 时未填 SourceCard）。
                     // 同时传入 ctx.TargetAreaId 供 WinnerInSameArea 判定（Y 方案：获胜地区 == 本卡所在地区才入栈）。
-                    if (!EffectEngine.Instance.EvaluateCondition(data.Condition?.Predicate, card, conditionCard, conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId))
+                    if (EE == null || !EE.EvaluateCondition(data.Condition?.Predicate, card, conditionCard, conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId))
                     {
                         skippedCond++;
                         GD.Print($"[Trigger] 触发条件不满足（EffectId={data.EffectId}, 来源={tmpl.CardName}, 事件={evt}），跳过");
