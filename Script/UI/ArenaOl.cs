@@ -60,6 +60,18 @@ namespace Script.UI
         private ChoicePromptPanel _choicePromptPanel;   // 联机决策面板（收到 ChoiceRequest 时弹出）
         private TextEdit _commandInput;       // PM 调试命令输入（Shift+Enter 上行 DebugCommand）
 
+        // ==================== 联机激活交互（双击效果选择 + 场上高亮选目标） ====================
+        // 效果选择/场上选目标进行期间为本地模态：拦截让过/出牌/重复双击等并发输入（服务端无待决请求，纯客户端 UI 阶段）。
+        private bool _activationSelectionBusy;
+        private OnlineActivationChoiceWindow _onlineChoiceWindow;   // 联机效果选择窗口（动态实例）
+        private PackedScene _targetWindowScene;                     // 复用单机 TargetSelectionWindow 场景（只读，不改类）
+        private TargetSelectionWindow _onlineTargetWindow;          // 场上点击高亮选目标提示窗（复用单机场景）
+        // —— 场上选目标状态 ——
+        private bool _activationTargetActive;
+        private Script.Data.Effects.EffectData _activationTargetAbility;
+        private Script.Game.Entities.CardInstance _activationTargetSource;
+        private readonly System.Collections.Generic.HashSet<string> _activationLegalCardUids = new System.Collections.Generic.HashSet<string>();
+
         // ==================== 联机拖拽（出牌/派遣暗藏/建立资产） ====================
         // 联机为快照驱动：拖拽结束不本地移动卡，只上行对应意图；服务端权威裁决后靠快照回显。
         // 蒙版模式：DeployCovert=派遣暗藏（需落到己方争夺区），EstablishAsset=建立资产（拖出即建立）。
@@ -693,6 +705,19 @@ namespace Script.UI
         /// <summary>反引号 ` 切换 PM 命令输入框可见性（与单机 Arena 的按键一致，Key 96）。</summary>
         public override void _Input(InputEvent @event)
         {
+            // 场上点击高亮选目标：左键命中合法目标卡 → 完成选择（经复用的 TargetSelectionWindow.PickFromArena）
+            if (_activationTargetActive
+                && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
+            {
+                // 命中合法目标卡则完成选择；未命中不取消（选目标无取消，须点合法目标），吞掉事件避免误拖拽其它卡
+                string hit = PickLegalActivationTargetAt(tsMb.GlobalPosition);
+                if (!string.IsNullOrEmpty(hit) && _onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
+                    _onlineTargetWindow.PickFromArena(hit);
+                AcceptEvent();
+                return;
+            }
+
+            // 反引号键切换 PM 命令输入框可见性（与单机 Arena 按键一致，Key 96）
             if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == (Key)96)
             {
                 if (_commandInput != null)
@@ -707,65 +732,284 @@ namespace Script.UI
             }
         }
 
+        /// <summary>场上选目标命中：返回点击位置下 ZIndex 最高的合法目标卡 UID（无则 null）。</summary>
+        private string PickLegalActivationTargetAt(Vector2 globalPos)
+        {
+            string best = null;
+            int bestZ = int.MinValue;
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (!_activationLegalCardUids.Contains(ui.Instance.UID)) continue;
+                if (ui.GetVisualGlobalRect().HasPoint(globalPos) && ui.ZIndex > bestZ)
+                {
+                    bestZ = ui.ZIndex;
+                    best = ui.Instance.UID;
+                }
+            }
+            return best;
+        }
+
         /// <summary>暗藏者双击现身：上行 RevealCovert 意图，服务端权威裁决。</summary>
         private void OnCovertRevealRequested(CardUI cardUI)
         {
+            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止现身暗藏
             if (cardUI?.Instance == null || _launcher == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离：只能现身自己的暗藏
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.RevealCovert, cardUI.Instance.UID);
             GD.Print($"[ArenaOl] 上行 RevealCovert: {cardUI.Instance.PlayerTemplate?.CardName}");
         }
 
-        /// <summary>附属卡双击激活：上行 ActivateAbility（取模板首个激活能力，无目标），服务端权威裁决。</summary>
+        /// <summary>附属卡双击激活：有多个可激活效果则弹联机效果列表供选择，再按所选发动；单效果直接发动（与单机一致）。</summary>
         private void OnAttachmentDoubleClicked(CardUI cardUI)
         {
+            if (_activationSelectionBusy) return;   // 本地模态：防重复双击
             if (cardUI?.Instance == null || _launcher == null) return;
-            if (cardUI.Instance.ControllerId != _localPlayerId) return;
+            if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离
             var inst = cardUI.Instance;
-            string effectId = null;
+            var abilities = new List<EffectData>();
             if (inst.PlayerTemplate is PlayerCardData tmpl)
             {
                 foreach (var e in tmpl.EffectDataList)
-                {
                     if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
-                    {
-                        effectId = e.EffectId;
-                        break;
-                    }
-                }
+                        abilities.Add(e);
             }
-            if (string.IsNullOrEmpty(effectId))
+            if (abilities.Count == 0)
             {
                 GD.Print($"[ArenaOl] {inst.PlayerTemplate?.CardName} 无可激活能力，忽略双击");
                 return;
             }
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, effectId, "");
-            GD.Print($"[ArenaOl] 上行 ActivateAbility: {inst.PlayerTemplate?.CardName} effect={effectId}");
+            if (abilities.Count == 1) { SendActivation(inst, abilities[0]); return; }
+            ShowOnlineEffectChoice(inst, abilities);
         }
 
-        /// <summary>秘社双击激活：上行 ActivateAbility（取首个激活选项首个效果，无目标），服务端权威裁决。</summary>
+        /// <summary>秘社双击激活：有多个激活选项则弹联机选项列表供选择，再按所选发动。
+        /// 与单机 Arena.OnCouncilDoubleClicked 一致：每个选项取首个 EffectData。</summary>
         private void OnCouncilDoubleClicked(CouncilCardUI cardUI)
         {
+            if (_activationSelectionBusy) return;
             if (cardUI?.Instance == null || _launcher == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;
             var inst = cardUI.Instance;
-            string effectId = null;
-            if (inst.CouncilTemplate != null && inst.CouncilTemplate.ActivationOptions.Count > 0)
+            var councilTmpl = inst.CouncilTemplate;
+            if (councilTmpl == null || councilTmpl.ActivationOptions == null || councilTmpl.ActivationOptions.Count == 0)
             {
-                foreach (var opt in inst.CouncilTemplate.ActivationOptions)
-                {
-                    if (opt?.EffectDataList == null || opt.EffectDataList.Count == 0) continue;
-                    effectId = opt.EffectDataList[0].EffectId;
-                    break;
-                }
-            }
-            if (string.IsNullOrEmpty(effectId))
-            {
-                GD.Print($"[ArenaOl] 秘社 {inst.CouncilTemplate?.CardName} 无激活选项，忽略双击");
+                GD.Print($"[ArenaOl] 秘社 {councilTmpl?.CardName} 无激活选项，忽略双击");
                 return;
             }
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, effectId, "");
-            GD.Print($"[ArenaOl] 上行秘社 ActivateAbility: {inst.CouncilTemplate?.CardName} effect={effectId}");
+            var options = new List<(Script.Data.Cards.CouncilActivationOption opt, EffectData eff)>();
+            foreach (var opt in councilTmpl.ActivationOptions)
+            {
+                if (opt?.EffectDataList == null || opt.EffectDataList.Count == 0) continue;
+                options.Add((opt, opt.EffectDataList[0]));
+            }
+            if (options.Count == 0)
+            {
+                GD.Print($"[ArenaOl] 秘社 {councilTmpl.CardName} 无有效激活选项，忽略双击");
+                return;
+            }
+            if (options.Count == 1) { SendActivation(inst, options[0].eff); return; }
+
+            _activationSelectionBusy = true;
+            var items = new List<ActivationChoiceItem>();
+            for (int i = 0; i < options.Count; i++)
+            {
+                var (opt, eff) = options[i];
+                bool disabled = IsActivationEffectDisabled(inst, eff);
+                string optName = string.IsNullOrEmpty(opt.OptionName) ? GetActivationAbilityLabel(eff) : opt.OptionName;
+                string label = (i + 1) + ". " + optName;
+                if (disabled) label += EffectDisabledReason(inst, eff);
+                EffectData captured = eff;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = label,
+                    Disabled = disabled,
+                    OnChosen = () => { _activationSelectionBusy = false; SendActivation(inst, captured); }
+                });
+            }
+            OpenOnlineChoiceWindow(items);
+        }
+
+        /// <summary>为附属/角色卡的多个可激活效果构建联机效果列表并弹出。</summary>
+        private void ShowOnlineEffectChoice(CardInstance inst, List<EffectData> abilities)
+        {
+            _activationSelectionBusy = true;
+            var items = new List<ActivationChoiceItem>();
+            for (int i = 0; i < abilities.Count; i++)
+            {
+                var eff = abilities[i];
+                bool disabled = IsActivationEffectDisabled(inst, eff);
+                string label = (i + 1) + ". " + GetActivationAbilityLabel(eff);
+                if (disabled) label += EffectDisabledReason(inst, eff);
+                EffectData captured = eff;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = label,
+                    Disabled = disabled,
+                    OnChosen = () => { _activationSelectionBusy = false; SendActivation(inst, captured); }
+                });
+            }
+            OpenOnlineChoiceWindow(items);
+        }
+
+        /// <summary>实例化联机效果选择窗口并弹出（点窗外不关闭；取消回调复位本地选择态）。</summary>
+        private void OpenOnlineChoiceWindow(List<ActivationChoiceItem> items)
+        {
+            if (_onlineChoiceWindow != null && GodotObject.IsInstanceValid(_onlineChoiceWindow))
+                _onlineChoiceWindow.QueueFree();
+            _onlineChoiceWindow = new OnlineActivationChoiceWindow();
+            AddChild(_onlineChoiceWindow);
+            _onlineChoiceWindow.OnCancelled = () => { _activationSelectionBusy = false; };
+            _onlineChoiceWindow.Init(items);
+            _onlineChoiceWindow.PopupCentered();
+        }
+
+        /// <summary>单条激活效果在列表中的简短描述（优先 FaqNote，回退 EffectId；与单机 GetActivationAbilityLabel 一致）。</summary>
+        private static string GetActivationAbilityLabel(EffectData ability)
+        {
+            if (!string.IsNullOrEmpty(ability.FaqNote)) return ability.FaqNote;
+            if (!string.IsNullOrEmpty(ability.EffectId)) return ability.EffectId;
+            return "激活效果";
+        }
+
+        /// <summary>联机本地粗筛：某激活效果当前是否置灰不可发动（需横置但已横置 / 需目标但无合法目标）。</summary>
+        private bool IsActivationEffectDisabled(CardInstance inst, EffectData e)
+        {
+            bool needsTap = !string.IsNullOrEmpty(e.ActivateCondition) && e.ActivateCondition.Contains("横置本角色");
+            if (needsTap && inst.IsTapped) return true;
+            if (e.Target != null && e.Target.NeedsSelection)
+            {
+                if (e.Target.Kind == TargetKind.Area) return false;   // 地区目标本轮暂缓：无现有效果，视作可用（服务端仍权威）
+                if (ComputeLegalCardTargetUids(inst, e).Count == 0) return true;
+            }
+            return false;
+        }
+
+        /// <summary>置灰原因后缀（与单机 OpenAttachmentActivateChoice 文案一致）。</summary>
+        private static string EffectDisabledReason(CardInstance inst, EffectData e)
+        {
+            bool needsTap = !string.IsNullOrEmpty(e.ActivateCondition) && e.ActivateCondition.Contains("横置本角色");
+            if (needsTap && inst.IsTapped) return "（已横置，无法横置自身）";
+            return "（无合法目标）";
+        }
+
+        /// <summary>统一激活上行入口：无目标直接上行；需目标则进入"场上点击高亮"选目标，选中后上行带 targetUid。</summary>
+        private void SendActivation(CardInstance inst, EffectData ability)
+        {
+            if (inst == null || ability == null || _launcher == null) return;
+            string name = inst.PlayerTemplate?.CardName ?? inst.CouncilTemplate?.CardName ?? "卡";
+            if (ability.Target != null && ability.Target.NeedsSelection)
+            {
+                if (ability.Target.Kind == TargetKind.Area)
+                {
+                    GD.Print($"[ArenaOl] {name} 地区目标激活暂不支持（TargetKind.Area，本轮暂缓），忽略：{ability.EffectId}");
+                    return;
+                }
+                BeginActivationTargetSelection(inst, ability);
+                return;
+            }
+            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, ability.EffectId, "");
+            GD.Print($"[ArenaOl] 上行 ActivateAbility: {name} effect={ability.EffectId}");
+        }
+
+        /// <summary>计算某激活效果在客户端投影中的合法卡目标 UID 集合（卡目标；地区目标暂缓）。
+        /// 复用单机 ActivateEligibility.IsLegalActivateTarget（其 cm 形参实现中未解引用，传 null 安全）。</summary>
+        private HashSet<string> ComputeLegalCardTargetUids(CardInstance source, EffectData ability)
+        {
+            var legal = new HashSet<string>();
+            if (source == null || ability?.Target == null || !ability.Target.NeedsSelection) return legal;
+            if (ability.Target.Kind == TargetKind.Area) return legal;
+            var zone = _launcher?.ClientZoneManager;
+            if (zone == null) return legal;
+            var cards = zone.GetZoneCards(CardZone.AreaZone, 0);
+            if (cards == null) return legal;
+            foreach (var c in cards)
+            {
+                if (c == null || c == source) continue;
+                if (ability.Target.IsLocalZone && c.ZoneDetailId != source.ZoneDetailId) continue;
+                if (ActivateEligibility.IsLegalActivateTarget(source, ability, c, null)) legal.Add(c.UID);
+            }
+            return legal;
+        }
+
+        /// <summary>进入"场上点击高亮"选目标：计算合法目标、高亮对应卡 UI、打开复用提示窗。</summary>
+        private void BeginActivationTargetSelection(CardInstance source, EffectData ability)
+        {
+            var legal = ComputeLegalCardTargetUids(source, ability);
+            if (legal.Count == 0)
+            {
+                GD.Print($"[ArenaOl] {source.PlayerTemplate?.CardName ?? source.CouncilTemplate?.CardName} 激活效果无合法目标，忽略：{ability.EffectId}");
+                _activationSelectionBusy = false;
+                return;
+            }
+            _activationSelectionBusy = true;
+            _activationTargetActive = true;
+            _activationTargetSource = source;
+            _activationTargetAbility = ability;
+            _activationLegalCardUids.Clear();
+            foreach (var u in legal) _activationLegalCardUids.Add(u);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(true);
+            }
+
+            EnsureTargetWindow();
+            if (_onlineTargetWindow != null)
+            {
+                _onlineTargetWindow.OnTargetPicked = OnActivationTargetPicked;
+                _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡
+                _onlineTargetWindow.Open(source.PlayerTemplate?.CardName ?? "激活效果",
+                    "请点击场上高亮的合法目标卡完成选择。");
+            }
+        }
+
+        /// <summary>懒加载并实例化复用的单机 TargetSelectionWindow 场景（不改其类源码）。</summary>
+        private void EnsureTargetWindow()
+        {
+            if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow)) return;
+            if (_targetWindowScene == null)
+                _targetWindowScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/TargetSelectionWindow.tscn");
+            if (_targetWindowScene == null)
+            {
+                GD.PrintErr("[ArenaOl] TargetSelectionWindow.tscn 加载失败");
+                return;
+            }
+            _onlineTargetWindow = _targetWindowScene.Instantiate<TargetSelectionWindow>();
+            AddChild(_onlineTargetWindow);
+        }
+
+        /// <summary>场上选中合法目标后：清高亮/关提示窗/复位状态，并上行 ActivateAbility(sourceUid, effectId, targetUid)。</summary>
+        private void OnActivationTargetPicked(string targetUid)
+        {
+            var src = _activationTargetSource;
+            var ab = _activationTargetAbility;
+            ClearActivationTargetSelection();
+            if (src == null || ab == null || string.IsNullOrEmpty(targetUid) || _launcher == null) return;
+            string name = src.PlayerTemplate?.CardName ?? src.CouncilTemplate?.CardName ?? "卡";
+            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, src.UID, ab.EffectId, targetUid);
+            GD.Print($"[ArenaOl] 上行 ActivateAbility(+目标): {name} effect={ab.EffectId} target={targetUid}");
+        }
+
+        /// <summary>清理场上高亮、关闭提示窗、复位目标选择状态与本地模态锁。</summary>
+        private void ClearActivationTargetSelection()
+        {
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(false);
+            }
+            if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
+                _onlineTargetWindow.Visible = false;
+            _activationTargetActive = false;
+            _activationTargetAbility = null;
+            _activationTargetSource = null;
+            _activationLegalCardUids.Clear();
+            _activationSelectionBusy = false;
         }
 
         /// <summary>重建世界牌库（地区牌堆）：用 WorldDeckZone 组件显示卡背堆叠 + 数量。</summary>
@@ -923,6 +1167,7 @@ namespace Script.UI
         /// <summary>本地玩家让过。仅允许操作自己，越权忽略。</summary>
         public void DoPass(int playerId)
         {
+            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止让过
             if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -930,6 +1175,7 @@ namespace Script.UI
         /// <summary>本地玩家结束回合/让过推进阶段。仅允许操作自己，越权忽略。</summary>
         public void DoEndTurn(int playerId)
         {
+            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止结束回合
             if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -949,6 +1195,7 @@ namespace Script.UI
         /// 单机也不检查该参数），故这里不依据 dropped 过滤，改用卡当前位置判定落点。</summary>
         private void OnLocalHandCardDragEnded(CardUI cardUI, bool dropped)
         {
+            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止拖拽出牌
             if (cardUI?.Instance == null) return;
             if (_launcher == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
             var inst = cardUI.Instance;
