@@ -1,9 +1,11 @@
 # C/S 化迁移进度与批次计划
 
 > 用途：防止上下文丢失。记录"分批迁移 + 每批三方验证"策略下，已完成/进行中/待做的迁移工作，以及关键设计决策。
-> 最近更新：2026-09-01
+> 最近更新：2026-09-05（本轮回填：P3 模块状态核实、第一批三方验证修复、模块B 下线记录、待清理项清理；详见 §十二）
 >
 > **📌 联机对战完整实现的最终缺口，见独立文档 → [`联机对战完整实现最终缺口清单.md`](./联机对战完整实现最终缺口清单.md)**（覆盖：四区域 UI 缺口、对抗整体、决策网关自动取消、剩余交互、规则完整度缺口与优先级）。
+>
+> **📐 联机整体架构（核心模块 / 关键流程 / 职责划分 / 权威与安全边界 / 客户端延迟掩盖 / 服务端形态取舍），见 → [`联机C-S架构设计方案.md`](./联机C-S架构设计方案.md)**（2026-09-05 新增；含"Godot headless 即真服务端"的判定标准与去 Godot 化的触发条件）。
 
 ## 一、总目标
 
@@ -14,8 +16,14 @@
 - **P0 进程边界**：`IInputGateway`（Local/Auto/Network 三实现）+ `GameEventBus` + `CardInstance` 纯数据化。
 - **P1 MVC 分层**：`Arena` 退化为纯 View；`ZoneManager/CardManager/TurnManager` 剥离 UI 硬依赖。
 - **P2 快照可序列化**：`ToSnapshot()` 聚合 + JSON 序列化。
-- **P3 五模块**：A·GodotEnetTransport / B·SnapshotRenderDriver / C·IntentHub·PlayerIntent·GodotIntentRouter / D·EventToMessageMapper / E·ReconnectManager。
+- **P3 五模块**（2026-09-05 逐模块核实实际状态）：
+  - **A·GodotEnetTransport**：✅ 生产在用（`NetworkMatchLauncher` 真跨进程链路）。
+  - **B·SnapshotRenderDriver（快照差异渲染）**：❌ **已下线/已移除**——`SnapshotRenderDriver.cs`、`Arena.SnapshotView.cs` 文件已删除，`Arena` 不再实现 `ISnapshotView`；`SnapshotDiff.cs` 保留但仅测试引用，生产无消费者。联机客户端渲染改由 **ArenaOl（快照全量重建）** 承担（见 §十）。
+  - **C·IntentHub·PlayerIntent·GodotIntentRouter**：✅ 生产在用。
+  - **D·EventToMessageMapper**：⚠️ 仅库 + 测试（`Script/Net/EventToMessageMapper.cs`、`RenderEvent.cs`、`NetP3DTests`），生产代码零引用 → 未接入。
+  - **E·ReconnectManager**：⚠️ 仅库（`ReconnectManager.cs`），生产代码零引用 → 重连管线未接线（见 §十一.3）。
 - **关键纪律**（需求实现对照.md §1001-1009 用户决策）：**移除 `ServerRuleEngine` 重写版**，只保留 `IIntentRouter` 接口，迁移真实 Manager 规则。即"两条输入路径收敛到同一批 Manager 方法"，不存在第二套逻辑。
+  - 2026-09-05 回填：纪律已执行——`ServerCore/ServerRuleEngine.cs`（空文件残留）已**删除**；`ServerCore/` 仅保留纯托管内核骨架（`Program.cs` / `ServerCardInstance.cs` / `CardTemplateRepository.cs`），被主工程 `<Compile Remove="ServerCore/**/*.cs" />` 排除编译，属"可选路线骨架"，**当前不参与正式联机链路**。
 
 ## 二、需要迁移的 Manager 批次清单
 
@@ -50,6 +58,11 @@
 - **不引入模板库依赖死链**：极端补建走"同模板空闲实例复用"，避免 Godot 资源系统与纯托管侧差异导致的编译/逻辑漂移。
 
 ### 三方验证（已写入 `Script/Tests/NetP1Batch1Tests.cs`，编排于 `TestsRunner`）
+
+> **状态更新（2026-09-05）：3/3 全绿。** 此前 `TestLoopbackSnapshotRoundTrip` / `TestEnetRealTransportSnapshotRoundTrip` 长期失败于 `重建后玩家1手牌数应一致 ｜ 期望 2 实际 0`。
+> - **根因**：`ZoneManager.PlaceIntoBucket` 的"秘社卡兜底"按**实例类型**（`inst.CouncilTemplate != null`）无条件改写快照区域 → 任何以 `CouncilCardData` 构造的实例，无论快照写的哪个区，一律被塞进秘社区桶，导致手牌桶为空；同时该兜底也违反"快照即真相"（会把快照明确写在墓地等合法区域的秘社卡搬错）。
+> - **修复**：兜底收窄为**仅当快照 zone ∈ {Hand, Deck}**（秘社卡规则上不可能出现的区）时才归位秘社区，其余区域一律以快照为准；测试场景的通用卡改用 `PlayerCardData`（构造规则合法状态）并补 1 张秘社区卡覆盖 CouncilZone 桶。
+> - 结果：全量 headless 测试 **33 个套件全绿、0 失败、0 ERR**。
 1. **LoopbackTransport 端到端**（`TestLoopbackSnapshotRoundTrip`）：`ToSnapshot` → 经 Loopback 序列化往返 → `ApplySnapshot` 重建 → 断言桶分布/UID/运行时字段一致 + 本次补全字段不丢。
 2. **单机回归**（`TestStandaloneSnapshotExportIntegrity`）：直接驱动 `ZoneManager` 移动 API → `ToSnapshot` → 断言导出字段完整（含本次补全 3 字段）+ 不破坏单机。
 3. **GodotEnetTransport 真实联机**（`TestEnetRealTransportSnapshotRoundTrip`）：整局快照经 127.0.0.1 真实 socket 序列化往返 → `ApplySnapshot` 重建 → 断言含补全字段零丢失。
@@ -117,7 +130,7 @@
 - `Script/Tests/NetP1Batch1Tests.cs`：三项验证（Loopback/单机/Enet，统一正式 `SnapshotSerializer`）已实现。
 - `Script/Net/Godot/NetworkMatchLauncher.cs`：联机对局启动器（Server 权威 + Client 投影），第二批已聚合消费整局快照，正式代码非临时。
 - `Script/Tests/NetP1Batch1MatchTests.cs`：联机端到端专项测试（手牌/Manager/世界牌库/地区投影一致），已编入 `TestsRunner`。
-- `Script/Net/Godot/NetMatchDemo.cs`：即插即用演示节点（AutoRun 自动演示，挂 Arena 子节点运行即可观察闭环日志）。
+- `Script/Net/Godot/NetMatchDemo.cs`：早期联机演示节点；**2026-09-05 已从 `Arena.tscn` 移除**（渲染由 ArenaOl 接管，节点仅余意图通道演示用途）。脚本文件保留，可供手动挂载调试；如需彻底删除请见 §十二.6。
 - 详细场景设计见 `联机验证场景设计.md`。
 
 ## 八、收尾红线审计结论（C/S 迁移核心完成标志）
@@ -138,7 +151,8 @@
 ### 已落地（正式代码）
 1. **`NetworkMatchLauncher.cs`**：拆出独立的 `StartServerOnly()`（服务端权威，不建客户端投影）与 `StartClientOnly()`（客户端投影，不建服务端规则）；`StartLocalLoopback` 复用二者（单进程回环向后兼容）；新增 `PushSnapshot()`（服务端主动广播当前快照）+ `ServerPlayerConnected()`/`ClientConnected()`（连接状态检测）。
 2. **`NetClientCardManager.cs`**（正式）：客户端独立 CardManager，重载 `ResolveInstance` 从模板（.tres）按权威 UID 重建卡实例——跨进程最核心路径（不共享服务端实例，只靠快照）。
-3. **`NetMatchEntry.cs`**（正式）：命令行驱动进程入口节点，`--server`/`--client` 分侧启动；`_Process` 显式驱动 ENet Poll；服务端检测到客户端连接后自动 `PushSnapshot()` 推初始快照；客户端连接后每 3 秒自动上行抽牌意图便于观察。
+3. **`NetMatchEntry.cs`**（正式）：命令行驱动进程入口节点，`--server`/`--client` 分侧启动；`_Process` 显式驱动 ENet Poll；服务端检测到客户端连接后自动 `PushSnapshot()` 推初始快照。
+   - ⚠️ **2026-09-05 更正**：原文"客户端连接后每 3 秒自动上行抽牌意图"**已废弃**——该自动抽牌逻辑在代码中已被注释并明确标注"已废弃、禁止重新启用"（正式玩法必须由玩家显式操作）。客户端进程现挂载 `ArenaOl` 联机战场场景承担渲染与操作。
 4. **`Scenes/Net/NetEntry.tscn`**：最小双进程入口场景（挂 NetMatchEntry + GameInitializer）。
 5. **`CardManager.cs`**：新增 `AdoptInstanceWithUid`（子类重建实例后登记权威 UID）。
 6. **`GodotEnetTransport.cs`**：新增 `IsClientConnected()`（客户端角色用底层连接状态判定，跨进程入口检测连接用）。
@@ -168,6 +182,11 @@ godot --path d:/MYPROJECT/UWPro res://Scenes/Net/NetEntry.tscn -- --client 18950
 
 ## 十、快照差异渲染接入（客户端投影驱动 Arena UI）
 
+> ❌ **2026-09-05 状态：本节所述接入已【整体下线】，仅作历史记录保留。**
+> - `SnapshotRenderDriver.cs` / `Arena.SnapshotView.cs` 已删除；`Arena` 不再实现 `ISnapshotView`、无 `ApplySnapshot`；`NetMatchDemo` 中 `DriveArenaBySnapshot` 已移除（代码注释："联机客户端渲染统一由 ArenaOl（快照驱动·全量重建）负责"）。
+> - **替代方案**：新增 `Script/UI/ArenaOl.cs` + `Scenes/Net/ArenaOl.tscn`（联机专用战场，快照**全量重建**渲染），由 `NetMatchEntry --client` 挂载；功能上覆盖了本节"用快照驱动客户端 UI"的目标，但**不走差异引擎**。
+> - `SnapshotDiff.cs` 保留（`NetP3BTests` 仍在验证其 Diff 语义），但**生产无消费者**；是否保留/下线该库待定。
+
 ### 现状（P3·模块B/D 已就绪，本次接通最后一环）
 快照差异渲染管线完整但之前未通电：`GameSnapshot → SnapshotDiff.Diff → List<RenderCommand> → SnapshotRenderDriver.ApplySnapshot → ISnapshotView → Arena 现有刷新方法`。缺的是"没有生产代码在收到快照后调用 `Arena.ApplySnapshot`"。
 
@@ -180,20 +199,100 @@ godot --path d:/MYPROJECT/UWPro res://Scenes/Net/NetEntry.tscn -- --client 18950
 - 当前 Arena 底层仍以 `CardInstance` 承载，`ISnapshotView` 各实现为"保守映射"（`ArrangeAllCards`/`RefreshStackUI` 等全量重排），非精确增量——但差异引擎本身（Diff/Route）已由 `NetP3BTests` 充分验证。
 - 跨进程客户端进程（`NetEntry.tscn --client`）无 Arena 场景，差异驱动当前作用于**单进程联机演示**（Arena + NetMatchDemo）；跨进程的"纯数据化 UI"（CardUI 改由快照挂载）留待后续。
 
-### 验证
+### 验证（历史记录）
 - 单进程联机演示：Arena + NetMatchDemo，观察日志 `快照差异已驱动 Arena（第 N 回合，总卡数=…）`，且 Arena 界面随客户端抽牌意图刷新。
+- ⚠️ 口令 "快照差异已驱动 Arena" 在当前代码中已无产生点（接线已移除），此验证步骤**作废**。
 
-### 【TEMPTEST】持续让过+抽牌自动循环（验收后移除）
+### 【TEMPTEST】持续让过+抽牌自动循环 —— ✅ 已于 2026-09-05 清理（保留原始说明作历史记录）
 - **标记**：`NetMatchDemo.cs` 内 `AutoLoopPassDraw`/`LoopIntervalSec` 字段 + `_Process` 循环分支，统一用 `【TEMPTEST】` 注释标记；移除时 grep `TEMPTEST` 即可定位。
 - **用途**：验证"过回合 + 抽牌"流程下手牌增长与快照投影一致（AutoRun 只抽 N 次，本循环持续驱动）。
 - **启用**：`Arena.tscn` 的 NetMatchDemo 设 `AutoLoopPassDraw = true`（`LoopIntervalSec` 默认 2s）。
 - **行为**：每 `LoopIntervalSec` 秒交替上行 Pass / DrawCards 意图，驱动服务端权威回合推进 + 快照下行。
-- **移除范围**：`NetMatchDemo.cs` 中 `AutoLoopPassDraw`/`LoopIntervalSec`/`_loopTimer`/`_loopPassTurn` + `_Process` 循环分支；若不再需要 `NetMatchDemo` 联机演示，可整体从 Arena.tscn 移除该节点。
+- **移除范围**：`NetMatchDemo.cs` 中 `AutoLoopPassDraw`/`LoopIntervalSec`/`_loopTimer`/`_loopStep`/`_loopStarted` + `_Process` 循环分支。
+- **清理结果（2026-09-05）**：上述字段与 `_Process` 分支已全部删除，`grep TEMPTEST` 在 `Script/` 下已无命中；`NetMatchDemo` 节点保留在 `Arena.tscn`（该场景已设 `AutoRun = false`，不影响单机）。
+- **遗留建议（待确认）**：`NetMatchDemo` 现仅剩"意图通道演示"用途（渲染已由 ArenaOl 接管），如需彻底精简可整体从 `Arena.tscn` 移除该节点。
 
 ## 十一、后续可选项（非迁移必需，按需推进）
 
 > **📌 从"当前可玩"到"完整双玩家对战"的最终缺口清单（四区域 UI / 对抗 / 决策网关 / 剩余交互 / 规则完整度），详见 [`联机对战完整实现最终缺口清单.md`](./联机对战完整实现最终缺口清单.md)。** 本节仅列迁移技术侧的可选项。
 
-1. **跨进程投影回归验证**：重新跑双进程（`NetEntry.tscn --server/--client`），确认客户端 `世界牌堆` 与 `地区` 不再为 0；跑 `TestsRunner` 确认 `NetP1Batch1MatchTests` 仍全绿。
-2. **UI 纯数据化**：跨进程客户端进程若无 Arena 场景，需新建客户端渲染场景 + CardUI 改由快照挂载（不依赖 CardInstance/事件总线），才能让差异引擎在跨进程客户端真正驱动渲染。
-3. **断线重连完善**：`ReconnectManager`（P3·模块E）+ `RandomSnapshot` 已就绪，可补全重连管线。
+1. **跨进程投影回归验证** —— ✅ **已完成（2026-09-05 回填）**：`NetP1Batch1MatchTests` 4/4 全绿（含 `TestLocalLoopbackWorldDeckAndAreaProjection`：世界牌堆 UID 序列与地区势力标记投影一致）；跨进程真实双进程的"世界牌堆/地区非 0"结论见 `联机对战完整实现最终缺口清单.md`（第九轮及以后）。
+2. **UI 纯数据化** —— ✅ **已完成，但走了另一条路线（2026-09-05 回填）**：未采用"差异引擎 + ISnapshotView"，而是新增 `Script/UI/ArenaOl.cs` + `Scenes/Net/ArenaOl.tscn` 作为联机专用客户端战场，按快照**全量重建**渲染（含手牌/场地/秘社/附属/分数/堆叠/地区标记），由 `NetMatchEntry --client` 挂载。
+3. **断线重连完善** —— ⏸️ **本轮决定：延后（不做）**。`ReconnectManager`（P3·模块E）+ `GameSnapshot.Random`（`RandomSnapshot`）已就绪，但生产零引用；**用户决定延后**，暂不接入 `NetworkMatchLauncher`/客户端入口。
+   - 若将来要做，需补：① 连接断开检测（`GodotEnetTransport` 侧事件）；② 重连握手消息与身份确认；③ `GameSnapshot.PendingInput` 恢复（服务端挂起请求续接）；④ 客户端 UI 状态提示（重连中/已恢复）。参考实现入口：`ReconnectManager.BuildPayload/ApplyPayload` + `NetworkMatchLauncher.OnClientMessage` 分流。
+4. **P3·模块D（EventToMessageMapper）** —— ⏳ **待决策（保留 / 搁置 / 移除）**：定位、当前状态与"要完成什么"见 §十二.4。
+5. **`SnapshotDiff.cs`** —— ⏳ **待决策**：生产无消费者，定位与完成路径见 §十二.4。
+6. **`ServerCore/` 纯托管路线** —— ⏳ **待决策**：骨架状态、阻塞点与完成路径见 §十二.4。
+7. **`NetMatchDemo` 演示节点** —— ✅ **已完成（2026-09-05）**：已从 `Arena.tscn` 移除节点与其 `ext_resource`（`Scenes/` 下已无引用）。
+
+---
+
+## 十二、最新状态回填（2026-09-05 · 逐项核实结论）
+
+> 背景：本文档此前停留在 2026-09-01，期间联机工作（ArenaOl、决策网关/选择协议、对抗与触发、效果系统接入等）大量推进但未回填；本节记录**逐项代码核实**的结果与处理。
+
+### 12.1 核实结论一览
+
+| 编号 | 项 | 原文档状态 | 核实结果 | 处理 |
+|---|---|---|---|---|
+| U1 | 第一批三方验证（`NetP1Batch1Tests`） | ✅ 已实现 | ⚠️ 3 用例中 2 个长期失败（手牌重建为 0） | ✅ **已修复**（见 §三状态更新）→ 3/3 通过 |
+| U2 | P3·模块B 快照差异渲染 | ✅ 已接入正式代码 | ❌ 文件已删除、`Arena` 无 `ISnapshotView`、`NetMatchDemo` 无接线 | ✅ 已回填为"**已下线**"（§十），替代方案 ArenaOl |
+| U3 | §十 【TEMPTEST】自动循环 | 待验收后移除 | ⚠️ 仍在代码中 | ✅ **已清理**（`NetMatchDemo.cs` 字段+`_Process` 分支；grep 无命中） |
+| U4 | P3·模块E 断线重连 | 库就绪，可补管线 | ⚠️ 生产零引用 | ⏸️ **延后（用户决定 2026-09-05，§十一.3）** |
+| U5 | §十一.2 UI 纯数据化 | 留待后续 | ✅ 已由 ArenaOl 实现（非差异引擎路线） | ✅ 已回填（§十一.2） |
+| U6 | `ServerRuleEngine` 移除纪律 | 已移除重写版 | ⚠️ 空文件残留 + `ServerCore/` 骨架仍在 | ✅ **已删除空文件**；骨架路线定位见 §十二.4 |
+| U7 | §十一.1 跨进程投影回归验证 | 待做 | ✅ 实际已完成（`NetP1Batch1MatchTests` 4/4 绿） | ✅ 已回填为已完成（§十一.1） |
+| U8 | P3·模块D EventToMessageMapper | 列为五模块之一 | ⚠️ 仅库+测试、生产零引用 | ⏳ 待决策（定位见 §十二.4） |
+| U9 | `NetMatchDemo` 节点挂在 `Arena.tscn` | 文档建议可移除 | ⚠️ 演示节点残留 | ✅ **已移除（2026-09-05，§十一.7）** |
+
+### 12.2 第一批验证失败根因与修复（U1，已闭环）
+
+- **现象**：`TestLoopbackSnapshotRoundTrip` / `TestEnetRealTransportSnapshotRoundTrip` 断言 `重建后玩家1手牌数应一致 ｜ 期望 2 实际 0`；`TestStandaloneSnapshotExportIntegrity` 通过（该用例不调 `ApplySnapshot`，故未暴露）。
+- **根因**：`ZoneManager.PlaceIntoBucket` 内的"秘社卡兜底"以**实例类型**判定（`inst.CouncilTemplate != null`）并无条件改写区域桶，**覆盖了快照里的 Zone**：
+  - 测试场景用 `CouncilCardData` 作为通用模板构造手牌/资产等卡（仅为构造方便），这些实例 `CouncilTemplate != null` → 重建时全部被塞进 `_council`，`_hand` 因此为空；
+  - 更深层问题：该兜底违反"快照即真相"——若快照明确把秘社卡写在墓地/争夺区等合法区域，客户端也会把它搬回秘社区（潜在显示/计数错误）。
+- **修复**：兜底收窄为**仅当快照 `Zone ∈ {Hand, Deck}`**（秘社卡规则上不可能出现）时才归位秘社区；其余区域一律以快照为准。
+- **测试侧同步**：`BuildScenario` 通用卡改用 `PlayerCardData`（构造规则合法状态），并补 1 张玩家1 秘社区卡以覆盖 `CouncilZone` 桶（新增断言 `重建后秘社区数应一致（秘社卡兜底不得误搬）`）。
+- **验证**：`dotnet build` 0 警告 0 错误；headless 全量 `TestsRunner` **33 套件全绿、0 失败、0 ERR**（历史首次全绿）。
+
+### 12.3 仍需跟进（未完成项）
+
+1. **P3·模块E 断线重连管线** —— ⏸️ **本轮决定：延后**（不列入当前待办；完成路径见 §十一.3）。
+2. **P3·模块D（EventToMessageMapper）/ `SnapshotDiff.cs` / `ServerCore/`** —— ⏳ **待决策**（三者的定位、当前状态、完成路径与成本评估见 §十二.4）。
+3. （已完成项）`NetMatchDemo` 节点已从 `Arena.tscn` 移除，见 §十一.7。
+
+### 12.4 三个待决策模块的定位与完成路径（2026-09-05 补充）
+
+#### (1) P3·模块D：渲染事件 → 网络消息（`EventToMessageMapper.cs` / `RenderEvent.cs` / `EventSerializer`）
+
+- **原本要做什么**：把 Manager 事件总线上的渲染事件（`OnCardMoved` / `OnCardStateChanged` / `OnPhaseChanged` / `OnPriorityChanged` / `OnCardDrawn` / `OnAreaWon` / `OnGameOver` / `AssetsChanged` / `StackChanged`）转成**可序列化的网络消息**，使"事件驱动渲染"可以跨进程：客户端把本地事件上报、或服务端把权威变更广播给客户端（用于表现层提示：动画/音效/飘字等）。
+- **当前状态**：库 + `EventSerializer` + `NetP3DTests` 覆盖齐全，但**生产零引用**（`NetworkMatchLauncher` 只下发快照，不转发事件）。
+- **要完成什么**（若要启用）：① 服务端在 Manager 事件处建 `EventToMessageMapper` 并挂到 `GodotEnetTransport` 下发（新增消息前缀如 `EVT:`）；② 客户端在 `NetworkMatchLauncher.OnClientMessage` 分流并暴露 `OnClientRenderEvent`；③ `ArenaOl` 订阅事件做增量表现（动画/高亮），**不再需要**本地 diff。
+- **成本/收益**：接线成本中等（协议 + 两端分流 + UI 表现层），收益是"表现层提示"；但当前客户端是**快照全量重建**，动画提示也可由客户端**本地对前后快照做 diff** 得到，无需服务端下发事件消息。
+- **建议**：**下线（删除模块D）**，避免长期死代码；若未来需要"服务端权威的表现提示"（例如只有服务端知道的信息，如对手暗藏翻面瞬间），再按上述路径重建。**（待你决策）**
+
+#### (2) `SnapshotDiff.cs`（+ `RenderCommand.cs`）：快照增量差异引擎
+
+- **原本要做什么**：对比前后两个 `GameSnapshot`，输出最小增量 `RenderCommand` 列表（AddCard/RemoveCard/MoveCard/UpdateCard/StackPush/StackPop/PlayerUpdate/PhaseChange），让客户端**增量刷新 UI** 而不是全量重建（模块B 的核心算法；配套的 `SnapshotRenderDriver`/`ISnapshotView` 已删除）。
+- **当前状态**：纯函数、零依赖、`NetP3BTests` 覆盖；**生产零消费者**（ArenaOl 走全量重建）。
+- **要完成什么**（若要启用）：① 重建"命令消费者"：在 `ArenaOl`（或新客户端场景）中按 `RenderCommand` 分发到已有的重建分支（增量版 `MoveCard/UpdateCard/StackPush` 等）；② 客户端保存 `_lastSnapshot` 并在 `ApplySnapshot` 时改为 `SnapshotDiff.Diff(_last, snap)` 驱动；③ 处理全量兜底（首包/差异异常时回退全量重建）。
+- **成本/收益**：收益是**性能与"不打断交互"**（避免每次快照重建全部节点、丢失拖拽/高亮态）。当前对局规模下全量重建可用，故非必需。
+- **建议**：**保留库（冻结）**，并在文档标注"未来客户端增量渲染/本地动画提示可复用"；若追求减债也可与模块D 一并删除。**（待你决策）**
+
+#### (3) `ServerCore/`：纯托管（脱离 Godot）服务端内核
+
+- **原本要做什么**：把服务端做成**不依赖 Godot** 的纯 .NET 进程（服务器/容器里跑，无 Godot 运行时），复用 `Script.Enums` + `Script.Net`（DTO/快照/意图/随机源）作为协议与数据层地基。
+- **当前状态 = 冒烟骨架，非可用服务端**：
+  - `Program.cs`：纯托管冒烟（随机复原、`SnapshotDiff`、重连载荷、`IntentHub` + **桩路由 `EchoIntentRouter`**）；其中"真实规则结算"被显式标注为不实现（`ServerRuleEngine` 重写版已按纪律删除）。
+  - `CardTemplateRepository.cs`：读 `Cards/card_templates.json`（Godot 侧 `CardExportRunner` 导出，约 1.2 MB / 700+ 张）按 UID 反查 —— **M2 卡牌 JSON 数据协议**，价值最高的一块。
+  - `ServerCardInstance.cs`：纯托管卡实例（能力值、持续授予/注销、翻面+版本号、伤害/死亡）。
+  - `ServerCore.csproj`：TFM `net10.0`（与主工程 `net8.0` 不一致），只编译 `Script/Enums` + `Script/Net`（排除 Godot 子目录与 `InputGateways.cs`）+ `DeterministicRandom`；**不含任何 Manager/规则层**。
+- **要完成什么**（若要变成真正的纯托管服务端）：① 规则层去 Godot 化——`ZoneManager`/`CardManager`/`TurnManager` 目前都是 `Node`，`EffectEngine` 有 97 处 `GD.*`、`TurnManager` 132 处、`PMCommandManager` 128 处；效果数据模型 `EffectData` 还依赖 `Godot.Collections.Array<T>` 与 `[Export]`；② `ResolveInstance` 改为从 `CardTemplateData`(JSON) 建实例；③ 用真实 `IIntentRouter` 替换 `EchoIntentRouter`，并接上 Zone/Turn/Stack/Effect 全链路；④ 传输与主循环（ENet/其它 socket）+ 快照广播 + `ChoiceRequest` 决策回环；⑤ 与 Godot 客户端协议对齐验证。
+- **成本/收益**：成本**很高**（等于把整套规则+效果系统脱离 Godot，且与"不写第二套规则"的纪律冲突）；当前服务端已可用 **Godot `--headless`** 方式运行（`NetMatchEntry --server`），功能上已满足联机需求。
+- **建议**：**不推进该路线**。做法二选一：**(a) 整体移除 `ServerCore/`**（并删 `UWPro.csproj` 的两条 `Compile Remove`），把 `card_templates.json` 导出能力保留在 Godot 工具里；**(b) 降级保留为"协议/数据层验证工具"**：保留 `CardTemplateRepository`（JSON 数据协议有复用价值），删除 `ServerCardInstance` 与桩路由，避免被误当作第二套规则实现。**（待你决策）**
+
+### 12.5 文档维护约定（避免再次过期）
+
+- 涉及"接入/下线/替换"的决定，必须在**同一轮**写入本文档对应章节（参考本轮 §一/§十/§十一 的状态标注方式）。
+- 每轮同步记录：`dotnet build` 结果 + headless 全量测试结论（套件数/失败数），失败用例须列名。
+- 与 `联机对战完整实现最终缺口清单.md` 的分工：**本文档记迁移技术侧**（模块、批次、投影链路、下线决定），**缺口清单记玩法完整度**（UI/对抗/交互/规则）。

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Script.Enums;
@@ -305,14 +305,32 @@ namespace Script.UI
             if (_defenseLabel != null && _instance.HasDefense) _defenseLabel.Text = $"防 {_instance.CurrentDefense}";
         }
 
+        /// <summary>外部注入的玩家级费用修正（联机客户端由 ArenaOl 从快照计算后注入）。
+        /// 默认 null = 未接管 → 仍走下方单机 EffectEngine.Instance 逻辑，单机行为完全不变。</summary>
+        public void SetExternalCostMod(int? mod)
+        {
+            _externalCostMod = mod;
+            RefreshCostReduction();
+        }
+        private int? _externalCostMod;
+
         /// <summary>刷新费用显示：若有玩家级费用修正（JC012 等"下一张帷幕守望牌-1"），实时显示减后费用并绿色提示；否则显示原始费用。</summary>
         public void RefreshCostReduction()
         {
             if (_costLabel == null || _instance == null || _instance.PlayerTemplate == null) return;
             var tmpl = _instance.PlayerTemplate;
             int mod = 0;
-            try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
-            catch (System.Exception) { mod = 0; }
+            if (_externalCostMod.HasValue)
+            {
+                // 联机客户端：ArenaOl 由快照投影算出减费额并注入（客户端无 EffectEngine 实例）。
+                mod = _externalCostMod.Value;
+            }
+            else
+            {
+                // 单机/未接管：原逻辑不变（读 EffectEngine.Instance，异常兜底 0）。
+                try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
+                catch (System.Exception) { mod = 0; }
+            }
             if (tmpl.Cost >= 0)
             {
                 int shown = Mathf.Max(0, tmpl.Cost - mod);

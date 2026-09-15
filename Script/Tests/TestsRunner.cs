@@ -46,6 +46,7 @@ namespace Script.Tests
                 new NetP1Batch1Tests(),            // C/S 化·第一批迁移三方验证（Loopback端到端 / 单机回归 / Enet真实联机）
                 new NetP1Batch1MatchTests(),        // C/S 化·第一批迁移端到端联机（NetworkMatchLauncher 回环 + 客户端投影一致）
                 new NetCrossProcessSimTests(),      // 【临时】伪跨进程 + ResolveInstance 从模板重建验证（跨进程联机核心点，验证后移除）
+                new OnlineEffectChainTests(),        // 联机效果系统接入：客户端可发动判定 / 费用修正快照 / 服务端目标校验
             };
 
             var redlines = new List<string>();

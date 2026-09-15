@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Godot;
 using Script.Data.Cards;
+using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Manager;
 using Script.Net;
@@ -31,19 +32,31 @@ namespace Script.Net.Godot
             "res://Cards/Data/CouncilCards",
         };
 
-        /// <summary>构建并设置客户端本地模板库索引（跨进程客户端在首次 ResolveInstance 前调用一次）。</summary>
+        /// <summary>构建并设置客户端本地模板库索引（跨进程客户端在首次 ResolveInstance 前调用一次）。
+        ///
+        /// 【效果系统接入·关键】客户端进程【没有 GameInitializer】（不跑规则），若不在此处补做效果注入，
+        /// 则 .tres 里的通用 PlayerCardData 只带牌面静态数据、EffectDataList / TargetRules 为空
+        /// （效果由 CardEffectFactory 按 UID 构建，不序列化进 .tres），表现为联机客户端
+        /// 「双击附属/角色卡 → 无可激活能力」「无合法目标」等效果链断裂。
+        /// 这里与 GameInitializer.InitializeAll 的第一件事一致：先注册全部效果构建器，再逐张模板注入（幂等）。
+        /// </summary>
         public void EnsureTemplateIndex()
         {
             if (_templates != null) return;
+            // 0) 注册全部卡效果构建器（幂等）：必须在任何 EnsureEffects 之前，否则查表为空、注入无效果。
+            Cards.Effects.AllEffects.RegisterAll();
             _templates = new Dictionary<string, BaseCardData>();
             foreach (var dir in TemplateDirs)
                 foreach (var path in EnumerateTres(dir))
                 {
                     var template = ResourceLoader.Load<BaseCardData>(path);
                     if (template == null || string.IsNullOrEmpty(template.UID)) continue;
+                    // 1) 玩家卡：按 UID 构建 EffectDataList / TargetRules（与单机/服务端同一份构建器，保证 EffectId 一致）。
+                    if (template is PlayerCardData playerTmpl)
+                        CardEffectFactory.EnsureEffects(playerTmpl);
                     _templates[template.UID] = template;
                 }
-            GD.Print($"[NetClientCardManager] 客户端模板库就绪：{_templates.Count} 张卡");
+            GD.Print($"[NetClientCardManager] 客户端模板库就绪：{_templates.Count} 张卡（效果构建器已注册并注入）");
         }
 
         /// <summary>重载 ResolveInstance：本地无实例时从模板按权威 UID 新建（跨进程核心重建路径）。</summary>
@@ -58,6 +71,9 @@ namespace Script.Net.Godot
             EnsureTemplateIndex();
             if (r != null && _templates.TryGetValue(r.TemplateUid, out var tmpl))
             {
+                // 防御性再注入（幂等）：即使模板经其它路径进入（未过 EnsureTemplateIndex 的注入循环），
+                // 也保证其 EffectDataList / TargetRules 已由 CardEffectFactory 构建，避免效果链断裂。
+                if (tmpl is PlayerCardData playerTmpl) CardEffectFactory.EnsureEffects(playerTmpl);
                 // 直接用权威 UID 建实例并登记，避免走 CreateCardInstance 的本地自增 UID（inst_N）。
                 // 跨进程下客户端自增 UID 与服务端权威 UID 同前缀 inst_，若经 CreateCardInstance 生成临时 UID
                 // 再覆盖，会产生残留临时键，后续快照 GetInstance 可能命中残留实例导致归位错乱

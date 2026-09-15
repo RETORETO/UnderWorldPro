@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -110,7 +110,8 @@ namespace Script.Manager
                 if (e.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)) continue;
                 // 方案C：激活效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                 // 显式声明 Scope 的效果按声明（如未来墓地/手牌激活）。不在此区则跳过该效果。
-                if (!EffectEngine.Instance.IsEffectActiveInZone(e, card)) continue;
+                // 静态化调用：客户端（无 EffectEngine 实例）也能复用同一生效区判定（行为与原先一致）。
+                if (!EffectEngine.IsEffectActiveInZone(e, card)) continue;
                 if (e.Cost > mana) continue;
                 // 窗口门禁（D9）：行动类激活仅限【自己行动步骤 + 堆叠为空 + 有行动权】
                 // （先手→ActionFirst，后手→ActionSecond，复用 CanEnterBasicActionMask）。

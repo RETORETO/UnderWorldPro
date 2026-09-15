@@ -50,6 +50,8 @@ namespace Script.Net.Godot
         private TurnManager _clientTurn;     // 独立投影回合（阶段/优先权/回合计数）
         private WorldDeckManager _clientWorld; // 第三批：独立投影世界牌库（地区牌堆）
         private AreaManager _clientArea;      // 第三批：独立投影地区（注册表 + 势力标记）
+        private System.Collections.Generic.List<Script.Net.CostModSnap> _clientCostMods
+            = new System.Collections.Generic.List<Script.Net.CostModSnap>();   // 玩家级费用修正投影（仅展示）
 
         /// <summary>服务端经此回调对外广播快照（如 Arena 想接 UI 渲染可订阅；最小验证可留空）。</summary>
         public Action<Script.Net.GameSnapshot> OnServerSnapshot;
@@ -60,6 +62,9 @@ namespace Script.Net.Godot
         /// <summary>客户端收到服务端下发的决策请求（ChoiceRequest）时回调。ArenaOl 订阅后弹出决策面板；
         /// 玩家选择经 SendChoiceResult 上行回包。无订阅方时 OnClientMessage 自动回取消兜底。</summary>
         public event Action<Script.Net.ChoiceRequest> OnClientChoiceRequest;
+
+        /// <summary>客户端收到服务端「拒绝意图」（IntentResult.Success=false）时回调，供 ArenaOl 弹可见提示。</summary>
+        public event Action<Script.Net.IntentResult> OnClientIntentRejected;
 
         /// <summary>
         /// 启动本地回环联机对局。
@@ -324,8 +329,13 @@ namespace Script.Net.Godot
                 return;
             }
 
-            // 否则为 IntentResult（客户端可对结果做断言/日志，此处仅解析不强制处理）
-            var _ = Script.Net.IntentClient.ParseResult(message);
+            // 否则为 IntentResult：失败时记录日志并通知 UI（服务端拒绝需要可见反馈，避免"点了没反应"）
+            var intentResult = Script.Net.IntentClient.ParseResult(message);
+            if (intentResult != null && !intentResult.Success)
+            {
+                GD.PrintErr($"[NetworkMatchLauncher][SVR] 意图被拒绝：{intentResult.Error}");
+                OnClientIntentRejected?.Invoke(intentResult);
+            }
         }
 
         /// <summary>客户端投影聚合应用整局快照：区域 → 世界牌库 → 玩家 → 堆叠 → 回合 → 地区（顺序：先恢复依赖基础）。</summary>
@@ -346,6 +356,8 @@ namespace Script.Net.Godot
             _clientPlayer.SetFirstPlayer(_clientTurn.FirstPlayerId);
             // 6) 地区（注册表从快照 AreaCards 重建 + 势力标记从快照恢复）
             _clientArea.ApplySnapshot(snap.AreaCards, snap.AreaMarks);
+            // 7) 玩家级费用修正（仅展示：JC012① 等"下一张费用-1"）
+            _clientCostMods = snap.CostMods ?? new System.Collections.Generic.List<Script.Net.CostModSnap>();
             GD.Print($"[NetworkMatchLauncher][CLI] 应用快照 手牌 {before}→{after} 总卡数={snap.Zones.Count} " +
                      $"堆叠={_clientStack.Entries.Count} 世界牌堆={_clientWorld.Count} 地区={_clientArea.GetOrderedAreaUids().Count} 地区标记={snap.AreaMarks.Count} " +
                      $"阶段={_clientTurn.CurrentPhase} 优先权={_clientTurn.PriorityPlayerId}");
@@ -363,6 +375,10 @@ namespace Script.Net.Godot
 
         /// <summary>客户端投影的 ZoneManager（供断言/调试读取投影状态）。</summary>
         public ZoneManager ClientZoneManager => _clientZone;
+        /// <summary>客户端投影的 CardManager（联机客户端做本地可发动判定 / 规则复用查询时使用）。</summary>
+        public CardManager ClientCardManager => _clientCard;
+        /// <summary>客户端投影的玩家级费用修正（仅用于 UI 减费展示，不参与结算）。</summary>
+        public System.Collections.Generic.IReadOnlyList<Script.Net.CostModSnap> ClientCostMods => _clientCostMods;
         /// <summary>客户端投影的 DeckManager（独立投影牌库；牌库数据在此，不在 ZoneManager.GetZoneCards(Deck) 里）。</summary>
         public DeckManager ClientDeckManager => _clientDeck;
         /// <summary>客户端投影的 TurnManager（第二批：阶段/优先权/回合计数投影）。</summary>

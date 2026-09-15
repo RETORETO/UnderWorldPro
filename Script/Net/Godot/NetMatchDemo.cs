@@ -28,25 +28,15 @@ namespace Script.Net.Godot
         [Export] public int AutoDrawCount { get; set; } = 2;
         /// <summary>AutoRun 用 ENet 监听端口（默认 18920）。</summary>
         [Export] public ushort Port { get; set; } = 18920;
-        /// <summary>【TEMPTEST】是否开启"持续让过+抽牌"自动循环（验收后移除）。</summary>
-        [Export] public bool AutoLoopPassDraw { get; set; } = false;
-        /// <summary>【TEMPTEST】AutoLoopPassDraw 的动作间隔（秒）。</summary>
-        [Export] public int LoopIntervalSec { get; set; } = 2;
 
         private GameInitializer _gi;
         private NetworkMatchLauncher _launcher;
         private double _autoTimer = 0;
         private int _autoStep = 0;
         private int _autoDrawsDone = 0;
-        // 【TEMPTEST】持续让过+抽牌循环的状态（验收后随方法一并移除）
-        private double _loopTimer = 0;
-        private int _loopStep = 0; // 0=P1让过 1=P2让过 2=抽牌（推进回合节拍）
-        private bool _loopStarted = false; // 启动只尝试一次，避免 _gi 未就绪时每帧重试刷屏
 
         public override void _Ready()
         {
-            // AutoLoopPassDraw 接管 _Process 时禁用 AutoRun，避免双启动冲突
-            if (AutoLoopPassDraw) AutoRun = false;
             // 与 Arena 同路径查找 GameInitializer（Composition Root，兄弟节点）
             ResolveGameInitializer();
         }
@@ -77,35 +67,6 @@ namespace Script.Net.Godot
 
         public override void _Process(double delta)
         {
-            // ===== 【TEMPTEST】持续让过+抽牌循环（验收后随 AutoLoopPassDraw 一并移除） =====
-            if (AutoLoopPassDraw)
-            {
-                if (_launcher == null)
-                {
-                    if (!_loopStarted) { _loopStarted = true; StartDemo(Port); } // 启动只尝试一次，避免反复报错
-                    _loopTimer = 0;
-                    return;
-                }
-                _loopTimer += delta;
-                if (_loopTimer >= LoopIntervalSec)
-                {
-                    _loopTimer = 0;
-                    // 让过回合需玩家1/玩家2 连续让过才推进阶段到 StartDraw（抽牌步骤）。
-                    // 序列：P1让过 → P2让过 →（阶段推进）→ 每推进一次抽 1 张验证手牌增长。
-                    switch (_loopStep)
-                    {
-                        case 0: _launcher.SendIntentAs(1, PlayerIntent.Kind.Pass); _loopStep = 1; GD.Print("[NetMatchDemo][TEMPTEST] P1 让过"); break;
-                        case 1: _launcher.SendIntentAs(2, PlayerIntent.Kind.Pass); _loopStep = 2; GD.Print("[NetMatchDemo][TEMPTEST] P2 让过（阶段应推进）"); break;
-                        default:
-                            _launcher.SendIntentAs(1, PlayerIntent.Kind.DrawCards, "1");
-                            _loopStep = 0; // 循环回起点
-                            GD.Print("[NetMatchDemo][TEMPTEST] P1 抽牌（验证手牌增长）");
-                            break;
-                    }
-                }
-                return; // 循环模式接管 _Process，不走下方 AutoRun
-            }
-
             if (!AutoRun) return;
             _autoTimer += delta;
             if (_autoStep == 0 && _autoTimer >= AutoStartDelaySec)

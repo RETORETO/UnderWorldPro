@@ -36,6 +36,19 @@ namespace Script.Net
 
         /// <summary>服务端当前随机源状态（MasterSeed + 各流步数），用于断线重连精确复原随机中间态（P3·模块E）。</summary>
         public RandomSnapshot Random;
+
+        /// <summary>玩家级费用修正（JC012① 等"下一张费用-X"）：仅用于客户端展示减费提示，结算仍以服务端为准。</summary>
+        public List<CostModSnap> CostMods = new List<CostModSnap>();
+    }
+
+    /// <summary>一条玩家级费用修正的快照投影（纯数据，对应 EffectEngine.TimedMod 中 Kind==CostMod 的条目）。</summary>
+    public class CostModSnap
+    {
+        public int PlayerId;
+        public int Amount;         // 修正量（负数为增费）
+        public string FilterText;  // 匹配过滤：空=全匹配；否则卡名含该串 或 Organization 等于该串
+        public bool ConsumeOnce;   // 一次性（"下一张"）
+        public int ExpireTurn;     // 到期回合
     }
 
     public class PlayerSnapshot

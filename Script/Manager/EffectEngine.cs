@@ -758,6 +758,26 @@ namespace Script.Manager
             return total;
         }
 
+        /// <summary>导出当前生效中的玩家级费用修正（只读，供快照下行给客户端做减费展示）。
+        /// 语义与 GetCostModification 的匹配规则一致，但导出的是「条目」而非某张卡的合计值。</summary>
+        public System.Collections.Generic.List<Script.Net.CostModSnap> GetActiveCostMods()
+        {
+            var list = new System.Collections.Generic.List<Script.Net.CostModSnap>();
+            foreach (var m in _timedModStack)
+            {
+                if (m.Kind != "CostMod") continue;
+                list.Add(new Script.Net.CostModSnap
+                {
+                    PlayerId = m.PlayerId,
+                    Amount = m.Amount,
+                    FilterText = m.FilterText,
+                    ConsumeOnce = m.ConsumeOnce,
+                    ExpireTurn = m.ExpireTurn,
+                });
+            }
+            return list;
+        }
+
         // ==================== D2 威名去重（战斗对抗获胜放置势力标志） ====================
         // 维度：areaUid + 控制者，保证"同一控制者多个威名在同一地区只放置一个势力标志"。
         // 单次战斗对抗只 Emit 一次 OnCombatWon（见 TriggerEmitPoints.OnCombatWon）；
@@ -1000,7 +1020,9 @@ namespace Script.Manager
         /// <summary>卡类型默认生效区（方案C 声明式 Scope 的默认推导）。
         /// 未声明 Scope（Specified）的效果回退到此处：附属→AttachTarget（严格=仅 AttachedZone）；角色→AreaZone（仅 AreaZone）。
         /// 未来扩展（墓地/手牌生效等）在此加判断，或让具体效果声明 Scope 覆盖。</summary>
-        public ZoneScope GetDefaultScope(CardInstance card)
+        /// <summary>纯函数：卡类型默认生效区（附属→AttachTarget，角色→AreaZone）。
+        /// 静态化目的：客户端（无 EffectEngine 实例）复用同一判定，避免复制规则分叉。</summary>
+        public static ZoneScope GetDefaultScope(CardInstance card)
         {
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return ZoneScope.Specified;
             bool isAttachment = (tmpl.CategoryFlag & CardCategory.Attachment) != 0;
@@ -1012,7 +1034,8 @@ namespace Script.Manager
         /// 接入点：RegisterPersistent（持续/静止）、TriggerRegistry（触发）、ActivateEligibility（激活）。
         /// 注意：AttachTarget 采用严格规则=仅 AttachedZone（Z1/Z4，AreaZone 附属暂不生效）。
         /// 未来加"某区生效"只需在 switch 增分支，勿在调用处重复写区判断（避免遗漏）。</summary>
-        public bool IsEffectActiveInZone(EffectData e, CardInstance card)
+        /// <summary>纯函数：某效果在其来源卡当前所在区是否生效（静态化，客户端亦可直接调用）。</summary>
+        public static bool IsEffectActiveInZone(EffectData e, CardInstance card)
         {
             if (card == null || e == null) return false;
             ZoneScope scope = (e.Scope == ZoneScope.Specified) ? GetDefaultScope(card) : e.Scope;

@@ -55,6 +55,18 @@ namespace Script.Net.Godot
             var tgt = string.IsNullOrEmpty(targetUid) ? null : _cardManager.GetInstance(targetUid);
             var data = _cardManager.GetEffectData(sourceUid, effectId);
             if (src == null || data == null) throw new System.InvalidOperationException("发动能力参数无效");
+
+            // 服务端权威复查激活目标合法性：客户端的目标过滤只是展示层防呆，禁止非法 targetUid 直接进入结算。
+            // 复用核心 ActivateEligibility.IsLegalActivateTarget（本地区/类别/目标规则/暗藏者豁免）。
+            if (data.Target != null && data.Target.NeedsSelection)
+            {
+                if (tgt == null)
+                    throw new System.InvalidOperationException($"激活 {effectId} 需要指定目标（targetUid 为空）");
+                if (!Script.Manager.ActivateEligibility.IsLegalActivateTarget(src, data, tgt, _cardManager))
+                    throw new System.InvalidOperationException(
+                        $"激活目标非法：{tgt.PlayerTemplate?.CardName ?? tgt.UID} 不符合 {effectId} 的目标规则");
+            }
+
             _service.ActivateAbility(src, data, tgt);
         }
 

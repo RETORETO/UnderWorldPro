@@ -59,45 +59,51 @@ namespace Script.Tests
             var all = new List<CardInstance>();
 
             // 玩家1 手牌 x2
-            var h1 = cm.CreateCardInstance(new CouncilCardData { CardName = "手牌A" }, 1);
-            var h2 = cm.CreateCardInstance(new CouncilCardData { CardName = "手牌B" }, 1);
+            var h1 = cm.CreateCardInstance(new PlayerCardData { CardName = "手牌A" }, 1);
+            var h2 = cm.CreateCardInstance(new PlayerCardData { CardName = "手牌B" }, 1);
             zm.MoveToHand(h1, 1); zm.MoveToHand(h2, 1);
             all.Add(h1); all.Add(h2);
 
             // 玩家1 资产区 x1（带伤害/横置状态）
-            var asset = cm.CreateCardInstance(new CouncilCardData { CardName = "资产甲" }, 1);
+            var asset = cm.CreateCardInstance(new PlayerCardData { CardName = "资产甲" }, 1);
             asset.Damage = 3; asset.IsTapped = true;
             zm.MoveToAsset(asset, 1);
             all.Add(asset);
 
             // 玩家1 争夺区 x1（带暗藏/调查/力量）
-            var area = cm.CreateCardInstance(new CouncilCardData { CardName = "争夺乙" }, 1);
+            var area = cm.CreateCardInstance(new PlayerCardData { CardName = "争夺乙" }, 1);
             area.IsCovert = true; area.CurrentInvestigation = 2; area.CurrentPower = 5;
             area.EnteredThisTurn = true; area.AbilityUsedThisTurn = false;
             zm.MoveToArea(area, "area_main", 1);
             all.Add(area);
 
             // 玩家1 墓地 x1
-            var gy = cm.CreateCardInstance(new CouncilCardData { CardName = "墓地丙" }, 1);
+            var gy = cm.CreateCardInstance(new PlayerCardData { CardName = "墓地丙" }, 1);
             zm.MoveToGraveyard(gy, 1);
             all.Add(gy);
 
             // 玩家1 附属区 x1
-            var att = cm.CreateCardInstance(new CouncilCardData { CardName = "附属丁" }, 1);
+            var att = cm.CreateCardInstance(new PlayerCardData { CardName = "附属丁" }, 1);
             att.IsAttached = true;
             zm.MoveToAttachedZone(att, "area_main", 1);
             all.Add(att);
 
             // 玩家1 封印区 x1
-            var seal = cm.CreateCardInstance(new CouncilCardData { CardName = "封印戊" }, 1);
+            var seal = cm.CreateCardInstance(new PlayerCardData { CardName = "封印戊" }, 1);
             seal.IsSealed = true;
             zm.MoveToSealedZone(seal, "area_main", 1);
             all.Add(seal);
 
             // 玩家2 手牌 x1（验证分桶按 ZoneOwnerId）
-            var h3 = cm.CreateCardInstance(new CouncilCardData { CardName = "手牌C" }, 2);
+            var h3 = cm.CreateCardInstance(new PlayerCardData { CardName = "手牌C" }, 2);
             zm.MoveToHand(h3, 2);
             all.Add(h3);
+
+            // 玩家1 秘社区 x1（秘社卡桶：验证 ApplySnapshot 对 CouncilZone 的归位，
+            // 以及"秘社卡兜底"只作用于手牌/牌库、不会把秘社区卡搬走）
+            var council = cm.CreateCardInstance(new CouncilCardData { CardName = "秘社己" }, 1);
+            zm.MoveToCouncil(council, 1);
+            all.Add(council);
 
             return (cm, zm, all);
         }
@@ -142,6 +148,7 @@ namespace Script.Tests
             Assert.AreEqual(1, zm.GetZoneCards(CardZone.AttachedZone, 1).Count, "重建后附属区数应一致");
             Assert.AreEqual(1, zm.GetZoneCards(CardZone.SealedZone, 1).Count, "重建后封印区数应一致");
             Assert.AreEqual(1, zm.GetZoneCards(CardZone.AreaZone, 1, "area_main").Count, "重建后争夺区数应一致");
+            Assert.AreEqual(1, zm.GetZoneCards(CardZone.CouncilZone, 1).Count, "重建后秘社区数应一致（秘社卡兜底不得误搬）");
 
             // 5) 断言运行时字段经重建零丢失（含本次补全的三个字段）
             var restoredArea = zm.GetZoneCards(CardZone.AreaZone, 1, "area_main")[0];

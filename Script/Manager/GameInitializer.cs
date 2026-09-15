@@ -406,6 +406,8 @@ public partial class GameInitializer : Node
         snap.WorldDeckCards = WorldDeckManager?.ToSnapshotUids() ?? snap.WorldDeckCards;
         snap.AreaCards = AreaManager?.ToSnapshot() ?? snap.AreaCards;
         snap.AreaMarks = AreaManager?.ToSnapshotMarks() ?? snap.AreaMarks;
+        // 玩家级费用修正（JC012① 等）：下行给客户端做减费展示（结算仍以服务端为准）
+        snap.CostMods = _effectEngine?.GetActiveCostMods() ?? snap.CostMods;
         return snap;
     }
 

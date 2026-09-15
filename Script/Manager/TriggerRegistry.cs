@@ -160,7 +160,7 @@ namespace Script.Manager
                     if (data.Timing != timing) continue;
                     // 方案C：触发效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                     // 显式声明 Scope 的效果按声明（如未来墓地/手牌触发）。不在此区则跳过该效果。
-                    if (EE == null || !EE.IsEffectActiveInZone(data, card))
+                    if (EE == null || !EffectEngine.IsEffectActiveInZone(data, card))
                     {
                         skippedZone++;
                         continue;

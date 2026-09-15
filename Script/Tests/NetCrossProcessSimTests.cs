@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Godot;
 using Script.Data.Cards;
+using Script.Data.Effects;
 using Script.Enums;
 using Script.Game.Entities;
 using Script.Manager;
@@ -178,6 +179,70 @@ namespace Script.Tests
             }
 
             launcher.Stop();
+        }
+
+        /// <summary>
+        /// 【回归·效果系统接入】生产客户端重建路径（真实 NetClientCardManager）必须完成模板效果注入。
+        ///
+        /// 缺陷背景：客户端进程【没有 GameInitializer】（不跑规则），而 .tres 里的通用 PlayerCardData 只带牌面
+        /// 静态数据，EffectDataList / TargetRules 由 CardEffectFactory 按 UID 构建、不序列化进 .tres。
+        /// 若客户端模板库既未注册效果构建器、也未对模板执行 EnsureEffects，则联机客户端拿到的模板效果为空，
+        /// 表现为 ArenaOl 双击附属/角色卡「无可激活能力，忽略双击」、效果列表为空、合法目标为空（效果链断裂）。
+        /// 本用例锁定该路径：经 NetClientCardManager.RebuildFromRef 重建的 JC012 实例必须带 2 个可激活效果与 TargetRules。
+        /// </summary>
+        public void TestClientCardManagerInjectsTemplateEffects()
+        {
+            // ① 还原「客户端进程刚启动」的模板初始态：.tres 已载入，但效果尚未注入。
+            //    （EffectDataList/TargetRules 由 CardEffectFactory 构建，不序列化进 .tres；
+            //      _effectsInjected 为 internal，同一程序集内可在测试中复位以复现该初始态）
+            const string jc012Path = "res://Cards/Data/PlayerCards/JC/JC012_weimushouwanghuiji.tres";
+            var raw = ResourceLoader.Load<PlayerCardData>(jc012Path);
+            Assert.IsNotNull(raw, "应能加载 JC012 模板 .tres");
+            raw.EffectDataList.Clear();
+            raw.TargetRules?.Clear();
+            raw._effectsInjected = false;
+            Assert.AreEqual(0, raw.EffectDataList.Count, "前置：注入前 JC012 模板效果应为空（复现客户端初始态）");
+
+            // ② 走生产客户端重建路径（真实 NetClientCardManager）：必须完成「注册构建器 + 注入模板效果」。
+            var client = new NetClientCardManager();
+            var inst = client.RebuildFromRef(new ZoneCardRef
+            {
+                Uid = "inst_900012",
+                TemplateUid = raw.UID,
+                OwnerId = 1,
+                ControllerId = 1,
+                Zone = CardZone.AttachedZone,
+                IsAttached = true,
+            });
+            Assert.IsNotNull(inst, "客户端应从模板重建 JC012 实例（模板库需可用）");
+            var tmpl = inst.PlayerTemplate as PlayerCardData;
+            Assert.IsNotNull(tmpl, "JC012 模板应为 PlayerCardData");
+
+            int activated = 0;
+            var ids = new List<string>();
+            foreach (var e in tmpl.EffectDataList)
+            {
+                if (e == null) continue;
+                ids.Add(e.EffectId);
+                if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated) activated++;
+            }
+            Assert.AreEqual(2, activated,
+                $"客户端重建的 JC012 应含 2 个可激活效果（否则 ArenaOl 报『无可激活能力』），实际={activated}，EffectIds={string.Join(",", ids)}");
+            Assert.IsTrue(ids.Contains("JC012_1_CostReduce") && ids.Contains("JC012_2_Tap"),
+                $"客户端模板应含 JC012 两个效果 Id，实际={string.Join(",", ids)}");
+            Assert.IsTrue(tmpl.TargetRules != null && tmpl.TargetRules.Count > 0,
+                "客户端重建的 JC012 应带 TargetRules（打出目标=本方秘社），否则目标合法性判定失效");
+
+            // ③ 客户端上行 ActivateAbility 用的 effectId，必须能被服务端 GetEffectData 解析（同一构建器 → EffectId 一致）。
+            var cm = new CardManager();
+            var serverLike = cm.CreateCardInstance(tmpl, 1);
+            Assert.IsNotNull(cm.GetEffectData(serverLike.UID, "JC012_1_CostReduce"),
+                "服务端应能按 effectId=JC012_1_CostReduce 解析出效果");
+            Assert.IsNotNull(cm.GetEffectData(serverLike.UID, "JC012_2_Tap"),
+                "服务端应能按 effectId=JC012_2_Tap 解析出效果（需目标效果的上行可解析性）");
+            var tapEffect = cm.GetEffectData(serverLike.UID, "JC012_2_Tap");
+            Assert.IsNotNull(tapEffect?.Target,
+                "JC012_2_Tap 应声明 Target（服务端要求带 targetUid，否则拒绝『缺少目标』）");
         }
     }
 }

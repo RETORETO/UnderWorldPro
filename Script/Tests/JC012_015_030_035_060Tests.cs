@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -492,13 +492,13 @@ namespace Script.Tests
             var attached = new CardInstance(tmpl, "jc035_att");
             attached.ControllerId = 1; attached.OwnerId = 1;
             attached.CurrentZone = CardZone.AttachedZone;
-            Assert.IsTrue(EffectEngine.Instance.IsEffectActiveInZone(ability, attached), "附属在 AttachedZone 应生效");
+            Assert.IsTrue(EffectEngine.IsEffectActiveInZone(ability, attached), "附属在 AttachedZone 应生效");
 
             // 未结附（AreaZone）不生效
             var area = new CardInstance(tmpl, "jc035_area");
             area.ControllerId = 1; area.OwnerId = 1;
             area.CurrentZone = CardZone.AreaZone;
-            Assert.IsFalse(EffectEngine.Instance.IsEffectActiveInZone(ability, area), "附属在 AreaZone（未结附）不应生效");
+            Assert.IsFalse(EffectEngine.IsEffectActiveInZone(ability, area), "附属在 AreaZone（未结附）不应生效");
         }
     }
 

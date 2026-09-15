@@ -883,10 +883,13 @@ public partial class ZoneManager : Node
         inst.ControllerId = r.ControllerId;
         int pid = r.ZoneOwnerId >= 1 ? r.ZoneOwnerId : (r.ControllerId >= 1 ? r.ControllerId : 1);
 
-        // 秘社卡强制归位秘社区（CouncilZone）：秘社卡 Template 为 CouncilCardData（PlayerTemplate 为 null），
-        // 只应存在于各自秘社区，绝不进手牌/牌库/墓地。若快照 zone 字段错乱，这里按实例类型兜底纠正，
-        // 避免秘社卡混入玩家手牌/牌库导致 UI 渲染时报"PlayerTemplate 为 null"。
-        if (inst.CouncilTemplate != null)
+        // 秘社卡兜底归位（收窄版，2026-09-05）：秘社卡 Template 为 CouncilCardData（PlayerTemplate 为 null），
+        // 规则上不会出现在【手牌/牌库】。若快照把秘社卡写到这两个区（历史 BUG：秘社卡混入手牌/牌库导致
+        // UI 渲染 "PlayerTemplate 为 null"），此处兜底归位秘社区。
+        // 注意：其余区域一律以【快照为准】——客户端重建的第一原则是"快照即真相"，
+        // 原实现"只要实例是秘社卡就强制进秘社区"会把快照明确写在墓地/争夺区等合法区域的卡搬错位置，
+        // 并导致 ToSnapshot→ApplySnapshot 往返不一致（NetP1Batch1Tests 两个往返用例即因此长期失败）。
+        if (inst.CouncilTemplate != null && (r.Zone == CardZone.Hand || r.Zone == CardZone.Deck))
         {
             Ensure(_council, pid).Add(inst);
             return;

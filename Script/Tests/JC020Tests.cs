@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -142,12 +142,12 @@ namespace Script.Tests
             Assert.AreEqual(ZoneScope.Specified, effects[1].Scope, "效果B未显式声明 Scope");
 
             var attached = NewAttached("jc020_att", 1, "areaA");
-            Assert.IsTrue(EffectEngine.Instance.IsEffectActiveInZone(effects[0], attached), "附属在 AttachedZone 效果A 应生效");
-            Assert.IsTrue(EffectEngine.Instance.IsEffectActiveInZone(effects[1], attached), "附属在 AttachedZone 效果B 应生效");
+            Assert.IsTrue(EffectEngine.IsEffectActiveInZone(effects[0], attached), "附属在 AttachedZone 效果A 应生效");
+            Assert.IsTrue(EffectEngine.IsEffectActiveInZone(effects[1], attached), "附属在 AttachedZone 效果B 应生效");
 
             var area = NewAttached("jc020_area", 1, "areaA");
             area.CurrentZone = CardZone.AreaZone; area.IsAttached = false;
-            Assert.IsFalse(EffectEngine.Instance.IsEffectActiveInZone(effects[0], area), "附属在 AreaZone（未结附）效果A 不应生效");
+            Assert.IsFalse(EffectEngine.IsEffectActiveInZone(effects[0], area), "附属在 AreaZone（未结附）效果A 不应生效");
         }
 
         // ==================== 目标过滤（本地区 + 暗藏者/角色） ====================

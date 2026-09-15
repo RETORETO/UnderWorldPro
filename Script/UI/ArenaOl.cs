@@ -72,6 +72,19 @@ namespace Script.UI
         private Script.Game.Entities.CardInstance _activationTargetSource;
         private readonly System.Collections.Generic.HashSet<string> _activationLegalCardUids = new System.Collections.Generic.HashSet<string>();
 
+        // —— 角色卡「拖拽箭头激活」状态（复刻单机 CardDragController.TryBeginActivateDragAt/EndActivateDrag 手势） ——
+        private Control _arrowLayer;                                  // 箭头层（动态创建：全屏、鼠标穿透、高层级）
+        private PackedScene _stackArrowScene;                         // 复用单机 StackArrow 场景（只读，不改其类）
+        private CardUI _activateDragSource;                           // 激活拖拽源卡 UI
+        private Script.Data.Effects.EffectData _activateDragAbility;  // 源卡首个可激活能力（与单机 GetActivatingAbility 一致）
+        private StackArrow _activateArrow;                            // 拖拽中的箭头
+        private readonly List<CardUI> _activateHighlighted = new List<CardUI>();
+        private readonly HashSet<string> _activateLegalUids = new HashSet<string>();
+
+        // —— 服务端拒绝提示（G4）：联机提示窗 + 模态标记 ——
+        private OnlineNoticeWindow _noticeWindow;
+        private bool _noticeWindowOpen;
+
         // ==================== 联机拖拽（出牌/派遣暗藏/建立资产） ====================
         // 联机为快照驱动：拖拽结束不本地移动卡，只上行对应意图；服务端权威裁决后靠快照回显。
         // 蒙版模式：DeployCovert=派遣暗藏（需落到己方争夺区），EstablishAsset=建立资产（拖出即建立）。
@@ -113,6 +126,19 @@ namespace Script.UI
                 _councilUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CouncilCardUI.tscn");
             if (_stackEntryScene == null)
                 _stackEntryScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/StackEntryUI.tscn");
+            if (_stackArrowScene == null)
+                _stackArrowScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/StackArrow.tscn");
+
+            // 箭头层（动态创建，避免改 ArenaOl.tscn）：全屏、鼠标穿透、高层级（对齐单机 Arena 的 ArrowLayer）
+            _arrowLayer = new Control
+            {
+                Name = "ArrowLayer",
+                MouseFilter = MouseFilterEnum.Ignore,
+                ZIndex = 4095,
+                ZAsRelative = false,
+            };
+            _arrowLayer.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            AddChild(_arrowLayer);
 
             var passBtn = GetNodeOrNull<Button>("ActionPanel/PassButton");
             if (passBtn != null) passBtn.Pressed += () => DoPass(_localPlayerId);
@@ -143,6 +169,7 @@ namespace Script.UI
             {
                 _launcher.OnClientSnapshot += ApplySnapshot;
                 _launcher.OnClientChoiceRequest += OnClientChoiceRequest;
+                _launcher.OnClientIntentRejected += OnClientIntentRejected;
             }
         }
 
@@ -152,6 +179,7 @@ namespace Script.UI
             {
                 _launcher.OnClientSnapshot -= ApplySnapshot;
                 _launcher.OnClientChoiceRequest -= OnClientChoiceRequest;
+                _launcher.OnClientIntentRejected -= OnClientIntentRejected;
             }
             _launcher = null;
         }
@@ -173,6 +201,22 @@ namespace Script.UI
             var vpSize = GetViewport().GetVisibleRect().Size;
             _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
             _choicePromptPanel.Popup();
+        }
+
+        /// <summary>服务端拒绝意图（IntentResult.Success=false）：弹出可见提示（联机提示窗，点窗外不关闭）。
+        /// 例如激活目标非法、缺优先权、费用不足等——避免玩家"点了没反应"。</summary>
+        private void OnClientIntentRejected(Script.Net.IntentResult result)
+        {
+            if (result == null) return;
+            if (_noticeWindow != null && GodotObject.IsInstanceValid(_noticeWindow)) return;   // 同屏只保留一个提示
+            _noticeWindowOpen = true;
+            _noticeWindow = new OnlineNoticeWindow();
+            AddChild(_noticeWindow);
+            _noticeWindow.OnClosed = () => { _noticeWindowOpen = false; };
+            _noticeWindow.Init(string.IsNullOrEmpty(result.Error)
+                ? "操作被服务端拒绝。"
+                : $"操作被服务端拒绝：{result.Error}");
+            _noticeWindow.PopupCentered();
         }
 
         /// <summary>把决策请求中的 UID 解析成可读文字（卡名/地区名/触发名）。</summary>
@@ -267,6 +311,30 @@ namespace Script.UI
             }
 
             ArrangeAll();
+
+            // 快照即权威状态：每次全量重建后刷新「可发动」高亮（联机无本地优先权变更事件）
+            RefreshActivateHighlights();
+        }
+
+        /// <summary>联机「可发动」高亮：复用单机 ActivateEligibility.CanActivate（客户端投影管理器已具备其全部依赖），
+        /// 对争夺区 + 附属区已渲染的卡刷新 CardUI.SetActivatableHighlight。与单机 Arena.RefreshActivateHighlights 同源规则。</summary>
+        private void RefreshActivateHighlights()
+        {
+            var zone = _launcher?.ClientZoneManager;
+            var cardMgr = _launcher?.ClientCardManager;
+            var turn = _launcher?.ClientTurnManager;
+            var player = _launcher?.ClientPlayerManager;
+            if (zone == null || cardMgr == null || turn == null || player == null) return;
+
+            var instances = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
+            instances.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
+            foreach (var inst in instances)
+            {
+                if (inst == null) continue;
+                if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                ui.SetActivatableHighlight(ActivateEligibility.CanActivate(inst, turn, player, cardMgr));
+            }
         }
 
         /// <summary>重建双方玩家牌库：用 DeckZone 组件显示卡背堆叠 + 数量（与单机一致）。
@@ -342,6 +410,7 @@ namespace Script.UI
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
                 ui.Setup(inst);
+                ui.SetExternalCostMod(ComputeClientCostMod(inst));
                 ui.SetTapped(inst.IsTapped);   // 使用费用后横置资产卡：同步服务端 IsTapped
                 ui.CanDrag = false;   // 资产区只读展示（联机下后续可扩展"横置/消耗"意图，暂不拖拽）
                 // 用共享排版定位：同时设置 Position 与 TargetPosition，避免 CardUI._Process 平滑移动
@@ -384,6 +453,7 @@ namespace Script.UI
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
                 ui.Setup(inst);
+                ui.SetExternalCostMod(ComputeClientCostMod(inst));
                 ui.SetFace(!inst.IsCovert);      // 暗藏卡(IsCovert)显示背面，普通角色正面
                 ui.SetTapped(inst.IsTapped);     // 同步横置（使用费用/攻击后）
                 ui.CanDrag = false;              // 争夺区只读展示（联机下后续再接入攻击/横置意图）
@@ -496,6 +566,7 @@ namespace Script.UI
                     var ui = _cardUIScene.Instantiate<CardUI>();
                     hostContainer.AddChild(ui);
                     ui.Setup(inst);
+                    ui.SetExternalCostMod(ComputeClientCostMod(inst));
                     ui.SetTapped(inst.IsTapped);
                     ui.CanDrag = false;
                     ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
@@ -517,6 +588,7 @@ namespace Script.UI
                     var ui = _cardUIScene.Instantiate<CardUI>();
                     hostContainer.AddChild(ui);
                     ui.Setup(inst);
+                    ui.SetExternalCostMod(ComputeClientCostMod(inst));
                     ui.SetTapped(inst.IsTapped);
                     ui.CanDrag = false;
                     ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
@@ -603,6 +675,7 @@ namespace Script.UI
                         var ui = _cardUIScene.Instantiate<CardUI>();
                         container.AddChild(ui);
                         ui.Setup(inst);
+                        ui.SetExternalCostMod(ComputeClientCostMod(inst));
                         ui.SetFace(true);
                         ui.CanDrag = false;
                         _cardUIMap[inst.UID] = ui;
@@ -717,6 +790,23 @@ namespace Script.UI
                 return;
             }
 
+            // 激活拖拽进行中：吞掉左键；抬起即结算落点（复刻单机 EndActivateDrag）
+            if (_activateDragSource != null
+                && @event is InputEventMouseButton dragMb && dragMb.ButtonIndex == MouseButton.Left)
+            {
+                if (!dragMb.Pressed) EndOnlineActivateDrag(dragMb.GlobalPosition);
+                AcceptEvent();
+                return;
+            }
+
+            // 激活拖拽起手：优先于手牌拖拽；仅当命中己方争夺区「可发动」角色卡才成立
+            if (@event is InputEventMouseButton activateDown && activateDown.Pressed && activateDown.ButtonIndex == MouseButton.Left
+                && TryBeginOnlineActivateDragAt(activateDown.GlobalPosition))
+            {
+                AcceptEvent();
+                return;
+            }
+
             // 反引号键切换 PM 命令输入框可见性（与单机 Arena 按键一致，Key 96）
             if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == (Key)96)
             {
@@ -754,7 +844,7 @@ namespace Script.UI
         /// <summary>暗藏者双击现身：上行 RevealCovert 意图，服务端权威裁决。</summary>
         private void OnCovertRevealRequested(CardUI cardUI)
         {
-            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止现身暗藏
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止现身暗藏
             if (cardUI?.Instance == null || _launcher == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离：只能现身自己的暗藏
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.RevealCovert, cardUI.Instance.UID);
@@ -764,7 +854,7 @@ namespace Script.UI
         /// <summary>附属卡双击激活：有多个可激活效果则弹联机效果列表供选择，再按所选发动；单效果直接发动（与单机一致）。</summary>
         private void OnAttachmentDoubleClicked(CardUI cardUI)
         {
-            if (_activationSelectionBusy) return;   // 本地模态：防重复双击
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：防重复双击/提示窗期间
             if (cardUI?.Instance == null || _launcher == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离
             var inst = cardUI.Instance;
@@ -788,7 +878,7 @@ namespace Script.UI
         /// 与单机 Arena.OnCouncilDoubleClicked 一致：每个选项取首个 EffectData。</summary>
         private void OnCouncilDoubleClicked(CouncilCardUI cardUI)
         {
-            if (_activationSelectionBusy) return;
+            if (_activationSelectionBusy || _noticeWindowOpen) return;
             if (cardUI?.Instance == null || _launcher == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;
             var inst = cardUI.Instance;
@@ -1012,6 +1102,164 @@ namespace Script.UI
             _activationSelectionBusy = false;
         }
 
+        // ==================== 角色卡「拖拽箭头激活」（复刻单机 CardDragController 手势） ====================
+
+        /// <summary>每帧维护激活拖拽的箭头与合法目标高亮（对应单机 Arena._Process → UpdateActivateDrag）。</summary>
+        public override void _Process(double delta)
+        {
+            if (_activateDragSource == null) return;
+            // 防御：源卡 UI 若被快照重建销毁，立即取消拖拽（避免引用失效节点）
+            if (!GodotObject.IsInstanceValid(_activateDragSource) || _activateDragSource.Instance == null)
+            {
+                CancelOnlineActivateDrag();
+                return;
+            }
+            UpdateOnlineActivateDrag(GetGlobalMousePosition());
+        }
+
+        /// <summary>尝试在点击处起手激活拖拽：命中己方争夺区「可发动」角色卡才成立。
+        /// 与单机一致：只用该卡首个 CharacterActivated/AttachmentActivated 能力；必须落到合法目标才发动（本轮不做无目标增强）。</summary>
+        private bool TryBeginOnlineActivateDragAt(Vector2 globalPos)
+        {
+            if (_activationSelectionBusy || _noticeWindowOpen || _activationTargetActive || _activateDragSource != null) return false;
+
+            var hit = PickFieldCardAt(globalPos);
+            if (hit?.Instance == null) return false;
+            var inst = hit.Instance;
+            if (inst.CurrentZone != CardZone.AreaZone) return false;
+            if (inst.IsCovert || inst.IsAttached) return false;   // 暗藏现身 / 附属激活各有双击链路，不在此争抢
+            if (inst.ControllerId != _localPlayerId) return false; // 输入隔离
+
+            var ability = GetFirstOnlineActivateAbility(inst);
+            if (ability == null) return false;
+
+            // 与单机 CardDragController.TryBeginActivateDragAt 同源门禁：优先权 + 费用 + 生效区 + 行动窗口 + 有合法目标
+            var cardMgr = _launcher?.ClientCardManager;
+            var turn = _launcher?.ClientTurnManager;
+            var player = _launcher?.ClientPlayerManager;
+            if (cardMgr == null || turn == null || player == null) return false;
+            if (!ActivateEligibility.CanActivate(inst, turn, player, cardMgr)) return false;
+
+            _activateDragSource = hit;
+            _activateDragAbility = ability;
+            _activateLegalUids.Clear();
+            foreach (var u in ComputeLegalCardTargetUids(inst, ability)) _activateLegalUids.Add(u);
+            _activationSelectionBusy = true;   // 拖拽期间本地模态：禁止让过/结束回合/重复起手
+
+            if (_arrowLayer != null && _stackArrowScene != null)
+            {
+                _activateArrow = _stackArrowScene.Instantiate<StackArrow>();
+                _arrowLayer.AddChild(_activateArrow);
+            }
+            UpdateOnlineActivateDrag(globalPos);
+            GD.Print($"[ArenaOl] 激活拖拽起手: {inst.PlayerTemplate?.CardName} 能力={ability.EffectId} 合法目标={_activateLegalUids.Count}");
+            return true;
+        }
+
+        /// <summary>拖拽中：箭头从源卡视觉中心指向鼠标，并按合法目标集合刷新高亮。</summary>
+        private void UpdateOnlineActivateDrag(Vector2 globalPos)
+        {
+            if (_activateDragSource == null) return;
+            if (_activateArrow != null && GodotObject.IsInstanceValid(_activateArrow))
+                _activateArrow.SetPoints(_activateDragSource.GetVisualGlobalRect().GetCenter(), globalPos);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                bool legal = _activateLegalUids.Contains(ui.Instance.UID);
+                ui.SetTargetHighlight(legal);
+                if (legal && !_activateHighlighted.Contains(ui)) _activateHighlighted.Add(ui);
+            }
+        }
+
+        /// <summary>放手：落点为合法目标则上行 ActivateAbility(sourceUid, effectId, targetUid)；否则取消（与单机 EndActivateDrag 一致）。</summary>
+        private void EndOnlineActivateDrag(Vector2 globalPos)
+        {
+            var src = _activateDragSource;
+            var ab = _activateDragAbility;
+            string targetUid = PickLegalTargetAt(globalPos);
+            bool ok = src?.Instance != null && ab != null
+                      && !string.IsNullOrEmpty(targetUid) && targetUid != src.Instance.UID;
+            string srcUid = src?.Instance?.UID;
+            string srcName = src?.Instance?.PlayerTemplate?.CardName;
+            string effectId = ab?.EffectId;
+            CancelOnlineActivateDrag();
+
+            if (!ok || _launcher == null)
+            {
+                GD.Print("[ArenaOl] 激活拖拽取消（落点非合法目标）");
+                return;
+            }
+            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, srcUid, effectId, targetUid);
+            GD.Print($"[ArenaOl] 上行 ActivateAbility(拖拽): {srcName} effect={effectId} target={targetUid}");
+        }
+
+        /// <summary>清理激活拖拽：清高亮、释放箭头、复位状态与本地模态锁。</summary>
+        private void CancelOnlineActivateDrag()
+        {
+            foreach (var ui in _activateHighlighted)
+                if (ui != null && GodotObject.IsInstanceValid(ui)) ui.SetTargetHighlight(false);
+            _activateHighlighted.Clear();
+            if (_activateArrow != null && GodotObject.IsInstanceValid(_activateArrow)) _activateArrow.QueueFree();
+            _activateArrow = null;
+            _activateDragSource = null;
+            _activateDragAbility = null;
+            _activateLegalUids.Clear();
+            _activationSelectionBusy = false;
+        }
+
+        /// <summary>源卡首个角色/附属激活能力（与单机 CardDragController.GetActivatingAbility 一致）。</summary>
+        private static EffectData GetFirstOnlineActivateAbility(CardInstance inst)
+        {
+            if (inst?.PlayerTemplate is PlayerCardData tmpl)
+                foreach (var e in tmpl.EffectDataList)
+                    if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return e;
+            return null;
+        }
+
+        /// <summary>命中点击处最上层场上卡 UI（不做合法性过滤；对齐单机 PickAreaCardAt 的命中语义）。</summary>
+        private CardUI PickFieldCardAt(Vector2 globalPos)
+        {
+            CardUI best = null;
+            int bestZ = int.MinValue;
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (!ui.GetVisualGlobalRect().HasPoint(globalPos)) continue;
+                if (ui.ZIndex >= bestZ) { bestZ = ui.ZIndex; best = ui; }
+            }
+            return best;
+        }
+
+        /// <summary>命中点击处的合法目标卡 UID（激活拖拽落点判定）。</summary>
+        private string PickLegalTargetAt(Vector2 globalPos)
+        {
+            var hit = PickFieldCardAt(globalPos);
+            if (hit?.Instance == null) return null;
+            return _activateLegalUids.Contains(hit.Instance.UID) ? hit.Instance.UID : null;
+        }
+
+        /// <summary>客户端按快照投影的费用修正计算某张卡的减费额（匹配规则与服务端 GetCostModification 一致：
+        /// FilterText 空=全匹配；否则卡名含 FilterText 或 Organization == FilterText）。纯展示，不参与结算。</summary>
+        private int ComputeClientCostMod(CardInstance inst)
+        {
+            var mods = _launcher?.ClientCostMods;
+            if (mods == null || mods.Count == 0 || inst?.PlayerTemplate == null) return 0;
+            var tmpl = inst.PlayerTemplate;
+            int total = 0;
+            foreach (var m in mods)
+            {
+                if (m == null || m.PlayerId != inst.ControllerId) continue;
+                if (string.IsNullOrEmpty(m.FilterText)
+                    || (!string.IsNullOrEmpty(tmpl.CardName) && tmpl.CardName.Contains(m.FilterText))
+                    || (!string.IsNullOrEmpty(tmpl.Organization) && tmpl.Organization == m.FilterText))
+                    total += m.Amount;
+            }
+            return total;
+        }
+
         /// <summary>重建世界牌库（地区牌堆）：用 WorldDeckZone 组件显示卡背堆叠 + 数量。</summary>
         private void RebuildWorldDeck()
         {
@@ -1118,6 +1366,7 @@ namespace Script.UI
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
                 ui.Setup(inst);
+                ui.SetExternalCostMod(ComputeClientCostMod(inst));   // 手牌减费提示（快照投影，仅展示）
                 // 输入隔离：仅本地玩家的手牌可拖拽出牌/派遣/资产；对手手牌只读展示
                 ui.CanDrag = isLocalHand;
                 if (isLocalHand)
@@ -1167,7 +1416,7 @@ namespace Script.UI
         /// <summary>本地玩家让过。仅允许操作自己，越权忽略。</summary>
         public void DoPass(int playerId)
         {
-            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止让过
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止让过
             if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -1175,7 +1424,7 @@ namespace Script.UI
         /// <summary>本地玩家结束回合/让过推进阶段。仅允许操作自己，越权忽略。</summary>
         public void DoEndTurn(int playerId)
         {
-            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止结束回合
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止结束回合
             if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -1195,7 +1444,7 @@ namespace Script.UI
         /// 单机也不检查该参数），故这里不依据 dropped 过滤，改用卡当前位置判定落点。</summary>
         private void OnLocalHandCardDragEnded(CardUI cardUI, bool dropped)
         {
-            if (_activationSelectionBusy) return;   // 本地模态：效果选择/选目标期间禁止拖拽出牌
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止拖拽出牌
             if (cardUI?.Instance == null) return;
             if (_launcher == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
             var inst = cardUI.Instance;
