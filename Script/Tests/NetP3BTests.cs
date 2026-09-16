@@ -10,9 +10,8 @@ namespace Script.Tests
     ///  (1) SnapshotDiff 空→快照 全量 Add；
     ///  (2) SnapshotDiff 同快照 无指令（幂等）；
     ///  (3) SnapshotDiff 卡移动/属性变化/堆叠/玩家/阶段 产出对应增量指令；
-    ///  (4) SnapshotRenderDriver 首包 Rebuild + 增量 Diff + sink 路由正确。
-    /// 注：快照差异算法与渲染驱动均纯托管，不依赖 Godot 场景；Arena 的 UI 应用层（Arena.SnapshotView）
-    /// 保守映射现有刷新方法，不重复装配完整对局（由既有 Arena 单机事件路径 + 端到端覆盖）。
+    ///  (4) SnapshotApplicationQueue：同帧多快照合并、延后窗口、与"上一份已应用快照"配对（表现层事件源）。
+    /// 注：差异算法与快照应用队列均纯托管，不依赖 Godot 场景；ArenaOl 的表现层接入（差异指令路由）由联机冒烟覆盖。
     /// </summary>
     public class NetP3BTests : TestRunner
     {
@@ -97,6 +96,65 @@ namespace Script.Tests
             // 卡 a 的 MoveCard 应携带新属性
             var moveA = cmds.Find(x => x is CardRenderCommand cc && cc.Kind == RenderCommand.CmdKind.MoveCard && cc.Uid == "a") as CardRenderCommand;
             Assert.IsTrue(moveA != null && moveA.Damage == 3 && moveA.IsTapped, "MoveCard 应携带新属性(Damage=3,Tap)");
+        }
+
+        /// <summary>(4a) 同一帧内多份快照：只保留最后一份（合并），且不与已应用快照重复应用。</summary>
+        public void TestSnapshotQueueCoalescing()
+        {
+            var q = new SnapshotApplicationQueue();
+            var s1 = new GameSnapshot { TurnCount = 1 };
+            var s2 = new GameSnapshot { TurnCount = 2 };
+            var s3 = new GameSnapshot { TurnCount = 3 };
+
+            q.Enqueue(s1); q.Enqueue(s2); q.Enqueue(s3);
+            Assert.AreEqual(3, q.EnqueueCount, "入队次数应记 3");
+            Assert.AreEqual(2, q.CoalescedCount, "同帧 3 份应合并掉 2 份");
+            Assert.IsTrue(q.HasPending, "应有待应用快照");
+
+            Assert.IsTrue(q.TryDequeue(out var prev, out var next), "待应用快照应可出队");
+            Assert.IsTrue(prev == null, "首次应用时 prev 应为 null（Diff 视作空初始态）");
+            Assert.IsTrue(ReferenceEquals(next, s3), "应只应用最后一份快照（s3）");
+            Assert.IsFalse(q.HasPending, "出队后队列应为空");
+        }
+
+        /// <summary>(4b) 与"上一份已应用快照"配对：出队给出 prev/next，供 SnapshotDiff 计算增量。</summary>
+        public void TestSnapshotQueuePairing()
+        {
+            var q = new SnapshotApplicationQueue();
+            var s1 = new GameSnapshot { TurnCount = 1, Zones = new List<ZoneCardRef> { Card("a", CardZone.Hand, 1) } };
+            var s2 = new GameSnapshot { TurnCount = 2, Zones = new List<ZoneCardRef> { Card("a", CardZone.AreaZone, 1) } };
+
+            q.Enqueue(s1);
+            Assert.IsTrue(q.TryDequeue(out var p0, out var n1), "首包应出队");
+            Assert.IsTrue(p0 == null, "首包 prev 为 null");
+            q.MarkApplied(n1);
+
+            q.Enqueue(s2);
+            Assert.IsTrue(q.TryDequeue(out var p1, out var n2), "第二包应出队");
+            Assert.IsTrue(ReferenceEquals(p1, s1), "第二包 prev 应为已应用的 s1");
+
+            var cmds = SnapshotDiff.Diff(p1, n2);
+            Assert.IsTrue(cmds.Exists(c => c.Kind == RenderCommand.CmdKind.MoveCard), "配对结果应能直接喂给 SnapshotDiff 产出 MoveCard");
+        }
+
+        /// <summary>(4c) 延后窗口：IsDeferred=true 时不应用但保留快照（动画/本地交互窗口期不丢快照）。</summary>
+        public void TestSnapshotQueueDeferred()
+        {
+            var q = new SnapshotApplicationQueue();
+            var s1 = new GameSnapshot { TurnCount = 1 };
+            q.Enqueue(s1);
+            q.IsDeferred = true;
+
+            Assert.IsFalse(q.TryDequeue(out _, out _), "延后窗口内不应出队");
+            Assert.IsTrue(q.HasPending, "延后期间快照应保留在队列中");
+
+            q.IsDeferred = false;
+            Assert.IsTrue(q.TryDequeue(out _, out var next), "解除延后应可出队");
+            Assert.IsTrue(ReferenceEquals(next, s1), "解除延后应应用保留的那份快照");
+
+            q.Reset();
+            Assert.IsFalse(q.HasPending, "Reset 后应无待应用快照");
+            Assert.IsTrue(q.Applied == null, "Reset 后基准快照应清空");
         }
 
     }

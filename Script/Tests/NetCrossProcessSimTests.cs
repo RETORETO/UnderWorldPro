@@ -38,7 +38,8 @@ namespace Script.Tests
                 var hit = GetInstance(r.Uid);
                 if (hit != null) return hit;
                 // 2) 从模板按权威 UID 新建（跨进程核心：无共享实例，靠 TemplateUid 反查模板）
-                if (r != null && _templates.TryGetValue(r.TemplateUid, out var tmpl))
+                //     注：TemplateUid 为空（内联模板卡/隐藏占位）时不查表，避免以 null 作字典键。
+                if (r != null && !string.IsNullOrEmpty(r.TemplateUid) && _templates.TryGetValue(r.TemplateUid, out var tmpl))
                 {
                     var inst = CreateCardInstance(tmpl, r.OwnerId);
                     AdoptInstanceWithUid(inst, r.Uid); // 重置为权威 UID 并登记

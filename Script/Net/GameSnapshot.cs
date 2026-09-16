@@ -39,6 +39,14 @@ namespace Script.Net
 
         /// <summary>玩家级费用修正（JC012① 等"下一张费用-X"）：仅用于客户端展示减费提示，结算仍以服务端为准。</summary>
         public List<CostModSnap> CostMods = new List<CostModSnap>();
+
+        /// <summary>
+        /// 【调查对抗·客户端 UI 对齐】当前待分配的调查卡（仅下发给决策者本人，其他人收到空表）。
+        /// 客户端据此复刻单机 InvestigationWindow（显示这些卡面并分配放回牌库顶/底）。
+        /// </summary>
+        public List<ZoneCardRef> InvestigationCards = new List<ZoneCardRef>();
+        /// <summary>上述调查卡的决策者玩家编号（0=无待决）。</summary>
+        public int InvestigationOwnerPlayerId;
     }
 
     /// <summary>一条玩家级费用修正的快照投影（纯数据，对应 EffectEngine.TimedMod 中 Kind==CostMod 的条目）。</summary>
@@ -70,6 +78,11 @@ namespace Script.Net
         public CardZone Zone;
         public int ZoneOwnerId = -1; // 区域归属玩家（手牌/牌库/墓地/资产/分数/秘社按 playerId 分桶）
         public string ZoneDetailId;  // 所在地区 UID / 宿主 UID（争夺区/附属/封印用）
+        /// <summary>
+        /// 【Phase B 信息隔离】是否为隐藏占位引用：对手手牌/牌库（以及地区牌堆）只下发"占位"，
+        /// 客户端据此建立只承载数量的占位实例（`CardInstance.IsHidden`），只画卡背、不泄露卡牌身份。
+        /// </summary>
+        public bool IsHidden;
         public bool IsCovert;
         public bool IsSealed;
         public bool IsAttached;
@@ -107,6 +120,27 @@ namespace Script.Net
         public bool IsCard;
         /// <summary>ResolveKind 枚举值（PlayToArea / Trigger / AreaWon ...），客户端投影重建显示用。</summary>
         public int Kind;
+
+        // ---- 客户端堆叠 UI 对齐单机所需的补充字段（2026-09-05）----
+        /// <summary>控制者玩家（堆叠箭头按控制者着色；夺控场景与 OwnerId 不同）。</summary>
+        public int ControllerId;
+        /// <summary>Kind=AreaWon 时被赢取地区的 UID（客户端据此显示地区卡面）。</summary>
+        public string WonAreaUid;
+        /// <summary>效果型条目的来源卡模板 UID（客户端据此显示来源卡卡图；空则不显示）。</summary>
+        public string SourceTemplateUid;
+        /// <summary>堆叠条目的目标引用（客户端据此绘制"条目 → 目标"箭头）。</summary>
+        public List<StackTargetSnap> Targets = new List<StackTargetSnap>();
+    }
+
+    /// <summary>堆叠条目目标引用的纯数据投影（对应 StackTargetRef）。</summary>
+    public class StackTargetSnap
+    {
+        /// <summary>StackTargetRef.RefKind：0=Card / 1=Area / 2=Player。</summary>
+        public int Kind;
+        public string CardUid;
+        public int AreaSlotId;
+        public string AreaUid;
+        public int PlayerId;
     }
 
     /// <summary>某地区的势力标记快照（第三批：p1=玩家1标记数，p2=玩家2标记数）。</summary>

@@ -72,6 +72,14 @@ namespace Script.Game.Entities
         public bool IsCovert { get; set; }        // 暗藏状态(背面朝上,场上暗藏者)
         public bool ExtraCostPaid { get; set; }   // 额外费用是否已支付(结算时玩家选择)
 
+        // ---------- C/S 化·Phase B：信息隔离占位 ----------
+        /// <summary>
+        /// 是否为"隐藏信息占位实例"（对手手牌/牌库等不可见区域）：只承载"存在与数量"，
+        /// `Template` 为 null（无名称/费用/效果），UI 只画卡背，不参与任何规则与交互。
+        /// 仅由快照投影路径设置（`ZoneCardRef.IsHidden`），单机恒为 false。
+        /// </summary>
+        public bool IsHidden { get; set; }
+
         // ---------- C/S 化·第一批：快照补全字段 ----------
         // 这两项为卡的回合级状态，原仅存在于运行时（无持久属性），快照需携带以免重连后
         // 进场时机判定（EnterTrigger 过滤）与能力使用限制失真。

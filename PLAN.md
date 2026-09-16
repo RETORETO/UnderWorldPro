@@ -1,3 +1,9 @@
+# PLAN.md · 联机计划总集
+
+> **当前轮（第 3 版）计划见文末《十、第 3 版计划（当前轮）》。** 其下《一~九》为**上一轮（第 2 版）已实施并验证**的存档记录，保留作为参照与格式模板。
+
+---
+
 # 联机效果系统接入 · 四项遗留缺口修复计划（第 2 版 · 已确认，待批准实施）
 
 > 状态：**已实施并验证**。四项裁决：G1 复刻单机「拖拽箭头激活」（**不做无目标增强**，严格 1:1）；G2 允许核心静态化；G3 允许快照协议扩展；G4 服务端校验 + 客户端可见提示。
@@ -215,3 +221,90 @@
   - `TestServerRejectsIllegalActivationTarget`（G4：暗藏者目标/缺目标被拒，合法角色目标通过）。
 - 结果：`dotnet build` **0 警告 0 错误**；headless 全量 `TestsRunner` **仅剩既有 `NetP1Batch1Tests` 2 例失败**（与本轮无关），新增套件 3/3 通过。
 - 待人工验证（headless 无法覆盖 UI）：三进程下高亮出现/消失、角色卡拖拽箭头与落点发动、非法目标提示窗、JC012① 减费绿字。
+
+---
+
+# 十、第 3 版计划（当前轮）：三处决策面板对齐单机 + 蒙版可拖拽预检
+
+> 用户裁决（2026-09-05）：① 「**全部三处一起对齐**」决策面板；② 「**加客户端预检**」蒙版可拖拽资格。
+> 约束不变：**不改单机 UI/逻辑**；共享的规则层只做**行为等价**的抽取；只动联机侧。
+> 状态：**待用户确认 5 个开放问题后实施**（见 §10.6）。→ **已确认并实施，结论见本节开头的状态行。**
+
+> 状态：**已实施并验证**（2026-09-05）。5 个开放问题的确认结论：① 静态纯函数落点＝**新建 `DeployCovertEligibility` + TurnManager 委托**；② 排序回包＝**`SelectedIndices` 有序下标**；③ 支付置灰＝**服务端下发 `PayAllowed`**；④ **接受**逐次入堆叠的多轮请求-响应；⑤ **纳入**地区目标选目标。
+> 实施结果：`dotnet build` 0/0；headless **34 套件全绿、0 失败、0 ERR**；新增 `NetChoicePanelTests` 6 例全绿。设计侧记录见 `联机C-S架构设计方案.md` §17、`C-S迁移进度与批次计划.md` §十七。
+
+## 10.1 现状认知（本轮改动的依据，均已核对源码）
+
+1. `ArenaOl.OnClientChoiceRequest` 先试 `TryOpenOnlineCombatWindow`（`CombatStrength`/`CombatInvestigation`/`TieBreak` 已用单机同款窗口），其余一律落到 `ChoicePromptPanel`（简化按钮列表）。
+2. **待对齐的三类请求**（服务端实际会发送的种类，已 grep 全部 `RequestKind =` 站点）：
+   | 请求种类 | 发送点 | 单机对应 UI |
+   |---|---|---|
+   | `SelectTriggerOrder` | `TurnManager.RunTriggerPhaseAsync`（联机触发排序） | `TriggerOrderWindow`（拖拽入堆叠/放弃区 + 全部/第一张入堆叠 + 完成排序） |
+   | `PayOrTap` | `EffectEngine.ExecuteVerbAsync`（JC068 阿格斯IV「准备维护」） | `Arena.PromptPayOrTap` → `ActivationChoiceWindow`（`ForceChoice=true`，两项，费用不足置灰"支付"） |
+   | `SelectTarget` | `TurnManager.EnsureTargetThenPushAsync`（触发选目标，含**地区目标**机动触发） | `TriggerInteractionCoordinator.RequestTargetSelection` → `TargetSelectionWindow` + 场上合法目标高亮（卡目标经 `CardManager.NotifyTargetSelectionChanged`；地区目标经 `AreaSlot.SetHighlight/IsTargetSelectable/OnAreaClicked`），**必须点合法目标、无取消** |
+3. `ChoiceRequest.Kind.ForceChoice` 在生产代码中**从未被发送**（grep 仅命中 `ChoicePromptPanel` 的渲染分支与超时表）→ 「ForceChoice 对齐」= 上述三类窗口在 `ForceChoice` 布尔下的**取消按钮/点窗外关闭**行为对齐单机（单机这三处均为强制、不可取消）。
+4. **关键事实（决定了必须改服务端）**：`RunTriggerPhaseAsync` 收到 `SelectTriggerOrder` 回包后**完全不使用顺序** —— 只要 `Cancelled==false`，就把该 owner 的**全部**触发按默认顺序逐个入栈。所以"对齐单机排序窗口"必须同时改**协议**与**服务端异步流程**（单机同步流程 `RunTriggerPhase` 不动）。
+5. **关键事实（决定了预检可行）**：`TurnManager.CanDeployCovert(instance)` 实际只判两件事 —— `!instance.HasPublicKeyword`（模板固有【公开】或运行时授予）与"是角色卡"；**不含**阶段/行动权/次数/封锁（那些在动作 `DeployCovert` 内判）。而 `CardInstance.HasPublicKeyword` 的模板回退分支（`PlayerTemplate.HasInherentKeyword("公开")`）在客户端可用 → 客户端可**复用同一条规则**做拖起预检，不是复制规则。
+
+## 10.2 P1 — SelectTriggerOrder 对齐（协议 + 服务端流程 + 新窗口）
+
+**协议**（`Script/Net/IInputGateway.cs`，纯加法，旧端可忽略）
+- `ChoiceRequest` 新增：`OptionForced: List<bool>`（与 `OptionUids` 同序：强制触发不可放弃）、`OrderContextId: string`（同一 owner 的排序窗口上下文；客户端据此**复用同一窗口**而非新开）。
+- `ChoiceResult` 新增：`SelectedIndices: List<int>`（**本次要入堆叠的条目下标序列**，指向本次请求的 `OptionUids`）。
+- 兼容：老客户端不回 `SelectedIndices` → 服务端退化为「全部、默认顺序」（与今日行为一致）。
+
+**服务端**（`Script/Manager/TurnManager.cs`，**仅** `RunTriggerPhaseAsync`；单机 `RunTriggerPhase` 零改动）
+- 每个 owner 内改为**循环**：`remaining` 非空 → 发请求（`OptionUids`=来源 UID、`OptionForced`=`EffectDataRef.Forced`、`OrderContextId`=该 owner 本次窗口 id）→ 依回包：
+  - `Cancelled==true` 且 `remaining` 含强制触发 → **忽略取消并重发**（等价单机「Done 按钮在入堆叠区非空时禁用」）；
+  - `Cancelled==true` 且无强制触发 → 放弃剩余，该 owner 结束；
+  - 否则按 `SelectedIndices` 顺序逐个 `await EnsureTargetThenPushAsync` 并入栈，随后从 `remaining` 移除；下标越界/重复 → 忽略该项并打日志。
+- 循环直到 `remaining` 空 → 与今日一致地进入下一个 owner。
+
+**客户端新增**（不改单机）
+- `Script/UI/OnlineTriggerOrderWindow.cs` + `Scenes/Net/OnlineTriggerOrderWindow.tscn`：复制单机 `TriggerOrderWindow.tscn` 的节点结构（**独立 scene uid**、不带 `unique_id` 属性），脚本为联机专用：
+  - **只读复用** `TriggerEntryUI`（`Setup(name, text, mandatory, data=null, template=null)` 对后两参可空）与 `TriggerOrderRoot`（全程不读 `TriggerData`）→ 单机这两个文件**零改动**；
+  - 同款三按钮 + 入堆叠区/放弃区拖拽；强制条目不可拖入放弃区（`TriggerOrderRoot` 内建）；
+  - 提交：把"入堆叠区当前顺序"映射为 `SelectedIndices`；`OrderContextId` 变化则重开窗口，相同则按新 `OptionUids` 刷新条目并**保留窗口**（实现"逐次入堆叠 + 窗口不关"的单机手感）；
+  - 「完成排序」= 放弃剩余（`Cancelled=true`），仅在入堆叠区为空时可点（同单机）。
+- `ArenaOl`：`OnClientChoiceRequest` 增 `SelectTriggerOrder` 分支 → 打开/更新窗口（纳入本地模态 `_activationSelectionBusy`），提交回包。
+
+## 10.3 P2 — PayOrTap 对齐
+
+- 服务端 `Script/Manager/EffectEngine.cs`：`ExecuteVerbAsync` 的请求补 `PayAllowed = CanPayPrepareUpkeep(source, payAmount)`（**服务端权威**，客户端不重算规则）。
+- 客户端新增 `Script/UI/OnlinePayOrTapWindow.cs`（联机专用，不与单机 `ActivationChoiceWindow` 争用）：
+  - 选项1「支付{PayAmount}（横置1张资产区牌）」，`PayAllowed==false` 时置灰；选项2「横置{来源卡名}」（卡名由 `SourceUid` 解析）。
+  - 强制语义：无取消按钮、点窗外不关闭（对齐单机 `Arena.PromptPayOrTap` 恒 `ForceChoice=true`）。
+  - 回包 `ChoiceResult.Pay`。
+
+## 10.4 P3 — SelectTarget 对齐（卡目标 + **地区目标**）
+
+- `ArenaOl`：`Kind.SelectTarget` → 复用既有「场上点击选目标」状态机（`_activationLegalCardUids` + `_onlineTargetWindow`/`TargetSelectionWindow` + `OnTargetPicked`），新增 `_pendingChoiceRequest` 把选中结果回成 `ChoiceResult{SelectedUid}`（区别于激活/出牌的本地目标选择）。
+- **新增地区目标支持**（当前联机只有卡目标高亮）：新增 `_activationLegalAreaUids`；用单机同款公开 API `AreaSlot.SetHighlight/IsTargetSelectable/OnAreaClicked`（§只读复用）+ `ArenaOl._Input` 增地区槽位点击路由（对齐单机"点高亮地区"）。
+- 取消语义：单机选目标不可取消 → 联机不显示取消按钮；仅保留服务端超时兜底的 `Cancelled` 既有路径。
+
+## 10.5 P4 — 蒙版可拖拽预检
+
+- **单一真相源**：把 `TurnManager.CanDeployCovert(CardInstance)` 的判定体抽为**静态纯函数**（推荐：新增 `Script/Manager/DeployCovertEligibility.cs`，与既有 `ActivateEligibility` 同风格），`TurnManager.CanDeployCovert` 改为**委托调用**（表达式等价 ⇒ 单机行为不变，`DeployCovert` 动作内的阶段/次数/封锁校验不动）。
+- `ArenaOl`：蒙版模式（`DeployCovert`）下拖起手牌前的资格判定调用**同一静态函数**（对齐单机 `CardDragController.IsDraggableUnderMask` → `TurnManager.CanDeployCovert`）；不满足则**不被拖起**（与单机一致，无额外提示）。
+- 结果：非法卡不再"能拖起、等服务端拒绝"。
+
+## 10.6 待用户确认的 5 个开放问题
+
+1. **静态纯函数落点**：新建 `DeployCovertEligibility` 静态类 + `TurnManager` 委托（推荐）／或直接在 `TurnManager` 上加 `public static`？
+2. **排序回包语义**：`SelectedIndices`（有序下标，推荐）／其它表达？（`SelectedUids` 在"同一来源卡多触发"时 UID 重复，无法表达顺序）
+3. **PayOrTap 置灰依据**：服务端下发 `PayAllowed`（推荐，客户端零规则）／客户端用投影 `ClientPlayerManager.GetAvailableMana` 比较？
+4. **逐次入堆叠的多轮往返**是否接受（单机「第一张进入堆叠」的等价实现 = 每按一次一次请求-响应；窗口保持打开）？
+5. **地区目标选目标**（§10.4 新增能力）确认纳入本轮？
+
+## 10.7 P5 — 测试与文档（实施时同步）
+
+- 新增 `Script/Tests/NetChoicePanelTests.cs`（注册进 `TestsRunner`）：
+  1. `SelectTriggerOrder` 请求/回包新字段往返（`OptionForced`/`OrderContextId`/`SelectedIndices`）；
+  2. 服务端**按 `SelectedIndices` 入栈顺序**断言 + 「无强制则放弃剩余」「有强制则忽略取消」两条分支；
+  3. `PayOrTap`：`PayAllowed` 往返 + `Pay=true/false` 落地（`ResolvePrepareUpkeep` 效果断言）；
+  4. `SelectTarget` 带地区 UID 的请求往返（客户端仅展示）；
+  5. 蒙版资格静态函数：角色卡通过、含【公开】拒绝、非角色卡拒绝（与 `DeployCovert` 拒绝条件一致）。
+- 全量回归：`dotnet build` 0/0 + headless `TestsRunner` 全绿 0 fail 0 ERR。
+- 文档：`联机C-S架构设计方案.md` §17、`C-S迁移进度与批次计划.md` §十七、`联机对战完整实现最终缺口清单.md` 第二十轮、`需求实现对照.md` banner。
+- 待人工冒烟（headless 不覆盖 UI）：三类窗口的交互与回包、排序多轮往返、地区高亮点选、蒙版非法卡拖不起。
+

@@ -8,7 +8,9 @@ namespace Script.Net.Godot
     ///
     /// 实现 <see cref="IIntentRouter"/>，把意图调用桥接到真实的 Godot 业务层
     /// （PlayerActionService / CardManager）。供 Godot 客户端进程 / 单机装配使用；
-    /// 纯托管 Server 进程则用另一套无 Godot 的实现（见 ServerCore 冒烟）。
+    /// 服务端同样以 Godot headless 进程承载本桥接（真实规则只在服务端执行）。
+    /// 注：原"纯托管 Server 内核"骨架（`ServerCore/`）已于 2026-09-05 按决策整体移除；
+    /// 若将来确需去 Godot 化，迁移路径见 `联机C-S架构设计方案.md` §8.3。
     ///
     /// 桥接层处理 IIntentRouter 纯数据签名 → CardInstance 实例/EffectData 的解析。
     /// </summary>

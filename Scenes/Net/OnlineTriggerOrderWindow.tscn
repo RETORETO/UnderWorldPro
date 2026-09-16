@@ -1,0 +1,152 @@
+[gd_scene format=3 uid="uid://colonline_triggerorder"]
+
+[ext_resource type="Script" path="res://Script/UI/OnlineTriggerOrderWindow.cs" id="1_otow"]
+[ext_resource type="Script" path="res://Script/UI/TriggerDropZone.cs" id="2_dropzone"]
+[ext_resource type="Script" path="res://Script/UI/TriggerOrderRoot.cs" id="3_root"]
+
+[node name="OnlineTriggerOrderWindow" type="Window" node_paths=PackedStringArray("OrderZoneContainer", "DiscardZoneContainer", "AllEnterButton", "FirstEnterButton", "DoneButton", "TitleLabel", "HintLabel", "DragHandle")]
+oversampling_override = 1.0
+title = "触发排序"
+position = Vector2i(0, 36)
+size = Vector2i(840, 620)
+script = ExtResource("1_otow")
+OrderZoneContainer = NodePath("RootControl/Panel/OrderZone/OrderZoneContainer")
+DiscardZoneContainer = NodePath("RootControl/Panel/DiscardZone/DiscardZoneContainer")
+AllEnterButton = NodePath("RootControl/Panel/AllEnterButton")
+FirstEnterButton = NodePath("RootControl/Panel/FirstEnterButton")
+DoneButton = NodePath("RootControl/Panel/DoneButton")
+TitleLabel = NodePath("RootControl/Panel/TitleLabel")
+HintLabel = NodePath("RootControl/Panel/HintLabel")
+DragHandle = NodePath("RootControl/Panel/DragHandle")
+
+[node name="RootControl" type="Control" parent="." node_paths=PackedStringArray("OrderZoneContainer", "DiscardZoneContainer", "DragHandle")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_root")
+OrderZoneContainer = NodePath("Panel/OrderZone/OrderZoneContainer")
+DiscardZoneContainer = NodePath("Panel/DiscardZone/DiscardZoneContainer")
+DragHandle = NodePath("Panel/DragHandle")
+
+[node name="BlockLayer" type="ColorRect" parent="RootControl"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0.55)
+
+[node name="Panel" type="Panel" parent="RootControl"]
+layout_mode = 0
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -420.0
+offset_top = -260.0
+offset_right = 420.0
+offset_bottom = 260.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DragHandle" type="Control" parent="RootControl/Panel"]
+anchors_preset = 0
+offset_top = -50.0
+offset_right = 840.0
+offset_bottom = 28.0
+mouse_filter = 1
+
+[node name="TitleLabel" type="Label" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = -38.0
+offset_right = 824.0
+offset_bottom = -6.0
+text = "触发效果排序"
+
+[node name="HintLabel" type="Label" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = -2.0
+offset_right = 824.0
+offset_bottom = 24.0
+text = "将触发拖入下方区域决定入堆叠顺序；强制触发必须入堆叠。"
+
+[node name="OrderZone" type="Panel" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 34.0
+offset_right = 824.0
+offset_bottom = 200.0
+
+[node name="OrderZoneLabel" type="Label" parent="RootControl/Panel/OrderZone"]
+layout_mode = 0
+offset_left = 4.0
+offset_top = 2.0
+offset_right = 344.0
+offset_bottom = 25.0
+text = "入堆叠区域（左→右=先→后入栈）"
+
+[node name="OrderZoneContainer" type="Control" parent="RootControl/Panel/OrderZone"]
+z_index = 1000
+anchors_preset = 0
+offset_left = 4.0
+offset_top = 26.0
+offset_right = 764.0
+offset_bottom = 166.0
+script = ExtResource("2_dropzone")
+
+[node name="DiscardZone" type="Panel" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 208.0
+offset_right = 824.0
+offset_bottom = 374.0
+
+[node name="DiscardZoneLabel" type="Label" parent="RootControl/Panel/DiscardZone"]
+layout_mode = 0
+offset_left = 4.0
+offset_top = 2.0
+offset_right = 344.0
+offset_bottom = 25.0
+text = "放弃区域（非强制可拖入，关窗前可拖回）"
+
+[node name="DiscardZoneContainer" type="Control" parent="RootControl/Panel/DiscardZone"]
+anchors_preset = 0
+offset_left = 4.0
+offset_top = 26.0
+offset_right = 764.0
+offset_bottom = 166.0
+script = ExtResource("2_dropzone")
+IsDiscardZone = true
+
+[node name="AllEnterButton" type="Button" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 400.0
+offset_right = 190.0
+offset_bottom = 440.0
+text = "全部进入堆叠"
+
+[node name="FirstEnterButton" type="Button" parent="RootControl/Panel"]
+layout_mode = 0
+offset_left = 210.0
+offset_top = 400.0
+offset_right = 384.0
+offset_bottom = 440.0
+text = "第一张进入堆叠"
+
+[node name="DoneButton" type="Button" parent="RootControl/Panel"]
+z_index = 100
+layout_mode = 0
+offset_left = 404.0
+offset_top = 400.0
+offset_right = 824.0
+offset_bottom = 440.0
+text = "完成排序"

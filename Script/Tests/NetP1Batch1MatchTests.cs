@@ -190,14 +190,19 @@ namespace Script.Tests
             launcher.SendIntent(PlayerIntent.Kind.DrawCards, "1");
             launcher._Process(0);
 
-            // 断言世界牌堆投影一致（UID 序列相同；ToSnapshotUids 现返回 ZoneCardRef）
+            // 断言世界牌堆投影一致【Phase B 调整】：
+            // 信息隔离后地区牌堆对客户端只下发"占位"（数量保留、身份隐藏），故此处断言
+            //  ① 数量一致；② 客户端侧均为占位（不泄露真实 UID/模板）。
             var serverUids = serverWorld.ToSnapshotUids();
             var clientUids = launcher.ClientWorldDeckManager.ToSnapshotUids();
             Assert.AreEqual(serverUids.Count, clientUids.Count,
                 $"客户端投影世界牌堆数量({clientUids.Count})应等于服务端({serverUids.Count})");
-            for (int i = 0; i < serverUids.Count; i++)
-                Assert.AreEqual(serverUids[i].Uid, clientUids[i].Uid,
-                    $"世界牌堆第{i}张 UID 应一致");
+            for (int i = 0; i < clientUids.Count; i++)
+            {
+                Assert.IsTrue(clientUids[i].IsHidden, $"世界牌堆第{i}张应为隐藏占位（信息隔离）");
+                Assert.IsTrue(string.IsNullOrEmpty(clientUids[i].TemplateUid),
+                    $"世界牌堆占位不得携带 TemplateUid（不泄露身份）");
+            }
 
             // 断言地区势力标记投影一致
             var (p1, p2) = serverArea.GetMarks(areaA);

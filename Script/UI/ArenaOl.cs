@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Godot;
 using Script.Enums;
@@ -33,8 +34,8 @@ namespace Script.UI
 
         // 专用区域组件（与单机 Arena 一致）：牌库/墓地/世界牌库用各自的组件渲染，
         // 手牌用 CardUI 渲染。联机快照驱动同样复用这些组件，确保视觉与单机一致。
-        private DeckZone _p1DeckZone;
-        private DeckZone _p2DeckZone;
+        private OnlineDeckZone _p1DeckZone;
+        private OnlineDeckZone _p2DeckZone;
         private GraveyardZone _p1GraveZone;
         private GraveyardZone _p2GraveZone;
         private WorldDeckZone _worldDeckZone;
@@ -71,6 +72,20 @@ namespace Script.UI
         private Script.Data.Effects.EffectData _activationTargetAbility;
         private Script.Game.Entities.CardInstance _activationTargetSource;
         private readonly System.Collections.Generic.HashSet<string> _activationLegalCardUids = new System.Collections.Generic.HashSet<string>();
+        /// <summary>「事务卡需目标出牌」路径的待发卡 UID（非空表示当前选目标是为 PlayCard 服务）。</summary>
+        private string _pendingPlayCardUid;
+        /// <summary>「服务端选目标请求」的待回包请求（非空表示本轮选中的目标要回成 ChoiceResult，而非上行意图）。</summary>
+        private Script.Net.ChoiceRequest _pendingChoiceTargetRequest;
+        /// <summary>服务端选目标请求中的**地区目标**集合（机动类触发：高亮地区槽位、点击地区完成选择）。</summary>
+        private readonly System.Collections.Generic.HashSet<string> _activationLegalAreaUids = new System.Collections.Generic.HashSet<string>();
+        /// <summary>「支付/横置」二选一窗口（JC068 准备维护；联机专用窗口，不本地结算）。</summary>
+        private OnlinePayOrTapWindow _onlinePayOrTapWindow;
+        /// <summary>「触发排序」窗口（联机专用；逐次入堆叠会多轮请求，窗口按 OrderContextId 复用）。</summary>
+        private OnlineTriggerOrderWindow _onlineTriggerOrderWindow;
+        /// <summary>当前排序窗口的上下文 id（服务端 OrderContextId；变化＝新一轮排序，需重建窗口）。</summary>
+        private string _triggerOrderContextId;
+        /// <summary>联机专用排序窗口场景缓存。</summary>
+        private PackedScene _triggerOrderWindowScene;
 
         // —— 角色卡「拖拽箭头激活」状态（复刻单机 CardDragController.TryBeginActivateDragAt/EndActivateDrag 手势） ——
         private Control _arrowLayer;                                  // 箭头层（动态创建：全屏、鼠标穿透、高层级）
@@ -84,6 +99,26 @@ namespace Script.UI
         // —— 服务端拒绝提示（G4）：联机提示窗 + 模态标记 ——
         private OnlineNoticeWindow _noticeWindow;
         private bool _noticeWindowOpen;
+
+        // ==================== 堆叠区（对齐单机：卡面/效果文本/地区卡面/箭头） ====================
+        private readonly Dictionary<StackEntryUI, Script.Game.Entities.StackEntry> _stackEntryUIMap
+            = new Dictionary<StackEntryUI, Script.Game.Entities.StackEntry>();
+        private readonly Dictionary<Script.Game.Entities.StackEntry, List<StackArrow>> _stackArrows
+            = new Dictionary<Script.Game.Entities.StackEntry, List<StackArrow>>();
+
+        // ==================== 快照应用队列（应用时机与表现层事件源） ====================
+        // 到达即入队（同帧多份自动合并）；真正应用时机由 _Process 决定：
+        //  - 本地交互/动画进行中可延后（有上限，避免长期不同步）；
+        //  - 应用前用 SnapshotDiff 对比"上一份已应用快照"，把差异指令交给表现层（动画的触发源）。
+        private readonly Script.Net.SnapshotApplicationQueue _snapshotQueue = new Script.Net.SnapshotApplicationQueue();
+        private double _snapshotDeferTimer;
+        private const double SnapshotMaxDeferSeconds = 1.5;
+
+        /// <summary>是否打印每帧表现层差异摘要（调试用；默认关闭）。</summary>
+        public bool VerbosePresentation { get; set; } = false;
+
+        /// <summary>最近一次快照差异的表现层摘要（如 "add=1 move=2 stack=1"），供调试/观测。</summary>
+        public string LastPresentationSummary { get; private set; } = "";
 
         // ==================== 联机拖拽（出牌/派遣暗藏/建立资产） ====================
         // 联机为快照驱动：拖拽结束不本地移动卡，只上行对应意图；服务端权威裁决后靠快照回显。
@@ -100,8 +135,8 @@ namespace Script.UI
             _p1Hand = GetNodeOrNull<Control>("Player1Area/HandContainer");
             _p2Hand = GetNodeOrNull<Control>("Player2Area/HandContainer");
             _areasContainer = GetNodeOrNull<Control>("CenterArea/AreasContainer");
-            _p1DeckZone = GetNodeOrNull<DeckZone>("Player1Area/DeckZone");
-            _p2DeckZone = GetNodeOrNull<DeckZone>("Player2Area/DeckZone");
+            _p1DeckZone = GetNodeOrNull<OnlineDeckZone>("Player1Area/DeckZone");
+            _p2DeckZone = GetNodeOrNull<OnlineDeckZone>("Player2Area/DeckZone");
             _p1GraveZone = GetNodeOrNull<GraveyardZone>("Player1Area/GraveyardZone");
             _p2GraveZone = GetNodeOrNull<GraveyardZone>("Player2Area/GraveyardZone");
             _worldDeckZone = GetNodeOrNull<WorldDeckZone>("CenterArea/WorldDeckZone");
@@ -165,9 +200,10 @@ namespace Script.UI
         {
             _launcher = launcher;
             _localPlayerId = localPlayerId;
+            _snapshotQueue.Reset();   // 换局/新连接：清空基准快照与待应用队列
             if (_launcher != null)
             {
-                _launcher.OnClientSnapshot += ApplySnapshot;
+                _launcher.OnClientSnapshot += OnSnapshotReceived;
                 _launcher.OnClientChoiceRequest += OnClientChoiceRequest;
                 _launcher.OnClientIntentRejected += OnClientIntentRejected;
             }
@@ -177,17 +213,28 @@ namespace Script.UI
         {
             if (_launcher != null)
             {
-                _launcher.OnClientSnapshot -= ApplySnapshot;
+                _launcher.OnClientSnapshot -= OnSnapshotReceived;
                 _launcher.OnClientChoiceRequest -= OnClientChoiceRequest;
                 _launcher.OnClientIntentRejected -= OnClientIntentRejected;
             }
             _launcher = null;
         }
 
+        /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
+        private void OnSnapshotReceived(GameSnapshot snap)
+        {
+            if (snap == null) return;
+            _snapshotQueue.Enqueue(snap);
+        }
+
         /// <summary>服务端下发决策请求：弹出联机决策面板，玩家选择后回包。</summary>
         private void OnClientChoiceRequest(Script.Net.ChoiceRequest request)
         {
             if (request == null) return;
+
+            // 【对齐单机】决策请求改用单机同款窗口（调查/战斗/破平/支付横置/触发排序/选目标），失败再退回通用决策面板
+            if (TryOpenOnlineDecisionWindow(request)) return;
+
             if (_choicePromptPanel == null || !GodotObject.IsInstanceValid(_choicePromptPanel))
             {
                 _choicePromptPanel = new ChoicePromptPanel();
@@ -201,6 +248,432 @@ namespace Script.UI
             var vpSize = GetViewport().GetVisibleRect().Size;
             _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
             _choicePromptPanel.Popup();
+        }
+
+        // ==================== 对抗窗口（对齐单机：调查/战斗/破平） ====================
+
+        private PackedScene _strengthWindowScene;        // 联机专用 OnlineStrengthWindow.tscn（不改单机窗口）
+        private PackedScene _investigationWindowScene;   // 复用单机 InvestigationWindow.tscn
+        private PackedScene _tieBreakWindowScene;        // 复用单机 TieBreakWindow.tscn
+        private OnlineStrengthWindow _onlineStrengthWindow;
+        private InvestigationWindow _onlineInvestigationWindow;
+        private bool _onlineCombatWindowOpen;
+
+        /// <summary>
+        /// 把服务端下发的决策请求转成**单机同款窗口**：
+        ///  - CombatStrength → StrengthWindow（点击场上败方卡左键+1/右键-1，确认后回 ChoiceResult；不本地结算）
+        ///  - CombatInvestigation → InvestigationWindow（拖拽把待分配调查卡分到牌库顶/底，确认后回 ChoiceResult）
+        ///  - TieBreak → TieBreakWindow（确认/取消→ChoiceResult）
+        ///  - PayOrTap → OnlinePayOrTapWindow（对齐单机 Arena.PromptPayOrTap：支付/横置二选一，强制、支付不足置灰）
+        ///  - SelectTriggerOrder → OnlineTriggerOrderWindow（对齐单机 TriggerOrderWindow：拖拽排序 + 全部/第一张入堆叠 + 完成）
+        ///  - SelectTarget → 场上选目标状态机（对齐单机 TargetSelectionWindow：高亮合法目标，点选完成）
+        /// 返回 false 表示未处理（调用方退回通用决策面板）。
+        /// </summary>
+        private bool TryOpenOnlineDecisionWindow(Script.Net.ChoiceRequest req)
+        {
+            switch (req.RequestKind)
+            {
+                case Script.Net.ChoiceRequest.Kind.CombatStrength:
+                    return OpenOnlineStrengthWindow(req);
+                case Script.Net.ChoiceRequest.Kind.CombatInvestigation:
+                    return OpenOnlineInvestigationWindow(req);
+                case Script.Net.ChoiceRequest.Kind.TieBreak:
+                    return OpenOnlineTieBreakWindow(req);
+                case Script.Net.ChoiceRequest.Kind.PayOrTap:
+                    return OpenOnlinePayOrTapWindow(req);
+                case Script.Net.ChoiceRequest.Kind.SelectTriggerOrder:
+                    return OpenOnlineTriggerOrderWindow(req);
+                case Script.Net.ChoiceRequest.Kind.SelectTarget:
+                    return OpenOnlineTargetSelectionWindow(req);
+                default:
+                    return false;
+            }
+        }
+
+        private T LoadWindowScene<T>(ref PackedScene cache, string path) where T : Node
+        {
+            if (cache == null) cache = ResourceLoader.Load<PackedScene>(path);
+            return cache?.Instantiate<T>();
+        }
+
+        /// <summary>战斗对抗：使用**联机专用** `OnlineStrengthWindow`（与单机视觉/操作一致，但不本地结算）；
+        /// 合法承伤目标由服务端下发的 `OptionUids` 决定（客户端不复制规则）。</summary>
+        private bool OpenOnlineStrengthWindow(Script.Net.ChoiceRequest req)
+        {
+            var win = LoadWindowScene<OnlineStrengthWindow>(ref _strengthWindowScene, "res://Scenes/Net/OnlineStrengthWindow.tscn");
+            if (win == null) return false;
+
+            var legal = new HashSet<string>(req.OptionUids ?? new List<string>());
+            AddChild(win);
+            win.IsLegalTarget = inst => inst != null && legal.Contains(inst.UID);   // 服务端下发的合法目标集合
+            win.FindCardUI = inst => FindCardUiByInstance(inst);                      // 显示/清除分配数字
+            win.OnConfirmed = allocations =>
+            {
+                var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
+                if (allocations != null)
+                    foreach (var kv in allocations)
+                    {
+                        if (kv.Key == null || kv.Value <= 0) continue;
+                        res.SelectedUids.Add(kv.Key.UID);
+                        res.SelectedAmounts.Add(kv.Value);
+                    }
+                _launcher?.SendChoiceResult(res);
+                _onlineStrengthWindow = null;
+                _onlineCombatWindowOpen = false;
+                _activationSelectionBusy = false;
+                GD.Print($"[ArenaOl] 战斗对抗分配已回包：{res.SelectedUids.Count} 个目标");
+            };
+            win.Configure(req.PlayerId, req.Amount, req.AreaUid, req.AreaNo);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Popup();
+
+            _onlineStrengthWindow = win;
+            _onlineCombatWindowOpen = true;
+            _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
+            GD.Print($"[ArenaOl] 战斗对抗窗口已打开（地区{req.AreaNo}，伤害 {req.Amount}，合法目标 {legal.Count}）");
+            return true;
+        }
+
+        /// <summary>调查对抗：复用单机 InvestigationWindow；待分配卡由快照（仅决策者可见）投影提供。</summary>
+        private bool OpenOnlineInvestigationWindow(Script.Net.ChoiceRequest req)
+        {
+            var win = LoadWindowScene<InvestigationWindow>(ref _investigationWindowScene, "res://Scenes/CombatResolution/InvestigationWindow.tscn");
+            if (win == null) return false;
+
+            var cards = new List<CardInstance>();
+            // 【关键】决策等待期间服务端不会推快照 → 待分配卡必须随请求下发（OptionCardRefs）；
+            // 客户端用投影 CardManager 按引用重建实例（含模板，可显示卡面）。
+            var clientCardMgr = _launcher?.ClientCardManager;
+            if (clientCardMgr != null && req.OptionCardRefs != null)
+            {
+                foreach (var r in req.OptionCardRefs)
+                {
+                    if (r == null) continue;
+                    var inst = clientCardMgr.RebuildFromRef(r);
+                    if (inst != null) cards.Add(inst);
+                }
+            }
+            // 兜底：若请求未带引用（旧服务端），退回用快照投影的待分配卡
+            if (cards.Count == 0)
+            {
+                var projected = _launcher?.ClientInvestigationCards;
+                if (projected != null) foreach (var c in projected) if (c != null) cards.Add(c);
+            }
+            if (cards.Count == 0)
+            {
+                GD.PrintErr("[ArenaOl] 调查对抗窗口：未拿到待分配卡（请求缺 OptionCardRefs 且快照无投影），退回通用决策面板");
+                win.QueueFree();
+                return false;
+            }
+
+            AddChild(win);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 150);
+            win.Popup();
+            win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
+            win.Configure(req.PlayerId, req.AreaNo, cards,
+                (winner, toTop, toBottom) =>
+                {
+                    // 回包语义：SelectedUids = 放回牌库顶的顺序（未选中的由服务端放牌库底）
+                    var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
+                    if (toTop != null) foreach (var c in toTop) if (c != null) res.SelectedUids.Add(c.UID);
+                    _launcher?.SendChoiceResult(res);
+                    _onlineInvestigationWindow = null;
+                    _onlineCombatWindowOpen = false;
+                    _activationSelectionBusy = false;
+                    GD.Print($"[ArenaOl] 调查对抗放回已回包：牌库顶 {res.SelectedUids.Count} 张");
+                },
+                (pid, count) => { /* 联机：抽牌由服务端结算，客户端不执行 */ });
+
+            _onlineInvestigationWindow = win;
+            _onlineCombatWindowOpen = true;
+            _activationSelectionBusy = true;
+            GD.Print($"[ArenaOl] 调查对抗窗口已打开（地区{req.AreaNo}，待分配 {cards.Count} 张）");
+            return true;
+        }
+
+        /// <summary>先手破平：复用单机 TieBreakWindow（确认→Cancelled=false；取消→Cancelled=true）。</summary>
+        private bool OpenOnlineTieBreakWindow(Script.Net.ChoiceRequest req)
+        {
+            var win = LoadWindowScene<TieBreakWindow>(ref _tieBreakWindowScene, "res://Scenes/CombatResolution/TieBreakWindow.tscn");
+            if (win == null) return false;
+
+            AddChild(win);
+            win.Configure(req.AreaNo, (CombatManager.CombatType)req.CombatTypeValue, confirmed =>
+            {
+                _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                {
+                    RequestId = req.RequestId,
+                    Cancelled = !confirmed,
+                });
+                _onlineCombatWindowOpen = false;
+                _activationSelectionBusy = false;
+                GD.Print($"[ArenaOl] 先手破平回包：{(confirmed ? "确认" : "取消")}");
+            });
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Popup();
+
+            _onlineCombatWindowOpen = true;
+            _activationSelectionBusy = true;
+            return true;
+        }
+
+        /// <summary>
+        /// 支付/横置二选一（JC068 阿格斯IV「准备维护」）：对齐单机 `Arena.PromptPayOrTap` 的弹窗——
+        /// 两个选项（支付 N / 横置来源卡）、费用不足时"支付"置灰、强制选择（无取消、点窗外不关闭）。
+        /// 联机不做本地结算：选中后回 `ChoiceResult{Pay=...}`，由服务端 `ResolvePrepareUpkeep` 落地。
+        /// </summary>
+        private bool OpenOnlinePayOrTapWindow(Script.Net.ChoiceRequest req)
+        {
+            if (_onlinePayOrTapWindow != null && GodotObject.IsInstanceValid(_onlinePayOrTapWindow))
+                _onlinePayOrTapWindow.QueueFree();
+
+            var win = new OnlinePayOrTapWindow();
+            AddChild(win);
+
+            // 来源卡名（单机文案为"横置阿格斯IV"）：由请求的 SourceUid 在投影世界里解析
+            string sourceName = string.IsNullOrEmpty(req.SourceUid) ? null : ResolveChoiceLabel(req.SourceUid);
+            if (string.IsNullOrEmpty(sourceName) || sourceName == "（未命名）")
+                sourceName = "来源卡";
+
+            string payLabel = $"支付{req.PayAmount}（横置1张资产区牌）";
+            string tapLabel = $"横置{sourceName}";
+            win.Init(req.Prompt, payLabel, !req.PayAllowed, tapLabel, pay =>
+            {
+                _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                {
+                    RequestId = req.RequestId,
+                    Pay = pay,
+                    Cancelled = false,
+                });
+                _onlinePayOrTapWindow = null;
+                _activationSelectionBusy = false;
+                GD.Print($"[ArenaOl] 准备维护回包：{(pay ? $"支付{req.PayAmount}" : "横置")}");
+            });
+
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Popup();
+
+            _onlinePayOrTapWindow = win;
+            _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
+            GD.Print($"[ArenaOl] 准备维护窗口已打开（支付{req.PayAmount}，可支付={req.PayAllowed}，来源={sourceName}）");
+            return true;
+        }
+
+        /// <summary>
+        /// 触发/效果选目标：对齐单机 `TriggerInteractionCoordinator.RequestTargetSelection` ——
+        /// 复用联机既有"场上点击选目标"状态机（`TargetSelectionWindow` + 合法目标高亮），点选合法目标即回包；
+        /// 单机该路径**不可取消**（必须点一个合法目标），故不提供取消按钮，仅保留服务端超时兜底。
+        /// 目标可为**场上卡**（`OptionUids` 指向卡实例）或**地区**（机动类触发，指向地区 UID）。
+        /// </summary>
+        private bool OpenOnlineTargetSelectionWindow(Script.Net.ChoiceRequest req)
+        {
+            // 区分"卡目标"与"地区目标"：能解析为地区 UID 的走地区高亮（对齐单机 trigger.IsAreaTarget 分支）
+            var areaUids = new List<string>();
+            var cardUids = new List<string>();
+            foreach (var uid in req.OptionUids ?? new List<string>())
+            {
+                if (string.IsNullOrEmpty(uid)) continue;
+                if (IsKnownAreaUid(uid)) areaUids.Add(uid);
+                else cardUids.Add(uid);
+            }
+
+            _activationSelectionBusy = true;
+            _activationTargetActive = true;
+            _activationTargetSource = null;      // 本路径不是"激活/出牌"，选中后回的是 ChoiceResult
+            _activationTargetAbility = null;
+            _pendingPlayCardUid = null;
+            _pendingChoiceTargetRequest = req;   // 标记：本轮的"选中"要回成 ChoiceResult
+            _activationLegalCardUids.Clear();
+            foreach (var u in cardUids) _activationLegalCardUids.Add(u);
+            _activationLegalAreaUids.Clear();
+            foreach (var u in areaUids) _activationLegalAreaUids.Add(u);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(true);
+            }
+            ApplyOnlineAreaHighlights();
+
+            EnsureTargetWindow();
+            if (_onlineTargetWindow == null)
+            {
+                _activationSelectionBusy = false;
+                _activationTargetActive = false;
+                _pendingChoiceTargetRequest = null;
+                return false;
+            }
+            _onlineTargetWindow.OnTargetPicked = OnServerChoiceTargetPicked;
+            _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡/地区
+            string hint = cardUids.Count == 0 && areaUids.Count > 0
+                ? "请点击一个高亮的地区（将移动至该地区）。"
+                : "请在场上选择合法目标卡（点击场上卡完成选择）。";
+            _onlineTargetWindow.Open(req.Prompt ?? "请选择目标", hint);
+            GD.Print($"[ArenaOl] 触发选目标窗口已打开（卡目标 {cardUids.Count} 个，地区目标 {areaUids.Count} 个）");
+            return true;
+        }
+
+        /// <summary>服务端选目标回包：把选中 UID 封成 `ChoiceResult` 上行（对齐单机选目标不可取消）。</summary>
+        private void OnServerChoiceTargetPicked(string targetUid)
+        {
+            var req = _pendingChoiceTargetRequest;
+            ClearActivationTargetSelection();
+            _pendingChoiceTargetRequest = null;
+            if (string.IsNullOrEmpty(targetUid) || req == null) return;
+            _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+            {
+                RequestId = req.RequestId,
+                SelectedUid = targetUid,
+                Cancelled = false,
+            });
+            GD.Print($"[ArenaOl] 触发选目标回包：{targetUid}");
+        }
+
+        /// <summary>
+        /// 触发排序（对齐单机 `TriggerOrderWindow`）：拖拽决定入堆叠顺序 + 取消（放弃区）/ 全部进入堆叠 /
+        /// 第一张进入堆叠 / 完成排序（＝放弃剩余）。联机专用窗口 `OnlineTriggerOrderWindow`（复用共享的
+        /// `TriggerEntryUI`/`TriggerOrderRoot` 纯 View 组件，不改它们）。
+        ///
+        /// 逐次入堆叠会产生**多轮请求-响应**：同一 `OrderContextId` 复用同一窗口并刷新条目；上下文变化则重建窗口。
+        /// 回包：`SelectedIndices` = 本次入堆叠的条目下标顺序（服务端据此按序入栈）；"完成排序"= `Cancelled=true`。
+        /// </summary>
+        private bool OpenOnlineTriggerOrderWindow(Script.Net.ChoiceRequest req)
+        {
+            string ctx = req.OrderContextId ?? "";
+            if (_onlineTriggerOrderWindow != null && GodotObject.IsInstanceValid(_onlineTriggerOrderWindow)
+                && !string.Equals(_triggerOrderContextId, ctx, StringComparison.Ordinal))
+            {
+                _onlineTriggerOrderWindow.CloseAndFree();   // 新的排序轮次（如换 owner）→ 重建窗口
+                _onlineTriggerOrderWindow = null;
+            }
+            if (_onlineTriggerOrderWindow == null || !GodotObject.IsInstanceValid(_onlineTriggerOrderWindow))
+            {
+                _triggerOrderContextId = ctx;
+                _onlineTriggerOrderWindow = LoadWindowScene<OnlineTriggerOrderWindow>(
+                    ref _triggerOrderWindowScene, "res://Scenes/Net/OnlineTriggerOrderWindow.tscn");
+                if (_onlineTriggerOrderWindow == null)
+                {
+                    GD.PrintErr("[ArenaOl] OnlineTriggerOrderWindow.tscn 加载失败，退回通用决策面板");
+                    return false;
+                }
+                AddChild(_onlineTriggerOrderWindow);
+                var decisionReq = req;
+                _onlineTriggerOrderWindow.OnSubmitIndices = indices =>
+                {
+                    var res = new Script.Net.ChoiceResult
+                    {
+                        RequestId = decisionReq.RequestId,
+                        Cancelled = false,
+                    };
+                    if (indices != null) res.SelectedIndices.AddRange(indices);
+                    _launcher?.SendChoiceResult(res);
+                    GD.Print($"[ArenaOl] 触发排序入堆叠已回包：{res.SelectedIndices.Count} 个（顺序 {string.Join(",", res.SelectedIndices)}）");
+                };
+                _onlineTriggerOrderWindow.OnDone = () =>
+                {
+                    _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                    {
+                        RequestId = decisionReq.RequestId,
+                        Cancelled = true,
+                    });
+                    GD.Print("[ArenaOl] 触发排序完成（放弃剩余）已回包");
+                    // 对齐单机 Done 关闭窗口：本轮排序结束（若还有其它 owner，服务端会下发新的上下文 id 开新窗口）
+                    if (_onlineTriggerOrderWindow != null && GodotObject.IsInstanceValid(_onlineTriggerOrderWindow))
+                        _onlineTriggerOrderWindow.CloseAndFree();
+                    _onlineTriggerOrderWindow = null;
+                    _activationSelectionBusy = false;
+                };
+            }
+
+            _onlineTriggerOrderWindow.OpenOrUpdate(ctx, req.PlayerId, BuildOnlineTriggerEntries(req));
+            _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
+            GD.Print($"[ArenaOl] 触发排序窗口已打开/刷新（ctx={ctx}，条目 {(req.OptionUids?.Count ?? 0)} 个）");
+            return true;
+        }
+
+        /// <summary>把排序请求的候选转成窗口条目（名称/效果文本/强制标记来自请求，卡图由来源卡模板解析）。</summary>
+        private List<OnlineTriggerEntry> BuildOnlineTriggerEntries(Script.Net.ChoiceRequest req)
+        {
+            var list = new List<OnlineTriggerEntry>();
+            var uids = req.OptionUids ?? new List<string>();
+            for (int i = 0; i < uids.Count; i++)
+            {
+                string uid = uids[i];
+                if (string.IsNullOrEmpty(uid)) continue;
+                string name = (req.OptionLabels != null && i < req.OptionLabels.Count) ? req.OptionLabels[i] : null;
+                if (string.IsNullOrEmpty(name)) name = ResolveChoiceLabel(uid);
+                string text = (req.OptionTexts != null && i < req.OptionTexts.Count) ? req.OptionTexts[i] : "";
+                bool mandatory = req.OptionForced != null && i < req.OptionForced.Count && req.OptionForced[i];
+                list.Add(new OnlineTriggerEntry
+                {
+                    OptionKey = uid,
+                    Name = name,
+                    EffectText = text,
+                    Mandatory = mandatory,
+                    SourceTemplate = ResolvePlayerTemplateByUid(uid),
+                });
+            }
+            return list;
+        }
+
+        /// <summary>按 UID 取投影世界里的玩家卡模板（卡图显示用；取不到返回 null，条目只显示文字）。</summary>
+        private Script.Data.Cards.PlayerCardData ResolvePlayerTemplateByUid(string uid)
+        {
+            if (string.IsNullOrEmpty(uid)) return null;
+            var inst = _launcher?.ClientCardManager?.GetInstance(uid) ?? FindInstanceInAllZones(uid);
+            return inst?.PlayerTemplate as Script.Data.Cards.PlayerCardData;
+        }
+
+        /// <summary>该 UID 是否为本局已知的地区（用于把 SelectTarget 的候选分流成"地区目标"）。</summary>
+        private bool IsKnownAreaUid(string uid)
+        {
+            if (string.IsNullOrEmpty(uid) || _areaSlots == null) return false;
+            foreach (var slot in _areaSlots)
+                if (slot != null && GodotObject.IsInstanceValid(slot) && slot.AreaUID == uid) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 高亮"可被选为目标的地区槽位"（对齐单机 `TriggerInteractionCoordinator.RequestTargetSelection` 的
+        /// `_targetIsArea` 分支）：`SetHighlight(true)` + `IsTargetSelectable = true` + `OnAreaClicked` 回调；
+        /// 点击由 `AreaSlot._GuiInput` 在 `IsTargetSelectable` 时触发（单机同款公开 API，只读复用不改其类）。
+        /// </summary>
+        private void ApplyOnlineAreaHighlights()
+        {
+            if (_areaSlots == null) return;
+            foreach (var slot in _areaSlots)
+            {
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                bool selectable = _activationLegalAreaUids.Contains(slot.AreaUID);
+                slot.IsTargetSelectable = selectable;
+                slot.SetHighlight(selectable);
+                slot.OnAreaClicked = selectable ? new Action<string>(OnServerChoiceTargetPicked) : null;
+            }
+        }
+
+        /// <summary>清除地区槽位的高亮/可选状态（选目标结束或取消时调用）。</summary>
+        private void ClearOnlineAreaHighlights()
+        {
+            if (_areaSlots == null) return;
+            foreach (var slot in _areaSlots)
+            {
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                slot.IsTargetSelectable = false;
+                slot.SetHighlight(false);
+                slot.OnAreaClicked = null;
+            }
+        }
+
+        /// <summary>按实例找已渲染的 CardUI（清分配显示/命中判定用）。</summary>
+        private CardUI FindCardUiByInstance(CardInstance inst)
+        {
+            if (inst == null) return null;
+            return _cardUIMap.TryGetValue(inst.UID, out var ui) && ui != null && GodotObject.IsInstanceValid(ui) ? ui : null;
         }
 
         /// <summary>服务端拒绝意图（IntentResult.Success=false）：弹出可见提示（联机提示窗，点窗外不关闭）。
@@ -330,7 +803,7 @@ namespace Script.UI
             instances.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
             foreach (var inst in instances)
             {
-                if (inst == null) continue;
+                if (inst == null || inst.IsHidden) continue;   // 占位实例（信息隔离）不参与可发动判定
                 if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
                 ui.SetActivatableHighlight(ActivateEligibility.CanActivate(inst, turn, player, cardMgr));
@@ -353,7 +826,7 @@ namespace Script.UI
         }
 
         /// <summary>清空 DeckZone 节点下的旧 CardUI 子节点（保留 CountLabel/CardContainer 等静态子节点）。</summary>
-        private void ClearDeckChildren(DeckZone deckZone)
+        private void ClearDeckChildren(OnlineDeckZone deckZone)
         {
             if (deckZone == null) return;
             foreach (Node child in deckZone.GetChildren())
@@ -375,7 +848,7 @@ namespace Script.UI
             if (graveZone == null || instances == null) return;
             foreach (var inst in instances)
             {
-                if (inst == null || inst.PlayerTemplate == null) continue;   // 墓地只放玩家卡
+                if (inst == null || inst.PlayerTemplate == null || inst.IsHidden) continue;   // 墓地只放玩家卡（占位除外）
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 ui.Setup(inst);
                 graveZone.AddCard(ui);
@@ -704,6 +1177,14 @@ namespace Script.UI
         }
 
         /// <summary>重建堆叠区（StackPanel/StackContainer）：条目以效果文字展示（客户端投影不重建卡片型 Kind）。</summary>
+        /// <summary>
+        /// 重建堆叠区（对齐单机 Arena.RefreshStackUI）：
+        ///  - 卡片型 → StackEntryUI 内显示真实卡面；
+        ///  - 效果型 → 半透明遮罩 + 角标 + 文本，并按快照的 SourceTemplateUid 显示来源卡卡图；
+        ///  - Kind=AreaWon → 额外挂一张地区卡面（复用 AreaCardUI）；
+        ///  - 每条目按 Targets 绘制"条目 → 目标"箭头（颜色按控制者），每帧跟随端点。
+        /// 联机为快照驱动：每次快照全量重建（同时清理旧箭头）。
+        /// </summary>
         private void RefreshStackUI()
         {
             if (_stackContainer == null) return;
@@ -713,15 +1194,136 @@ namespace Script.UI
                     _stackContainer.RemoveChild(old);
                     old.QueueFree();
                 }
+            _stackEntryUIMap.Clear();
+            ClearStackArrows();
 
             var stack = _launcher?.ClientStackManager;
             if (stack == null || _stackEntryScene == null) return;
-            foreach (var entry in stack.Entries)
+
+            var snaps = _launcher?.ClientStackSnapshot;   // 与 Entries 同序（ApplySnapshot 按序追加）
+            var entries = stack.Entries;
+            for (int i = 0; i < entries.Count; i++)
             {
+                var entry = entries[i];
                 if (entry == null) continue;
+                var snap = (snaps != null && i < snaps.Count) ? snaps[i] : null;
+
                 var ui = _stackEntryScene.Instantiate<StackEntryUI>();
-                _stackContainer.AddChild(ui);
+                _stackContainer.AddChild(ui);      // 先入树再 Setup（_Ready 内取子节点引用）
                 ui.Setup(entry, null);
+
+                // 效果型：客户端没有 StackEffect 实例，用快照的来源模板 UID 补来源卡图
+                // 注：不改动单机 StackEntryUI —— 直接操作其场景内节点 "TriggerCardArt"。
+                if (!entry.IsCard && snap != null && !string.IsNullOrEmpty(snap.SourceTemplateUid))
+                {
+                    var art = ui.GetNodeOrNull<TextureRect>("TriggerCardArt");
+                    if (art != null)
+                    {
+                        var tex = ResourceLoader.Load<Texture2D>(ResolvePlayerCardImagePath(snap.SourceTemplateUid));
+                        if (tex != null) { art.Texture = tex; art.Visible = true; }
+                        else art.Visible = false;
+                    }
+                }
+
+                // 赢取地区条目：复制并显示该地区卡的卡面（对齐单机）
+                if (entry.Kind == ResolveKind.AreaWon && !string.IsNullOrEmpty(entry.WonAreaUid))
+                {
+                    var slot = _areaSlots.Find(s => s != null && s.AreaUID == entry.WonAreaUid);
+                    if (slot?.Data != null) ui.AttachAreaCard(slot.Data, _areaCardUIScene);
+                }
+
+                _stackEntryUIMap[ui] = entry;
+            }
+
+            RedrawStackArrows();
+        }
+
+        /// <summary>按条目 Targets 创建箭头实例（颜色按控制者着色，与单机一致）。</summary>
+        private void RedrawStackArrows()
+        {
+            if (_arrowLayer == null || _stackArrowScene == null) return;
+            ClearStackArrows();
+            foreach (var kv in _stackEntryUIMap)
+            {
+                var entry = kv.Value;              // 键=条目 UI，值=数据模型条目
+                var list = entry.Targets;
+                if (list == null || list.Count == 0) continue;
+                Color col = entry.ControllerId == 1 ? Colors.OrangeRed : Colors.CornflowerBlue;
+                var arrows = new List<StackArrow>();
+                foreach (var _ in list)
+                {
+                    var arrow = _stackArrowScene.Instantiate<StackArrow>();
+                    arrow.ZIndex = 4095;
+                    arrow.ZAsRelative = false;
+                    _arrowLayer.AddChild(arrow);
+                    arrow.SetColor(col);
+                    arrows.Add(arrow);
+                }
+                _stackArrows[entry] = arrows;
+            }
+            UpdateStackArrowEndpoints();
+        }
+
+        /// <summary>清理堆叠箭头实例。</summary>
+        private void ClearStackArrows()
+        {
+            foreach (var kv in _stackArrows)
+                foreach (var a in kv.Value)
+                    if (a != null && GodotObject.IsInstanceValid(a)) a.QueueFree();
+            _stackArrows.Clear();
+        }
+
+        /// <summary>每帧跟随：起点=条目 UI 中心，终点=目标卡/地区/玩家区中心（对齐单机 UpdateArrowEndpoints）。</summary>
+        private void UpdateStackArrowEndpoints()
+        {
+            if (_arrowLayer == null || _stackArrows.Count == 0) return;
+            foreach (var kv in _stackArrows)
+            {
+                var entry = kv.Key;
+                var arrows = kv.Value;
+                if (arrows == null || arrows.Count == 0 || entry.Targets == null) continue;
+                StackEntryUI entryUi = null;
+                foreach (var m in _stackEntryUIMap)
+                    if (ReferenceEquals(m.Value, entry)) { entryUi = m.Key; break; }
+                if (entryUi == null || !GodotObject.IsInstanceValid(entryUi)) continue;
+
+                Vector2 from = entryUi.GetGlobalCenter();
+                int n = Mathf.Min(arrows.Count, entry.Targets.Count);
+                for (int i = 0; i < n; i++)
+                {
+                    var to = ResolveStackTargetCenter(entry.Targets[i]);
+                    if (to == null) continue;
+                    arrows[i].SetPoints(from, to.Value);
+                }
+            }
+        }
+
+        /// <summary>定位堆叠目标节点中心（全局坐标）；找不到返回 null。</summary>
+        private Vector2? ResolveStackTargetCenter(StackTargetRef target)
+        {
+            if (target == null) return null;
+            switch (target.Kind)
+            {
+                case StackTargetRef.RefKind.Card:
+                    if (!string.IsNullOrEmpty(target.CardUid)
+                        && _cardUIMap.TryGetValue(target.CardUid, out var cardUi)
+                        && cardUi != null && GodotObject.IsInstanceValid(cardUi))
+                        return cardUi.GetVisualGlobalRect().GetCenter();
+                    return null;
+                case StackTargetRef.RefKind.Area:
+                    AreaSlot slot = null;
+                    if (!string.IsNullOrEmpty(target.AreaUid))
+                        slot = _areaSlots.Find(s => s != null && s.AreaUID == target.AreaUid);
+                    if (slot == null && target.AreaSlotId >= 1 && target.AreaSlotId <= _areaSlots.Count)
+                        slot = _areaSlots[target.AreaSlotId - 1];
+                    if (slot == null || !GodotObject.IsInstanceValid(slot)) return null;
+                    return slot.GlobalPosition + slot.GetRect().Size / 2f;
+                case StackTargetRef.RefKind.Player:
+                    var pArea = GetNodeOrNull<Control>(target.PlayerId == 1 ? "Player1Area" : "Player2Area");
+                    if (pArea != null) return pArea.GlobalPosition + pArea.GetRect().Size / 2f;
+                    return null;
+                default:
+                    return null;
             }
         }
 
@@ -778,12 +1380,29 @@ namespace Script.UI
         /// <summary>反引号 ` 切换 PM 命令输入框可见性（与单机 Arena 的按键一致，Key 96）。</summary>
         public override void _Input(InputEvent @event)
         {
-            // 场上点击高亮选目标：左键命中合法目标卡 → 完成选择（经复用的 TargetSelectionWindow.PickFromArena）
+            // 战斗对抗窗口：点击场上卡分配伤害（左键 +1 / 右键 -1），与单机 Arena._Input 的路由一致
+            if (_onlineStrengthWindow != null && GodotObject.IsInstanceValid(_onlineStrengthWindow)
+                && @event is InputEventMouseButton strMb && strMb.Pressed
+                && (strMb.ButtonIndex == MouseButton.Left || strMb.ButtonIndex == MouseButton.Right))
+            {
+                var hitCard = PickFieldCardAt(strMb.GlobalPosition);
+                if (hitCard != null)
+                {
+                    _onlineStrengthWindow.TryAllocate(hitCard, strMb.ButtonIndex == MouseButton.Right ? 2 : 1);
+                    AcceptEvent();
+                    return;
+                }
+            }
+
+            // 场上点击高亮选目标：左键命中合法目标卡/地区 → 完成选择（经复用的 TargetSelectionWindow.PickFromArena）
             if (_activationTargetActive
                 && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
             {
-                // 命中合法目标卡则完成选择；未命中不取消（选目标无取消，须点合法目标），吞掉事件避免误拖拽其它卡
+                // 命中合法目标卡则完成选择；未命中不取消（选目标无取消，须点合法目标），吞掉事件避免误拖拽其它卡。
+                // 机动等"地区目标"（单机 trigger.IsAreaTarget 分支）同样在此接管：_Input 先于 Control._GuiInput，
+                // 故必须在本分支判定地区槽位，否则 AreaSlot._GuiInput 收不到点击。
                 string hit = PickLegalActivationTargetAt(tsMb.GlobalPosition);
+                if (string.IsNullOrEmpty(hit)) hit = PickLegalActivationAreaAt(tsMb.GlobalPosition);
                 if (!string.IsNullOrEmpty(hit) && _onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
                     _onlineTargetWindow.PickFromArena(hit);
                 AcceptEvent();
@@ -839,6 +1458,20 @@ namespace Script.UI
                 }
             }
             return best;
+        }
+
+        /// <summary>场上选目标命中（地区）：返回点击位置下的合法目标地区 UID（无则 null）。
+        /// 对齐单机 `TriggerInteractionCoordinator._targetIsArea` 的"点高亮地区"分支（判定范围为整个槽位矩形）。</summary>
+        private string PickLegalActivationAreaAt(Vector2 globalPos)
+        {
+            if (_activationLegalAreaUids.Count == 0 || _areaSlots == null) return null;
+            foreach (var slot in _areaSlots)
+            {
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                if (!_activationLegalAreaUids.Contains(slot.AreaUID)) continue;
+                if (slot.ContainsGlobalPoint(globalPos)) return slot.AreaUID;
+            }
+            return null;
         }
 
         /// <summary>暗藏者双击现身：上行 RevealCovert 意图，服务端权威裁决。</summary>
@@ -1003,6 +1636,96 @@ namespace Script.UI
             GD.Print($"[ArenaOl] 上行 ActivateAbility: {name} effect={ability.EffectId}");
         }
 
+        // ==================== 出牌拖拽：合法目标高亮（对齐单机 UpdateDragTargetHighlights） ====================
+
+        private CardUI _handDragHighlightSource;
+        private readonly List<CardUI> _handDragHighlighted = new List<CardUI>();
+
+        /// <summary>
+        /// 拖拽手牌期间高亮合法目标（对齐单机 `CardDragController.UpdateDragTargetHighlights`）：
+        /// 仅在"无蒙版"时生效；合法目标由客户端投影 CardManager 的 `IsLegalPlayTarget` 判定（与单机同一规则入口）；
+        /// 本方秘社卡若为合法目标亦高亮。每帧调用（拖拽是移动过程，无事件可依）。
+        /// </summary>
+        private void UpdateHandDragTargetHighlights()
+        {
+            if (_maskMode != MaskMode.None || _activationSelectionBusy || _noticeWindowOpen)
+            {
+                ClearHandDragTargetHighlights();
+                return;
+            }
+
+            // 找到"本地玩家正在拖拽的手牌卡"
+            CardUI dragging = null;
+            var localHand = _localPlayerId == 1 ? _p1Hand : _p2Hand;
+            if (localHand != null)
+            {
+                foreach (var kv in _cardUIMap)
+                {
+                    var ui = kv.Value;
+                    if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                    if (!ui.IsDragging) continue;
+                    if (ui.GetParent() != localHand) continue;
+                    dragging = ui;
+                    break;
+                }
+            }
+            if (dragging?.Instance == null)
+            {
+                ClearHandDragTargetHighlights();
+                return;
+            }
+            if (!ReferenceEquals(_handDragHighlightSource, dragging)) ClearHandDragTargetHighlights();
+            _handDragHighlightSource = dragging;
+
+            var cardMgr = _launcher?.ClientCardManager;
+            if (cardMgr == null) return;
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (ReferenceEquals(ui, dragging)) continue;
+                if (ui.Instance.IsHidden) continue;
+                // 高亮范围与落点命中范围一致：仅争夺区/附属区（对齐单机 UpdateDragTargetHighlights 只遍历 AreaCardUIs）
+                var zone = ui.Instance.CurrentZone;
+                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone) continue;
+                bool legal = cardMgr.IsLegalPlayTarget(dragging.Instance, ui.Instance);
+                bool was = _handDragHighlighted.Contains(ui);
+                if (legal && !was) { ui.SetTargetHighlight(true); _handDragHighlighted.Add(ui); }
+                else if (!legal && was) { ui.SetTargetHighlight(false); _handDragHighlighted.Remove(ui); }
+            }
+
+            // 本方秘社为合法目标时高亮（对齐单机 SetCouncilHighlight）
+            var ownCouncilUi = (_localPlayerId == 1 ? _councilContainer1 : _councilContainer2) != null
+                ? FindOwnCouncilUi()
+                : null;
+            if (ownCouncilUi?.Instance != null)
+                ownCouncilUi.SetTargetHighlight(cardMgr.IsLegalPlayTarget(dragging.Instance, ownCouncilUi.Instance));
+        }
+
+        /// <summary>清除拖拽期间的合法目标高亮。</summary>
+        private void ClearHandDragTargetHighlights()
+        {
+            foreach (var ui in _handDragHighlighted)
+                if (ui != null && GodotObject.IsInstanceValid(ui)) ui.SetTargetHighlight(false);
+            _handDragHighlighted.Clear();
+            _handDragHighlightSource = null;
+            var ownCouncilUi = FindOwnCouncilUi();
+            if (ownCouncilUi != null && GodotObject.IsInstanceValid(ownCouncilUi)) ownCouncilUi.SetTargetHighlight(false);
+        }
+
+        /// <summary>取本方秘社卡 UI（秘社 UI 不在 _cardUIMap 中）。</summary>
+        private CouncilCardUI FindOwnCouncilUi()
+        {
+            foreach (var kv in _councilCardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui?.Instance == null || !GodotObject.IsInstanceValid(ui)) continue;
+                if (ui.Instance.ControllerId == _localPlayerId) return ui;
+            }
+            return null;
+        }
+
         /// <summary>计算某激活效果在客户端投影中的合法卡目标 UID 集合（卡目标；地区目标暂缓）。
         /// 复用单机 ActivateEligibility.IsLegalActivateTarget（其 cm 形参实现中未解引用，传 null 安全）。</summary>
         private HashSet<string> ComputeLegalCardTargetUids(CardInstance source, EffectData ability)
@@ -1072,13 +1795,25 @@ namespace Script.UI
             AddChild(_onlineTargetWindow);
         }
 
-        /// <summary>场上选中合法目标后：清高亮/关提示窗/复位状态，并上行 ActivateAbility(sourceUid, effectId, targetUid)。</summary>
+        /// <summary>场上选中合法目标后：清高亮/关提示窗/复位状态；按当前待办动作上行意图。</summary>
         private void OnActivationTargetPicked(string targetUid)
         {
             var src = _activationTargetSource;
             var ab = _activationTargetAbility;
+            var playUid = _pendingPlayCardUid;      // 事务卡出牌路径（甲1）
             ClearActivationTargetSelection();
-            if (src == null || ab == null || string.IsNullOrEmpty(targetUid) || _launcher == null) return;
+            if (string.IsNullOrEmpty(targetUid) || _launcher == null) return;
+
+            // 路径一：事务卡（需目标出牌）——复刻单机 BeginSorceryTargetSelection 的"选完目标再出牌"
+            if (!string.IsNullOrEmpty(playUid))
+            {
+                _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, playUid, "", targetUid);
+                GD.Print($"[ArenaOl] 上行 PlayCard(事务卡+目标): {playUid} target={targetUid}");
+                return;
+            }
+
+            // 路径二：激活能力（原有）
+            if (src == null || ab == null) return;
             string name = src.PlayerTemplate?.CardName ?? src.CouncilTemplate?.CardName ?? "卡";
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, src.UID, ab.EffectId, targetUid);
             GD.Print($"[ArenaOl] 上行 ActivateAbility(+目标): {name} effect={ab.EffectId} target={targetUid}");
@@ -1095,18 +1830,91 @@ namespace Script.UI
             }
             if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
                 _onlineTargetWindow.Visible = false;
+            ClearOnlineAreaHighlights();
             _activationTargetActive = false;
             _activationTargetAbility = null;
             _activationTargetSource = null;
+            _pendingPlayCardUid = null;
             _activationLegalCardUids.Clear();
+            _activationLegalAreaUids.Clear();
             _activationSelectionBusy = false;
+        }
+
+        // ==================== 事务卡（需目标出牌）场上选目标（对齐单机） ====================
+
+        /// <summary>
+        /// 事务卡需选目标时的联机入口（对齐单机 `Arena.BeginSorceryTargetSelection`）：
+        /// 单机是"拖出后弹窗选目标"，联机此处复用既有的"场上高亮 + 复用单机 TargetSelectionWindow"基础设施，
+        /// 选完目标再上行 PlayCard(cardUid, null, targetUid)；服务端仍做完整校验与结算。
+        /// 若场上无合法目标 / 费用不足 → 不发意图（卡留在手牌，视觉上自行归位）。
+        /// </summary>
+        private void BeginOnlinePlayCardTargetSelection(CardInstance card)
+        {
+            if (card?.PlayerTemplate == null || _launcher == null) return;
+
+            // 费用预检（对齐单机：费用不足不弹窗、直接不发动）；用快照投影的费用修正计算
+            int cost = Mathf.Max(0, card.PlayerTemplate.Cost - ComputeClientCostMod(card));
+            var playerMgr = _launcher.ClientPlayerManager;
+            if (cost > 0 && playerMgr != null && playerMgr.GetAvailableMana(_localPlayerId) < cost)
+            {
+                GD.Print($"[ArenaOl] 事务卡 {card.PlayerTemplate.CardName} 费用不足（需{cost}），不弹选目标窗");
+                return;
+            }
+
+            var clientCardMgr = _launcher.ClientCardManager;
+            var zone = _launcher.ClientZoneManager;
+            if (clientCardMgr == null || zone == null) return;
+
+            // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类，与单机一致）
+            var candidates = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
+            candidates.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
+            candidates.AddRange(zone.GetZoneCards(CardZone.CouncilZone, 0));
+
+            var legal = new List<string>();
+            foreach (var t in candidates)
+            {
+                if (t == null || t == card || t.IsHidden) continue;
+                if (clientCardMgr.IsLegalPlayTarget(card, t)) legal.Add(t.UID);
+            }
+            if (legal.Count == 0)
+            {
+                GD.Print($"[ArenaOl] 事务卡 {card.PlayerTemplate.CardName} 无合法目标，不弹出选择");
+                return;
+            }
+
+            _pendingPlayCardUid = card.UID;
+            _activationSelectionBusy = true;
+            _activationTargetActive = true;
+            _activationLegalCardUids.Clear();
+            foreach (var u in legal) _activationLegalCardUids.Add(u);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(true);
+            }
+
+            EnsureTargetWindow();
+            if (_onlineTargetWindow != null)
+            {
+                _onlineTargetWindow.OnTargetPicked = OnActivationTargetPicked;
+                _onlineTargetWindow.SetBlocking(false);
+                _onlineTargetWindow.Open(card.PlayerTemplate.CardName ?? "事务卡",
+                    "请点击场上高亮的合法目标卡完成选择。");
+            }
+            GD.Print($"[ArenaOl] 事务卡选目标：{card.PlayerTemplate.CardName} 合法目标={legal.Count}");
         }
 
         // ==================== 角色卡「拖拽箭头激活」（复刻单机 CardDragController 手势） ====================
 
-        /// <summary>每帧维护激活拖拽的箭头与合法目标高亮（对应单机 Arena._Process → UpdateActivateDrag）。</summary>
+        /// <summary>每帧：① 泵送快照应用队列（合并/延后 + 差异路由） ② 维护激活拖拽的箭头与合法目标高亮。</summary>
         public override void _Process(double delta)
         {
+            PumpSnapshotQueue(delta);
+            UpdateStackArrowEndpoints();   // 堆叠箭头每帧跟随（端点实时更新）
+            UpdateHandDragTargetHighlights();   // 拖拽手牌期间的合法目标高亮（对齐单机）
+
             if (_activateDragSource == null) return;
             // 防御：源卡 UI 若被快照重建销毁，立即取消拖拽（避免引用失效节点）
             if (!GodotObject.IsInstanceValid(_activateDragSource) || _activateDragSource.Instance == null)
@@ -1115,6 +1923,68 @@ namespace Script.UI
                 return;
             }
             UpdateOnlineActivateDrag(GetGlobalMousePosition());
+        }
+
+        /// <summary>
+        /// 快照应用时机控制（延迟掩盖基础）：
+        ///  - 本地交互/动画进行中 → 延后应用（上限 <see cref="SnapshotMaxDeferSeconds"/>，超时强制应用避免长期不同步）；
+        ///  - 应用前用 SnapshotDiff 对比上一份已应用快照 → 差异指令交 <see cref="RouteRenderCommands"/>（表现层事件源）。
+        /// </summary>
+        private void PumpSnapshotQueue(double delta)
+        {
+            bool localBusy = _activateDragSource != null
+                             || _activationTargetActive
+                             || _activationSelectionBusy
+                             || _noticeWindowOpen;
+            if (localBusy)
+            {
+                _snapshotDeferTimer += delta;
+                _snapshotQueue.IsDeferred = _snapshotDeferTimer < SnapshotMaxDeferSeconds;
+            }
+            else
+            {
+                _snapshotDeferTimer = 0;
+                _snapshotQueue.IsDeferred = false;
+            }
+
+            if (!_snapshotQueue.TryDequeue(out var prev, out var next)) return;
+
+            ApplySnapshot(next);
+            RouteRenderCommands(Script.Net.SnapshotDiff.Diff(prev, next));
+            _snapshotQueue.MarkApplied(next);
+        }
+
+        /// <summary>
+        /// 表现层事件源：把"前后快照差异"路由给表现层。
+        /// 当前实现为最小形态——分类计数 + 摘要（供调试/观测），并作为后续动画系统的接入点：
+        /// 将来在此把 AddCard/MoveCard/UpdateCard/StackPush|Pop/PhaseChange/PlayerUpdate 映射为动画即可，
+        /// 无需改动快照链路与规则层。
+        /// </summary>
+        private void RouteRenderCommands(List<Script.Net.RenderCommand> cmds)
+        {
+            if (cmds == null || cmds.Count == 0) return;
+
+            int add = 0, remove = 0, move = 0, update = 0, stack = 0, player = 0, phase = 0;
+            foreach (var c in cmds)
+            {
+                if (c == null) continue;
+                switch (c.Kind)
+                {
+                    case Script.Net.RenderCommand.CmdKind.AddCard: add++; break;
+                    case Script.Net.RenderCommand.CmdKind.RemoveCard: remove++; break;
+                    case Script.Net.RenderCommand.CmdKind.MoveCard: move++; break;
+                    case Script.Net.RenderCommand.CmdKind.UpdateCard: update++; break;
+                    case Script.Net.RenderCommand.CmdKind.StackPush:
+                    case Script.Net.RenderCommand.CmdKind.StackPop: stack++; break;
+                    case Script.Net.RenderCommand.CmdKind.PlayerUpdate: player++; break;
+                    case Script.Net.RenderCommand.CmdKind.PhaseChange: phase++; break;
+                }
+            }
+
+            LastPresentationSummary =
+                $"add={add} remove={remove} move={move} update={update} stack={stack} player={player} phase={phase}";
+            if (VerbosePresentation)
+                GD.Print($"[ArenaOl][表现] 快照差异 {cmds.Count} 条：{LastPresentationSummary}");
         }
 
         /// <summary>尝试在点击处起手激活拖拽：命中己方争夺区「可发动」角色卡才成立。
@@ -1218,7 +2088,36 @@ namespace Script.UI
             return null;
         }
 
-        /// <summary>命中点击处最上层场上卡 UI（不做合法性过滤；对齐单机 PickAreaCardAt 的命中语义）。</summary>
+        /// <summary>
+        /// 某张**本地手牌**在当前蒙版下是否允许被拖起（对齐单机 `CardDragController.IsDraggableUnderMask`）：
+        ///  - 派遣暗藏：复用规则层同一静态函数 `DeployCovertEligibility.IsEligible`（非角色卡 / 带【公开】→ 不可拖起）；
+        ///  - 建立资产 / 无蒙版：均可拖起。
+        /// 注：动作内的阶段/行动权/次数/封锁校验不在客户端复刻，非法操作仍由服务端拒绝并回执提示。
+        /// </summary>
+        private bool IsDraggableUnderOnlineMask(CardInstance inst)
+        {
+            if (inst == null) return false;
+            return _maskMode switch
+            {
+                MaskMode.DeployCovert => DeployCovertEligibility.IsEligible(inst),
+                _ => true,
+            };
+        }
+
+        /// <summary>按当前蒙版刷新"本地手牌是否可拖起"（进入/退出蒙版时调用；手牌每帧不会重建，故需主动刷新）。</summary>
+        private void ApplyOnlineMaskDragGate()
+        {
+            if (_localHand == null || !GodotObject.IsInstanceValid(_localHand)) return;
+            foreach (var child in _localHand.GetChildren())
+            {
+                if (child is not CardUI ui || !GodotObject.IsInstanceValid(ui)) continue;
+                if (ui.Instance == null) { ui.CanDrag = false; continue; }
+                ui.CanDrag = !ui.Instance.IsHidden && IsDraggableUnderOnlineMask(ui.Instance);
+            }
+        }
+
+        /// <summary>命中"场上卡"目标（**仅争夺区/附属区**，不含手牌/牌库/墓地，跳过隐藏占位；
+        /// 对齐单机 `CardDragController.PickAreaCardAt` 的命中范围：AreaCardUIs + AttachedCardUIs）。</summary>
         private CardUI PickFieldCardAt(Vector2 globalPos)
         {
             CardUI best = null;
@@ -1227,6 +2126,9 @@ namespace Script.UI
             {
                 var ui = kv.Value;
                 if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (ui.Instance.IsHidden) continue;
+                var zone = ui.Instance.CurrentZone;
+                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone) continue;
                 if (!ui.GetVisualGlobalRect().HasPoint(globalPos)) continue;
                 if (ui.ZIndex >= bestZ) { bestZ = ui.ZIndex; best = ui; }
             }
@@ -1246,7 +2148,7 @@ namespace Script.UI
         private int ComputeClientCostMod(CardInstance inst)
         {
             var mods = _launcher?.ClientCostMods;
-            if (mods == null || mods.Count == 0 || inst?.PlayerTemplate == null) return 0;
+            if (mods == null || mods.Count == 0 || inst?.PlayerTemplate == null || inst.IsHidden) return 0;
             var tmpl = inst.PlayerTemplate;
             int total = 0;
             foreach (var m in mods)
@@ -1294,7 +2196,10 @@ namespace Script.UI
                 var slot = _areaSlotScene.Instantiate<AreaSlot>();
                 _areasContainer.AddChild(slot);
                 slot.Name = $"AreaSlot_{i + 1}";
-                // 联机投影下统计依赖为 null 时 AreaSlot 内部会自动跳过统计刷新，不影响卡面显示
+                // 【对齐单机】注入统计依赖（客户端投影的 Zone/Player Manager）→ 地区"调查/战斗/势力"统计可显示。
+                // AreaStatsCalculator 只依赖这两个 Manager，且客户端 PlayerManager 已注入投影 ZoneManager
+                // 并已由快照设置先手（SetFirstPlayer），故统计与单机同源同值。
+                slot.SetStatsDependencies(_launcher?.ClientZoneManager, _launcher?.ClientPlayerManager);
                 slot.Setup(inst, i + 1, false, _areaCardUIScene);
                 _areaSlots.Add(slot);
             }
@@ -1361,6 +2266,17 @@ namespace Script.UI
             foreach (var inst in instances)
             {
                 if (inst == null || _cardUIMap.ContainsKey(inst.UID)) continue;
+                // 【Phase B 信息隔离】隐藏区占位（对手手牌）：只画卡背、不参与交互与减费显示。
+                if (inst.IsHidden)
+                {
+                    var hiddenUi = _cardUIScene.Instantiate<CardUI>();
+                    container.AddChild(hiddenUi);
+                    hiddenUi.Setup(null);
+                    hiddenUi.SetFace(false);
+                    hiddenUi.CanDrag = false;
+                    _cardUIMap[inst.UID] = hiddenUi;
+                    continue;
+                }
                 // CardUI 只支持玩家卡（PlayerCardData）；地区卡/秘社卡 PlayerTemplate 为 null，跳过避免误报/背面
                 if (inst.PlayerTemplate == null) continue;
                 var ui = _cardUIScene.Instantiate<CardUI>();
@@ -1368,7 +2284,9 @@ namespace Script.UI
                 ui.Setup(inst);
                 ui.SetExternalCostMod(ComputeClientCostMod(inst));   // 手牌减费提示（快照投影，仅展示）
                 // 输入隔离：仅本地玩家的手牌可拖拽出牌/派遣/资产；对手手牌只读展示
-                ui.CanDrag = isLocalHand;
+                // 蒙版资格预检（对齐单机 CardDragController.IsDraggableUnderMask → TurnManager.CanDeployCovert）：
+                // 派遣暗藏蒙版下，不具备资格的卡（非角色卡 / 带【公开】）不允许被拖起。
+                ui.CanDrag = isLocalHand && IsDraggableUnderOnlineMask(inst);
                 if (isLocalHand)
                     ui.CardDragEnded += OnLocalHandCardDragEnded;
                 _cardUIMap[inst.UID] = ui;
@@ -1436,22 +2354,41 @@ namespace Script.UI
         {
             _maskMode = (_maskMode == mode) ? MaskMode.None : mode;
             if (btn != null) btn.Modulate = (_maskMode == mode) ? new Color(1.2f, 1.2f, 0.4f) : Colors.White;
+            ApplyOnlineMaskDragGate();   // 按新蒙版刷新手牌"可拖起"资格（对齐单机 IsDraggableUnderMask）
             GD.Print($"[ArenaOl] 蒙版模式 => {_maskMode}（{(_maskMode == MaskMode.DeployCovert ? "请拖手牌到己方争夺区" : _maskMode == MaskMode.EstablishAsset ? "请拖出手牌建立资产" : "无")}）");
         }
 
-        /// <summary>本地玩家手牌拖拽结束：判定落点并上行对应意图（联机不本地移动，服务端裁决后快照回显）。
-        /// 注：CardUI.EndDrag 发出的 CardDragEnded 第二个参数固定为 false（与单机 CardDragController 一致，
-        /// 单机也不检查该参数），故这里不依据 dropped 过滤，改用卡当前位置判定落点。</summary>
+        /// <summary>
+        /// 本地玩家手牌拖拽结束：**严格对齐单机 `CardDragController.OnCardDragEnded` 的落点语义**：
+        ///  ① 拖回自己手牌区 → 取消（不发意图，卡自行归位）；
+        ///  ② 蒙版模式（派遣暗藏/建立资产）→ 专属分支；
+        ///  ③ 目标卡：**仅当为合法打出目标**（`IsLegalPlayTarget`）才取（秘社同理）；
+        ///  ④ 地区落点：角色卡取"己方争夺区"；其它卡仅当其允许 Area 目标时才取（对齐单机 D48）；
+        ///  ⑤ 角色卡未落在己方争夺区 → 不发意图（等价单机"退回手牌"）；
+        ///  ⑥ 事务卡需目标且两者皆空 → 弹出选目标（对齐单机 `BeginSorceryTargetSelection`）；
+        ///  ⑦ 其它需目标卡两者皆空 → 不发意图（等价单机退回手牌）。
+        /// 注：CardUI.EndDrag 的第二个参数固定为 false（单机也不检查该参数），故按卡当前位置判定落点。
+        /// </summary>
         private void OnLocalHandCardDragEnded(CardUI cardUI, bool dropped)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止拖拽出牌
+            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗/对抗窗口期间禁止拖拽出牌
             if (cardUI?.Instance == null) return;
             if (_launcher == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
             var inst = cardUI.Instance;
+            var tmpl = inst.PlayerTemplate;
+            if (tmpl == null) return;
             var cardUid = inst.UID;
             // 拖拽结束瞬间卡仍位于放手位置（CardLayoutHelper 平滑移动目标在下次快照重建后才会更新）
             Vector2 dropPos = cardUI.GetVisualGlobalRect().GetCenter();
 
+            // ① 拖回自己手牌区 = 取消打出（对齐单机）
+            if (_localHand != null && _localHand.GetGlobalRect().HasPoint(dropPos))
+            {
+                GD.Print($"[ArenaOl] 拖回手牌区，取消出牌：{tmpl.CardName}");
+                return;
+            }
+
+            // ② 蒙版模式（与单机 HandleMaskDrop 同义）
             if (_maskMode == MaskMode.DeployCovert)
             {
                 var areaUid = FindOwnAreaUidAt(dropPos);
@@ -1469,18 +2406,109 @@ namespace Script.UI
 
             if (_maskMode == MaskMode.EstablishAsset)
             {
+                // 对齐单机 HandleMaskDrop：建立资产需落到「己方资产区」或「任一争夺区」，否则取消（不发意图）
+                var ownAsset = _localPlayerId == 1 ? _assetContainer1 : _assetContainer2;
+                bool droppedOnAsset = ownAsset != null && GodotObject.IsInstanceValid(ownAsset)
+                                      && ownAsset.GetGlobalRect().HasPoint(dropPos);
+                bool droppedOnArea = !string.IsNullOrEmpty(FindTargetAreaUidAt(dropPos));
+                if (!droppedOnAsset && !droppedOnArea)
+                {
+                    GD.Print("[ArenaOl] 建立资产：需拖到己方资产区或争夺区，本次不发意图");
+                    _maskMode = MaskMode.None;
+                    return;
+                }
                 _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.EstablishAsset, cardUid);
                 _maskMode = MaskMode.None;
                 GD.Print($"[ArenaOl] 上行 EstablishAsset: {inst.PlayerTemplate?.CardName}");
                 return;
             }
 
-            // 普通出牌：判定落点目标
-            string targetAreaUid = FindOwnAreaUidAt(dropPos);
-            string targetCardUid = FindTargetCardUidAt(dropPos);
+            var clientCardMgr = _launcher.ClientCardManager;
+            bool isCharacter = (tmpl.CategoryFlag & CardCategory.Character) != 0;
+            bool requiresTarget = tmpl.GetRequiresTarget();
+
+            // ③ 目标卡：仅"合法打出目标"才算命中（对齐单机 IsLegalCardTarget；避免把非法落点直接发给服务端）
+            string targetCardUid = "";
+            var hitUi = PickFieldCardAt(dropPos);   // 仅争夺区/附属区（不含手牌，对齐单机 PickAreaCardAt）
+            if (hitUi?.Instance != null && clientCardMgr != null && clientCardMgr.IsLegalPlayTarget(inst, hitUi.Instance))
+                targetCardUid = hitUi.Instance.UID;
+            // 秘社（CouncilCardUI 不在 _cardUIMap）：命中本方秘社区且为合法目标时才取（对齐单机）
+            if (string.IsNullOrEmpty(targetCardUid) && clientCardMgr != null)
+            {
+                var councilContainer = _localPlayerId == 1 ? _councilContainer1 : _councilContainer2;
+                if (councilContainer != null && GodotObject.IsInstanceValid(councilContainer)
+                    && councilContainer.GetGlobalRect().HasPoint(dropPos))
+                {
+                    var councilCards = _launcher.ClientZoneManager?.GetZoneCards(CardZone.CouncilZone, _localPlayerId);
+                    var councilInst = councilCards?.Find(c => c != null);
+                    if (councilInst != null && clientCardMgr.IsLegalPlayTarget(inst, councilInst))
+                        targetCardUid = councilInst.UID;
+                }
+            }
+
+            // ④ 地区落点：角色卡=己方争夺区；其它卡仅当允许 Area 目标（对齐单机 D48）
+            string targetAreaUid = "";
+            if (string.IsNullOrEmpty(targetCardUid))
+            {
+                if (isCharacter) targetAreaUid = FindOwnAreaUidAt(dropPos);
+                else if (tmpl.GetAllowedTargets().Contains(TargetKind.Area)) targetAreaUid = FindTargetAreaUidAt(dropPos);
+            }
+
+            // ⑤ 角色卡必须落在己方争夺区，否则不发意图（等价单机"退回手牌"）
+            if (isCharacter && string.IsNullOrEmpty(targetAreaUid))
+            {
+                GD.Print($"[ArenaOl] 角色卡需落在己方争夺区，本次不发意图：{tmpl.CardName}");
+                return;
+            }
+
+            // ⑥ 事务卡（需目标）：拖出后弹窗选目标（对齐单机 BeginSorceryTargetSelection）
+            if (IsSorceryRequiringTarget(inst)
+                && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
+            {
+                BeginOnlinePlayCardTargetSelection(inst);
+                return;
+            }
+
+            // ⑦ 其它需目标卡未命中合法目标 → 不发意图（等价单机退回手牌）
+            if (requiresTarget && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
+            {
+                GD.Print($"[ArenaOl] {tmpl.CardName} 需要目标但未命中合法目标，本次不发意图");
+                return;
+            }
+
             _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid,
                 targetAreaUid ?? "", targetCardUid ?? "");
-            GD.Print($"[ArenaOl] 上行 PlayCard: {inst.PlayerTemplate?.CardName} targetArea={targetAreaUid ?? "无"} targetCard={targetCardUid ?? "无"}");
+            GD.Print($"[ArenaOl] 上行 PlayCard: {tmpl.CardName} targetArea={targetAreaUid ?? "无"} targetCard={targetCardUid ?? "无"}");
+        }
+
+        /// <summary>查找落点命中的地区槽位（任一侧争夺区容器内即算命中，用于结附地区类卡）。</summary>
+        private string FindTargetAreaUidAt(Vector2 globalPos)
+        {
+            foreach (var slot in _areaSlots)
+            {
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                bool hit = (slot.Player1Area != null && slot.Player1Area.GetGlobalRect().HasPoint(globalPos))
+                           || (slot.Player2Area != null && slot.Player2Area.GetGlobalRect().HasPoint(globalPos));
+                if (hit) return slot.AreaUID;
+            }
+            return null;
+        }
+
+        /// <summary>是否为"需要目标的事务卡"（与单机 CardDragController 的判定一致：Sorcery 类别 + GetRequiresTarget）。</summary>
+        private static bool IsSorceryRequiringTarget(CardInstance inst)
+        {
+            if (inst?.PlayerTemplate is not PlayerCardData tmpl) return false;
+            if ((tmpl.CategoryFlag & CardCategory.Sorcery) == 0) return false;
+            return tmpl.GetRequiresTarget();
+        }
+
+        /// <summary>按卡模板 UID 推断卡图目录（与 CardUI/StackEntryUI 的规则一致）。</summary>
+        private static string ResolvePlayerCardImagePath(string uid)
+        {
+            int i = 0;
+            while (i < uid.Length && char.IsLetter(uid[i])) i++;
+            string folder = i > 0 ? uid.Substring(0, i) : "JC";
+            return $"res://Cards/Image/PlayerCards/{folder}/{uid}.jpg";
         }
 
         /// <summary>查找落点命中的"己方争夺区"对应地区 UID（本地玩家 1→Player1Area，2→Player2Area）。</summary>
@@ -1492,35 +2520,6 @@ namespace Script.UI
                 var ownArea = _localPlayerId == 1 ? slot.Player1Area : slot.Player2Area;
                 if (ownArea != null && ownArea.GetGlobalRect().HasPoint(globalPos))
                     return slot.AreaUID;
-            }
-            return null;
-        }
-
-        /// <summary>查找落点命中的场上目标卡 UID（场上角色/附属/暗藏者等非手牌玩家卡）。</summary>
-        private string FindTargetCardUidAt(Vector2 globalPos)
-        {
-            foreach (var kv in _cardUIMap)
-            {
-                var ui = kv.Value;
-                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                if (ui.Instance == null) continue;
-                // 目标只能是场上卡（非手牌/牌库/墓地）
-                if (ui.Instance.CurrentZone != CardZone.AreaZone
-                    && ui.Instance.CurrentZone != CardZone.AttachedZone)
-                    continue;
-                if (ui.GetVisualGlobalRect().HasPoint(globalPos))
-                    return ui.Instance.UID;
-            }
-            // 秘社卡（CouncilCardUI）也是合法卡目标（如 JC012 结附本方秘社）。
-            // 单机 CardDragController 有专设的秘社落点判定，联机快照驱动同样需要支持，
-            // 否则附属拖到秘社时 targetCardUid 为空，服务端 Attachment 结算会落入"无合法目标→进墓地"。
-            foreach (var kv in _councilCardUIMap)
-            {
-                var ui = kv.Value;
-                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                if (ui.Instance == null) continue;
-                if (ui.GetGlobalRect().HasPoint(globalPos))
-                    return ui.Instance.UID;
             }
             return null;
         }

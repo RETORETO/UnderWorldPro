@@ -34,13 +34,15 @@ namespace Script.Tests
             transport.Start();
 
             // 模拟"玩家1客户端"：收到任何请求都回 Pay=true（等价于自动付费）
+            // Phase B：请求/回包均带类型信封 v2（NetEnvelope），此处按真实客户端行为解包/包裹。
             transport.RegisterClient(1, serverMsg =>
             {
-                var req = ChoiceSerializer.DeserializeRequest(serverMsg);
+                var req = ChoiceSerializer.DeserializeRequest(NetEnvelope.UnwrapPayload(serverMsg));
                 if (req != null)
                 {
                     var result = new ChoiceResult { RequestId = req.RequestId, Pay = true, Cancelled = false };
-                    transport.ClientReply(1, ChoiceSerializer.SerializeResult(result));
+                    transport.ClientReply(1, NetEnvelope.Wrap(NetEnvelope.Types.ChoiceResult,
+                        ChoiceSerializer.SerializeResult(result)));
                 }
             });
 

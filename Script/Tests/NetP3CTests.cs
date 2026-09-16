@@ -66,9 +66,9 @@ namespace Script.Tests
             var hub = new IntentHub(new StubIntentRouter());
             transport.OnMessageReceived((playerId, msg) =>
             {
-                // 服务端侧：用 transport 上报的 playerId 做权威裁决（此处模拟映射为 2，与客户端声明的 1 不符）
-                var resp = hub.HandleIntent(playerId, msg);
-                transport.Send(playerId, resp); // 下行 IntentResult
+                // 服务端侧：Phase B 信封 → 先解包再裁决；回执同样打信封（与 NetworkMatchLauncher 一致）
+                var resp = hub.HandleIntent(playerId, NetEnvelope.UnwrapPayload(msg));
+                transport.Send(playerId, NetEnvelope.Wrap(NetEnvelope.Types.IntentResult, resp));
             });
 
             bool gotResult = false;

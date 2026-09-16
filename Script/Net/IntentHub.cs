@@ -196,15 +196,17 @@ namespace Script.Net
             LocalPlayerId = localPlayerId;
         }
 
-        /// <summary>上行一条意图。返回 IntentId（客户端保存用于匹配 IntentResult）。</summary>
+        /// <summary>上行一条意图（Phase B：带类型信封 v2，接收方按显式类型分发）。返回 IntentId。</summary>
         public string SendIntent(PlayerIntent.Kind kind, params string[] args)
         {
             var intent = PlayerIntent.Create(LocalPlayerId, kind, args);
-            _transport.Send(LocalPlayerId, IntentSerializer.SerializeIntent(intent));
+            var payload = IntentSerializer.SerializeIntent(intent);
+            _transport.Send(LocalPlayerId, NetEnvelope.Wrap(NetEnvelope.Types.Intent, payload));
             return intent.IntentId;
         }
 
-        /// <summary>客户端收到服务端下行的 IntentResult（json）后解析。</summary>
-        public static IntentResult ParseResult(string json) => IntentSerializer.DeserializeResult(json);
+        /// <summary>客户端收到服务端下行的 IntentResult（json，可为信封或裸载荷）后解析。</summary>
+        public static IntentResult ParseResult(string json)
+            => IntentSerializer.DeserializeResult(NetEnvelope.UnwrapPayload(json));
     }
 }

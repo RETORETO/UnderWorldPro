@@ -42,11 +42,12 @@ namespace Script.Tests
                 new NetP3CTests(),                 // C/S 化 P3·模块C 意图指令通道（DTO序列化 + 服务端权威校验 + 回环闭环）
                 new NetP3BTests(),                 // C/S 化 P3·模块B 客户端渲染切换（快照差异引擎 + 渲染驱动路由）
                 new NetP3ETests(),                 // C/S 化 P3·模块E 断线重连（可复原PRNG + 随机源Hub + 重连管线）
-                new NetP3DTests(),                 // C/S 化 P3·模块D 渲染事件→网络消息映射（EventToMessageMapper + 序列化）
                 new NetP1Batch1Tests(),            // C/S 化·第一批迁移三方验证（Loopback端到端 / 单机回归 / Enet真实联机）
                 new NetP1Batch1MatchTests(),        // C/S 化·第一批迁移端到端联机（NetworkMatchLauncher 回环 + 客户端投影一致）
                 new NetCrossProcessSimTests(),      // 【临时】伪跨进程 + ResolveInstance 从模板重建验证（跨进程联机核心点，验证后移除）
                 new OnlineEffectChainTests(),        // 联机效果系统接入：客户端可发动判定 / 费用修正快照 / 服务端目标校验
+                new NetPhaseBTests(),                // Phase B：信息隔离（按玩家过滤快照 + 占位实例）/ 信封 v2 / 决策超时按 Kind
+                new NetChoicePanelTests(),           // 第 3 版：触发排序顺序应用/强制忽略取消、PayOrTap PayAllowed、蒙版资格、决策窗口场景
             };
 
             var redlines = new List<string>();

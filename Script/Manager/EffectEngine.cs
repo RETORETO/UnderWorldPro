@@ -375,6 +375,7 @@ namespace Script.Manager
             {
                 // C/S 挂起点：经输入网关向控制者请求"支付/横置"二选一，await 回包后续算。
                 int payAmount = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var parsedPay)) ? parsedPay : 1;
+                var paySource = source;
                 var result = await InputGateway.RequestChoice(
                     source?.ControllerId ?? 0,
                     new Script.Net.ChoiceRequest
@@ -385,6 +386,8 @@ namespace Script.Manager
                         Prompt = $"准备维护：支付{payAmount} 或 横置",
                         // 单机语义：阿格斯IV 准备维护为强制触发，必须二选一（Arena.PromptPayOrTap 置 ForceChoice=true）。
                         ForceChoice = true,
+                        // 服务端权威：费用是否够支付（客户端仅据此置灰"支付"选项，对齐单机 PromptPayOrTap 的置灰，不重算规则）。
+                        PayAllowed = CanPayPrepareUpkeep(paySource, payAmount),
                     });
                 // 拿到选择后续算（与同步版 ResolvePrepareUpkeep 落地逻辑一致）
                 ResolvePrepareUpkeep(source, payAmount, pay: result.Pay);

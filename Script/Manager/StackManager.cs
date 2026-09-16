@@ -156,9 +156,28 @@ public partial class StackManager : Node
                 var entry = new Script.Game.Entities.StackEntry(s.OwnerId, s.EffectText ?? "");
                 entry.IsCard = s.IsCard;
                 entry.Kind = (Script.Game.Entities.ResolveKind)s.Kind;
+                entry.ControllerId = s.ControllerId > 0 ? s.ControllerId : s.OwnerId;
+                entry.WonAreaUid = s.WonAreaUid;
                 if (!string.IsNullOrEmpty(s.SourceUid) && _cardManager != null)
                     entry.SourceCard = _cardManager.GetInstance(s.SourceUid);
                 entry.SourceCardUid = s.SourceUid;
+                // 目标引用（箭头绘制用）：按快照重建 StackTargetRef 列表
+                entry.Targets = new System.Collections.Generic.List<Script.Game.Entities.StackTargetRef>();
+                if (s.Targets != null)
+                {
+                    foreach (var t in s.Targets)
+                    {
+                        if (t == null) continue;
+                        entry.Targets.Add(new Script.Game.Entities.StackTargetRef
+                        {
+                            Kind = (Script.Game.Entities.StackTargetRef.RefKind)t.Kind,
+                            CardUid = t.CardUid,
+                            AreaSlotId = t.AreaSlotId,
+                            AreaUid = t.AreaUid,
+                            PlayerId = t.PlayerId,
+                        });
+                    }
+                }
                 _stack.Add(entry);
             }
         }
@@ -180,6 +199,33 @@ public partial class StackManager : Node
                 EffectText = e.EffectText,
                 IsCard = e.IsCard,
                 Kind = (int)e.Kind,
+                // 客户端堆叠 UI 对齐单机所需（箭头/地区卡面/来源卡图）
+                ControllerId = e.ControllerId,
+                WonAreaUid = e.WonAreaUid,
+                SourceTemplateUid = e.SourceCard?.PlayerTemplate?.UID
+                                    ?? e.StackEffect?.Source?.PlayerTemplate?.UID,
+                Targets = StackTargetsToSnap(e.Targets),
+            });
+        }
+        return list;
+    }
+
+    /// <summary>堆叠目标引用 → 纯数据投影（供客户端绘制"条目 → 目标"箭头）。</summary>
+    private static System.Collections.Generic.List<Script.Net.StackTargetSnap> StackTargetsToSnap(
+        System.Collections.Generic.List<Script.Game.Entities.StackTargetRef> targets)
+    {
+        var list = new System.Collections.Generic.List<Script.Net.StackTargetSnap>();
+        if (targets == null) return list;
+        foreach (var t in targets)
+        {
+            if (t == null) continue;
+            list.Add(new Script.Net.StackTargetSnap
+            {
+                Kind = (int)t.Kind,
+                CardUid = t.CardUid,
+                AreaSlotId = t.AreaSlotId,
+                AreaUid = t.AreaUid,
+                PlayerId = t.PlayerId,
             });
         }
         return list;

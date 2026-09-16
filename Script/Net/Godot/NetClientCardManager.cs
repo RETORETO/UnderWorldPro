@@ -67,9 +67,11 @@ namespace Script.Net.Godot
             //    落到下方按权威模板重建覆盖，避免归位到错误的卡。
             var hit = GetInstance(r.Uid);
             if (hit != null && (r == null || hit.Template?.UID == r.TemplateUid)) return hit;
-            // 2) 从模板按权威 UID 新建
+
+            // 注：隐藏占位（r.IsHidden）已在基类 RebuildFromRef 中统一处理，不会进入本方法。
+            // 2) 从模板按权威 UID 新建（TemplateUid 为空时不查表：避免以 null 作为字典键，也避免误命中）
             EnsureTemplateIndex();
-            if (r != null && _templates.TryGetValue(r.TemplateUid, out var tmpl))
+            if (r != null && !string.IsNullOrEmpty(r.TemplateUid) && _templates.TryGetValue(r.TemplateUid, out var tmpl))
             {
                 // 防御性再注入（幂等）：即使模板经其它路径进入（未过 EnsureTemplateIndex 的注入循环），
                 // 也保证其 EffectDataList / TargetRules 已由 CardEffectFactory 构建，避免效果链断裂。

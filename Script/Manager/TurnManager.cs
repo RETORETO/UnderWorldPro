@@ -558,6 +558,9 @@ public partial class TurnManager : Node
         RunTriggerPhase(allTriggers, onAllCompleted);
     }
 
+    /// <summary>联机触发排序窗口的上下文序号（用于生成 OrderContextId，客户端据此复用同一排序窗口）。</summary>
+    private int _triggerOrderContextSeq;
+
     private async System.Threading.Tasks.Task RunTriggerPhaseAsync(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
     {
         if (InputGateway == null)
@@ -565,7 +568,6 @@ public partial class TurnManager : Node
             RunTriggerPhase(allTriggers, onAllCompleted);
             return;
         }
-
         // 联机触发排序/选目标为原子操作：期间拒绝让过/出牌，与单机模态窗口 EnterAtomic 语义一致。
         EnterAtomic();
         try
@@ -575,30 +577,93 @@ public partial class TurnManager : Node
             for (int i = 0; i < owners.Count; i++)
             {
                 int owner = owners[i];   // owner = 触发效果来源卡的 ControllerId（BuildTriggerOwnerGroups 已按 ControllerId 分组）
-                var triggers = byOwner[owner];
-                GD.Print($"[Trigger] 向玩家{owner}（controller）发起触发排序请求（Async，触发数={triggers.Count}）");
+                // 排序窗口上下文 id：同一 owner 的整个排序过程（含"逐次入堆叠"的多轮请求）共用一个 id，
+                // 客户端据此复用同一窗口、不反复关闭重开（对齐单机排序窗口保持打开的手感）。
+                string contextId = $"trig_{owner}_{TurnCount}_{++_triggerOrderContextSeq}";
+                var remaining = new List<Script.Data.Effects.StackEffectInstance>(byOwner[owner]);
+                GD.Print($"[Trigger] 向玩家{owner}（controller）发起触发排序请求（Async，触发数={remaining.Count}，ctx={contextId}）");
 
-                // 任一触发为强制（EffectData.Forced）时，该窗口不可整体放弃。
-                bool force = triggers.Exists(t => t.EffectDataRef != null && t.EffectDataRef.Forced);
-                var req = new Script.Net.ChoiceRequest
+                int guard = 0;
+                while (remaining.Count > 0)
                 {
-                    PlayerId = owner,
-                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTriggerOrder,
-                    OptionUids = triggers.ConvertAll(t => t.Source?.UID ?? t.DisplayName),
-                    Prompt = $"玩家{owner} 排序触发（{triggers.Count} 个）",
-                    ForceChoice = force,
-                };
+                    // 防呆：客户端若持续回"不可推进"的结果（如一直取消但仍有强制触发），最多重问 32 轮，
+                    // 之后按默认顺序全部入栈，避免死循环卡住整局。
+                    if (++guard > 32)
+                    {
+                        GD.PrintErr($"[Trigger] 玩家{owner} 排序请求重试超过上限，剩余 {remaining.Count} 个按默认顺序入栈");
+                        foreach (var t in remaining) await EnsureTargetThenPushAsync(t);
+                        break;
+                    }
 
-                var result = await InputGateway.RequestChoice(owner, req);
-                if (result != null && result.Cancelled)
-                {
-                    GD.Print($"[Trigger] 玩家{owner} 放弃剩余触发（{triggers.Count} 个），跳过入栈");
-                    continue;
+                    // 任一触发为强制（EffectData.Forced）时，该窗口不可整体放弃（等价单机 Done 按钮禁用）。
+                    bool force = remaining.Exists(t => t.EffectDataRef != null && t.EffectDataRef.Forced);
+                    var req = new Script.Net.ChoiceRequest
+                    {
+                        PlayerId = owner,
+                        RequestKind = Script.Net.ChoiceRequest.Kind.SelectTriggerOrder,
+                        OptionUids = remaining.ConvertAll(t => t.Source?.UID ?? t.DisplayName),
+                        OptionForced = remaining.ConvertAll(t => t.EffectDataRef != null && t.EffectDataRef.Forced),
+                        OptionLabels = remaining.ConvertAll(t => t.DisplayName ?? ""),
+                        OptionTexts = remaining.ConvertAll(t => t.DisplayText ?? ""),
+                        Prompt = $"玩家{owner} 排序触发（{remaining.Count} 个）",
+                        ForceChoice = force,
+                        OrderContextId = contextId,
+                    };
+
+                    var result = await InputGateway.RequestChoice(owner, req);
+
+                    // 放弃剩余：仅当剩余中没有强制触发时才生效（有强制触发 → 重新请求，对齐单机按钮禁用语义）。
+                    if (result != null && result.Cancelled)
+                    {
+                        if (force)
+                        {
+                            GD.Print($"[Trigger] 玩家{owner} 请求放弃但仍有强制触发，重新请求排序");
+                            continue;
+                        }
+                        GD.Print($"[Trigger] 玩家{owner} 放弃剩余触发（{remaining.Count} 个），跳过入栈");
+                        break;
+                    }
+
+                    // 本次要入堆叠的条目：按 SelectedIndices 的顺序（下标指向本次请求的 OptionUids）。
+                    // 兼容：未回下标（旧客户端）或空列表 → 全部按默认顺序入栈（与旧行为一致，不会卡死）。
+                    var ordered = new List<Script.Data.Effects.StackEffectInstance>();
+                    var indices = result?.SelectedIndices;
+                    if (indices == null || indices.Count == 0)
+                    {
+                        GD.Print($"[Trigger] 玩家{owner} 未指定顺序，剩余 {remaining.Count} 个按默认顺序入栈");
+                        ordered.AddRange(remaining);
+                    }
+                    else
+                    {
+                        var seen = new HashSet<int>();
+                        foreach (var idx in indices)
+                        {
+                            if (idx < 0 || idx >= remaining.Count)
+                            {
+                                GD.PrintErr($"[Trigger] 忽略越界下标 {idx}（剩余 {remaining.Count} 个）");
+                                continue;
+                            }
+                            if (!seen.Add(idx))
+                            {
+                                GD.PrintErr($"[Trigger] 忽略重复下标 {idx}");
+                                continue;
+                            }
+                            ordered.Add(remaining[idx]);
+                        }
+                        if (ordered.Count == 0)
+                        {
+                            // 全是非法下标：不推进（下一轮 guard 保护），避免空转死循环。
+                            GD.PrintErr($"[Trigger] 玩家{owner} 回包下标全部非法，本轮不推进");
+                            continue;
+                        }
+                    }
+
+                    // 按玩家指定顺序逐个入堆叠（需选目标的先经网关选目标），随后从剩余中移除。
+                    foreach (var t in ordered)
+                        await EnsureTargetThenPushAsync(t);
+                    foreach (var t in ordered)
+                        remaining.Remove(t);
                 }
-
-                // 逐个触发：需选目标的经网关选目标后入栈；无需目标的直接入栈。
-                foreach (var t in triggers)
-                    await EnsureTargetThenPushAsync(t);
             }
 
             PriorityPlayerId = GetPriorityPlayer();
@@ -1715,11 +1780,9 @@ public partial class TurnManager : Node
 
     public bool CanDeployCovert(CardInstance instance)
     {
-        if (instance == null) return false;
-        // 【公开】关键字的卡不可进行暗藏行动（与 DeployCovert 第 2.5 步同判据）
-        if (instance.HasPublicKeyword) return false;
-        // 仅角色卡可派遣（与 DeployCovert 第 5 步同判据）
-        return (instance.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0;
+        // 判定体抽取到 DeployCovertEligibility（单一真相源），联机客户端（快照投影、无 TurnManager 实例）
+        // 复用同一静态函数做"拖起资格"预检；此处保持原签名与语义不变（单机行为零变化）。
+        return DeployCovertEligibility.IsEligible(instance);
     }
 
     /// <summary>

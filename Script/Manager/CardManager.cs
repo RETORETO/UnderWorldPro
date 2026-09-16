@@ -239,6 +239,24 @@ public partial class CardManager : Node
     public CardInstance RebuildFromRef(Script.Net.ZoneCardRef r)
     {
         if (r == null) return null;
+
+        // 【Phase B 信息隔离·统一入口】隐藏占位（对手手牌/牌库、地区牌堆）不依赖模板库解析：
+        // 在调用 ResolveInstance 之前统一处理，保证任何子类 override（跨进程客户端/测试替身/未来纯托管）
+        // 都能正确得到占位实例，且不会因 TemplateUid 为空而走模板查找（历史上会抛 Dictionary key 为空）。
+        // 占位 UID 稳定 → 跨快照复用同一实例。
+        if (r.IsHidden)
+        {
+            var existed = GetInstance(r.Uid);
+            var hidden = existed ?? new CardInstance(null, r.Uid);
+            hidden.IsHidden = true;
+            hidden.OwnerId = r.OwnerId;
+            hidden.ControllerId = r.ControllerId;
+            hidden.CurrentZone = r.Zone;
+            hidden.ZoneDetailId = r.ZoneDetailId;
+            if (existed == null) _allInstances[r.Uid] = hidden;
+            return hidden;
+        }
+
         var inst = ResolveInstance(r);
         if (inst == null)
         {
@@ -263,6 +281,7 @@ public partial class CardManager : Node
         if (r.MagicDomains != null) inst.MagicDomains.AddRange(r.MagicDomains);
         inst.EnteredThisTurn = r.EnteredThisTurn;
         inst.AbilityUsedThisTurn = r.AbilityUsedThisTurn;
+        inst.IsHidden = r.IsHidden;   // Phase B 信息隔离：占位实例标记（只画卡背，不参与规则/交互）
         inst.SyncVersion(r.VersionId);
         return inst;
     }
@@ -281,6 +300,9 @@ public partial class CardManager : Node
         // 1) 直接命中
         var hit = GetInstance(r.Uid);
         if (hit != null) return hit;
+
+        // 注：隐藏占位（r.IsHidden）已在 RebuildFromRef 中统一处理，不会进入本方法，
+        // 故此处无需再判 IsHidden（避免多处重复实现，也不要求子类 override 自行处理）。
 
         // 2) 同模板空闲实例复用（覆盖重连 UID 错位竞态）
         foreach (var cand in _allInstances.Values)

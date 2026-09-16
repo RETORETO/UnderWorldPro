@@ -787,6 +787,7 @@ public partial class ZoneManager : Node
             OwnerId = c.OwnerId,
             Zone = zone,
             ZoneOwnerId = playerId,
+            IsHidden = c.IsHidden,   // Phase B：隐藏占位（信息隔离）标记随投影保留
             ZoneDetailId = c.ZoneDetailId,
             IsCovert = c.IsCovert,
             IsSealed = c.IsSealed,

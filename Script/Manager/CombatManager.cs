@@ -46,6 +46,14 @@ public partial class CombatManager : Node
     /// <summary>联机决策网关（服务端注入）。非空时对抗决策经网关下发/回收；单机保持 null 走事件窗口。</summary>
     public IInputGateway InputGateway { get; set; }
 
+    // ---- 【联机·客户端 UI 对齐】待决的调查卡（决策期间由 BuildSnapshot 下发给决策者）----
+    private List<CardInstance> _pendingInvestigationCards;
+    private int _pendingInvestigationOwner;
+    /// <summary>当前待分配的调查卡（无待决时为 null/空）。</summary>
+    public List<CardInstance> PendingInvestigationCards => _pendingInvestigationCards;
+    /// <summary>上述调查卡的决策者（仅该玩家可见）。</summary>
+    public int PendingInvestigationOwner => _pendingInvestigationOwner;
+
     public void Initialize(CardManager cardManager, PlayerManager playerManager,
                            ZoneManager zoneManager, AreaManager areaManager)
     {
@@ -174,6 +182,10 @@ public partial class CombatManager : Node
                     RequestKind = ChoiceRequest.Kind.TieBreak,
                     Prompt = $"地区{areaNo} {TypeName(type)}打平，是否使用先手破平特权？",
                     ForceChoice = false,
+                    // 客户端复用单机 TieBreakWindow 所需上下文
+                    AreaUid = areaUid,
+                    AreaNo = areaNo,
+                    CombatTypeValue = (int)type,
                 };
                 var result = await InputGateway.RequestChoice(firstPlayer, req);
                 if (result != null && !result.Cancelled)
@@ -225,6 +237,11 @@ public partial class CombatManager : Node
                 Amount = diff,
                 Prompt = $"地区{areaNo} 战斗对抗：分配 {diff} 点伤害",
                 ForceChoice = true,   // 对齐单机 StrengthWindow：必须分配完才能确认
+                // 客户端复用单机 StrengthWindow 所需上下文
+                AreaUid = areaUid,
+                AreaNo = areaNo,
+                LoserPlayerId = loser,
+                CombatTypeValue = (int)type,
             };
             var result = await InputGateway.RequestChoice(winner, req);
             if (result == null || result.Cancelled)
@@ -233,11 +250,20 @@ public partial class CombatManager : Node
                 _triggerEmitPoints?.OnCombatWon(winner, areaUid);
                 return;
             }
+            // 【服务端权威复检】客户端回传的分配必须落在服务端已计算的合法承伤目标内（防越权/防漂移）
+            var legalTargets = new HashSet<string>(targets.ConvertAll(t => t.UID));
             for (int i = 0; i < result.SelectedUids.Count; i++)
             {
-                var tgt = _cardManager?.GetInstance(result.SelectedUids[i]);
+                string uid = result.SelectedUids[i];
                 int amt = i < result.SelectedAmounts.Count ? result.SelectedAmounts[i] : 0;
-                if (tgt != null && amt > 0) _cardManager.DealDamageToInstance(tgt, amt);
+                if (string.IsNullOrEmpty(uid) || amt <= 0) continue;
+                if (!legalTargets.Contains(uid))
+                {
+                    GD.PrintErr($"  ⛔ 战斗对抗分配目标非法（{uid}），已忽略该条分配");
+                    continue;
+                }
+                var tgt = _cardManager?.GetInstance(uid);
+                if (tgt != null) _cardManager.DealDamageToInstance(tgt, amt);
             }
             _triggerEmitPoints?.OnCombatWon(winner, areaUid);
             return;
@@ -250,16 +276,29 @@ public partial class CombatManager : Node
             return;
         }
         var cards = ActionService.TakeTopForInvestigation(winner, diff);
+        // 【联机·客户端 UI 对齐】把"待分配的调查卡"登记为待决状态，由 BuildSnapshot 下发
+        // （仅下发给决策者 winner：客户端要显示这些卡面才能复刻单机 InvestigationWindow）。
+        _pendingInvestigationCards = cards;
+        _pendingInvestigationOwner = winner;
         var reqInv = new ChoiceRequest
         {
             PlayerId = winner,
             RequestKind = ChoiceRequest.Kind.CombatInvestigation,
             OptionUids = cards.ConvertAll(c => c.UID),
+            // 【联机·UI 对齐关键】决策等待期间服务端不推快照 → 展示所需的卡实例必须随请求下发，
+            // 否则客户端（ArenaOl）拿不到这些卡、只能退化成简化面板。
+            OptionCardRefs = cards.ConvertAll(ToDisplayRef),
             Amount = diff,
             Prompt = $"地区{areaNo} 调查对抗：选择放回牌库顶的卡（其余放底）",
             ForceChoice = true,
+            // 客户端复用单机 InvestigationWindow 所需上下文
+            AreaUid = areaUid,
+            AreaNo = areaNo,
+            CombatTypeValue = (int)type,
         };
         var resInv = await InputGateway.RequestChoice(winner, reqInv);
+        _pendingInvestigationCards = null;
+        _pendingInvestigationOwner = 0;
 
         // SelectedUids = 放牌库顶顺序；未选中的卡按原顺序放牌库底。
         var selectedSet = new HashSet<string>(resInv?.SelectedUids ?? new List<string>());
@@ -378,5 +417,25 @@ public partial class CombatManager : Node
         foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
             if (IsLegalStrengthTarget(c, loser, areaUid)) count++;
         return count;
+    }
+
+    /// <summary>
+    /// 把卡实例投影为"展示用引用"（随 ChoiceRequest 下发给客户端，供其在决策等待期间重建卡面）。
+    /// 只带展示所需字段，不含规则状态；真实结算仍以服务端为准。
+    /// </summary>
+    private static Script.Net.ZoneCardRef ToDisplayRef(CardInstance c)
+    {
+        if (c == null) return null;
+        return new Script.Net.ZoneCardRef
+        {
+            Uid = c.UID,
+            TemplateUid = c.Template?.UID,
+            OwnerId = c.OwnerId,
+            ControllerId = c.ControllerId,
+            Zone = c.CurrentZone,
+            ZoneOwnerId = c.OwnerId,
+            Damage = c.Damage,
+            IsTapped = c.IsTapped,
+        };
     }
 }

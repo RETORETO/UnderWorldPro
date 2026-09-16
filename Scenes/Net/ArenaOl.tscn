@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://cb2irdstaf17r"]
 
 [ext_resource type="Script" uid="uid://bnur1w16jdanr" path="res://Script/UI/ArenaOl.cs" id="1_ol"]
-[ext_resource type="Script" uid="uid://bmwoybdbkft7b" path="res://Script/UI/DeckZone.cs" id="2_odh8s"]
+[ext_resource type="Script" path="res://Script/UI/OnlineDeckZone.cs" id="5_oldeck"]
 [ext_resource type="Script" uid="uid://bvdfchlwxfovv" path="res://Script/UI/GraveyardZone.cs" id="3_rremj"]
 [ext_resource type="Script" uid="uid://bfgeuvespoao7" path="res://Script/UI/WorldDeckZone.cs" id="4_odh8s"]
 
@@ -140,7 +140,7 @@ layout_mode = 0
 offset_left = 1200.0
 offset_right = 1300.0
 offset_bottom = 140.0
-script = ExtResource("2_odh8s")
+script = ExtResource("5_oldeck")
 _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
@@ -266,7 +266,7 @@ offset_left = 1200.0
 offset_top = 110.0
 offset_right = 1300.0
 offset_bottom = 250.0
-script = ExtResource("2_odh8s")
+script = ExtResource("5_oldeck")
 _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 

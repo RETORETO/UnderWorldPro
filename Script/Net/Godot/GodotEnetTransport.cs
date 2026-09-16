@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Godot;
@@ -34,7 +34,10 @@ namespace Script.Net.Godot
         private readonly Encoding _utf8 = new UTF8Encoding(false);
         private Action<int, string> _serverHandler;
         private bool _running;
-
+        /// <summary>客户端：是否曾观测到"连接中/已连接"（用于区分"刚创建尚未就绪"与"连接确实失败"）。</summary>
+        private bool _linkWasUp;
+        /// <summary>客户端：连接是否已判定失败（Poll 轮询已因此停止）。供上层给出一次性提示，避免日志刷屏。</summary>
+        public bool LinkFailed { get; private set; }
         // 服务端：ENet peer id(long) ↔ 游戏内玩家编号(int 1/2)
         private readonly Dictionary<long, int> _peerToPlayer = new Dictionary<long, int>();
         private readonly Dictionary<int, long> _playerToPeer = new Dictionary<int, long>();
@@ -129,6 +132,28 @@ namespace Script.Net.Godot
         public void Poll()
         {
             if (!_running) return;
+
+            // 客户端链路已彻底断开（ENet 判定连接失败 / 对端关闭）时，peer 已不活跃：
+            // 继续 Poll 只会每帧刷 "The multiplayer instance isn't currently active"（不可捕获的引擎错误），
+            // 且对玩家毫无信息量。此处判定一次、给出**可行动**的诊断后停止轮询。
+            // 说明：用"曾观测到 Connecting/Connected"作闩锁，避免刚创建时状态尚未就绪就误判为失败。
+            if (_role == EnetRole.Client)
+            {
+                var status = _peer.GetConnectionStatus();
+                if (status != MultiplayerPeer.ConnectionStatus.Disconnected) _linkWasUp = true;
+                else if (_linkWasUp)
+                {
+                    _running = false;
+                    LinkFailed = true;
+                    GD.PrintErr($"[GodotEnetTransport] 连接服务端 {ServerAddress}:{Port} 失败（ENet 状态=Disconnected），已停止轮询。"
+                        + "请依次确认：① --client 的第 4 个参数/--host 是否为**服务端电脑的局域网 IPv4**（不是 127.0.0.1）；"
+                        + "② 服务端进程是否已在运行且打印了『等待客户端连接』；"
+                        + "③ 服务端电脑防火墙是否放行该 UDP 端口（netsh advfirewall firewall add rule name=\"UWPro Server\" dir=in action=allow protocol=UDP localport=<端口>）；"
+                        + "④ 两台电脑是否在同一网段（互相 ping 通）。");
+                    return;
+                }
+            }
+
             _peer.Poll();
 
             while (_peer.GetAvailablePacketCount() > 0)

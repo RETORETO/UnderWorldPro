@@ -408,8 +408,43 @@ public partial class GameInitializer : Node
         snap.AreaMarks = AreaManager?.ToSnapshotMarks() ?? snap.AreaMarks;
         // 玩家级费用修正（JC012① 等）：下行给客户端做减费展示（结算仍以服务端为准）
         snap.CostMods = _effectEngine?.GetActiveCostMods() ?? snap.CostMods;
+        // 【调查对抗·客户端 UI 对齐】把待分配的调查卡一并下发（仅决策者本人可见，由 SnapshotFilter 过滤）
+        FillInvestigationCards(snap);
         return snap;
     }
+
+    /// <summary>把 CombatManager 的待决调查卡投影为纯数据引用（供客户端复刻单机 InvestigationWindow）。</summary>
+    private void FillInvestigationCards(Script.Net.GameSnapshot snap)
+    {
+        var cm = CombatManager;
+        var pending = cm?.PendingInvestigationCards;
+        snap.InvestigationOwnerPlayerId = (pending != null && pending.Count > 0) ? cm.PendingInvestigationOwner : 0;
+        snap.InvestigationCards = new System.Collections.Generic.List<Script.Net.ZoneCardRef>();
+        if (pending == null) return;
+        foreach (var c in pending)
+        {
+            if (c == null) continue;
+            snap.InvestigationCards.Add(new Script.Net.ZoneCardRef
+            {
+                Uid = c.UID,
+                TemplateUid = c.Template?.UID,
+                OwnerId = c.OwnerId,
+                ControllerId = c.ControllerId,
+                Zone = c.CurrentZone,
+                ZoneOwnerId = c.OwnerId,
+                Damage = c.Damage,
+                IsTapped = c.IsTapped,
+            });
+        }
+    }
+
+    /// <summary>
+    /// 【Phase B·信息隔离】构建"发给某个玩家"的快照视图：隐藏信息（对手手牌/牌库、地区牌堆）替换为占位引用，
+    /// 只保留数量与顺序；公开区（争夺区/附属/封印/墓地/资产/分数/秘社/堆叠/地区/势力标记/费用修正）原样下发。
+    /// viewerPlayerId &lt;= 0 表示不过滤（返回完整快照，供服务端自省/测试）。
+    /// </summary>
+    public Script.Net.GameSnapshot BuildSnapshotFor(int viewerPlayerId)
+        => Script.Net.SnapshotFilter.ForPlayer(BuildSnapshot(), viewerPlayerId);
 
     /// <summary>查询玩家起手数：若有秘社则用其 StartingHandSize，否则回退默认 InitialHandSize</summary>
     private int GetCouncilHandSize(int playerId)

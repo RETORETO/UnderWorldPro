@@ -102,6 +102,7 @@ public partial class WorldDeckManager : Node
                 TemplateUid = c.Template?.UID ?? "",
                 OwnerId = c.OwnerId,
                 Zone = Script.Enums.CardZone.Deck,
+                IsHidden = c.IsHidden,   // Phase B：隐藏占位（信息隔离）标记随投影保留
             });
         }
         return list;
