@@ -57,6 +57,14 @@ namespace Script.Manager
         // ==================== 管理器引用（供动词执行体访问模型） ====================
         // 由 GameInitializer 注入；用于 Move 等动词真正改写模型（跨地区移动）。
         public CardManager CardManagerRef { get; set; }
+
+        /// <summary>
+        /// 【批次 2·多对局隔离】本效果引擎所属对局的 CardManager（**单一取值入口**）。
+        /// 生产路径由 `GameInitializer` 注入 `CardManagerRef`（每局一套实例）→ 一个服务端进程内多场对局互不串场；
+        /// 仅在"未注入"的旧路径/单测里退回进程级 `CardManager.Instance`（与改造前语义一致）。
+        /// 说明：这正是设计方案 §十一 列出的"11 处 `CardManager.Instance`"的收口点——所有动词执行体一律走本属性。
+        /// </summary>
+        private CardManager CM => CardManagerRef ?? CardManager.Instance;
         // 持续光环（D19-③）需读取区域卡集合，由 GameInitializer 注入 ZoneManager 引用。
         public ZoneManager ZoneManagerRef { get; set; }
 
@@ -176,7 +184,7 @@ namespace Script.Manager
                 if (data.Timing == EffectTiming.OnSorceryCast && source != null)
                 {
                     GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {source.PlayerTemplate?.CardName} 目标丢失 → 不结算，卡进墓地");
-                    CardManager.Instance?.MoveCardToGraveyard(source);
+                    CM?.MoveCardToGraveyard(source);
                 }
                 else
                 {
@@ -282,7 +290,7 @@ namespace Script.Manager
                         bool stillLegal = false;
                         foreach (var rule in srcTmpl.TargetRules)
                         {
-                            if (rule != null && CardManager.MatchesRule(rule, target, srcCtrl)) { stillLegal = true; break; }
+                            if (rule != null && CardManager.MatchesRule(rule, target, srcCtrl, TurnManagerRef?.PlayerManagerRef)) { stillLegal = true; break; }
                         }
                         if (!stillLegal)
                         {
@@ -333,7 +341,7 @@ namespace Script.Manager
                 if (data.Timing == EffectTiming.OnSorceryCast && source != null)
                 {
                     GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {source.PlayerTemplate?.CardName} 目标丢失 → 不结算，卡进墓地");
-                    CardManager.Instance?.MoveCardToGraveyard(source);
+                    CM?.MoveCardToGraveyard(source);
                 }
                 else
                 {
@@ -414,7 +422,7 @@ namespace Script.Manager
                 case ActionVerb.Destroy:
                     if (target != null)
                     {
-                        CardManager.Instance?.MoveCardToGraveyard(target);
+                        CM?.MoveCardToGraveyard(target);
                         GD.Print($"[EffectEngine] 消灭 {target.PlayerTemplate?.CardName}");
                     }
                     else GD.Print("[EffectEngine] Destroy 目标为空，跳过");
@@ -423,7 +431,7 @@ namespace Script.Manager
                 case ActionVerb.Bounce:
                     if (target != null)
                     {
-                        CardManager.Instance?.ReturnCardToHand(target);
+                        CM?.ReturnCardToHand(target);
                         GD.Print($"[EffectEngine] 移回 {target.PlayerTemplate?.CardName} 到拥有者手牌");
                     }
                     break;
@@ -432,7 +440,7 @@ namespace Script.Manager
                     if (!string.IsNullOrEmpty(targetAreaId) && source != null)
                     {
                         // 机动：移动到指定地区（JC014 公路骑士在对抗前触发，targetAreaId 由 ManeuverTrigger 窗口推导"另一地区"）
-                        var cm = CardManagerRef ?? CardManager.Instance;
+                        var cm = CM;
                         if (cm != null)
                         {
                             cm.MoveCardToArea(source, targetAreaId);
@@ -501,7 +509,7 @@ namespace Script.Manager
                     break;
 
                 case ActionVerb.Sacrifice:
-                    if (source != null) { CardManager.Instance?.MoveCardToGraveyard(source); GD.Print($"[EffectEngine] 牺牲 {source.PlayerTemplate?.CardName}"); }
+                    if (source != null) { CM?.MoveCardToGraveyard(source); GD.Print($"[EffectEngine] 牺牲 {source.PlayerTemplate?.CardName}"); }
                     break;
 
                 case ActionVerb.Seal:
@@ -596,7 +604,7 @@ namespace Script.Manager
                     if (target != null)
                     {
                         int dmg = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var parsedDmg)) ? parsedDmg : 1;
-                        CardManager.Instance?.DealDamageToInstance(target, dmg);
+                        CM?.DealDamageToInstance(target, dmg);
                         GD.Print($"[EffectEngine] 造成 {dmg} 点伤害 → {target.PlayerTemplate?.CardName}");
                     }
                     else GD.Print("[EffectEngine] DealDamage 目标为空，跳过");
@@ -691,7 +699,7 @@ namespace Script.Manager
                 }
                 else
                 {
-                    var c = CardManager.Instance?.GetInstance(m.TargetUid);
+                    var c = CM?.GetInstance(m.TargetUid);
                     if (c != null)
                     {
                         if (m.Kind == "Defense")
@@ -843,7 +851,7 @@ namespace Script.Manager
                     if (source == null) return false;
                     int oppId = source.ControllerId == 1 ? 2 : (source.ControllerId == 2 ? 1 : -1);
                     if (oppId < 0) { GD.Print($"[EffectEngine] 条件「OpponentHandLe3」无法满足：source 控制者异常 {source.ControllerId}"); return false; }
-                    int oppHand = CardManager.Instance != null ? CardManager.Instance.GetHandCardsByOwner(oppId).Count : 0;
+                    int oppHand = CM != null ? CM.GetHandCardsByOwner(oppId).Count : 0;
                     GD.Print($"[EffectEngine] 条件「OpponentHandLe3」：对手玩家{oppId} 手牌数={oppHand} → {(oppHand <= 3 ? "满足" : "不满足")}");
                     return oppHand <= 3;
                 case "WinnerIsSelf":
@@ -1454,7 +1462,7 @@ namespace Script.Manager
                 if (e.Timing == EffectTiming.OnSorceryCast) spells.Add(e);
             }
             if (spells.Count == 0) return;
-            CardInstance target = string.IsNullOrEmpty(targetUid) ? null : CardManager.Instance?.GetInstance(targetUid);
+            CardInstance target = string.IsNullOrEmpty(targetUid) ? null : CM?.GetInstance(targetUid);
 
             // D16 新方案：结算前校验，任一需目标效果的目标已丢失（版本号不一致）→ 整张事务卡不结算并直接进墓地（用户铁律）
             foreach (var spell in spells)
@@ -1462,7 +1470,7 @@ namespace Script.Manager
                 if (ValidateTargetAtResolve(spell, sorcery, target, "", targetVersionId) == TargetValidation.Lost)
                 {
                     GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {tmpl.CardName} 目标丢失 → 整张不结算，卡进墓地");
-                    CardManager.Instance?.MoveCardToGraveyard(sorcery);
+                    CM?.MoveCardToGraveyard(sorcery);
                     return;
                 }
             }
@@ -1585,10 +1593,10 @@ namespace Script.Manager
             if (!string.IsNullOrEmpty(data.ActivateCondition) &&
                 data.ActivateCondition.Contains("牺牲本角色"))
             {
-                if (source != null && CardManager.Instance != null)
+                if (source != null && CM != null)
                 {
                     GD.Print($"[EffectEngine] ✝ {tmpl.CardName} 因激活牺牲自身（入堆叠前代价）");
-                    CardManager.Instance.MoveCardToGraveyard(source);
+                    CM.MoveCardToGraveyard(source);
                     Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                 }
                 else

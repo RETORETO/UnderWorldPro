@@ -122,14 +122,15 @@ namespace Script.Tests
             var before = zm.ToSnapshot();
             Assert.AreEqual(all.Count, before.Count, "导出快照应覆盖全部实例");
 
-            // 2) 经 LoopbackTransport 序列化往返（模拟服务端→客户端下发）
-            var transport = new LoopbackTransport();
+            // 2) 经 LoopbackTransport 序列化往返（模拟服务端→客户端下发；批次 1：会话寻址）
+            var loop = new PlayerIdLoopback();
+            var transport = loop.Transport;
             transport.Start();
             string received = null;
-            transport.RegisterClient(1, msg => { received = msg; });
+            loop.RegisterClient(1, msg => { received = msg; });
             // 用正式快照序列化器（SnapshotSerializer，已含 IncludeFields）经 Loopback 往返，与正式下发链路一致
             var json = SnapshotSerializer.Serialize(new GameSnapshot { Zones = before });
-            transport.Send(1, json); // 服务端下发快照字符串
+            loop.Send(1, json); // 服务端下发快照字符串
             transport.Stop();
             Assert.IsFalse(string.IsNullOrEmpty(received), "客户端应经 Loopback 收到序列化快照");
 
@@ -229,22 +230,27 @@ namespace Script.Tests
             // 构造整局快照（仅 Zones 部分用于本批验证；其余字段为空不影响）
             var snap = new GameSnapshot { Zones = zm.ToSnapshot() };
 
-            var server = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Server) { Port = (ushort)port };
+            var server = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Server)
+            {
+                Port = (ushort)port,
+                MaxClients = 16,
+            };
             var client = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Client)
             {
                 Port = (ushort)port,
                 ServerAddress = "127.0.0.1",
-                LocalPlayerId = 1
             };
 
             string clientGot = null;
-            server.OnMessageReceived((pid, msg) =>
+            string serverSawSession = null;
+            server.OnSessionMessage((sessionId, msg) =>
             {
-                // 服务端收到客户端"请求快照"→ 下发序列化快照（正式 SnapshotSerializer）
+                // 服务端收到客户端"请求快照"→ 按会话定向下发序列化快照（正式 SnapshotSerializer）
+                serverSawSession = sessionId;
                 var json = SnapshotSerializer.Serialize(snap);
-                server.Send(pid, json);
+                server.SendToSession(sessionId, json);
             });
-            client.OnMessageReceived((pid, msg) => { clientGot = msg; });
+            client.OnSessionMessage((_, msg) => { clientGot = msg; });
 
             server.Start();
             client.Start();
@@ -254,14 +260,15 @@ namespace Script.Tests
             {
                 server.Poll();
                 client.Poll();
-                if (server.IsPlayerConnected(1) && clientGot == null)
+                if (client.IsClientConnected() && clientGot == null)
                 {
-                    client.Send(1, "REQ_SNAPSHOT");
+                    client.SendToServer("REQ_SNAPSHOT");
                 }
                 if (clientGot != null) break;
                 System.Threading.Thread.Sleep(10);
             }
 
+            Assert.IsTrue(!string.IsNullOrEmpty(serverSawSession), "服务端应记录到会话 id（批次 1：连接=会话）");
             Assert.IsFalse(string.IsNullOrEmpty(clientGot), "客户端应经真实 ENet 收到序列化快照");
 
             // 客户端从空态重建

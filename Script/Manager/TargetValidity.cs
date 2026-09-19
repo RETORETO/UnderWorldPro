@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Effects;
 using Script.Enums;
 using Script.Game.Entities;
@@ -33,7 +33,10 @@ namespace Script.Manager
     {
         /// <summary>注入的 PlayerManager 引用（由 GameInitializer 在装配时赋值）。
         /// 用于"条件式限制"（如 AttachedToCharacterIfNoMind）在取目标阶段评估"资产区是否具【心】"等打出时状态。
-        /// 与 EffectEngine.Instance / TurnManager.Instance 同一注入风格；结算复检阶段这些限制跳过（见 Check）。</summary>
+        ///
+        /// 【批次 2·多对局隔离】本字段是**进程级兜底**：一个服务端进程同时跑多场对局时，它只会指向"最后构造的那一局"。
+        /// 因此所有生产调用点都应显式传入本局的 PlayerManager（见 `CheckRestrictions`/`Check` 的 `pm` 形参，
+        /// 由 `CardManager.PlayerManagerRef` / `TurnManager.PlayerManagerRef` 提供）；本字段仅服务于未注入的旧路径与单测。</summary>
         public static PlayerManager PlayerManagerRef;
 
         /// <summary>
@@ -67,9 +70,11 @@ namespace Script.Manager
         /// <param name="target">当前目标实例。</param>
         /// <param name="desc">目标描述（TargetRule 或 TargetSpec）。</param>
         /// <param name="snapshot">目标入栈时快照；用于"结算前变化"类（控制者/子类别）判定。为 null 则跳过此类判定（兜底场景）。</param>
+        /// <param name="pm">本对局的 PlayerManager（**多对局隔离**：由调用方传入；null 时退回进程级 `PlayerManagerRef` 兜底）。</param>
         /// <returns>(仍合法?, 丢失原因)。</returns>
         public static (bool valid, TargetLossReason reason) Check(
-            CardInstance source, CardInstance target, ITargetDesc desc, TargetSnapshot? snapshot = null)
+            CardInstance source, CardInstance target, ITargetDesc desc, TargetSnapshot? snapshot = null,
+            PlayerManager pm = null)
         {
             // 0. 实例不存在 / 已移出游戏
             if (target == null || target.CurrentZone == CardZone.Exiled)
@@ -112,7 +117,7 @@ namespace Script.Manager
             // 其"【心】"判定只在打出（选目标）时做，结算时不复检（用户规则：结算时【心】是否仍在不影响）。
             // 其余 Restrictions（Friendly/Enemy/子类别/费用等）照常复检。
             var resolveRestrictions = ExcludePlayTimeOnlyRestrictions(desc.Restrictions);
-            if (!CheckRestrictions(resolveRestrictions, desc.Param, target, sourceController))
+            if (!CheckRestrictions(resolveRestrictions, desc.Param, target, sourceController, pm))
                 return (false, TargetLossReason.Illegal);
 
             return (true, TargetLossReason.None);
@@ -151,9 +156,10 @@ namespace Script.Manager
         /// <param name="param">限制参数（部分限制共用，按 '|' 分段，见各 case 注释）。</param>
         /// <param name="t">被判定的目标实例。</param>
         /// <param name="sourceController">敌我判定基准控制者（取目标=来源当前控制者；结算=入栈来源控制者快照）。</param>
+        /// <param name="pm">本对局的 PlayerManager（**多对局隔离**：由调用方传入；null 时退回进程级 `PlayerManagerRef` 兜底）。</param>
         public static bool CheckRestrictions(
             System.Collections.Generic.IEnumerable<TargetRestriction> restrictions,
-            string param, CardInstance t, int sourceController)
+            string param, CardInstance t, int sourceController, PlayerManager pm = null)
         {
             if (t == null) return false;
             if (restrictions == null) return true;
@@ -203,7 +209,7 @@ namespace Script.Manager
                         // 结算复检阶段此限制【跳过】（见 Check 的过滤），故这里不区分阶段、直接按实时【心】判定——
                         // 因本方法只在取目标阶段被调用（结算侧 Check 会先剔除本限制再进 CheckRestrictions）。
                         {
-                            bool hasMind = HasMindDomain(sourceController);
+                            bool hasMind = HasMindDomain(sourceController, pm);
                             if (hasMind) break;  // 有【心】→ 放行
                             // 无【心】→ 目标必须"结附于角色"：宿主存在、且为玩家卡（PlayerTemplate 非空）、且类别含 Character。
                             // 秘社宿主 PlayerTemplate 为 null（用 CouncilTemplate），地区附属 AttachedTo 为 null，均应拦截。
@@ -300,10 +306,11 @@ namespace Script.Manager
             }
         }
 
-        /// <summary>判定某控制者资产区是否具【心】（心灵领域忠诚 ≥ 1）。取目标阶段的条件式限制评估用。</summary>
-        private static bool HasMindDomain(int controllerId)
+        /// <summary>判定某控制者资产区是否具【心】（心灵领域忠诚 ≥ 1）。取目标阶段的条件式限制评估用。
+        /// pm = 本对局的 PlayerManager（多对局隔离）；null 时退回进程级 `PlayerManagerRef`（旧路径/单测兜底）。</summary>
+        private static bool HasMindDomain(int controllerId, PlayerManager pm = null)
         {
-            var pm = PlayerManagerRef;
+            pm ??= PlayerManagerRef;
             if (pm == null || controllerId < 0) return false;
             var loyalty = pm.GetDomainLoyalty(controllerId);
             return loyalty.TryGetValue(MagicDomain.Mind, out int v) && v >= 1;

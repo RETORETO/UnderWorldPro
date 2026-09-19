@@ -3,28 +3,44 @@ using System;
 namespace Script.Net
 {
     /// <summary>
-    /// 【C/S 化 P2】传输抽象层：将"消息如何发到客户端/从客户端收"与具体网络实现解耦。
+    /// 【C/S 化 P2 / 大厅化改造·批次 1】传输抽象层：把"消息如何发到某个客户端/从客户端收"与具体网络实现解耦。
     ///
-    /// 服务端权威架构下，服务端持有本接口实例：
-    /// - Send：向指定玩家下发一条消息（如序列化的 ChoiceRequest JSON）
-    /// - Poll/订阅：接收客户端回包（如序列化的 ChoiceResult JSON）
+    /// **寻址模型（批次 1 起）**：传输层只认 **SessionId**（服务端为每条连接分配的会话标识），不再认"玩家编号"。
+    ///   - 服务端：`SendToSession(sessionId, msg)` 定向下发；`OnSessionMessage/OnSessionConnected/OnSessionDisconnected` 订阅；
+    ///   - 客户端：只有"我对服务端"这一条连接，用 `SendToServer(msg)`，不需要任何寻址；
+    ///   - 对局层的"playerId（=座位 1/2）"由对局层把座位映射到 SessionId 后调用本接口（见 `NetworkInputGateway` 注入的解析器）。
+    ///
+    /// 为什么不在传输层保留"playerId 寻址"：大厅模型下同一条连接在不同阶段身份不同（先登录→再进房→座位才确定），
+    /// 两套寻址并存会长期分叉（设计方案 §十四 明令禁止的临时做法之一）。
     ///
     /// 实现可插拔：
-    /// - LoopbackTransport：同进程回环（测试/单机双端验证用，无真实 socket）—— 已实现（Net/LoopbackTransport.cs）
-    /// - （P3 里程碑）GodotEnetTransport：基于 Godot ENetMultiplayerPeer 的真实联机，置于 Net/Godot/ 子目录
-    ///   （引入 Godot 依赖，不污染 Net/ 根目录的纯托管性，保证 Headless 服务端仍可用 Loopback/自定义 transport）
-    /// - （P3 可选）TcpTransport：基于 System.Net.Sockets 的纯托管 TCP，同样不依赖 Godot
+    /// - `LoopbackTransport`：同进程回环（测试用，无真实 socket）；
+    /// - `Script.Net.Godot.GodotEnetTransport`：Godot ENet 真实联机（服务端会话池 / 客户端单连接）。
     ///
-    /// 纪律：本接口不依赖 Godot，保持 Net/ 根目录纯托管（Headless 服务端可用）。
-    /// 真实传输实现（依赖 Godot 或具体 socket 库）应放在 Net/ 的子目录，避免破坏根目录纯净性。
+    /// 纪律：本接口不依赖 Godot，保持 `Net/` 根目录纯托管（headless 服务端可用）。
     /// </summary>
     public interface INetTransport
     {
-        /// <summary>向指定玩家发送一条文本消息（JSON 等）。playerId 为游戏内玩家编号（1/2）。</summary>
-        void Send(int playerId, string message);
+        // ==================== 发送 ====================
 
-        /// <summary>订阅客户端上行消息。回调参数为 (playerId, message)。</summary>
-        void OnMessageReceived(Action<int, string> handler);
+        /// <summary>服务端 → 指定会话发送一条文本消息。会话不存在时静默忽略（实现内可打日志）。</summary>
+        void SendToSession(string sessionId, string message);
+
+        /// <summary>客户端 → 服务端发送一条文本消息（客户端只有唯一对端，无需寻址）。</summary>
+        void SendToServer(string message);
+
+        // ==================== 订阅 ====================
+
+        /// <summary>订阅客户端上行消息：回调参数为 (sessionId, message)。</summary>
+        void OnSessionMessage(Action<string, string> handler);
+
+        /// <summary>订阅"会话建立"（服务端角色）：参数为服务端分配的新会话 id。</summary>
+        void OnSessionConnected(Action<string> handler);
+
+        /// <summary>订阅"会话断开"（服务端角色）。</summary>
+        void OnSessionDisconnected(Action<string> handler);
+
+        // ==================== 生命周期 ====================
 
         /// <summary>启动传输（监听/连接）。</summary>
         void Start();
@@ -35,7 +51,15 @@ namespace Script.Net
         /// <summary>驱动传输轮询（如 ENet 需主动 Poll）。默认空实现：同步投递型传输（Loopback）无需轮询。</summary>
         void Poll() { }
 
-        /// <summary>查询某游戏内玩家编号是否已连入。默认 true：同步回环型传输始终视为已连接；真实传输（ENet）按连接状态返回。</summary>
-        bool IsPlayerConnected(int playerId) => true;
+        // ==================== 查询与服务端操作 ====================
+
+        /// <summary>某会话是否仍连接着。</summary>
+        bool IsSessionConnected(string sessionId);
+
+        /// <summary>当前连接数（服务端角色；客户端角色按实现返回）。</summary>
+        int ConnectedSessionCount { get; }
+
+        /// <summary>服务端主动断开某会话（踢人 / 服务器满 / 协议不匹配）。默认空实现，便于测试替身。</summary>
+        void DisconnectSession(string sessionId, string reason) { }
     }
 }

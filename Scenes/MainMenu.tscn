@@ -47,6 +47,10 @@ custom_maximum_size = Vector2(-1, 50)
 layout_mode = 2
 text = "开始游戏"
 
+[node name="OnlineButton" type="Button" parent="ButtonContainer"]
+layout_mode = 2
+text = "联机对战"
+
 [node name="DeckButton" type="Button" parent="ButtonContainer" unique_id=1953962482]
 custom_minimum_size = Vector2(0, 50)
 custom_maximum_size = Vector2(-1, 50)

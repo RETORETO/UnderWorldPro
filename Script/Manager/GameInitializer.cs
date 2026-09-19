@@ -38,6 +38,18 @@ public partial class GameInitializer : Node
     /// 便于以后 C/S 化时在此层拦截并下发服务器。</summary>
     public PlayerActionService PlayerActionService { get; private set; }
 
+    // ============================================================
+    // 【批次 2·多对局隔离】本局卡组显式指定（联机房间/MatchHost 用）
+    // ============================================================
+    // 背景：原 `ReloadDecks` 只从 UI 自动单例 `GameManager`（SelectedDeck/UseSelectedDeck）取 P1 卡组，
+    // 那是单机时代的"房间内勾选卡组"约定；服务端（headless、可能同时跑多场对局）不能依赖进程级 UI 状态，
+    // 否则多局之间会互相读到对方的卡组选择。
+    // 约定：非 null 即视为"本局显式卡组"，优先于 UI 选择与硬编码卡组；由建房/开局流程（批次 5）按座位填入。
+    /// <summary>本局 P1（座位1）卡组；null=未指定（退回 UI 选择/硬编码）。</summary>
+    public DeckList P1DeckOverride { get; set; }
+    /// <summary>本局 P2（座位2）卡组；null=未指定（退回硬编码测试卡组）。</summary>
+    public DeckList P2DeckOverride { get; set; }
+
     /// <summary>
     /// 本局唯一随机源。所有需要随机的 Manager 均从此处注入，
     /// 禁止各自 new Random()，否则牌序无法复现也无法同步。
@@ -55,6 +67,12 @@ public partial class GameInitializer : Node
 
     /// <summary>本局 EffectEngine 实例（静态单例治理：显式注入替代 EffectEngine.Instance）。</summary>
     private Script.Manager.EffectEngine _effectEngine;
+
+    /// <summary>
+    /// 【批次 2】本局 EffectEngine 只读访问器（**本局独有**，不指向进程级单例）。
+    /// 供对局宿主/房间层与服务端侧逻辑取用（例如需要在本局上直接结算效果、或查询费用修正）。
+    /// </summary>
+    public Script.Manager.EffectEngine EffectEngine => _effectEngine;
 
     /// <summary>持续效果联动处理器（下沉到装配层，替代单机 Arena.Events 的 View 订阅，使联机服务端同样触发）。
     /// 具名字段便于每次 InitializeAll 先反订阅再订阅，避免重复累加。</summary>
@@ -119,6 +137,9 @@ public partial class GameInitializer : Node
         AddChild(PlayerManager);
         // 注入到 TargetValidity（静态目标校验链），供条件式限制（如 AttachedToCharacterIfNoMind）
         // 在取目标阶段评估"资产区是否具【心】"（心灵领域忠诚）。
+        // 【批次 2·多对局隔离】这是**进程级兜底**（一个进程跑多局时只会指向最后一局）；
+        // 生产链路由 `CardManager.PlayerManagerRef`（下方注入）与 `TurnManager` 把自己的 PlayerManager
+        // 显式传入 `TargetValidity.CheckRestrictions/Check`，本行仅为未注入路径与单测保留。
         Script.Manager.TargetValidity.PlayerManagerRef = PlayerManager;
         if (VerboseSetup) GD.Print("  ✅ PlayerManager");
 
@@ -209,6 +230,11 @@ public partial class GameInitializer : Node
         effectEngine.CardManagerRef = CardManager;
         effectEngine.TurnManagerRef = TurnManager;   // 抓牌/费用等需回合管理器参与的全局操作
 
+        // 8.5.1【批次 2·多对局隔离】CardManager 也持有本局的 PlayerManager：
+        // 目标精筛链（CardManager.MatchesRule/MatchesSpec → TargetValidity.CheckRestrictions）需要它来评估
+        // 【心】等条件式限制；不注入就会退回进程级 `TargetValidity.PlayerManagerRef`（多局并存时会串场）。
+        CardManager.PlayerManagerRef = PlayerManager;
+
         // 8.6【MVC 收口】UI 通知总线（实例单例）：承载 Controller 的"状态已变请刷新"广播
         // （OnVisualDirty / CostModChanged），取代 EffectEngine 的 static 委托。须早于任何 OnVisualDirty 触发。
         new Script.Manager.UiNotificationBus();
@@ -223,13 +249,33 @@ public partial class GameInitializer : Node
 
     /// <summary>
     /// 加载双方卡组并缓存秘社来源（_loadedDeck）。
-    /// 规则：P2 始终使用硬编码测试卡组；P1 仅在房间勾选「使用卡组JSON」时，
-    /// 用 SelectedDeck（优先）或 SelectedDeckPath 指向的 JSON 初始化，否则也用硬编码卡组。
+    /// 优先级（自上而下）：
+    ///   1. **本局显式指定的卡组**（`P1DeckOverride`/`P2DeckOverride`）——联机房间/`MatchHost` 用；
+    ///   2. 单机 UI 选择（`GameManager.UseSelectedDeck` + `SelectedDeck/SelectedDeckPath`，仅 P1）；
+    ///   3. 硬编码测试卡组（P1/P2）。
     /// InitTestDecks / InitFromDeckList 均为幂等重建（内部 Clear 后填充+洗牌），可安全重复调用。
     /// </summary>
     private void ReloadDecks()
     {
-        DeckManager.InitTestDecks(playerId: 2); // P2 硬编码
+        // ① P2 卡组
+        if (P2DeckOverride != null)
+        {
+            DeckManager.InitFromDeckList(P2DeckOverride, playerId: 2);
+            GD.Print("【GameInitializer】P2 使用本局显式指定卡组");
+        }
+        else
+        {
+            DeckManager.InitTestDecks(playerId: 2); // P2 硬编码
+        }
+
+        // ② P1 卡组
+        if (P1DeckOverride != null)
+        {
+            DeckManager.InitFromDeckList(P1DeckOverride, playerId: 1);
+            _loadedDeck = P1DeckOverride;   // 秘社来源：以 P1 卡组为准（与单机"P1 用 JSON 时以该卡组为秘社来源"一致）
+            GD.Print("【GameInitializer】P1 使用本局显式指定卡组");
+            return;
+        }
 
         var gm = GameManager.Instance;
         if (gm != null && gm.UseSelectedDeck)
@@ -245,6 +291,13 @@ public partial class GameInitializer : Node
                 GD.PrintErr("[GameInitializer] 卡组 JSON 无效，P1 回退到硬编码卡组");
                 DeckManager.InitTestDecks(playerId: 1);
             }
+        }
+        else if (P2DeckOverride != null)
+        {
+            // 联机场景：P2 已显式指定 → P1 未指定时沿用 P2 卡组（避免服务端去读 UI 状态）
+            DeckManager.InitFromDeckList(P2DeckOverride, playerId: 1);
+            _loadedDeck = P2DeckOverride;
+            GD.Print("【GameInitializer】P1 沿用 P2 的本局显式卡组（未单独指定）");
         }
         else
         {

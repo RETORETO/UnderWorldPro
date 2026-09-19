@@ -47,6 +47,15 @@ namespace Script.Net.Godot
         /// <summary>客户端：链路失败已提示过一次（避免日志刷屏）。</summary>
         private bool _clientLinkFailedNotified;
 
+        // —— 【增量 A】BOT 模式（大厅流程冒烟） ——
+        private bool _isBot;
+        private string _botRole = "host";
+        private string _botDeckPath;
+        private bool _startLobby;
+        private string _lobbyNick;
+        private ClientSession _botSession;
+        private NetBotClient _bot;
+
         public override void _Ready()
         {
             var args = OS.GetCmdlineUserArgs();
@@ -69,6 +78,49 @@ namespace Script.Net.Godot
                     // 单独写法：--host 192.168.1.10（与 --client 的第四个参数等价，后者优先）
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) serverHost = args[i + 1];
                 }
+                else if (args[i] == "--bot")
+                {
+                    // 【增量 A】脚本化客户端（开发/冒烟用）：--bot <port> <host|join> [serverIp] [deckPath]
+                    // 配合 `NetServer.tscn` 可在**一台机器**上真跑"完整流程"（建房→加入→准备→开局→对局→重开）。
+                    _isBot = true;
+                    _isClient = true;
+                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out var bp)) port = (ushort)bp;
+                    if (i + 2 < args.Length && !args[i + 2].StartsWith("--")) _botRole = args[i + 2];
+                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--")) serverHost = args[i + 3];
+                    if (i + 4 < args.Length && !args[i + 4].StartsWith("--")) _botDeckPath = args[i + 4];
+                }
+                else if (args[i] == "--lobby")
+                {
+                    // 【增量 B】直接进入联机大厅页（跳过主菜单）并自动连接：
+                    //   --lobby [serverIp] [port] [nick] [--smoke-host|--smoke-join]
+                    // 只影响联机入口；单机流程（主菜单/单机大厅）不受影响。
+                    _startLobby = true;
+                    Script.UI.Online.OnlineClientContext.AutoConnect = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) serverHost = args[i + 1];
+                    if (i + 2 < args.Length && int.TryParse(args[i + 2], out var lp)) port = (ushort)lp;
+                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--")) _lobbyNick = args[i + 3];
+                }
+                else if (args[i] == "--smoke-host")
+                {
+                    Script.UI.Online.OnlineClientContext.SmokeMode = true;
+                    Script.UI.Online.OnlineClientContext.SmokeIsHost = true;
+                }
+                else if (args[i] == "--smoke-join")
+                {
+                    Script.UI.Online.OnlineClientContext.SmokeMode = true;
+                    Script.UI.Online.OnlineClientContext.SmokeIsHost = false;
+                }
+            }
+
+            // ==================== 联机大厅页模式（增量 B：带 UI 的大厅入口） ====================
+            if (_startLobby)
+            {
+                Script.UI.Online.OnlineClientContext.LastHost = serverHost;
+                Script.UI.Online.OnlineClientContext.LastPort = port;
+                if (!string.IsNullOrWhiteSpace(_lobbyNick)) Script.UI.Online.OnlineClientContext.LastName = _lobbyNick;
+                GD.Print($"[NetMatchEntry] 进入联机大厅页（默认服务端 {serverHost}:{port}）");
+                GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
+                return;
             }
 
             if (!_isServer && !_isClient) return; // 无联机参数，本节点空转（不干扰正常单机流程）
@@ -76,40 +128,47 @@ namespace Script.Net.Godot
             _serverHost = serverHost;
             _port = port;
 
+            // ==================== BOT 模式（增量 A：大厅流程冒烟，不挂战场 UI） ====================
+            if (_isBot)
+            {
+                _botSession = ClientSession.Connect(serverHost, port, _botRole == "host" ? "房主BOT" : "玩家BOT");
+                _bot = new NetBotClient(_botSession, _botRole == "host", _botDeckPath);
+                GD.Print($"[NetMatchEntry] BOT 客户端已启动（角色 {_botRole}，服务端 {serverHost}:{port}）");
+                return;
+            }
+
             _launcher = new NetworkMatchLauncher();
             AddChild(_launcher); // launcher 自带 _Process 驱动 ENet Poll
 
+            // ==================== 服务端（薄适配：与 NetServer.tscn 走同一实现） ====================
+            // 历史：早期 `--server` 用 NetworkMatchLauncher 起"单场服务端"（无大厅）。批次 6 起统一为
+            // **大厅服务端**（LobbyServerHost）——避免两条服务端形态并存；单场启动器仅保留给测试/回环。
             if (_isServer)
             {
-                // 服务端：查找场景中装配好的 GameInitializer（对局组合根），必要时初始化 + 起手
-                var gi = GetNodeOrNull<GameInitializer>("GameInitializer")
-                         ?? GetParent()?.GetNodeOrNull<GameInitializer>("GameInitializer");
-                if (gi == null)
+                var host = new LobbyServerHost { Name = "LobbyServerHost" };
+                AddChild(host);
+                if (!host.Start(Script.Net.Lobby.ServerConfig.FromArgs(args)))
                 {
-                    GD.PushError("[NetMatchEntry] --server 需要场景中存在 GameInitializer 节点");
+                    GD.PrintErr("[NetMatchEntry] 服务端启动失败，进程退出");
+                    GetTree().Quit(1);
                     return;
                 }
-                if (gi.ZoneManager == null || gi.TurnManager == null)
-                {
-                    gi.InitializeAll();
-                    gi.StartMatch();
-                    SetupInitialAreas(gi); // 命令行场景无 Arena，手动摆 3 个初始地区（纯逻辑，供地区投影验证）
-                }
-                _launcher.StartServerOnly(gi, port);
-                GD.Print($"[NetMatchEntry] 服务端进程就绪（端口 {port}，含 {gi.AreaManager?.GetOrderedAreaUids().Count} 个地区）。等待客户端连接...");
-                PrintLocalAddresses(port);
+                GD.Print("[NetMatchEntry] --server 已映射到大厅服务端（与 NetServer.tscn 同一实现）");
+                return;
             }
-            else if (_isClient)
+
+            // ==================== 旧式客户端（薄适配：映射到大厅流程） ====================
+            // 历史：`--client <port> <pid> [ip]` 直接挂单场战场、等待服务端推快照。批次 6 起统一为
+            // "进大厅页（自动连接）"；座位由服务端在房间内分配，故 pid 参数不再需要（保留兼容、仅打印提示）。
+            if (_isClient)
             {
-                var clientCard = new NetClientCardManager();
-                _launcher.StartClientOnly(clientCard, port, null, clientPlayerId, serverHost);
-                // 挂载联机战场（快照驱动 UI，布局与单机 Arena 一致），显示客户端投影 + 提供操作
-                var arenaOlScene = GD.Load<PackedScene>("res://Scenes/Net/ArenaOl.tscn");
-                var arenaOl = arenaOlScene.Instantiate<Script.UI.ArenaOl>();
-                arenaOl.Name = "ArenaOl";
-                AddChild(arenaOl);
-                arenaOl.AttachLauncher(_launcher, clientPlayerId);
-                GD.Print($"[NetMatchEntry] 客户端进程就绪（玩家{clientPlayerId} + 服务端 {serverHost} 端口 {port}）。等待服务端快照...");
+                GD.Print($"[NetMatchEntry] --client 已映射到大厅客户端（忽略 pid={clientPlayerId}，座位由房间分配）");
+                Script.UI.Online.OnlineClientContext.AutoConnect = true;
+                Script.UI.Online.OnlineClientContext.LastHost = serverHost;
+                Script.UI.Online.OnlineClientContext.LastPort = port;
+                Script.UI.Online.OnlineClientContext.LastName = $"玩家{clientPlayerId}";
+                GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
+                return;
             }
         }
 
@@ -135,6 +194,13 @@ namespace Script.Net.Godot
 
         public override void _Process(double delta)
         {
+            // BOT 模式：只驱动 ClientSession（无战场 UI、无本地规则）
+            if (_isBot)
+            {
+                _bot?.Poll(delta);
+                return;
+            }
+
             if (_launcher == null) return;
 
             // 显式驱动 ENet Poll（launcher 已被 AddChild，引擎也会调；显式调用更保险）

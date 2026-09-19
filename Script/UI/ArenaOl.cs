@@ -25,7 +25,7 @@ namespace Script.UI
     [GlobalClass]
     public partial class ArenaOl : Control
     {
-        private NetworkMatchLauncher _launcher;
+        private IMatchClientView _matchClient;   // 客户端对局视图（单场启动器 or 大厅会话，两者同接口）
         private int _localPlayerId = 1;
 
         private Control _p1Hand;
@@ -196,28 +196,60 @@ namespace Script.UI
             }
         }
 
-        public void AttachLauncher(NetworkMatchLauncher launcher, int localPlayerId = 1)
+        /// <summary>
+        /// 挂载"客户端对局视图"（统一入口，增量 B）：
+        ///   · 单场装配器路径传 `NetworkMatchLauncher`；
+        ///   · 大厅路径传 `ClientSession`（一条连接贯穿大厅与对局）。
+        /// 两者都实现 <see cref="IMatchClientView"/>，故战场表现层只有一条代码路径。
+        /// </summary>
+        public void AttachMatchClient(IMatchClientView client, int localPlayerId = 1)
         {
-            _launcher = launcher;
+            _matchClient = client;
             _localPlayerId = localPlayerId;
             _snapshotQueue.Reset();   // 换局/新连接：清空基准快照与待应用队列
-            if (_launcher != null)
+            if (_matchClient != null)
             {
-                _launcher.OnClientSnapshot += OnSnapshotReceived;
-                _launcher.OnClientChoiceRequest += OnClientChoiceRequest;
-                _launcher.OnClientIntentRejected += OnClientIntentRejected;
+                _matchClient.OnClientSnapshot += OnSnapshotReceived;
+                _matchClient.OnClientChoiceRequest += OnClientChoiceRequest;
+                _matchClient.OnClientIntentRejected += OnClientIntentRejected;
+
+                // 【关键】晚订阅者补帧：大厅流程中初始快照在"房间页"阶段就已到达（服务端建局即推送），
+                // 而本战场页是之后才挂载的——若只靠事件订阅会漏掉首帧，表现为"进入对战后一张卡都不显示"。
+                if (_matchClient.LastSnapshot != null)
+                {
+                    GD.Print("[ArenaOl] 补帧：使用最近一次快照重建战场（晚挂载场景）");
+                    OnSnapshotReceived(_matchClient.LastSnapshot);
+                }
             }
         }
 
+        /// <summary>兼容旧调用点（单场装配器）。</summary>
+        public void AttachLauncher(NetworkMatchLauncher launcher, int localPlayerId = 1)
+            => AttachMatchClient(launcher, localPlayerId);
+
+        /// <summary>兼容旧调用点（大厅会话）。</summary>
+        public void AttachSession(Script.Net.Godot.ClientSession session, int localPlayerId = 0)
+            => AttachMatchClient(session, localPlayerId != 0 ? localPlayerId : session.MySeat);
+
         public void DetachLauncher()
         {
-            if (_launcher != null)
+            if (_matchClient != null)
             {
-                _launcher.OnClientSnapshot -= OnSnapshotReceived;
-                _launcher.OnClientChoiceRequest -= OnClientChoiceRequest;
-                _launcher.OnClientIntentRejected -= OnClientIntentRejected;
+                _matchClient.OnClientSnapshot -= OnSnapshotReceived;
+                _matchClient.OnClientChoiceRequest -= OnClientChoiceRequest;
+                _matchClient.OnClientIntentRejected -= OnClientIntentRejected;
             }
-            _launcher = null;
+            _matchClient = null;
+        }
+
+        /// <summary>
+        /// 离开战场页（切回房间页/大厅页）时**必须反订阅**：`ClientSession` 是进程级长寿命对象，
+        /// 而本节点会被切场景释放；不反订阅会让后续快照/决策请求打到已释放节点（ObjectDisposedException）。
+        /// </summary>
+        public override void _ExitTree()
+        {
+            DetachLauncher();
+            base._ExitTree();
         }
 
         /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
@@ -242,8 +274,8 @@ namespace Script.UI
             }
             _choicePromptPanel.Init(request, ResolveChoiceLabel, result =>
             {
-                if (_launcher != null)
-                    _launcher.SendChoiceResult(result);
+                if (_matchClient != null)
+                    _matchClient.SendChoiceResult(result);
             });
             var vpSize = GetViewport().GetVisibleRect().Size;
             _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
@@ -317,7 +349,7 @@ namespace Script.UI
                         res.SelectedUids.Add(kv.Key.UID);
                         res.SelectedAmounts.Add(kv.Value);
                     }
-                _launcher?.SendChoiceResult(res);
+                _matchClient?.SendChoiceResult(res);
                 _onlineStrengthWindow = null;
                 _onlineCombatWindowOpen = false;
                 _activationSelectionBusy = false;
@@ -344,7 +376,7 @@ namespace Script.UI
             var cards = new List<CardInstance>();
             // 【关键】决策等待期间服务端不会推快照 → 待分配卡必须随请求下发（OptionCardRefs）；
             // 客户端用投影 CardManager 按引用重建实例（含模板，可显示卡面）。
-            var clientCardMgr = _launcher?.ClientCardManager;
+            var clientCardMgr = _matchClient?.ClientCardManager;
             if (clientCardMgr != null && req.OptionCardRefs != null)
             {
                 foreach (var r in req.OptionCardRefs)
@@ -357,7 +389,7 @@ namespace Script.UI
             // 兜底：若请求未带引用（旧服务端），退回用快照投影的待分配卡
             if (cards.Count == 0)
             {
-                var projected = _launcher?.ClientInvestigationCards;
+                var projected = _matchClient?.ClientInvestigationCards;
                 if (projected != null) foreach (var c in projected) if (c != null) cards.Add(c);
             }
             if (cards.Count == 0)
@@ -378,7 +410,7 @@ namespace Script.UI
                     // 回包语义：SelectedUids = 放回牌库顶的顺序（未选中的由服务端放牌库底）
                     var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
                     if (toTop != null) foreach (var c in toTop) if (c != null) res.SelectedUids.Add(c.UID);
-                    _launcher?.SendChoiceResult(res);
+                    _matchClient?.SendChoiceResult(res);
                     _onlineInvestigationWindow = null;
                     _onlineCombatWindowOpen = false;
                     _activationSelectionBusy = false;
@@ -402,7 +434,7 @@ namespace Script.UI
             AddChild(win);
             win.Configure(req.AreaNo, (CombatManager.CombatType)req.CombatTypeValue, confirmed =>
             {
-                _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
                 {
                     RequestId = req.RequestId,
                     Cancelled = !confirmed,
@@ -442,7 +474,7 @@ namespace Script.UI
             string tapLabel = $"横置{sourceName}";
             win.Init(req.Prompt, payLabel, !req.PayAllowed, tapLabel, pay =>
             {
-                _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
                 {
                     RequestId = req.RequestId,
                     Pay = pay,
@@ -525,7 +557,7 @@ namespace Script.UI
             ClearActivationTargetSelection();
             _pendingChoiceTargetRequest = null;
             if (string.IsNullOrEmpty(targetUid) || req == null) return;
-            _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+            _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
             {
                 RequestId = req.RequestId,
                 SelectedUid = targetUid,
@@ -571,12 +603,12 @@ namespace Script.UI
                         Cancelled = false,
                     };
                     if (indices != null) res.SelectedIndices.AddRange(indices);
-                    _launcher?.SendChoiceResult(res);
+                    _matchClient?.SendChoiceResult(res);
                     GD.Print($"[ArenaOl] 触发排序入堆叠已回包：{res.SelectedIndices.Count} 个（顺序 {string.Join(",", res.SelectedIndices)}）");
                 };
                 _onlineTriggerOrderWindow.OnDone = () =>
                 {
-                    _launcher?.SendChoiceResult(new Script.Net.ChoiceResult
+                    _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
                     {
                         RequestId = decisionReq.RequestId,
                         Cancelled = true,
@@ -625,7 +657,7 @@ namespace Script.UI
         private Script.Data.Cards.PlayerCardData ResolvePlayerTemplateByUid(string uid)
         {
             if (string.IsNullOrEmpty(uid)) return null;
-            var inst = _launcher?.ClientCardManager?.GetInstance(uid) ?? FindInstanceInAllZones(uid);
+            var inst = _matchClient?.ClientCardManager?.GetInstance(uid) ?? FindInstanceInAllZones(uid);
             return inst?.PlayerTemplate as Script.Data.Cards.PlayerCardData;
         }
 
@@ -697,7 +729,7 @@ namespace Script.UI
         {
             if (string.IsNullOrEmpty(uid)) return "（未命名）";
             // 玩家卡（手牌/争夺区/附属等）
-            var inst = _launcher?.ClientZoneManager != null ? FindInstanceInAllZones(uid) : null;
+            var inst = _matchClient?.ClientZoneManager != null ? FindInstanceInAllZones(uid) : null;
             if (inst != null)
             {
                 if (inst.PlayerTemplate != null) return inst.PlayerTemplate.CardName ?? uid;
@@ -705,7 +737,7 @@ namespace Script.UI
                 if (inst.CouncilTemplate != null) return inst.CouncilTemplate.CardName ?? uid;
             }
             // 地区实例（独立 CardManager 中的地区卡）
-            var area = _launcher?.ClientAreaManager?.GetOrderedAreaInstances()?.Find(a => a != null && a.UID == uid);
+            var area = _matchClient?.ClientAreaManager?.GetOrderedAreaInstances()?.Find(a => a != null && a.UID == uid);
             if (area?.AreaTemplate != null) return area.AreaTemplate.CardName ?? uid;
             return uid;
         }
@@ -713,7 +745,7 @@ namespace Script.UI
         /// <summary>在客户端投影 ZoneManager 的全部区域桶里按 UID 查卡实例。</summary>
         private Script.Game.Entities.CardInstance FindInstanceInAllZones(string uid)
         {
-            var zone = _launcher?.ClientZoneManager;
+            var zone = _matchClient?.ClientZoneManager;
             if (zone == null) return null;
             foreach (var z in new[] { CardZone.Hand, CardZone.Graveyard, CardZone.AssetZone, CardZone.AreaZone, CardZone.AttachedZone, CardZone.SealedZone, CardZone.CouncilZone, CardZone.ScoreZone, CardZone.Stack })
             {
@@ -729,10 +761,10 @@ namespace Script.UI
         // ==================== 快照渲染（全量重建） ====================
         private void ApplySnapshot(GameSnapshot snap)
         {
-            if (_launcher == null) return;
+            if (_matchClient == null) return;
             ClearAllUI();
 
-            var zone = _launcher.ClientZoneManager;
+            var zone = _matchClient.ClientZoneManager;
             if (zone != null)
             {
                 // 手牌/墓地/资产区：ZoneManager 投影区域桶（玩家卡，PlayerTemplate != null）
@@ -761,7 +793,7 @@ namespace Script.UI
 
             RebuildWorldDeck();
 
-            var turn = _launcher.ClientTurnManager;
+            var turn = _matchClient.ClientTurnManager;
             if (_phaseLabel != null && turn != null)
                 _phaseLabel.Text = $"回合{turn.TurnCount} 阶段={turn.CurrentPhase} 优先权={turn.PriorityPlayerId}";
 
@@ -785,18 +817,35 @@ namespace Script.UI
 
             ArrangeAll();
 
+            // 诊断日志：战场重建完成（用于排查"进入对战后没有卡牌"这类问题——能从日志直接看到手牌/场上数量）
+            GD.Print($"[ArenaOl] 战场已按快照重建：手牌 {_p1Hand?.GetChildCount() ?? 0}/{_p2Hand?.GetChildCount() ?? 0}"
+                + $"，争夺区 {CountAllAreaCards()} 张，地区 {_areaSlots.Count} 个，堆叠 {_stackContainer?.GetChildCount() ?? 0}");
+
             // 快照即权威状态：每次全量重建后刷新「可发动」高亮（联机无本地优先权变更事件）
             RefreshActivateHighlights();
+        }
+
+        /// <summary>争夺区已渲染卡数（诊断日志用）。</summary>
+        private int CountAllAreaCards()
+        {
+            int n = 0;
+            foreach (var slot in _areaSlots)
+            {
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                n += slot.Player1Area?.GetChildCount() ?? 0;
+                n += slot.Player2Area?.GetChildCount() ?? 0;
+            }
+            return n;
         }
 
         /// <summary>联机「可发动」高亮：复用单机 ActivateEligibility.CanActivate（客户端投影管理器已具备其全部依赖），
         /// 对争夺区 + 附属区已渲染的卡刷新 CardUI.SetActivatableHighlight。与单机 Arena.RefreshActivateHighlights 同源规则。</summary>
         private void RefreshActivateHighlights()
         {
-            var zone = _launcher?.ClientZoneManager;
-            var cardMgr = _launcher?.ClientCardManager;
-            var turn = _launcher?.ClientTurnManager;
-            var player = _launcher?.ClientPlayerManager;
+            var zone = _matchClient?.ClientZoneManager;
+            var cardMgr = _matchClient?.ClientCardManager;
+            var turn = _matchClient?.ClientTurnManager;
+            var player = _matchClient?.ClientPlayerManager;
             if (zone == null || cardMgr == null || turn == null || player == null) return;
 
             var instances = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
@@ -814,7 +863,7 @@ namespace Script.UI
         /// 牌库数据在客户端投影 DeckManager（ZoneManager.GetZoneCards(Deck) 恒空）。</summary>
         private void RebuildDecks()
         {
-            var deckMgr = _launcher?.ClientDeckManager;
+            var deckMgr = _matchClient?.ClientDeckManager;
             if (deckMgr == null) return;
             var d1 = deckMgr.GetDeckPlayer1();
             var d2 = deckMgr.GetDeckPlayer2();
@@ -962,7 +1011,7 @@ namespace Script.UI
         private void RebuildCouncils()
         {
             if (_councilUIScene == null) return;
-            var zone = _launcher?.ClientZoneManager;
+            var zone = _matchClient?.ClientZoneManager;
             if (zone == null) return;
 
             foreach (var ui in _councilCardUIMap.Values)
@@ -1003,7 +1052,7 @@ namespace Script.UI
         /// 注意：必须"先 AddChild 再 Setup"（Setup 在 AddChild 前会被 _Ready 的默认 SetFace(false) 覆盖成卡背）。</summary>
         private void RebuildAttachmentsAndSeals()
         {
-            var zone = _launcher?.ClientZoneManager;
+            var zone = _matchClient?.ClientZoneManager;
             if (zone == null) return;
 
             var cards = new System.Collections.Generic.List<CardInstance>();
@@ -1126,7 +1175,7 @@ namespace Script.UI
         /// <summary>重建分数区（ScoreZone）：渲染赢取地区/计分卡，并从快照刷新双方胜利分数。</summary>
         private void RebuildScoreZone(GameSnapshot snap)
         {
-            var zone = _launcher?.ClientZoneManager;
+            var zone = _matchClient?.ClientZoneManager;
             if (zone == null) return;
 
             for (int p = 1; p <= 2; p++)
@@ -1197,10 +1246,10 @@ namespace Script.UI
             _stackEntryUIMap.Clear();
             ClearStackArrows();
 
-            var stack = _launcher?.ClientStackManager;
+            var stack = _matchClient?.ClientStackManager;
             if (stack == null || _stackEntryScene == null) return;
 
-            var snaps = _launcher?.ClientStackSnapshot;   // 与 Entries 同序（ApplySnapshot 按序追加）
+            var snaps = _matchClient?.ClientStackSnapshot;   // 与 Entries 同序（ApplySnapshot 按序追加）
             var entries = stack.Entries;
             for (int i = 0; i < entries.Count; i++)
             {
@@ -1330,7 +1379,7 @@ namespace Script.UI
         /// <summary>刷新各地区势力标记（从客户端投影 AreaManager 读取）。</summary>
         private void RefreshAreaMarks()
         {
-            var areaMgr = _launcher?.ClientAreaManager;
+            var areaMgr = _matchClient?.ClientAreaManager;
             if (areaMgr == null) return;
             foreach (var slot in _areaSlots)
             {
@@ -1345,8 +1394,8 @@ namespace Script.UI
         /// <summary>本地玩家投降。仅允许操作自己，越权忽略。</summary>
         public void DoConcede(int playerId)
         {
-            if (_launcher == null || !IsLocalPlayer(playerId)) return;
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Concede);
+            if (_matchClient == null || !IsLocalPlayer(playerId)) return;
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Concede);
             GD.Print($"[ArenaOl] 上行 Concede: 玩家{_localPlayerId}");
         }
 
@@ -1367,12 +1416,12 @@ namespace Script.UI
         /// <summary>把多行 PM 命令逐行作为 DebugCommand 意图上行（空行/# 注释跳过）。</summary>
         private void SendPMBatch(string text)
         {
-            if (string.IsNullOrWhiteSpace(text) || _launcher == null) return;
+            if (string.IsNullOrWhiteSpace(text) || _matchClient == null) return;
             foreach (var raw in text.Split(new[] { '\n', '\r' }, System.StringSplitOptions.RemoveEmptyEntries))
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#")) continue;
-                _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DebugCommand, line);
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DebugCommand, line);
                 GD.Print($"[ArenaOl] 上行 DebugCommand: {line}");
             }
         }
@@ -1478,9 +1527,9 @@ namespace Script.UI
         private void OnCovertRevealRequested(CardUI cardUI)
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止现身暗藏
-            if (cardUI?.Instance == null || _launcher == null) return;
+            if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离：只能现身自己的暗藏
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.RevealCovert, cardUI.Instance.UID);
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.RevealCovert, cardUI.Instance.UID);
             GD.Print($"[ArenaOl] 上行 RevealCovert: {cardUI.Instance.PlayerTemplate?.CardName}");
         }
 
@@ -1488,7 +1537,7 @@ namespace Script.UI
         private void OnAttachmentDoubleClicked(CardUI cardUI)
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：防重复双击/提示窗期间
-            if (cardUI?.Instance == null || _launcher == null) return;
+            if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离
             var inst = cardUI.Instance;
             var abilities = new List<EffectData>();
@@ -1512,7 +1561,7 @@ namespace Script.UI
         private void OnCouncilDoubleClicked(CouncilCardUI cardUI)
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;
-            if (cardUI?.Instance == null || _launcher == null) return;
+            if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;
             var inst = cardUI.Instance;
             var councilTmpl = inst.CouncilTemplate;
@@ -1620,7 +1669,7 @@ namespace Script.UI
         /// <summary>统一激活上行入口：无目标直接上行；需目标则进入"场上点击高亮"选目标，选中后上行带 targetUid。</summary>
         private void SendActivation(CardInstance inst, EffectData ability)
         {
-            if (inst == null || ability == null || _launcher == null) return;
+            if (inst == null || ability == null || _matchClient == null) return;
             string name = inst.PlayerTemplate?.CardName ?? inst.CouncilTemplate?.CardName ?? "卡";
             if (ability.Target != null && ability.Target.NeedsSelection)
             {
@@ -1632,7 +1681,7 @@ namespace Script.UI
                 BeginActivationTargetSelection(inst, ability);
                 return;
             }
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, ability.EffectId, "");
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, ability.EffectId, "");
             GD.Print($"[ArenaOl] 上行 ActivateAbility: {name} effect={ability.EffectId}");
         }
 
@@ -1677,7 +1726,7 @@ namespace Script.UI
             if (!ReferenceEquals(_handDragHighlightSource, dragging)) ClearHandDragTargetHighlights();
             _handDragHighlightSource = dragging;
 
-            var cardMgr = _launcher?.ClientCardManager;
+            var cardMgr = _matchClient?.ClientCardManager;
             if (cardMgr == null) return;
 
             foreach (var kv in _cardUIMap)
@@ -1733,7 +1782,7 @@ namespace Script.UI
             var legal = new HashSet<string>();
             if (source == null || ability?.Target == null || !ability.Target.NeedsSelection) return legal;
             if (ability.Target.Kind == TargetKind.Area) return legal;
-            var zone = _launcher?.ClientZoneManager;
+            var zone = _matchClient?.ClientZoneManager;
             if (zone == null) return legal;
             var cards = zone.GetZoneCards(CardZone.AreaZone, 0);
             if (cards == null) return legal;
@@ -1802,12 +1851,12 @@ namespace Script.UI
             var ab = _activationTargetAbility;
             var playUid = _pendingPlayCardUid;      // 事务卡出牌路径（甲1）
             ClearActivationTargetSelection();
-            if (string.IsNullOrEmpty(targetUid) || _launcher == null) return;
+            if (string.IsNullOrEmpty(targetUid) || _matchClient == null) return;
 
             // 路径一：事务卡（需目标出牌）——复刻单机 BeginSorceryTargetSelection 的"选完目标再出牌"
             if (!string.IsNullOrEmpty(playUid))
             {
-                _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, playUid, "", targetUid);
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, playUid, "", targetUid);
                 GD.Print($"[ArenaOl] 上行 PlayCard(事务卡+目标): {playUid} target={targetUid}");
                 return;
             }
@@ -1815,7 +1864,7 @@ namespace Script.UI
             // 路径二：激活能力（原有）
             if (src == null || ab == null) return;
             string name = src.PlayerTemplate?.CardName ?? src.CouncilTemplate?.CardName ?? "卡";
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, src.UID, ab.EffectId, targetUid);
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, src.UID, ab.EffectId, targetUid);
             GD.Print($"[ArenaOl] 上行 ActivateAbility(+目标): {name} effect={ab.EffectId} target={targetUid}");
         }
 
@@ -1850,19 +1899,19 @@ namespace Script.UI
         /// </summary>
         private void BeginOnlinePlayCardTargetSelection(CardInstance card)
         {
-            if (card?.PlayerTemplate == null || _launcher == null) return;
+            if (card?.PlayerTemplate == null || _matchClient == null) return;
 
             // 费用预检（对齐单机：费用不足不弹窗、直接不发动）；用快照投影的费用修正计算
             int cost = Mathf.Max(0, card.PlayerTemplate.Cost - ComputeClientCostMod(card));
-            var playerMgr = _launcher.ClientPlayerManager;
+            var playerMgr = _matchClient.ClientPlayerManager;
             if (cost > 0 && playerMgr != null && playerMgr.GetAvailableMana(_localPlayerId) < cost)
             {
                 GD.Print($"[ArenaOl] 事务卡 {card.PlayerTemplate.CardName} 费用不足（需{cost}），不弹选目标窗");
                 return;
             }
 
-            var clientCardMgr = _launcher.ClientCardManager;
-            var zone = _launcher.ClientZoneManager;
+            var clientCardMgr = _matchClient.ClientCardManager;
+            var zone = _matchClient.ClientZoneManager;
             if (clientCardMgr == null || zone == null) return;
 
             // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类，与单机一致）
@@ -2004,9 +2053,9 @@ namespace Script.UI
             if (ability == null) return false;
 
             // 与单机 CardDragController.TryBeginActivateDragAt 同源门禁：优先权 + 费用 + 生效区 + 行动窗口 + 有合法目标
-            var cardMgr = _launcher?.ClientCardManager;
-            var turn = _launcher?.ClientTurnManager;
-            var player = _launcher?.ClientPlayerManager;
+            var cardMgr = _matchClient?.ClientCardManager;
+            var turn = _matchClient?.ClientTurnManager;
+            var player = _matchClient?.ClientPlayerManager;
             if (cardMgr == null || turn == null || player == null) return false;
             if (!ActivateEligibility.CanActivate(inst, turn, player, cardMgr)) return false;
 
@@ -2056,12 +2105,12 @@ namespace Script.UI
             string effectId = ab?.EffectId;
             CancelOnlineActivateDrag();
 
-            if (!ok || _launcher == null)
+            if (!ok || _matchClient == null)
             {
                 GD.Print("[ArenaOl] 激活拖拽取消（落点非合法目标）");
                 return;
             }
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, srcUid, effectId, targetUid);
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, srcUid, effectId, targetUid);
             GD.Print($"[ArenaOl] 上行 ActivateAbility(拖拽): {srcName} effect={effectId} target={targetUid}");
         }
 
@@ -2147,7 +2196,7 @@ namespace Script.UI
         /// FilterText 空=全匹配；否则卡名含 FilterText 或 Organization == FilterText）。纯展示，不参与结算。</summary>
         private int ComputeClientCostMod(CardInstance inst)
         {
-            var mods = _launcher?.ClientCostMods;
+            var mods = _matchClient?.ClientCostMods;
             if (mods == null || mods.Count == 0 || inst?.PlayerTemplate == null || inst.IsHidden) return 0;
             var tmpl = inst.PlayerTemplate;
             int total = 0;
@@ -2166,7 +2215,7 @@ namespace Script.UI
         private void RebuildWorldDeck()
         {
             if (_worldDeckZone == null) return;
-            var wm = _launcher?.ClientWorldDeckManager;
+            var wm = _matchClient?.ClientWorldDeckManager;
             if (wm == null) return;
             _worldDeckZone.Initialize(wm.Count, _areaCardUIScene);
         }
@@ -2175,7 +2224,7 @@ namespace Script.UI
         /// 地区数据在客户端投影 AreaManager（GetOrderedAreaInstances 按槽位排序），不在 ZoneManager 的 AreaZone 桶。</summary>
         private void RebuildAreas()
         {
-            var areaMgr = _launcher?.ClientAreaManager;
+            var areaMgr = _matchClient?.ClientAreaManager;
             if (areaMgr == null) return;
             var areaInstances = areaMgr.GetOrderedAreaInstances();
 
@@ -2199,7 +2248,7 @@ namespace Script.UI
                 // 【对齐单机】注入统计依赖（客户端投影的 Zone/Player Manager）→ 地区"调查/战斗/势力"统计可显示。
                 // AreaStatsCalculator 只依赖这两个 Manager，且客户端 PlayerManager 已注入投影 ZoneManager
                 // 并已由快照设置先手（SetFirstPlayer），故统计与单机同源同值。
-                slot.SetStatsDependencies(_launcher?.ClientZoneManager, _launcher?.ClientPlayerManager);
+                slot.SetStatsDependencies(_matchClient?.ClientZoneManager, _matchClient?.ClientPlayerManager);
                 slot.Setup(inst, i + 1, false, _areaCardUIScene);
                 _areaSlots.Add(slot);
             }
@@ -2335,16 +2384,16 @@ namespace Script.UI
         public void DoPass(int playerId)
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止让过
-            if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
+            if (_matchClient == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
 
         /// <summary>本地玩家结束回合/让过推进阶段。仅允许操作自己，越权忽略。</summary>
         public void DoEndTurn(int playerId)
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止结束回合
-            if (_launcher == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
+            if (_matchClient == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
 
         // ==================== 联机拖拽落点判定 + 意图上行 ====================
@@ -2373,7 +2422,7 @@ namespace Script.UI
         {
             if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗/对抗窗口期间禁止拖拽出牌
             if (cardUI?.Instance == null) return;
-            if (_launcher == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
+            if (_matchClient == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
             var inst = cardUI.Instance;
             var tmpl = inst.PlayerTemplate;
             if (tmpl == null) return;
@@ -2398,7 +2447,7 @@ namespace Script.UI
                     _maskMode = MaskMode.None;
                     return;
                 }
-                _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DeployCovert, cardUid, areaUid);
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DeployCovert, cardUid, areaUid);
                 _maskMode = MaskMode.None;
                 GD.Print($"[ArenaOl] 上行 DeployCovert: {inst.PlayerTemplate?.CardName} → 地区 {areaUid}");
                 return;
@@ -2417,13 +2466,13 @@ namespace Script.UI
                     _maskMode = MaskMode.None;
                     return;
                 }
-                _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.EstablishAsset, cardUid);
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.EstablishAsset, cardUid);
                 _maskMode = MaskMode.None;
                 GD.Print($"[ArenaOl] 上行 EstablishAsset: {inst.PlayerTemplate?.CardName}");
                 return;
             }
 
-            var clientCardMgr = _launcher.ClientCardManager;
+            var clientCardMgr = _matchClient.ClientCardManager;
             bool isCharacter = (tmpl.CategoryFlag & CardCategory.Character) != 0;
             bool requiresTarget = tmpl.GetRequiresTarget();
 
@@ -2439,7 +2488,7 @@ namespace Script.UI
                 if (councilContainer != null && GodotObject.IsInstanceValid(councilContainer)
                     && councilContainer.GetGlobalRect().HasPoint(dropPos))
                 {
-                    var councilCards = _launcher.ClientZoneManager?.GetZoneCards(CardZone.CouncilZone, _localPlayerId);
+                    var councilCards = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.CouncilZone, _localPlayerId);
                     var councilInst = councilCards?.Find(c => c != null);
                     if (councilInst != null && clientCardMgr.IsLegalPlayTarget(inst, councilInst))
                         targetCardUid = councilInst.UID;
@@ -2476,7 +2525,7 @@ namespace Script.UI
                 return;
             }
 
-            _launcher.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid,
+            _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid,
                 targetAreaUid ?? "", targetCardUid ?? "");
             GD.Print($"[ArenaOl] 上行 PlayCard: {tmpl.CardName} targetArea={targetAreaUid ?? "无"} targetCard={targetCardUid ?? "无"}");
         }

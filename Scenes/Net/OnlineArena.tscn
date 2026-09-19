@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://colonlinearena"]
+
+[ext_resource type="Script" path="res://Script/UI/Online/OnlineArenaEntry.cs" id="1_oae"]
+
+[node name="OnlineArena" type="Node"]
+script = ExtResource("1_oae")

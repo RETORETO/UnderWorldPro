@@ -30,26 +30,28 @@ namespace Script.Tests
 
         public void TestNetworkGatewayEndToEnd()
         {
-            var transport = new LoopbackTransport();
+            // 批次 1：传输层改为会话寻址；本测试用"座位 1 ↔ 会话 p1"的回环辅助（断言不变）。
+            var loop = new PlayerIdLoopback();
+            var transport = loop.Transport;
             transport.Start();
 
             // 模拟"玩家1客户端"：收到任何请求都回 Pay=true（等价于自动付费）
             // Phase B：请求/回包均带类型信封 v2（NetEnvelope），此处按真实客户端行为解包/包裹。
-            transport.RegisterClient(1, serverMsg =>
+            loop.RegisterClient(1, serverMsg =>
             {
                 var req = ChoiceSerializer.DeserializeRequest(NetEnvelope.UnwrapPayload(serverMsg));
                 if (req != null)
                 {
                     var result = new ChoiceResult { RequestId = req.RequestId, Pay = true, Cancelled = false };
-                    transport.ClientReply(1, NetEnvelope.Wrap(NetEnvelope.Types.ChoiceResult,
+                    loop.ClientReply(1, NetEnvelope.Wrap(NetEnvelope.Types.ChoiceResult,
                         ChoiceSerializer.SerializeResult(result)));
                 }
             });
 
             var gateway = new NetworkInputGateway(transport);
             // 统一分发方：服务端收到客户端上行 ChoiceResult 后，显式转发给网关完成挂起请求。
-            // （NetworkInputGateway 设计为不自行订阅 OnMessageReceived，避免与传输其他订阅者互相覆盖。）
-            transport.OnMessageReceived((pid, msg) => gateway.TryHandleResult(msg));
+            // （NetworkInputGateway 设计为不自行订阅会话消息，避免与传输其他订阅者互相覆盖。）
+            transport.OnSessionMessage((sessionId, msg) => gateway.TryHandleResult(msg));
 
             var ee = new Script.Manager.EffectEngine();
             ee.InputGateway = gateway;

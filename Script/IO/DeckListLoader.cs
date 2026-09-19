@@ -45,7 +45,30 @@ public static class DeckListLoader
             return null;
         }
 
-        var root = json.As<Godot.Collections.Dictionary>();
+        return BuildFromRoot(json.As<Godot.Collections.Dictionary>(), path);
+    }
+
+    /// <summary>
+    /// 【联机·服务端校验用】从 **JSON 文本**解析卡组（服务端不一定持有客户端本地的卡组文件）。
+    /// 语义与 <see cref="Load"/> 完全一致（含"无秘社则补默认秘社"兜底）；解析失败返回 null。
+    /// </summary>
+    public static DeckList LoadFromText(string jsonText, string sourceLabel = "(inline)")
+    {
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            GD.PushError($"[DeckListLoader] 卡组 JSON 为空: {sourceLabel}");
+            return null;
+        }
+        var json = Json.ParseString(jsonText);
+        if (json.VariantType != Variant.Type.Nil && json.VariantType == Variant.Type.Dictionary)
+            return BuildFromRoot(json.As<Godot.Collections.Dictionary>(), sourceLabel);
+        GD.PushError($"[DeckListLoader] 卡组 JSON 解析失败: {sourceLabel}");
+        return null;
+    }
+
+    /// <summary>把已解析的根字典装配为 `DeckList`（`Load` 与 `LoadFromText` 共用，避免两份解析逻辑）。</summary>
+    private static DeckList BuildFromRoot(Godot.Collections.Dictionary root, string sourceLabel)
+    {
         var deck = new DeckList();
         if (root.ContainsKey("deckName")) deck.DeckName = root["deckName"].AsString();
 
@@ -72,8 +95,25 @@ public static class DeckListLoader
         {
             deck.Councils.Add(new DeckList.DeckEntry { TemplatePath = FallbackCouncilPath, Copies = 1 });
         }
-
+        _ = sourceLabel;
         return deck;
+    }
+
+    /// <summary>
+    /// 把卡组序列化为 JSON **文本**（不落盘）。
+    /// 用途：**联机客户端把卡组内联提交给服务端**（服务端不一定持有客户端本机的卡组文件）。
+    /// 与 <see cref="Save"/> 使用同一字段名，保证服务端 `LoadFromText` 能解析。
+    /// </summary>
+    public static string ToJsonText(DeckList deck)
+    {
+        if (deck == null) return null;
+        var root = new Godot.Collections.Dictionary
+        {
+            ["deckName"] = deck.DeckName,
+            ["cards"] = ToArray(deck.Cards),
+            ["councils"] = ToArray(deck.Councils),
+        };
+        return Json.Stringify(root);
     }
 
     /// <summary>将卡组序列化写回 JSON 文件（覆盖式）。</summary>

@@ -1053,7 +1053,7 @@ public partial class TurnManager : Node
                     ? new Script.Manager.TargetValidity.TargetSnapshot(
                         entry.SourceZoneDetailSnapshot, entry.SourceControllerSnapshot)
                     : (Script.Manager.TargetValidity.TargetSnapshot?)null;
-                var (valid, reason) = TargetValidity.Check(source, target, desc, snapshot);
+                var (valid, reason) = TargetValidity.Check(source, target, desc, snapshot, _playerManager);
                 if (!valid)
             {
                 GD.Print($"⚑ [D16] 目标 {targetUid} 结算复检不合法（{reason}）：发动地快照={entry.SourceZoneDetailSnapshot}，" +

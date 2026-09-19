@@ -25,37 +25,28 @@ namespace Script.Net.Godot
     ///   - 客户端上行：PlayerIntent JSON（IntentSerializer 已含 IncludeFields）；
     ///   - 服务端下行：IntentResult JSON（意图回执）/ "SNAP:" + SnapshotSerializer JSON（整局快照投影）。
     ///
+    /// 【批次 1 会话化】传输层只认**会话 id**（服务端分配 `s1`/`s2`…）。本类作为"单场装配器"按连接顺序把会话绑到
+    /// 座位 1/2（`_seatToSession`），对局层因此仍可按"座位（=playerId）"表达语义；房间模型下这层绑定由 `RoomSession` 接管
+    /// （大厅/房间批次 3/5），届时本类退化为薄适配或由 `MatchHost` 取代（拆分不在本批做）。
+    ///
     /// 驱动：本类继承 Node，由场景挂入后 _Process 每帧 Poll 两端 transport（ENet 需主动 Poll）。
     /// 这是正式联机入口（非验证桩）：服务端与客户端两侧都经本类装配，规则只在服务端执行。
     /// </summary>
-    public class NetworkMatchLauncher : Node
+    public class NetworkMatchLauncher : Node, IMatchClientView
     {
-        private const string SNAP_PREFIX = "SNAP:";
+        private const string SNAP_PREFIX = Script.Net.SnapshotSerializer.SnapPrefix;
 
         // —— 服务端侧（权威） ——
         private INetTransport _serverTransport;
-        private IntentHub _hub;
-        private NetworkInputGateway _gateway;
+        private MatchHost _matchHost;        // 单场对局宿主（批次 2：服务端装配全部委托给它）
         private GameInitializer _serverGame;
 
         // —— 客户端侧（投影） ——
         private INetTransport _clientTransport;
         private LoopbackTransport _loopbackClient; // 仅当注入 LoopbackTransport 时非 null
         private IntentClient _client;
-        private ZoneManager _clientZone;      // 独立投影区域桶
-        private CardManager _clientCard;     // 同进程下与服务端共享实例（注入 GameInitializer 的 CardManager）
-        private DeckManager _clientDeck;     // 独立投影牌库（ApplySnapshot 牌库分支用）
-        private PlayerManager _clientPlayer; // 独立投影玩家（先手/游戏结束标记）
-        private StackManager _clientStack;   // 独立投影堆叠
-        private TurnManager _clientTurn;     // 独立投影回合（阶段/优先权/回合计数）
-        private WorldDeckManager _clientWorld; // 第三批：独立投影世界牌库（地区牌堆）
-        private AreaManager _clientArea;      // 第三批：独立投影地区（注册表 + 势力标记）
-        private System.Collections.Generic.List<Script.Net.CostModSnap> _clientCostMods
-            = new System.Collections.Generic.List<Script.Net.CostModSnap>();   // 玩家级费用修正投影（仅展示）
-        private System.Collections.Generic.List<Script.Net.StackEntrySnap> _clientStackSnaps
-            = new System.Collections.Generic.List<Script.Net.StackEntrySnap>();  // 堆叠快照（与投影 Entries 同序）
-        private System.Collections.Generic.List<Script.Game.Entities.CardInstance> _clientInvestigationCards
-            = new System.Collections.Generic.List<Script.Game.Entities.CardInstance>();  // 待分配调查卡（仅决策者本人）
+        // 【增量 B】客户端投影字段已迁入 `ClientMatchView`（`_matchView`）；下方访问器委托给它。
+        // 【增量 B】玩家级费用修正/堆叠快照/待分配调查卡 已迁入 ClientMatchView（经访问器暴露）。
 
         /// <summary>服务端经此回调对外广播快照（如 Arena 想接 UI 渲染可订阅；最小验证可留空）。</summary>
         public Action<Script.Net.GameSnapshot> OnServerSnapshot;
@@ -69,6 +60,29 @@ namespace Script.Net.Godot
 
         /// <summary>客户端收到服务端「拒绝意图」（IntentResult.Success=false）时回调，供 ArenaOl 弹可见提示。</summary>
         public event Action<Script.Net.IntentResult> OnClientIntentRejected;
+
+        // ==================== IMatchClientView（成员名与既有公开 API 一致） ====================
+        // 说明：本类的 `OnClientSnapshot/OnClientChoiceRequest/OnClientIntentRejected` 与 `ClientXxx` 访问器
+        // 早已是 ArenaOl/测试使用的公开 API，接口刻意采用同一命名 → 本类几乎无需适配层。
+        // 唯一例外：`OnClientSnapshot` 是**委托字段**（调用方可直接赋值），而接口要求 event，
+        // 故对其做显式接口实现（转发到同一字段），既有赋值写法保持不变。
+
+        event Action<Script.Net.GameSnapshot> IMatchClientView.OnClientSnapshot
+        {
+            add => OnClientSnapshot += value;
+            remove => OnClientSnapshot -= value;
+        }
+
+        // ==================== 座位 ↔ 会话 绑定（批次 1 适配层） ====================
+        // 传输层只认会话（sessionId）；本类作为"单场装配器"，按连接顺序把会话绑到座位 1/2。
+        // 【批次 2】座位表已下沉到 `MatchHost`（本类只决定"哪个新会话拿哪个座位"，绑定动作委托给 MatchHost）；
+        // 房间模型下这层绑定策略由房间（RoomSession）决定，见《联机大厅与房间设计方案》§五。
+        private int _nextSeat = 1;
+        /// <summary>本进程（客户端角色）的座位号。</summary>
+        private int _localSeat = 1;
+
+        /// <summary>座位 → 会话（服务端角色；委托 `MatchHost`，未装配时返回 null）。</summary>
+        private string SessionOfSeat(int seat) => _matchHost?.SessionOfSeat(seat);
 
         /// <summary>
         /// 启动本地回环联机对局。
@@ -99,6 +113,10 @@ namespace Script.Net.Godot
         /// <summary>
         /// 【真跨进程·服务端进程】仅装配服务端权威侧：GameInitializer 真实规则 + ENet/传输监听 + IntentHub + 快照下行。
         /// 不建任何客户端投影。供独立 Server 进程启动（配合命令行为 --server）。
+        ///
+        /// 【批次 2】服务端侧装配**全部委托给 `MatchHost`**（单场对局宿主）：本类不再自己持有 hub/网关/座位表，
+        /// 只负责"传输 + 按连接顺序绑座"这层单场适配。这样"一个服务端进程多场并发"只需创建多个 `MatchHost`，
+        /// 不存在第二份对局装配实现（避免返工）。
         /// </summary>
         public void StartServerOnly(GameInitializer serverGame, ushort port = 18920,
             INetTransport serverTransport = null)
@@ -106,61 +124,36 @@ namespace Script.Net.Godot
             if (serverGame == null) throw new ArgumentNullException(nameof(serverGame));
             _serverGame = serverGame;
 
-            var pm = serverGame.PMCommandManager;
-            if (pm != null)
-                ConfigureServerPMCommands(serverGame, pm);
-            var router = new GodotIntentRouter(serverGame.PlayerActionService, serverGame.CardManager, pm);
-            _hub = new IntentHub(router);
+            _serverTransport = serverTransport ?? new GodotEnetTransport(EnetRole.Server) { Port = port, MaxClients = 16 };
 
-            _serverTransport = serverTransport ?? new GodotEnetTransport(EnetRole.Server) { Port = port };
-            // 异步决策网关：服务端 await 客户端 ChoiceResult。传输层为单委托，网关不自行订阅，
-            // 由统一分发方 OnServerMessage 显式转发 ChoiceResult（TryHandleResult）。
-            _gateway = new NetworkInputGateway(_serverTransport);
-            // 注入规则层：注入后，*Async 决策入口（如触发排序窗口）改经网关向目标玩家下发请求并 await 回包；
-            // 未注入时完全退化为同步，现有行为不变。
-            serverGame.TurnManager.InputGateway = _gateway;
-            // 联机对抗（调查/战斗/破平）也走同一决策网关，替代单机的事件窗口。
-            serverGame.CombatManager.InputGateway = _gateway;
-            // 异步决策续算（触发排序/选目标等）完成后，主动广播最新快照，
-            // 避免客户端完成选择后 UI 无反馈（否则要等下一次意图才刷新）。
-            serverGame.TurnManager.OnAsyncSettlementCompleted += () => PushSnapshot();
-            _serverTransport.OnMessageReceived(OnServerMessage);
+            // 单场对局宿主（本类的服务端侧就是"一场"）：装配 hub/网关/PM 命令/结束订阅/快照下行
+            _matchHost = new MatchHost("match_1", serverGame, _serverTransport);
+            _matchHost.OnServerSnapshot = snap => OnServerSnapshot?.Invoke(snap);
+            _matchHost.OnGameOver = winner => GD.Print($"[NetworkMatchLauncher][SVR] 对局结束，获胜座位 {winner}");
+            _matchHost.StartServing();
+
+            _serverTransport.OnSessionMessage(OnServerMessage);
+            _serverTransport.OnSessionConnected(OnServerSessionConnected);
+            _serverTransport.OnSessionDisconnected(OnServerSessionDisconnected);
             _serverTransport.Start();
-            GD.Print($"[NetworkMatchLauncher] 服务端进程已启动（权威规则 + 端口 {port}，InputGateway 已注入）");
+            GD.Print($"[NetworkMatchLauncher] 服务端进程已启动（权威规则 + 端口 {port}，MatchHost 已接管；会话寻址）");
         }
 
-        /// <summary>服务端无 Arena 场景时，为 PMCommandManager 注入纯逻辑依赖（UI 回调置空），
-        /// 使服务端可经 DebugCommand 意图执行 PM 调试命令验证核心功能。</summary>
-        private void ConfigureServerPMCommands(GameInitializer serverGame, PMCommandManager pm)
+        /// <summary>服务端：新会话接入 → 按连接顺序绑定座位（1/2）。超出 2 个的连接不绑定座位（无法参与对局）。</summary>
+        private void OnServerSessionConnected(string sessionId)
         {
-            pm.Initialize(
-                serverGame.CardManager,
-                serverGame.DeckManager,
-                () => serverGame.AreaManager?.GetOrderedAreaUids() ?? new System.Collections.Generic.List<string>(),
-                (pid, count) => serverGame.PlayerActionService?.DrawCards(pid, count),
-                serverGame.ZoneManager,
-                onZoneChanged: null,
-                refreshCardUI: null,
-                getFaceUp: null,
-                setFaceUp: null,
-                openCombatWindow: null,
-                areaManager: serverGame.AreaManager,
-                drawAndAddNewArea: () => DrawAndAddAreaForDebug(serverGame),
-                stackManager: serverGame.StackManager);
+            if (_nextSeat > 2) return;                 // 单场装配器最多两名玩家（大厅模型由房间层管理，见设计方案）
+            _matchHost?.BindSeat(_nextSeat++, sessionId);
         }
 
-        /// <summary>PM 命令 addarea 的纯逻辑实现：从世界牌库抽 1 张地区卡注册为新区（不建 UI）。</summary>
-        private static bool DrawAndAddAreaForDebug(GameInitializer serverGame)
+        /// <summary>服务端：会话断开 → 释放座位绑定（委托 `MatchHost`）。</summary>
+        private void OnServerSessionDisconnected(string sessionId)
         {
-            if (serverGame?.PlayerActionService == null || serverGame.AreaManager == null) return false;
-            var initial = serverGame.PlayerActionService.DrawInitialAreas(1);
-            if (initial == null || initial.Count == 0) return false;
-            var area = initial[0];
-            int index = serverGame.AreaManager.GetOrderedAreaUids().Count + 1;
-            serverGame.PlayerActionService.RegisterArea(area.UID, index, area);
-            return true;
+            if (_matchHost?.SeatOfSession(sessionId) is not int seat || seat == 0) return;
+            _matchHost.UnbindSession(sessionId);
+            GD.Print($"[NetworkMatchLauncher][SVR] 会话 {sessionId}（座位 {seat}）断开，座位已释放");
+            // 座位号不回退：避免"新连接的座位号与既存玩家的 UI/日志身份混淆"（房间模型下由房间重排座位）
         }
-
 
         /// <summary>
         /// 集中装配客户端投影 Manager（Zone/Deck/Player/Stack/Turn/World/Area/Card）。
@@ -168,33 +161,19 @@ namespace Script.Net.Godot
         /// </summary>
         private void AssembleClientProjection(CardManager clientCard)
         {
-            _clientCard = clientCard;
-
-            _clientDeck = new DeckManager();
-            _clientDeck.Initialize(_clientCard, new Script.Game.SeededRandomSource(1));
-            _clientZone = new ZoneManager();
-            _clientZone.Initialize(_clientCard, _clientDeck);
-            _clientCard.SetZoneManager(_clientZone);
-
-            // 独立投影 PlayerManager / StackManager / TurnManager（仅状态投影，不驱动规则）
-            _clientPlayer = new PlayerManager();
-            _clientPlayer.SetZoneManager(_clientZone);
-            _clientStack = new StackManager();
-            _clientStack.SetCardManager(_clientCard);
-            _clientTurn = new TurnManager();
-            _clientTurn.Initialize(_clientDeck, _clientPlayer, _clientCard);
-            _clientTurn.SetZoneManager(_clientZone);
-            _clientTurn.SetStackManager(_clientStack);
-
-            // 世界牌库/地区的地区卡（DQ）用【独立 CardManager】重建，与玩家卡（_clientCard）彻底隔离，
-            // 避免地区卡实例与玩家卡实例在共享 _allInstances 里串扰。
-            var worldCard = new NetClientCardManager();
-            _clientWorld = new WorldDeckManager();
-            _clientWorld.SetCardManager(worldCard);
-            _clientArea = new AreaManager();
-            _clientArea.Initialize(_clientWorld, _clientZone, _clientStack);
-            _clientArea.SetCardManager(worldCard);
+            // 【增量 B】投影装配与消息分发已抽出为 `ClientMatchView`（与大厅路径共用同一份实现），
+            // 本类只保留"单场装配器"的接线：把视图事件转发到既有公开事件，并把上行绑定到本类的发送路径。
+            _matchView = new ClientMatchView(clientCard, _localSeat);
+            _matchView.OnClientSnapshot += snap => OnClientSnapshot?.Invoke(snap);
+            _matchView.OnClientChoiceRequest += req => OnClientChoiceRequest?.Invoke(req);
+            _matchView.OnClientIntentRejected += res => OnClientIntentRejected?.Invoke(res);
+            _matchView.BindSender(
+                (kind, args) => SendIntentAs(_localSeat, kind, args),
+                result => SendChoiceResult(result));
         }
+
+        /// <summary>客户端对局视图（投影 + 分发 + 上行）；未启动客户端时为 null。</summary>
+        private ClientMatchView _matchView;
 
         /// <summary>
         /// 【真跨进程·客户端进程】仅装配客户端投影侧：独立 CardManager（跨进程由子类从模板重建）+ 各投影 Manager + ENet 连接 + 消费快照。
@@ -205,42 +184,52 @@ namespace Script.Net.Godot
             INetTransport clientTransport = null, int playerId = 1, string serverAddress = "127.0.0.1")
         {
             AssembleClientProjection(clientCard);
+            _localSeat = playerId;
 
             _clientTransport = clientTransport ?? new GodotEnetTransport(EnetRole.Client)
             {
                 Port = port,
                 ServerAddress = string.IsNullOrEmpty(serverAddress) ? "127.0.0.1" : serverAddress,
-                LocalPlayerId = playerId,
             };
             _client = new IntentClient(_clientTransport, playerId);
-            // 传输无关注册：LoopbackTransport 用 RegisterClient 收服务端下行，其余用 OnMessageReceived
+
+            // 传输无关注册：LoopbackTransport 用会话注册收服务端下行，其余用 OnSessionMessage。
+            // 回环场景下客户端会话名 = 服务端为该座位绑定的会话名（同进程共享映射）；未绑定时按 "p<seat>" 约定。
             _loopbackClient = _clientTransport as LoopbackTransport;
             if (_loopbackClient != null)
-                _loopbackClient.RegisterClient(playerId, m => OnClientMessage(playerId, m));
+            {
+                string sid = SessionOfSeat(playerId) ?? ("p" + playerId);
+                _loopbackClient.RegisterSession(sid, m => OnClientMessage(playerId, m));
+            }
             else
-                _clientTransport.OnMessageReceived(OnClientMessage);
+            {
+                _clientTransport.OnSessionMessage((_, m) => OnClientMessage(playerId, m));
+            }
             _clientTransport.Start();
             string addrLog = (_clientTransport as GodotEnetTransport)?.ServerAddress ?? "内存回环(Loopback)";
-            GD.Print($"[NetworkMatchLauncher] 客户端进程已启动（玩家{playerId} + 独立投影 + 服务端 {addrLog} 端口 {port}）");
+            GD.Print($"[NetworkMatchLauncher] 客户端进程已启动（座位{playerId} + 独立投影 + 服务端 {addrLog} 端口 {port}）");
         }
 
         /// <summary>客户端上行一条意图（如 Pass / DrawCards / PlayCard）。返回的 IntentId 可用于匹配下行结果。</summary>
         public string SendIntent(PlayerIntent.Kind kind, params string[] args)
-            => SendIntentAs(1, kind, args);
+            => SendIntentAs(_localSeat, kind, args);
 
         /// <summary>
-        /// 以指定玩家编号上行一条意图（Loopback 回环：演示模式驱动玩家1/玩家2 让过推进回合）。
-        /// 真实跨进程时各客户端进程固定自己的 LocalPlayerId；此处供单进程双轨演示用。
+        /// 以指定座位上行一条意图（回环/演示：单进程内驱动座位1/座位2 让过推进回合）。
+        /// 真实跨进程时每个客户端进程固定自己的座位（`StartClientOnly` 的 playerId）。
+        /// 寻址：回环用 `ClientReply(会话, …)`，真实客户端用 `SendToServer`（无需寻址）。
         /// </summary>
         public string SendIntentAs(int playerId, PlayerIntent.Kind kind, params string[] args)
         {
             if (_loopbackClient != null)
             {
                 var intent = PlayerIntent.Create(playerId, kind, args);
-                _loopbackClient.ClientReply(playerId, Script.Net.IntentSerializer.SerializeIntent(intent));
+                string sid = SessionOfSeat(playerId) ?? ("p" + playerId);
+                _loopbackClient.ClientReply(sid,
+                    NetEnvelope.Wrap(NetEnvelope.Types.Intent, Script.Net.IntentSerializer.SerializeIntent(intent)));
                 return intent.IntentId;
             }
-            return _client?.SendIntent(kind, args);
+            return _client?.SendIntentAs(playerId, kind, args);
         }
 
         /// <summary>客户端上行一条决策回包（ChoiceResult，Phase B：带类型信封 v2），对应服务端挂起的请求。</summary>
@@ -250,17 +239,18 @@ namespace Script.Net.Godot
             var payload = Script.Net.NetEnvelope.Wrap(
                 Script.Net.NetEnvelope.Types.ChoiceResult,
                 Script.Net.ChoiceSerializer.SerializeResult(result));
-            // Loopback：直接经回环上送服务端分发方；其余传输经 Send 上行。
+            // 回环：需显式给出"来源会话"；真实客户端：SendToServer（唯一对端）。
             if (_loopbackClient != null)
             {
-                _loopbackClient.ClientReply(_client?.LocalPlayerId ?? 1, payload);
+                string sid = SessionOfSeat(_localSeat) ?? ("p" + _localSeat);
+                _loopbackClient.ClientReply(sid, payload);
                 return;
             }
-            _clientTransport.Send(_client?.LocalPlayerId ?? 1, payload);
+            _clientTransport.SendToServer(payload);
         }
 
-        // —— 服务端收包：意图 → 路由 → 回执 → 广播快照 ——
-        private void OnServerMessage(int playerId, string message)
+        // —— 服务端收包：意图/决策回包 → 交本场 MatchHost 路由 ——
+        private void OnServerMessage(string sessionId, string message)
         {
             // Phase B·协议加固：优先按显式类型信封分发；非信封（旧客户端）回退到形状识别。
             string envType = Script.Net.NetEnvelope.UnwrapType(message);
@@ -269,7 +259,7 @@ namespace Script.Net.Godot
             // 1) 决策回包：交给网关匹配挂起请求（信封/裸 JSON 均可）
             if (envType == null || envType == Script.Net.NetEnvelope.Types.ChoiceResult)
             {
-                if (_gateway != null && _gateway.TryHandleResult(payload)) return;
+                if (_matchHost != null && _matchHost.TryHandleChoiceResult(payload)) return;
                 if (envType == Script.Net.NetEnvelope.Types.ChoiceResult)
                 {
                     GD.PrintErr("[NetworkMatchLauncher][SVR] 收到未匹配到挂起请求的 ChoiceResult，已忽略");
@@ -277,22 +267,27 @@ namespace Script.Net.Godot
                 }
             }
 
-            // 2) 否则按意图处理（快照为服务端下行，不会到此处）
-            var resultJson = _hub.HandleIntent(playerId, payload);
-            _serverTransport.Send(playerId,
-                Script.Net.NetEnvelope.Wrap(Script.Net.NetEnvelope.Types.IntentResult, resultJson));
+            // 2) 对局通道（意图等）：全部交 MatchHost（含"未绑定会话→越权拒绝"与结算后快照广播）
+            if (_matchHost != null && _matchHost.HandleMessage(sessionId, envType ?? Script.Net.NetEnvelope.Types.Intent, payload))
+                return;
 
-            // 权威结算后，向所有已连客户端广播最新整局快照（投影重建）
-            PushSnapshot();
+            GD.PrintErr($"[NetworkMatchLauncher][SVR] 无法路由的消息：会话 {sessionId}，类型 {envType ?? "（无信封）"}");
         }
 
         /// <summary>
         /// 服务端主动向所有已连客户端广播当前整局快照（投影重建）。
         /// 【Phase B 信息隔离】按玩家分别过滤后下发：每个玩家只看到自己的手牌/牌库内容，
         /// 对手手牌/牌库与地区牌堆只发占位引用（数量与顺序保留）。服务端侧保留完整真相（OnServerSnapshot 仍为完整快照）。
-        /// 供客户端连接后推送初始快照，以及双进程验证手动触发。
+        /// 【批次 2】实际下发由 `MatchHost.PushSnapshot()` 承担（逐座位定点投递）。
         /// </summary>
         public void PushSnapshot()
+        {
+            if (_matchHost != null) { _matchHost.PushSnapshot(); return; }
+            PushSnapshotLegacy();
+        }
+
+        /// <summary>未装配 MatchHost 时的兜底路径（旧调用顺序：先 PushSnapshot 后 StartServerOnly）。</summary>
+        private void PushSnapshotLegacy()
         {
             var snap = _serverGame?.BuildSnapshot();
             if (snap == null)
@@ -307,10 +302,11 @@ namespace Script.Net.Godot
 
             foreach (var pid in new[] { 1, 2 })
             {
-                if (!_serverTransport.IsPlayerConnected(pid)) continue;
+                string sid = SessionOfSeat(pid);
+                if (string.IsNullOrEmpty(sid) || !_serverTransport.IsSessionConnected(sid)) continue;
                 var view = Script.Net.SnapshotFilter.ForPlayer(snap, pid);
                 var json = SNAP_PREFIX + Script.Net.SnapshotSerializer.Serialize(view);
-                _serverTransport.Send(pid, json);
+                _serverTransport.SendToSession(sid, json);
             }
 
             OnServerSnapshot?.Invoke(snap);   // 服务端自省/测试：完整快照
@@ -318,6 +314,14 @@ namespace Script.Net.Godot
 
         // —— 客户端收包：SNAP 投影重建 + ChoiceRequest 响应 + IntentResult 解析 ——
         private void OnClientMessage(int playerId, string message)
+        {
+            // 【增量 B】分发逻辑统一在 ClientMatchView（快照应用 + 决策请求 + 意图回执）；
+            // 本类只订阅其事件并转发到既有公开事件（保持既有测试与 ArenaOl 老路径不变）。
+            _matchView?.HandleMessage(message);
+        }
+
+        /// <summary>（遗留）单场路径的旧分发实现已迁入 `ClientMatchView.HandleMessage`。</summary>
+        private void OnClientMessageLegacy(int playerId, string message)
         {
             if (message.StartsWith(SNAP_PREFIX))
             {
@@ -374,65 +378,49 @@ namespace Script.Net.Godot
             }
         }
 
-        /// <summary>客户端投影聚合应用整局快照：区域 → 世界牌库 → 玩家 → 堆叠 → 回合 → 地区（顺序：先恢复依赖基础）。</summary>
-        private void ApplyClientSnapshot(Script.Net.GameSnapshot snap)
-        {
-            var before = _clientZone.GetZoneCards(Script.Enums.CardZone.Hand, 1).Count;
-            // 1) 区域桶（卡的位置真相）
-            _clientZone.ApplySnapshot(snap.Zones);
-            var after = _clientZone.GetZoneCards(Script.Enums.CardZone.Hand, 1).Count;
-            // 2) 世界牌库（地区牌堆：命中共享实例或从模板重建）
-            _clientWorld.ApplySnapshotUids(snap.WorldDeckCards);
-            // 3) 玩家（游戏结束标记；先手由回合层派生）
-            _clientPlayer.ApplySnapshot(snap.Players);
-            // 4) 堆叠（按 SourceUid 解析卡片型条目）
-            _clientStack.ApplySnapshot(snap.Stack);
-            // 5) 回合（阶段/优先权/回合计数；先手标志据此派生）
-            _clientTurn.ApplySnapshot(snap);
-            _clientPlayer.SetFirstPlayer(_clientTurn.FirstPlayerId);
-            // 6) 地区（注册表从快照 AreaCards 重建 + 势力标记从快照恢复）
-            _clientArea.ApplySnapshot(snap.AreaCards, snap.AreaMarks);
-            // 7) 玩家级费用修正（仅展示：JC012① 等"下一张费用-1"）
-            _clientCostMods = snap.CostMods ?? new System.Collections.Generic.List<Script.Net.CostModSnap>();
-            // 8) 堆叠快照原文（与投影 Entries 同序；UI 取展示字段如来源模板 UID）
-            _clientStackSnaps = snap.Stack ?? new System.Collections.Generic.List<Script.Net.StackEntrySnap>();
-            // 9) 待分配调查卡（信息隔离：只发给决策者本人；其他人这里为空）
-            _clientInvestigationCards = new System.Collections.Generic.List<Script.Game.Entities.CardInstance>();
-            if (snap.InvestigationCards != null && _clientCard != null)
-            {
-                foreach (var r in snap.InvestigationCards)
-                {
-                    var inst = _clientCard.RebuildFromRef(r);
-                    if (inst != null) _clientInvestigationCards.Add(inst);
-                }
-            }
-            GD.Print($"[NetworkMatchLauncher][CLI] 应用快照 手牌 {before}→{after} 总卡数={snap.Zones.Count} " +
-                     $"堆叠={_clientStack.Entries.Count} 世界牌堆={_clientWorld.Count} 地区={_clientArea.GetOrderedAreaUids().Count} 地区标记={snap.AreaMarks.Count} " +
-                     $"阶段={_clientTurn.CurrentPhase} 优先权={_clientTurn.PriorityPlayerId}");
-        }
+        /// <summary>
+        /// 客户端投影聚合应用整局快照（委托 `ClientMatchView`）。
+        /// 保留本方法名以便既有调用点/测试不变；实现只有一份（增量 B 抽出）。
+        /// </summary>
+        private void ApplyClientSnapshot(Script.Net.GameSnapshot snap) => _matchView?.ApplySnapshot(snap);
+
+        // ==================== IMatchClientView（委托给 ClientMatchView） ====================
+        // 旧单场路径（含全部既有测试）继续用这些访问器；新的大厅路径由 ClientSession 提供同名能力。
+
+        public int LocalSeat => _localSeat;
+        
+        
+        
+        
+        
+        
+        
+        
 
         /// <summary>客户端投影的 ZoneManager（供断言/调试读取投影状态）。</summary>
-        public ZoneManager ClientZoneManager => _clientZone;
+        public ZoneManager ClientZoneManager => _matchView?.ClientZoneManager;
         /// <summary>客户端投影的 CardManager（联机客户端做本地可发动判定 / 规则复用查询时使用）。</summary>
-        public CardManager ClientCardManager => _clientCard;
+        public CardManager ClientCardManager => _matchView?.ClientCardManager;
         /// <summary>客户端投影的玩家级费用修正（仅用于 UI 减费展示，不参与结算）。</summary>
-        public System.Collections.Generic.IReadOnlyList<Script.Net.CostModSnap> ClientCostMods => _clientCostMods;
+        public System.Collections.Generic.IReadOnlyList<Script.Net.CostModSnap> ClientCostMods => _matchView?.ClientCostMods;
         /// <summary>客户端最近一次堆叠快照（与 ClientStackManager.Entries 同序；供 UI 取来源模板 UID 等展示字段）。</summary>
-        public System.Collections.Generic.IReadOnlyList<Script.Net.StackEntrySnap> ClientStackSnapshot => _clientStackSnaps;
+        public System.Collections.Generic.IReadOnlyList<Script.Net.StackEntrySnap> ClientStackSnapshot => _matchView?.ClientStackSnapshot;
         /// <summary>【调查对抗】当前待分配的调查卡投影（仅决策者本人非空；供客户端复刻单机调查窗口）。</summary>
-        public System.Collections.Generic.IReadOnlyList<Script.Game.Entities.CardInstance> ClientInvestigationCards => _clientInvestigationCards;
+        public System.Collections.Generic.IReadOnlyList<Script.Game.Entities.CardInstance> ClientInvestigationCards => _matchView?.ClientInvestigationCards;
+        /// <summary>最近一次已应用快照（晚订阅者补帧用）。</summary>
+        public GameSnapshot LastSnapshot => _matchView?.LastSnapshot;
         /// <summary>客户端投影的 DeckManager（独立投影牌库；牌库数据在此，不在 ZoneManager.GetZoneCards(Deck) 里）。</summary>
-        public DeckManager ClientDeckManager => _clientDeck;
+        public DeckManager ClientDeckManager => _matchView?.ClientDeckManager;
         /// <summary>客户端投影的 TurnManager（第二批：阶段/优先权/回合计数投影）。</summary>
-        public TurnManager ClientTurnManager => _clientTurn;
+        public TurnManager ClientTurnManager => _matchView?.ClientTurnManager;
         /// <summary>客户端投影的 StackManager（第二批：堆叠投影）。</summary>
-        public StackManager ClientStackManager => _clientStack;
+        public StackManager ClientStackManager => _matchView?.ClientStackManager;
         /// <summary>客户端投影的 PlayerManager（第二批：先手/游戏结束投影）。</summary>
-        public PlayerManager ClientPlayerManager => _clientPlayer;
+        public PlayerManager ClientPlayerManager => _matchView?.ClientPlayerManager;
         /// <summary>客户端投影的 WorldDeckManager（第三批：地区牌堆投影）。</summary>
-        public WorldDeckManager ClientWorldDeckManager => _clientWorld;
+        public WorldDeckManager ClientWorldDeckManager => _matchView?.ClientWorldDeckManager;
         /// <summary>客户端投影的 AreaManager（第三批：地区注册表/势力标记投影）。</summary>
-        public AreaManager ClientAreaManager => _clientArea;
+        public AreaManager ClientAreaManager => _matchView?.ClientAreaManager;
 
         /// <summary>每帧驱动 ENet 轮询（由挂载场景的 _Process 调用）。</summary>
         public override void _Process(double delta)
@@ -441,9 +429,12 @@ namespace Script.Net.Godot
             _clientTransport?.Poll();
         }
 
-        /// <summary>服务端视角：指定玩家编号是否已连入（双进程入口检测客户端连接用）。</summary>
+        /// <summary>服务端视角：指定座位（玩家编号）是否已有会话连入（双进程入口检测客户端连接用）。</summary>
         public bool ServerPlayerConnected(int playerId)
-            => _serverTransport != null && _serverTransport.IsPlayerConnected(playerId);
+        {
+            string sid = SessionOfSeat(playerId);
+            return !string.IsNullOrEmpty(sid) && _serverTransport != null && _serverTransport.IsSessionConnected(sid);
+        }
 
         /// <summary>客户端视角：与服务端的链路是否已判定失败（不存在/超时；ENet 轮询已停止）。</summary>
         public bool ClientLinkFailed()
@@ -455,10 +446,10 @@ namespace Script.Net.Godot
             if (_clientTransport == null) return false;
             // Loopback 回环视为常连
             if (_loopbackClient != null) return true;
-            // 真实 ENet 客户端：以底层连接状态判定（IsPlayerConnected 在客户端角色下恒 false，不可用）
+            // 真实 ENet 客户端：以底层连接状态判定（服务端角色才有会话池）
             if (_clientTransport is GodotEnetTransport enet)
                 return enet.IsClientConnected();
-            return _clientTransport.IsPlayerConnected(1);
+            return true;
         }
 
         public void Stop()

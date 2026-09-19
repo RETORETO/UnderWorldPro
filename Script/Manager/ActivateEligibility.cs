@@ -162,7 +162,8 @@ namespace Script.Manager
         }
 
         /// <summary>判定激活能力 source 以 target 为目标是否合法（拖拽落点校验复用）。</summary>
-        public static bool IsLegalActivateTarget(CardInstance source, EffectData ability, CardInstance target, CardManager cm)
+        public static bool IsLegalActivateTarget(CardInstance source, EffectData ability, CardInstance target, CardManager cm,
+            PlayerManager pm = null)
         {
             if (source == null || ability == null || target == null || source == target) return false;
             if (ability.Target == null || !ability.Target.NeedsSelection) return false;
@@ -199,7 +200,7 @@ namespace Script.Manager
                 {
                     if (rule == null || rule.Kind != actKind) continue;
                     hasMatchingRule = true;
-                    if (CardManager.MatchesRule(rule, target, sourceController)) return true;
+                    if (CardManager.MatchesRule(rule, target, sourceController, pm)) return true;
                 }
                 return !hasMatchingRule; // 无匹配 rule 时退化为纯大类粗筛（JC012 激活②走此路径）
             }
@@ -215,11 +216,14 @@ namespace Script.Manager
                 (actTargetB.IncludeCovert && kindB == TargetKind.Covert);
         }
 
-        public static bool HasLegalTarget(CardInstance source, EffectData ability, CardManager cm)
+        public static bool HasLegalTarget(CardInstance source, EffectData ability, CardManager cm,
+            PlayerManager pm = null)
         {
             if (cm == null) return false;
             // 本地区限定：仅枚举来源卡所在地区的卡（基准=source.ZoneDetailId，含暗藏者与角色）；
             // 否则 GetAreaCards 会遍历所有地区，本地区效果会把其他地区的目标也算合法。
+            // pm（多对局隔离）：由调用方传入本局 PlayerManager；null 时链路退回进程级静态兜底。
+            pm ??= cm.PlayerManagerRef;
             var all = ability.Target != null && ability.Target.IsLocalZone
                 ? cm.GetAreaInstancesBySlot(source.ZoneDetailId)
                 : cm.GetAreaCards();
@@ -227,7 +231,7 @@ namespace Script.Manager
             foreach (var c in all)
             {
                 if (c == source) continue;
-                if (IsLegalActivateTarget(source, ability, c, cm)) return true;
+                if (IsLegalActivateTarget(source, ability, c, cm, pm)) return true;
             }
             return false;
         }

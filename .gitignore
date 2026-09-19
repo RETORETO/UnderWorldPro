@@ -1,3 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# 一键联机脚本产出的进程日志（每次运行生成，不入库）
+logs/
+
+# 本地临时诊断日志
+_dsh*.log

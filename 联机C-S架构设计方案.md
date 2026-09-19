@@ -635,4 +635,388 @@ ArenaOl 拖拽结束（判定落点：目标地区/目标卡）
 3. **逐次入堆叠的落区记忆按 `OptionKey` 一对一匹配**：若同一来源卡在同一轮有多个触发，匹配顺序为"先到先配"，极端情况下放弃区落区可能与玩家上一次摆放不完全一致（规则结果不受影响）。
 4. **Phase C（动画/延迟掩盖）仍暂缓**（待用户指定动画规格，见 §9.5）；**Phase D（重连）** 仍延后（含"掉线立即取消挂起决策"）。
 
+---
 
+## 18. 大厅/房间 · 批次 1 执行记录：会话与协议底座（2026-09-05）
+
+> 依据：`联机大厅与房间设计方案.md`（D1–D10 已拍板）+ `PLAN.md` §十一（批次 1 计划；用户已批准两点取舍："取消 playerId 寻址、不留双轨"与"`NetworkMatchLauncher` 本批只适配不拆分"）。
+
+### 18.1 核心变化：传输层从"玩家编号寻址"改为"会话寻址"
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 身份来源 | ENet 服务端把连接按顺序编号为"玩家1/2"（`_nextPlayerId++`），传输层直接认玩家号 | 传输层只认 **SessionId**（服务端分配 `s1`/`s2`…，`peerId ↔ sessionId` 双向映射） |
+| 服务端下发 | `Send(playerId, msg)` | `SendToSession(sessionId, msg)` |
+| 客户端上行 | `Send(LocalPlayerId, msg)` | `SendToServer(msg)`（客户端只有唯一对端，无需寻址） |
+| 上行回调 | `OnMessageReceived(Action<int,string>)` | `OnSessionMessage(Action<string,string>)` + `OnSessionConnected/OnSessionDisconnected` |
+| 越权校验 | `intent.PlayerId == 连接编号` | `intent.PlayerId == 该会话在当前房间的座位`（`IntentHub.HandleIntent(sessionId, seat, json)`） |
+| 连接数上限 | `MaxClients = 2`（隐含"两条连接=两名玩家"） | 默认 **16**（大厅要容纳多人等待；座位由房间绑定） |
+
+**三层身份映射**（本批建立，后续批次直接用）：`peerId → SessionId → Seat(1/2) → playerId(=Seat)`。
+`NetworkMatchLauncher` 作为"单场装配器"在本批**只做适配**：按连接顺序把会话绑到座位 1/2（`_seatToSession`）；房间模型下这层绑定由 `RoomSession` 接管（批次 3/5）。
+
+### 18.2 新增文件
+
+| 文件 | 内容 |
+|---|---|
+| `Script/Net/Lobby/LobbyProtocol.cs` | `LobbyRequestKind`（11 种）、`LobbyErrorCode`（18 种）、`RoomPhase`、`ProtocolVersion = 1` |
+| `Script/Net/Lobby/LobbyRequest.cs` | 大厅/房间请求（Hello/ListRooms/CreateRoom/JoinRoom/LeaveRoom/SetReady/SelectDeck/StartMatch/Kick/Rematch/Ping） |
+| `Script/Net/Lobby/LobbyResponse.cs` | 请求应答（`Ok`/`ErrorCode`/`ErrorText`/`SessionId`/`RoomState`/`RoomList` + 默认错误文案） |
+| `Script/Net/Lobby/RoomState.cs` | `RoomState`/`RoomSeatState`/`RoomSettings`/`MatchSummary` + **`ForViewer(seat)` 视图裁剪** + `MakeDisplayName`（`昵称#座位`） |
+| `Script/Net/Lobby/RoomListSnapshot.cs` | 房间列表（`RoomBrief` + `MaxRooms`，预留 `ForViewer`） |
+| `Script/Net/Lobby/ServerNotice.cs` | 服务端主动通知（被踢/服务器满/请求被拒） |
+| `Script/Net/Lobby/LobbySerializer.cs` | 五类大厅数据的 JSON 序列化器（`IncludeFields`，与 `ChoiceSerializer` 同风格） |
+| `Script/Net/Lobby/ServerConfig.cs` | 服务端配置 + `FromArgs`（`--port/--max-conns/--max-rooms/--name-max/--finished-ttl/--verbose`） |
+| `Script/Net/Lobby/ILobbyHandler.cs` | 大厅业务接口 + `IMatchRouter` 接口 + `NoMatchRouter`（默认"不在对局中"） |
+| `Script/Net/Lobby/ServerHost.cs` | 服务端会话底座（纯托管）：会话表、信封分发、Hello/版本/昵称校验、**幂等（RequestId 去重 + 缓存回放）**、连接上限、`Send/Respond/Notice/Disconnect` |
+| `Script/Net/Godot/ClientSession.cs` | 客户端会话：`Connect` → 自动 `Hello`；分发 `LobbyResponse/RoomState/RoomList/ServerNotice`；`OnMatchEnvelope` 透传对局通道（批次 5 用）；维护 `MySessionId`/`MySeat` |
+
+### 18.3 修改文件
+
+| 文件 | 改动 |
+|---|---|
+| `Script/Net/INetTransport.cs` | 会话化接口（移除 `Send(playerId)`/`OnMessageReceived(int)`，新增 `SendToSession`/`SendToServer`/`OnSessionMessage`/`OnSessionConnected`/`OnSessionDisconnected`/`IsSessionConnected`/`ConnectedSessionCount`/`DisconnectSession`）——**不留双轨兼容分支** |
+| `Script/Net/LoopbackTransport.cs` | 会话化（`RegisterSession`/`ClientReply(sessionId,…)`/会话事件；注册即视为已连接，并对后订阅者补发事件，避免测试顺序敏感） |
+| `Script/Net/Godot/GodotEnetTransport.cs` | 服务端会话池（`s1`/`s2`… + 双向映射）、`SendToSession`、`SendToServer`、`DisconnectSession`、`MaxClients` 默认 16；删除 `LocalPlayerId` |
+| `Script/Net/NetworkInputGateway.cs` | 构造函数新增 `seatToSession` 解析器（默认回环约定 `p<seat>`）；下发改 `SendToSession`；座位无对应会话时立即按取消返回（避免无限等待） |
+| `Script/Net/IntentHub.cs` | `HandleIntent(sessionId, seat, json)`；`IntentClient.SendIntent` 改 `SendToServer`，新增 `SendIntentAs`（回环多座位用） |
+| `Script/Net/Godot/NetworkMatchLauncher.cs` | **适配**（不拆分）：新增 `_seatToSession/_sessionToSeat` 按连接顺序绑座；`PushSnapshot` 按座位→会话定向下发；收包用会话 id + 座位校验；`ServerPlayerConnected(seat)` 改查会话；客户端侧改 `SendToServer`/`RegisterSession` |
+| `Script/Net/NetEnvelope.cs` | 新增 5 个信封类型：`lobby_req`/`lobby_res`/`room_state`/`room_list`/`server_notice`（纯加法） |
+
+### 18.4 测试与验证
+
+- 新增 3 套件 + 1 测试辅助：
+  - `Script/Tests/LobbyProtocolTests.cs`（6 例）：五类数据往返；**`ForViewer` 裁剪（对手卡组名/张数/违规原因必须不可见，且不污染服务端原对象）**；`昵称#座位`；信封新类型与旧格式兼容（含载荷含 `|`）；`ServerConfig` 默认值与参数解析（非法值不破坏默认）。
+  - `Script/Tests/SessionRoutingTests.cs`（4 例）：会话生命周期与业务通知；`SendToSession` 定向投递（两会话不串）；连接超限拒绝；**真实 ENet 两条连接 → 两个不同会话 id，定向回包各达各的**。
+  - `Script/Tests/SessionGuardTests.cs`（8 例）：未 Hello 拒绝；重复 Hello 拒绝；版本不匹配（应答 + 通知 + 断开）；昵称超长/空白拒绝；**幂等（重复 RequestId 只执行一次并回放缓存应答）**；未知信封类型/非信封脏数据；非对局会话发 `intent`/`choice_res` 被拒（被 `IMatchRouter` 接管时不发通知）；幂等缓存有上限。
+  - `Script/Tests/TestTransports.cs`：`PlayerIdLoopback`（座位 1/2 ↔ 会话 `p1/p2` 的测试包装，使既有测试只改调用点）。
+- 既有测试迁移（只改调用点、断言不变）：`NetGodotTests`、`NetP1Batch1Tests`、`NetP2Tests`、`NetP3CTests`。
+- 结果：`dotnet build` **0 警告 0 错误**；headless 全量 **37 套件全绿、0 失败、0 ERR**（套件数 34 → 37）。
+- **真实局域网三进程冒烟**（本机真实网卡 IP，非回环）：
+  - 服务端：`Peer … connected → session s1` → `会话 s1 → 座位 1`；`session s2` → `座位 2`；两次按玩家过滤的快照下行；
+  - 客户端：`应用快照 手牌 0→6 总卡数=116 地区=3`；全链路无 ERR。
+  - 结论：会话化改造**没有破坏既有对局链路**（意图/决策/快照通道全部可用）。
+
+### 18.5 本批未做（按计划留给后续批次）
+- `Scenes/Net/NetServer.tscn` 无头服务端入口（批次 6）
+- 房间状态机/权限/超时/踢人（批次 3；本批只有 `ILobbyHandler` 接口 + 测试替身）
+- 规则层单例注入化（批次 2；`EffectEngine` 的 11 处 `CardManager.Instance` 等）
+- 大厅/房间 UI（批次 4）、对局接入房间（批次 5）
+
+### 18.6 已知边界
+- `ServerHost` 目前只做**连接级**会话管理；`SessionIdleTimeoutSeconds` 字段已定义但未启用（批次 3 随房间生命周期一起做，避免半成品）。
+- `NetworkMatchLauncher` 的座位绑定是"按连接顺序"，**断开即释放、座位号不回退**；房间模型下的座位重排由批次 3 处理。
+- 客户端 `ClientSession.OnMatchEnvelope` 已就绪但暂无订阅方（批次 5 由 `ArenaOl` 订阅）——属最终接口预留，非临时分支。
+
+---
+
+## 19. 大厅/房间 · 批次 2 执行记录：多对局隔离 + `MatchHost` 工厂化（2026-09-05）
+
+> 目标（设计方案 §十四 批次 2）：消除规则层对进程级单例的依赖，使**一个服务端进程可同时托管多场对局**且互不串场，并把"一场对局的服务端装配"收口为 `MatchHost`。
+
+### 19.1 规则层单例注入化（改动与依据）
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `EffectEngine` | 动词执行体 11 处直接用 `CardManager.Instance`（行 179/336/417/426/504/599/694/846/1457/1465/1588-1591）+ 1 处 `CardManagerRef ?? CardManager.Instance` | 新增**单一取值入口** `private CardManager CM => CardManagerRef ?? CardManager.Instance;`，全部改走 `CM`（生产恒有注入 → 每局一套实例；未注入时才退回进程级兜底） |
+| `TargetValidity`（目标精筛链） | `PlayerManagerRef` 为 **static**，`HasMindDomain` 直接读它 → 一个进程跑多局时只指向最后一局 | `CheckRestrictions`/`Check` 新增可选形参 `PlayerManager pm`；`HasMindDomain(id, pm)` 用 `pm ?? PlayerManagerRef`（生产由调用方传入本局实例，静态字段降级为兜底） |
+| `CardManager` | 无 PlayerManager 引用 | 新增 `PlayerManagerRef`（由 `GameInitializer` 注入），`MatchesRule`/`MatchesSpec` 显式传入 `CheckRestrictions` |
+| `ActivateEligibility` | `MatchesRule` 调用不带 pm | `IsLegalActivateTarget(..., pm)`、`HasLegalTarget(..., pm)` 传本局 `PlayerManager`（缺省退回 `cm.PlayerManagerRef`） |
+| `TurnManager` | `TargetValidity.Check(...)` 不带 pm | 传本局 `_playerManager` |
+| `GameInitializer` | P1 卡组只从 UI 自动单例 `GameManager`（`UseSelectedDeck/SelectedDeck`）读 | 新增 `P1DeckOverride`/`P2DeckOverride`（`DeckList`）——**服务端显式指定卡组**，优先于 UI 选择与硬编码卡组；服务端不再依赖进程级 UI 状态（同时为批次 5 的"按座位下发卡组"铺好接口） |
+| `GameInitializer` | `EffectEngine` 私有 | 新增只读访问器 `EffectEngine`（本局实例，供宿主/房间层取用） |
+| `SnapshotSerializer` | 无前缀常量（`SNAP:` 在 launcher 与 ClientSession 各写一份） | 新增 `SnapPrefix` **唯一真相源**，`MatchHost`/`NetworkMatchLauncher` 共同引用 |
+
+> 保留项（明确降级为兜底，不再被生产路径依赖）：`EffectEngine.Instance`、`CardManager.Instance`、`TurnManager.Instance`、
+> `TargetValidity.PlayerManagerRef`、`UiNotificationBus.Instance`（客户端 UI 总线；服务端无 UI，两局共享无影响）。
+
+### 19.2 `MatchHost`（新增 `Script/Net/Godot/MatchHost.cs`）
+一场对局的服务端宿主，**唯一实现**（`NetworkMatchLauncher` 的服务端侧已全部委托给它，不再有第二份装配）：
+
+| API | 职责 |
+|---|---|
+| `MatchHost(matchId, game, transport)` | 绑定"本场"的 `GameInitializer` 与传输 |
+| `StartServing()` | 装配 PM 调试命令依赖、`IntentHub`+`GodotIntentRouter`、`NetworkInputGateway`（座位→会话解析），注入 `TurnManager`/`CombatManager`，订阅异步结算完成 → 广播快照，订阅 `PlayerManager.OnGameOver` |
+| `StopServing()` | 退订 + 解除网关注入 + 清空座位表（**避免旧局残留事件影响新局**） |
+| `BindSeat/UnbindSession/SessionOfSeat/SeatOfSession/IsSeatConnected` | 座位↔会话映射（**绑定策略由上层决定**：房间层按房间座位绑定；当前单场装配器按连接顺序绑定） |
+| `HandleMessage(sessionId, type, payload)` | `choice_res` → 网关匹配；`intent` → 越权校验（未绑定会话直接拒绝并回执）+ `IntentHub` 裁决 + 回执 + 快照广播 |
+| `PushSnapshot()/PushSnapshotToSeat(seat)` | 按座位 `SnapshotFilter.ForPlayer` 过滤后**定点**下发 |
+| `IsOver/WinnerSeat/OnGameOver` | 结束信号（供批次 3 广播 `RoomState(Finished)`、批次 5 结算） |
+
+`NetworkMatchLauncher` 的变化：服务端字段从 `_hub/_gateway/_seatToSession/_sessionToSeat/ConfigureServerPMCommands/DrawAndAddAreaForDebug` 收敛为 `_matchHost` 一处；`PushSnapshot()` 转调 `MatchHost`（保留未装配时的 legacy 兜底路径）。
+
+### 19.3 验证
+
+- `dotnet build UWPro.csproj`：**0 警告 0 错误**。
+- headless 全量 `TestsRunner`：**38 套件全绿、0 失败、0 ERR**（37 → 38）。
+- 新增套件 `Script/Tests/MatchIsolationTests.cs`（3 例）：
+  1. `TestTwoMatchesHaveIndependentManagers`：两局各有独立 `CardManager/ZoneManager/PlayerManager/EffectEngine`；**显式把 `CardManager.Instance` 指向 B 局**后，A 局的卡仍只在 A 局世界；
+  2. `TestEffectResolutionDoesNotCrossMatches`（**核心回归**）：`CardManager.Instance` 指向 B 局时，用 A 局引擎消灭 A 局的卡 → 落在 **A 局墓地**，B 局墓地/争夺区数量与内容完全不变；
+  3. `TestTwoMatchHostsRouteAndPushIndependently`：一条传输上挂两个 `MatchHost`（p1/p2 属 A 房、p3/p4 属 B 房）→ 座位映射互不认识、A 房拒绝 B 房会话的意图（回执 `Success=false`）、A 房结算后消息只到 p1/p2（B 房 0 条）、两房快照内容各自取自本场（A+1 张/B+2 张场地卡 → 张数不同）、`StopServing()` 只清本局注入。
+- **局域网三进程冒烟**（真实网卡 IP）：`MatchHost match_1 绑定：会话 s1 → 座位 1` / `s2 → 座位 2` → 两次过滤快照 → 客户端 `应用快照 手牌 0→6`；无 ERR。证明重构未破坏既有对局链路。
+
+### 19.4 已知边界
+- `MatchHost` 目前**每场一个传输**的用法（单场装配器）与"一条传输多场"（房间模型）都支持，但**握手/会话归属仍由外层判定**：批次 3 的 `RoomRegistry` 才会把"会话 → 房间"写进路由，本批只保证"同一进程多场互不串"。
+- 旧的 11+5 处 `.Instance` **兜底分支保留**（未注入路径/单测仍可用）；生产路径已全部走注入，故多局隔离成立。若要彻底删除兜底，需先清理测试装配（属可选收尾，不影响正确性）。
+- `GameInitializer` 仍会在装配时写 `GameManager`（UI 单例）无关字段——卡组读取已改为 override 优先，但若未来服务端要完全脱离 UI 单例，可把 `ReloadDecks` 的 UI 分支抽成显式 `DeckSource` 策略（批次 5 视需要）。
+
+---
+
+## 20. 大厅/房间 · 增量 A 执行记录：服务端房间管理 + headless 入口（2026-09-05）
+
+> 用户裁决：批次 3~6 改为 **3 段增量**（A=3+入口 / B=4+5 / C=6），**大厅/房间不写单测**，改为每段末尾跑一次**完整流程自检**；并同意把最小 `NetServer` 入口提前到增量 A。
+> 本段计划见 `PLAN.md` §十二。
+
+### 20.1 新增文件
+
+| 文件 | 内容 |
+|---|---|
+| `Script/Net/Lobby/IRoomMatchHost.cs` | 房间内"一场对局"的**纯接口**（`StartServing/StopServing/BindSeat/UnbindSession/SeatOfSession/SessionOfSeat/HandleMessage/PushSnapshot/ForfeitSeat/IsOver/WinnerSeat/OnGameOver`）——`Script/Net/Lobby` 保持纯托管，对局宿主由 Godot 侧实现 |
+| `Script/Net/Lobby/IDeckValidator.cs` | 卡组校验接口 + `PermissiveDeckValidator`（不校验，仅测试替身） |
+| `Script/Net/Lobby/RoomSession.cs` | 房间状态机与数据：两座位、准备、卡组、重开请求、阶段刷新（`RefreshLobbyPhase`）、房主转移、`ToState(isConnected)`、`ToBrief()` |
+| `Script/Net/Lobby/RoomRegistry.cs` | 房间注册表：创建（房号 `r1`…）/查询/移除/上限/列表摘要 |
+| `Script/Net/Lobby/LobbyServer.cs` | **`ILobbyHandler` + `IMatchRouter` 实现**：11 种请求的权威校验与状态迁移、房主规则、踢人、离开（含"对局中离开→判负"）、D10 重开、`Tick()` 超时清理、按查看者裁剪的 `RoomState` 广播、会话→房间表 |
+| `Script/Net/Godot/GameDeckValidator.cs` | 服务端卡组校验（D6 基础校验）：内联 JSON 优先、`deckId` 次之；条目非空；**模板存在性**（`ResourceLoader`）；秘社兜底由 `DeckListLoader` 完成 |
+| `Script/Net/Godot/ServerMatchFactory.cs` | 房间 → 对局宿主：**每房一套 `GameInitializer`**（双方卡组用 `P1DeckOverride/P2DeckOverride`）、`InitializeAll + StartMatch`、按房间设置摆初始地区、`MatchHost` 包装；`owner` 可为 null（测试用）并在 `Destroy` 释放节点 |
+| `Script/Net/Godot/NetServerEntry.cs` + `Scenes/Net/NetServer.tscn` | **headless 专用服务端入口**（D1）：`ServerConfig.FromArgs` → ENet 服务端 → `ServerHost` + `LobbyServer` + `ServerMatchFactory`；每帧 `Poll` + `Tick`；启动打印候选 IPv4 |
+| `Script/Net/Godot/NetBotClient.cs`（+ `NetEntry --bot`） | **脚本化客户端**：Hello → ListRooms → 建房/加入 → 提交卡组（内联 JSON）→ 准备 →（房主）开始 → 对局内每 3 秒让过 → 结束后请求重开；决策请求自动取消（冒烟用） |
+| `Script/Tests/LobbyFlowTests.cs` | **完整流程自检**（真实 ENet，同进程服务端 + 2 客户端会话）：`TestFullLobbyFlow` 走完建房→加入→卡组（含 D7 不可见断言）→准备→开始→对局中阶段守卫→判负→结果广播→D10 重开→离开销毁；`TestRoomPermissionFlow` 覆盖越权/满房/踢人/非法卡组等边界 |
+
+### 20.2 修改文件
+
+| 文件 | 改动 |
+|---|---|
+| `Script/IO/DeckListLoader.cs` | 新增 `LoadFromText(json, label)`（服务端校验客户端内联卡组）与 `ToJsonText(deck)`（客户端提交卡组）；`Load` 与 `LoadFromText` 共用 `BuildFromRoot`，避免两份解析逻辑 |
+| `Script/Net/Godot/MatchHost.cs` | 实现 `IRoomMatchHost`；新增 `ForfeitSeat(seat, reason)`（D5：直接判负，Phase D 在此入口内改为"30s 宽限"）；`OnGameOver` 改属性形态 |
+| `Script/Net/Godot/ClientSession.cs` | 新增 `SendMatchIntent(kind, args)`（用 `MySeat` 作身份）与 `SendChoiceResult(result)`——对局通道的上行入口，供 BOT 与增量 B 的战场视图使用 |
+| `Script/Net/Godot/NetMatchEntry.cs` | 新增 `--bot <port> <host\|join> [serverIp] [deckPath]` 模式（只驱 `ClientSession`，不挂战场 UI） |
+| `Script/Net/Godot/SnapshotSerializer`（批次 2 已加） | `SnapPrefix` 被 `MatchHost` 复用（本段无改动，仅确认无第二份前缀常量） |
+
+### 20.3 关键时序（本段固化，增量 B 沿用）
+`StartMatch` → 服务端**复检双方卡组**（非法→取消该方准备 + `InvalidDeck`）→ `Phase=Starting` 广播 →
+**绑座 → `StartServing()` → `PushSnapshot()`** → `Phase=InMatch` 广播。
+（网关的"座位→会话"解析在建局期即可能被调用，故绑座必须先于 `StartServing`——已在代码注释与 PLAN §12.2 写死。）
+
+### 20.4 验证
+
+- `dotnet build UWPro.csproj`：**0 警告 0 错误**。
+- headless 全量 `TestsRunner`：**39 套件全绿、0 失败、0 ERR**（38 → 39；新增 `LobbyFlowTests` 2 例）。既有联机链路（`NetP1Batch1MatchTests`/`NetPhaseBTests`/`NetGodotTests`/`MatchIsolationTests` 等）零回退。
+- **三进程实跑（一台机器，真实 ENet）**：`NetServer --headless --port 18998` + `NetEntry --bot … host` + `NetEntry --bot … join`
+  - 服务端日志：`s1 创建房间 r1` → `座位1 卡组通过校验：默认对局卡组（57 张）` → `s2 加入房间 r1 座位 2` → `座位1/2 已准备 → 阶段 Ready` → `ServerMatchFactory 建局完成：初始地区 3 个` → `MatchHost r1 绑定 s1→座位1 / s2→座位2` → `下行快照 总卡数=116` → `对局开始`；
+  - 两个 BOT 均收到 `RoomState`（含 `昵称#座位`）与初始快照，进入 `InMatch`；
+  - 对局内意图经**真实规则引擎**处理：服务端 `玩家1/2 让过（连续计数）→ 双方连续让过，推进阶段 → CombatInvestigation→CombatStrength→CombatPower→…`，无越权/异常。
+  - 结论：**"建房 → 加入 → 卡组校验 → 准备 → 开局 → 对局内意图"全链路在真实多进程下跑通**。
+
+### 20.5 本段未做（留给增量 B/C）
+- 大厅/房间 **UI**（`LobbyOl/RoomOl` 场景与脚本）；`GameManager` 的 `LobbyOnline/RoomOnline` 状态
+- **客户端投影装配搬迁**（现仍在 `NetworkMatchLauncher` 内）+ `ArenaOl` 挂 `ClientSession`
+- 增量 C：客户端"机器人模式"打磨、`NetMatchEntry` 薄适配化、冒烟脚本、文档收口
+- 断线重连（Phase D）；对局中掉线仍按 D5 **直接判负**
+
+### 20.6 已知边界
+- `LobbyServer.Tick()` 目前只做"空房/结束房超时清理"，未做"会话空闲回收"（`SessionIdleTimeoutSeconds` 仍未启用）。
+- 房间列表目前随 `ListRooms` 的**应答**下发（`LobbyResponse.RoomList`）；独立的 `room_list` 推送通道保留给后续"列表主动刷新"。
+- BOT 客户端仅用于开发/冒烟（`--bot`），**不参与正式玩法**；决策请求自动取消以避免冒烟卡住。
+- 一个服务端进程可承载多房间（批次 2 已保证隔离），但增量 A 尚未做"多房间同时开打"的实跑验证（仅单房间实跑 + `MatchIsolationTests` 的双 MatchHost 隔离验证）。
+
+---
+
+## 21. 大厅/房间 · 增量 B 执行记录：联机 UI + 客户端接入（2026-09-05）
+
+> 用户裁决：批次 3~6 分 3 段增量（A=3+入口 / B=4+5 / C=6），**大厅/房间不写单测**、改为每段末尾一次完整流程自检。本段计划见 `PLAN.md` §十三。
+
+### 21.1 第一步：客户端投影"搬出 launcher"（本段风险最高的一步，已完成且**零测试改动**）
+| 文件 | 改动 |
+|---|---|
+| `Script/Net/Godot/ClientMatchView.cs`（新） | 从 `NetworkMatchLauncher` 抽出**客户端半边**：投影装配（Zone/Deck/Player/Stack/Turn/World/Area，世界牌库用独立 `NetClientCardManager`）、`ApplySnapshot`（区域→世界牌堆→玩家→堆叠→回合→地区）、`HandleMessage`（`SNAP:` 快照 / 信封决策请求 / 意图回执分发，含"无 UI 订阅时自动取消"兜底）。上行经注入的两个委托完成，故可被两种连接方式复用 |
+| 同文件含 `IMatchClientView` | 接口成员**刻意沿用既有 `ClientXxx` 命名**（`ClientZoneManager/ClientCardManager/…/ClientCostMods/ClientStackSnapshot/ClientInvestigationCards`、`OnClientSnapshot/OnClientChoiceRequest/OnClientIntentRejected`、`SendIntentAs/SendChoiceResult`）→ `ArenaOl` 只需换字段类型，**60+ 处调用点一行未改** |
+| `NetworkMatchLauncher` | 客户端字段（8 个投影 Manager + 3 个列表）删除，改持 `ClientMatchView`；访问器与事件保持原签名（委托）；`ApplyClientSnapshot`/`OnClientMessage` 委托视图；`OnClientSnapshot` 因是委托字段，用**显式接口实现**转发 |
+| `ClientSession` | 实现 `IMatchClientView`（懒建 `ClientMatchView`；投影 CardManager 用 `NetClientCardManager`；座位由 `RoomState.ViewerSeat` 同步），对局消息交视图处理并保留 `OnMatchEnvelope` 透传 |
+| `ArenaOl` | 字段由 `NetworkMatchLauncher` 改为 `IMatchClientView`；新增 `AttachMatchClient(client, seat)`；`AttachLauncher(...)`/`AttachSession(...)` 均为其薄封装 → **战场表现层只有一条代码路径** |
+
+**结果**：既有 **39 套件零改动全绿**（含回环端到端 `NetP1Batch1MatchTests`、真实 ENet `NetGodotTests`、双对局隔离 `MatchIsolationTests`）。
+
+### 21.2 第二步：联机 UI（新建在线专用场景；单机 `Lobby/Room/Arena` 未改动）
+| 文件 | 内容 |
+|---|---|
+| `Scenes/Net/LobbyOl.tscn` + `Script/UI/Online/LobbyOl.cs` | 地址/端口/昵称 → 连接 → **登录大厅应答后**拉房间列表 → 创建/加入；列表显示房间名/人数/房主/阶段 |
+| `Scenes/Net/RoomOl.tscn` + `Script/UI/Online/RoomOl.cs` | 房间号+我的座位+房主标记；两座位行（`昵称#座位`/准备/卡组校验；**对手卡组信息按 D7 根本收不到**）；我的卡组（路径输入+提交，内联 JSON）；准备/取消；房主：开始/踢人；结束后：结果+再来一局；离开房间 |
+| `Scenes/Net/OnlineArena.tscn` + `Script/UI/Online/OnlineArenaEntry.cs` | 把既有 `ArenaOl` 挂到"大厅会话"（`AttachSession`）；房间阶段离开 `InMatch` 时回房间页 |
+| `Script/UI/Online/OnlineClientContext.cs` | 进程级会话持有（一进程=一条连接，大厅/房间/战场共用）+ `AutoConnect`/`SmokeMode` |
+| `GameManager`（改） | 追加 `LobbyOnline/RoomOnline/OnlineArena` 状态与场景映射；新增 `GoToStateDeferred`（见 21.3-②） |
+| `MainMenu`（改） | 追加「联机对战」按钮（单机三态流程不受影响） |
+| `NetMatchEntry`（改） | 新增 `--lobby [serverIp] [port] [nick] [--smoke-host\|--smoke-join]`：直接进大厅页并自动连接；`--smoke-*` 让 UI 页在无显示器环境下按**与按钮相同**的处理函数自动走完流程（正式玩法恒不启用） |
+
+### 21.3 冒烟暴露并修掉的 3 个真实问题（无显示器自检的价值）
+1. **登录时序**：`ClientSession.OnConnected` 在**发送 Hello 之前**触发 → 大厅页立刻 `ListRooms` 被判 `NotHelloed`。修：房间列表改在 **Hello 应答**（带 `SessionId`）后拉取。
+2. **切场景时机**：在服务端状态回调（`_Process` 轮询内）直接 `ChangeSceneToFile` → `Parent node is busy adding/removing children` + `ObjectDisposedException`。修：新增 `GameManager.GoToStateDeferred`（defer 挂在 **SceneTree** 上），联机页一律用它。
+3. **事件泄漏**：大厅页切走后节点被释放，却仍订阅着**进程级长寿命**的 `ClientSession` 事件 → 后续事件打到已释放节点。修：`LobbyOl._ExitTree` 完整反订阅。
+
+### 21.4 验证
+- `dotnet build`：**0 警告 0 错误**；headless 全量 **39 套件全绿、0 失败、0 ERR**（`LobbyFlowTests` 现 3 例：完整流程 / 权限边界 / **联机 UI 场景可加载且关键节点存在**）。
+- **三进程 headless 实跑（走 UI 代码路径）**：`NetServer --headless` + `NetEntry --lobby … --smoke-host` + `--smoke-join`
+  - 房主：`已登录大厅（会话 s1）` → `已进入房间 r1` → 卡组校验通过（57 张）→ 准备 → 开始 → **`战场已挂载（座位 1）`** → `ClientMatchView 应用快照 手牌 0→6 总卡数=116`；
+  - 加入者：同样走完（会话 s2 / 座位 2）；服务端：`建局完成（初始地区 3）` → `绑定 s1→座位1 / s2→座位2` → `下行快照` → `对局开始`；
+  - **三个进程 stderr 全空（0 条 ERROR/Exception）**。
+
+### 21.5 本段未做 / 待人工
+- **有显示器的人工冒烟**（唯一剩余项）：两台电脑点着走一遍——大厅连接、准备/卡组、开局后拖拽出牌、三类决策窗口、结束→再来一局。headless 只能证明"代码路径与协议正确"，不能替代鼠标手感验证。
+- 增量 C（=批次 6）：headless 入口打磨、`NetMatchEntry` 薄适配化、冒烟脚本、文档收口。
+- 断线重连（Phase D）；对局中掉线仍按 D5 直接判负。
+- 已知边界：`RoomOl` 的卡组选择是"路径输入+提交"（未做卡组浏览/编辑器）；`LobbyOl` 的房间列表为进入时拉取 + 手动刷新（未做服务端主动推送）。
+
+### 21.6 用户实机反馈修复：**"进入对战没有显示任何卡牌"**（2026-09-05）
+
+**现象**：用户手动跑通"大厅→房间→开始游戏"后，战场页打开但**一张卡都不显示**。
+
+**根因（晚订阅者漏帧）**：服务端在 `StartMatch` 后会**立即**推送初始快照，而客户端此时还停在**房间页**
+（房间页要等 `RoomState(Phase=InMatch)` 才切战场页）。于是时间线是：
+```
+服务端：建局 → 绑座 → 推初始快照 ─────────────┐
+客户端：RoomOl 收 RoomState(InMatch) → 切场景 → ArenaOl 挂载/订阅   ← 快照事件已在订阅之前发生
+```
+`ArenaOl` 的渲染完全由 `OnClientSnapshot` 事件驱动（`_snapshotQueue` → `_process` → `ApplySnapshot`），
+**首帧在它订阅之前就过去了 → 没有任何重建 → 空战场**。
+（旧的 CLI 路径之所以没暴露：`NetEntry --client` 是先 `AttachLauncher` 再等快照，不存在晚订阅。）
+
+**修复（按"晚订阅者补帧"这一通用模式做，非打补丁）**：
+1. `IMatchClientView` 新增 `GameSnapshot LastSnapshot { get; }`；`ClientMatchView.ApplySnapshot` 记录最近一次快照；
+   `NetworkMatchLauncher` / `ClientSession` 各自暴露。
+2. `ArenaOl.AttachMatchClient` 在**订阅之后**检查 `LastSnapshot`：非空则立即 `OnSnapshotReceived(LastSnapshot)` 补帧。
+   → 大厅流程、以及"再来一局后重新挂载战场"都能拿到当前局面。
+3. **同时修掉一个同源隐患**：`ArenaOl` 之前没有 `_ExitTree`，切回房间页后仍订阅着进程级长寿命 `ClientSession` 事件
+   → 后续快照/决策请求会打到已释放节点。现补 `_ExitTree → DetachLauncher()`。
+4. 顺手加了一条诊断日志（长期保留）：`[ArenaOl] 战场已按快照重建：手牌 x/y，争夺区 N 张，地区 N 个，堆叠 N`
+   ——以后遇到"没显示卡牌"可直接从日志判断是**没收到快照**还是**渲染分支没走**。
+
+**验证**（三进程 headless，走 UI 代码路径，真实 ENet）：
+- 两端进战场后均出现 `[ArenaOl] 战场已按快照重建：手牌 6/6，争夺区 12 张，地区 3 个，堆叠 0`（补帧生效）；
+- 完整闭环反复通过：`开局 → 战场重建 → 认输 → 结束回房间页 → 双方重开 → 再次开局 → …`（连续 4 轮），
+  服务端日志成对出现 `对局结束：获胜座位 N（可再来一局）` / `双方同意重开：本局已关闭，回到未准备状态（卡组保留）`；
+- **三个进程 stderr 零 ERROR/Exception**；`dotnet build` 0 警告 0 错误；headless 全量 **39 套件全绿、0 失败、0 ERR**。
+
+
+
+### 21.7 用户追加需求：卡组持久化 + 下拉框选择（2026-09-05）
+
+**需求**：① 记住玩家上次使用的卡组，进房自动选中；无记录时默认选卡组目录下第一个；② 卡组改用**下拉框**，列出 `res://Decks/` 下全部卡组文件名，点选后收起下拉框。
+
+**实现**（新增 2 个纯 IO 工具 + 房间页改造）：
+| 文件 | 内容 |
+|---|---|
+| `Script/IO/DeckCatalog.cs`（新） | `ListDeckPaths()`：`DirAccess` 枚举 `res://Decks/*.json`，按文件名升序；`DisplayName()`（不含扩展名的文件名）；`ResolveInitialDeck(available, preferred)`（优先上次使用 → 目录里第一个 → 默认卡组）；`DeckDir`/`DefaultDeckPath` 常量。目录不可读时返回空并由调用方兜底（**导出构建需把 `Decks/*.json` 加入导出过滤**，已在注释标注） |
+| `Script/IO/OnlineClientPrefs.cs`（新） | 本地偏好持久化到 `user://online_client.cfg`（`ConfigFile`）：`last_deck_path` / `last_host` / `last_port` / `last_nick`；读写全容错（缺失/损坏一律退默认值，绝不因偏好损坏挡住联机） |
+| `Scenes/Net/RoomOl.tscn`（改） | `DeckPathInput`(LineEdit) → **`DeckOption`(OptionButton)**；「提交卡组」按钮保留为**「重新提交卡组」**（同一卡组不会重复触发 `item_selected`，故保留显式入口） |
+| `Script/UI/Online/RoomOl.cs`（改） | 进房即构建下拉框（8 个卡组，显示文件名）→ 自动选中（上次使用/目录第一个）→ **自动提交**给服务端校验并持久化；`item_selected` 即"选择→提交→记忆"（`OptionButton` 天生点选后收起）；状态栏显示当前卡组与校验结果 |
+| `Script/UI/Online/LobbyOl.cs`（改） | 地址/端口/昵称：命令行 `--lobby` 优先，否则用本地偏好回填；连接时持久化 |
+
+**验证**（三进程 headless，真实 ENet）：
+- **首轮（删除偏好）**：`卡组目录共 8 个卡组：default_deck、jc014_035_deck、卡组073506…` → `卡组下拉框已就绪：8 个，当前选中「default_deck」（来源：目录默认）` → `已提交卡组「default_deck」（57 张）` → 服务端 `卡组通过校验：默认对局卡组（57 张）`，并把 `last_deck_path` 落盘；
+- **次轮（把偏好改成「灰色测试」模拟上次选择）**：`已载入偏好：卡组=res://Decks/灰色测试.json` → `当前选中「灰色测试」（来源：上次使用）` → `已提交卡组「灰色测试」（42 张）` → 服务端 `卡组通过校验：灰色测试（42 张）`；
+- 两轮 **stderr 零 ERROR/Exception**；`dotnet build` 0 警告 0 错误；headless 全量 **39 套件全绿、0 失败、0 ERR**。
+
+**已知边界**：卡组下拉框只列 `res://Decks/` 下的 `*.json`（不含子目录）；卡组内容编辑仍走单机「编辑卡组」入口（本页只选不编）。
+---
+
+## 22. 大厅/房间 · 增量 C（批次 6 收尾）执行记录（2026-09-05）
+
+> 目标（设计方案 §十四 批次 6）：服务端入口打磨、`NetMatchEntry` 薄适配化、一键启动/冒烟脚本、文档收口。
+
+### 22.1 服务端入口打磨 + 服务端装配去重
+| 文件 | 内容 |
+|---|---|
+| `Script/Net/Godot/LobbyServerHost.cs`（新） | **大厅服务端宿主**（Node）：把"服务端进程要装配的一切"收成一个可复用组件——ENet 服务端传输 → `ServerMatchFactory` → `LobbyServer` → `ServerHost`；`_Process` 驱动 `Poll` + 房间超时 `Tick`。**端口占用等失败不再抛异常**，改为打印可读原因并让入口友好退出；启动时打印"客户端怎么连"与本机候选 IPv4（只列 IPv4） |
+| `Script/Net/Godot/NetServerEntry.cs`（改） | 由"自己装配一遍"改为**薄壳**：解析命令行 → `LobbyServerHost.Start(config)`；失败即退出并给出原因 |
+| `Script/Net/Godot/NetMatchEntry.cs`（改）·**薄适配化** | `--server` 不再用"单场服务端"，改为**与 `NetServer.tscn` 同一实现**（`LobbyServerHost`）→ 彻底消除"两种服务端形态并存"；`--client <port> <pid> [ip]` 映射为"进大厅页并自动连接"（座位由房间分配，pid 仅作默认昵称） |
+
+### 22.2 一键启动/冒烟脚本
+| 脚本 | 用途 |
+|---|---|
+| `一键联机三开.bat` + `start_online_3.ps1`（默认 `172.19.163.3:18950`、玩家A/玩家B） | **"打开即三开"**：本机起 1 个大厅服务端（headless）+ 2 个客户端（窗口，`--lobby` 自动连接）；支持 `-ServerIp/-Port/-P1/-P2/-Smoke/-Headless`；先编译、查 UDP 端口占用并告警；**三个进程的 stdout/stderr 分落 `logs/`**，末尾打印日志路径与手动步骤 |
+| `启动联机三进程测试.bat`（改） | 自动化冒烟：服务端 + 2 个 **BOT** 客户端，无需点击跑完"建房→加入→选卡组→准备→开始→对局" |
+| `启动大厅服务端.bat` / `启动联机客户端.bat` | 单机分角色启动（服务器机/客户端机分开时用） |
+
+> **脚本编码经验（踩坑记录）**：`.bat` 由 `cmd.exe` 按**系统 ANSI 代码页**（中文 Windows＝936）解析，写成 UTF-8 会让中文注释/参数错乱（`'xxx' is not recognized`、行被截断）。
+> 因此：**`.bat` 一律纯 ASCII**；需要中文（默认昵称"玩家A/玩家B"）的逻辑放**带 BOM 的 UTF-8 PowerShell 脚本**，由 ASCII 壳 `.bat` 调用（壳优先 `pwsh`，回退 `powershell`）。`start_online_3.ps1` 必须保存为 **UTF-8 with BOM**。
+
+### 22.3 文档收口
+`项目现状精简版.md` 增补"联机对局启动方式（推荐顺序）"；`.gitignore` 增加 `logs/` 与 `_dsh*.log`。
+
+### 22.4 验证
+- **一键脚本实测**（本机 `-Smoke -Headless`）：三进程正常启动，服务端日志出现完整流程：
+  `s1（玩家A）创建房间 r1 → s2（玩家B）加入座位2 → 双方卡组通过校验（卡组073506）→ 建局完成（初始地区3）→ 绑定 s1→座位1 / s2→座位2 → 下行快照 62 卡 → 对局开始（座位1=玩家A / 座位2=玩家B）`；
+  客户端 A：`已登录大厅 → 已进入房间 → 自动开始对局 → 切战场页 → 补帧 → [ArenaOl] 战场已按快照重建：手牌 6/6，争夺区 12 张，地区 3 个`；
+  三个进程 `.err.log` 均 **0 字节**。
+- `dotnet build` 0 警告 0 错误；headless 全量 **39 套件全绿、0 失败、0 ERR**。
+
+### 22.5 至此：大厅 → 房间 → 对战完整流程已闭环
+A 段（批次 3+入口）＝服务端房间管理 + headless 入口；B 段（批次 4+5）＝联机 UI + 客户端接入；C 段（批次 6）＝入口/脚本/文档收口。
+**剩余**：有显示器的人工手感冒烟（拖拽出牌、决策窗口、布局观感）；卡牌内容与动画（`后续优化事项.md` §五/§六）；断线重连（Phase D）。
+---
+
+## 23. D11 卡组锁定（准备后不可更换）+ 大厅/房间完整性审查（2026-09-05）
+
+### 23.1 需求与规则
+用户需求：「制作一下房间内锁定卡组不能切换的逻辑，玩家准备后卡组下拉框不能打开。」
+规则（**权威在服务端**，客户端只是显示）：座位 `Ready == true` → 卡组锁定；取消准备 / D10 回到未准备 / 被踢离座清座位 → 自动解锁。决策记录见 `联机大厅与房间设计方案.md` **D11**；计划与验收见 `PLAN.md` §十四。
+
+### 23.2 实现（只动联机侧，单机 UI/逻辑零改动）
+| 文件 | 改动 |
+|---|---|
+| `Script/Net/Lobby/LobbyProtocol.cs` | `LobbyErrorCode` 新增 `DeckLocked`（随 `JsonStringEnumConverter` 按名序列化，新旧端同构建无兼容问题）；`SelectDeck` 注释补充锁定语义 |
+| `Script/Net/Lobby/LobbyServer.cs` | `HandleSelectDeck`（行 253 附近）在座位校验后新增 `if (seat.Ready) → RespondFail(DeckLocked, "已准备：卡组已锁定，请先取消准备再更换卡组。")` 并**直接 return**（不改任何座位状态、不广播，保证与拒绝前状态完全一致）；类头注释补该规则 |
+| `Script/UI/Online/RoomOl.cs` | 新增 `IsDeckLocked()` / `ApplyDeckLock(bool)` / `RestoreCommittedSelection()` 与字段 `_committedIndex`、`_suppressDeckSignal`；`OnRoomState` 每次同步 `DeckOption.Disabled = locked` + `TooltipText`；`DeckButton.Disabled = locked`；`OnDeckItemSelected` 与 `SubmitDeck()` 双保险判锁定，命中则**回滚选中项**到"最后一次成功提交的卡组"并提示；卡组状态行追加 `🔒 已准备：卡组已锁定（取消准备后可更换）` |
+| `Script/Tests/LobbyFlowTests.cs` | 流程自检新增 ⑥b/⑥c（见 23.3） |
+
+设计取舍：拒绝时**不自动取消准备**（替代方案"允许换卡但顺带取消准备"会让对手看到的"已准备"在无提示情况下失效，语义更差）；`_committedIndex` 记录"服务端最后知晓的卡组"，从而在锁定瞬间把 UI 选中项回滚到与服务端一致的状态（而不是停在玩家刚点的那一项）。
+
+### 23.3 验证
+- `dotnet build UWPro.csproj -c Debug`：**0 错误**（仅离线环境 NuGet 审计警告 `NU1900`）。
+- headless 全量 `TestsRunner`：**全绿、0 失败**，其中 `LobbyFlowTests 通过 3 / 失败 0`（新增断言：① 已准备后 `SelectDeck` 返回 `DeckLocked` 且卡组名/准备态不变；② 取消准备后同一请求成功且卡组名更新；③ 再准备后阶段回到 `Ready`，后续开局流程不受影响）。
+- stderr 仅有既有用例故意触发的 `res://NoSuchCard.tres` 资源错误（"卡牌不存在"路径），无其它 ERROR/Exception。
+
+### 23.4 同步做的只读完整性审查（未改代码）
+逐项清单（高/中/低 + 文件行号 + 修法）落在 `联机对战完整实现最终缺口清单.md` **§七 第二十五轮**，摘要见 `PLAN.md` §14.5。四条高优：
+1. `Starting` 阶段 `BindSeat/StartServing/PushSnapshot` 抛异常 → 房间永久停在 `Starting` 并占 `MaxRooms` 槽位（`Tick` 不回收）；
+2. `HandleKick` 缺阶段守卫 → 房主可在对局中踢对手直接获胜（可主动利用）；
+3. 断线/停服链路两端都没闭合（客户端侧角色断链只置 `LinkFailed` 不发事件、三个在线页面不订阅；服务端 `Stop()` 不关房不通知）；
+4. `LobbyOl._helloAcked` 为页面级状态而 Hello 为会话级一次性动作 → 从房间回大厅后「刷新/创建房间」永久禁用（打完一局想再开一局的路径断在这里）。
+---
+
+## 24. 大厅/房间完整性修复执行记录（H1–H4 + M1–M7，2026-09-05）
+
+> 依据：`联机对战完整实现最终缺口清单.md` §七（第二十五轮只读审查）+ 用户裁决"高优 + 中优一起修"。
+> 计划与验收见 `PLAN.md` §十五；进度摘要见 `C-S迁移进度与批次计划.md` §二十三。**单机侧零改动。**
+
+### 24.1 服务端（`Script/Net/Lobby/`）
+- **H1 建局异常回退**：`LobbyServer.StartMatchInternal` 现在把 `_matchFactory` / `BindSeat` / `StartServing` / `PushSnapshot` 全部包在同一个 try 里；失败（含工厂返回 null）统一走 `AbortStart(room, reason)`：`StopServing` → `Match=null` → `Phase=Waiting` → 取消双方准备 → `OnMatchAssemblyReleased`（释放半成品对局节点）→ 广播 → `NoticeRoom(Internal, "建局失败，已退回准备阶段：…")`。
+  另加两层兜底：`RoomSession.StartingAtTick` + `SweepStartingRooms()`（`Tick` 内每秒检查，超 `StartingGraceMs=15s` 直接回退）——这是"异常残留把 `MaxRooms` 占满"的唯一出口。
+  新增公开回调解说：`OnRoomClosed`（房间销毁）与 `OnMatchAssemblyReleased`（这一局的装配被丢弃，房间没关）职责分离；`LobbyServerHost` 两者都接到 `ServerMatchFactory.Destroy`。
+- **H2 踢人阶段守卫**：`HandleKick` 在"我是房主 / 目标在座 / 不是自己"之外增加阶段判断，对局中一律 `PhaseMismatch`（此前会经 `LeaveRoomInternal` 的 InMatch 分支 `ForfeitSeat(对手)` 让房主凭空获胜）。
+- **M1 关闭通知**：`CloseRoom` 改为先置 `Phase=Closed`，**逐个**向在座会话 `SendRoomState(...)`（不能用 `Broadcast`：它对 Closed 提前 return），再清座位/移出注册表/回调 `OnRoomClosed`。新增日志"已向 N 个在座会话下发 Closed 状态"。
+- **M5 少人恢复**：新增 `RecoverIfOpponentGone(room, reason)`：`Finished` 且 `OccupiedCount < 2` → 回 `Waiting`（清 `RematchRequested`、**保留 `Summary`**）+ `NoticeRoom(Disconnected, "对手已离开…房间已回到等待状态…")`。`OnMatchGameOver` 与 `LeaveRoomInternal` 均调用；`StartMatchInternal` 成功时清 `Summary`（避免结果横幅带进新一局）。
+- **M7 空闲回收**：`SweepIdleSessions()` 在 `Tick` 内每秒执行，只回收 **`RoomOfSession(sid) == null`** 且超 `SessionIdleTimeoutSeconds` 的会话（`Notice` + `Disconnect`）。**刻意不回收房间内/对局中的会话**：思考、看牌时的"长时间无消息"是正常行为，误踢代价远大于占一个连接槽。新增 `ServerHost.SessionIds` 供遍历；`--idle-timeout <秒>` CLI（`<=0` 关闭该机制）。
+- **`ServerHost.Stop()` / `Disconnect()` 冲刷**：新增 `FlushOutbound(rounds, sleepMs)`；`Stop()` = `OnServerStopping` → `FlushOutbound(8×20ms)` → `Stop`，`Disconnect()` = `FlushOutbound(3×10ms)` → `DisconnectSession`。原因：ENet 的强制断开 / `Close()` 不会替我们发送排队中的数据，不冲刷则"房间已关闭/你已被移出房间/长时间无操作"这类**收尾消息会静默丢失**。
+- **`ILobbyShutdown`（新文件）**：停止清理单独成接口（不加进 `ILobbyHandler`，避免波及测试替身）；`ServerHost.Stop()` 经它调用 `LobbyServer.OnServerStopping()`（遍历关房，幂等）。
+
+### 24.2 传输层（`Script/Net/Godot/GodotEnetTransport.cs`）
+- **`Poll()` 顺序调整**：`_peer.Poll()` + `DispatchAvailablePackets()`（新抽出的私有方法）**先执行**，"链路已断"判定**后执行**。原来的顺序在检测到断开时直接 return，导致**服务端关闭前刚下发的那一帧数据永远读不出来**（H3/M1 的闭环就靠这条消息）。判定为断开后 `_running=false`，后续帧立即返回，不会出现"每帧刷引擎错误"。
+- **`DisconnectSession` 改优雅断开**：`DisconnectPeer((int)peerId, force: false)`（ENet 会先把该 peer 已排队的下行数据发完再发断开包），并**即时移除** `_sessionToPeer/_peerToSession`（服务端视角立刻生效，后续 `OnPeerDisconnected` 不会重复回调）。
+
+### 24.3 客户端
+- **H3 断线感知**：`ClientSession.Poll()` 检测 `LinkFailed || (_helloSent && !IsConnected)` → `NotifyDisconnected()`（**幂等**：`Poll` 检测与显式 `Disconnect()` 共用，只通知一次）。
+  UI 订阅：`LobbyOl.OnDisconnected`（提示"请点连接重连" + 禁房间操作 + 清 `_helloAcked`）、`RoomOl.OnDisconnected`（释放会话 → 回大厅）、`OnlineArenaEntry.OnDisconnected`（同上）；`OnlineArenaEntry` 另处理 `RoomPhase.Closed` → 直接回大厅（不再先进房间页）。
+- **H4 登录态上移**：新增 `ClientSession.IsHelloAcked`（只认 Hello 那条应答的 `RequestId`，`res.Ok && SessionId` 非空才置位）。`LobbyOl._Ready` 接管既有会话时若已登录 → 直接恢复按钮并拉列表（此前 `_helloAcked` 是页面级字段，从房间页回大厅后刷新/建房永久灰）。
+- **M6 反订阅**：`RoomOl._ExitTree` 补退 `OnNotice`（此前悬空订阅会打到已释放节点，并把当前页强行切回大厅）。
+- **M5 配套**：`RoomOl` 的结果横幅改为"`MatchSummary != null` 就显示"，使"对手掉线 → 房间回 Waiting"时赢家仍能看到"本局你获胜（对手已离开）"。
+
+### 24.4 对局侧
+- **M3**：`LobbyServer.TryRoute` 只放行 `InMatch`（终局后不再路由 `intent/choice_res`）；`MatchHost.HandleMessage` 开头 `if (IsOver) return true;`（静默忽略，避免终局结果被覆盖或二次触发 `OnGameOver`）。
+- **M4**：`NetworkInputGateway._pending` 由 `TaskCompletionSource` 改为 `Pending{ Tcs, Seat }`；`TryHandleResult(json, seat = 0)` 在 `seat != 0 && pending.Seat != 0 && pending.Seat != seat` 时**拒绝执行且不完成等待**（真正的玩家仍可回答），只记拒绝日志；`MatchHost` 用 `SeatOfSession(sessionId)` 传入座位，未绑定会话的 `choice_res` 直接拒绝。旧签名 `TryHandleResult(json)` 保留（`seat = 0` = 不校验），既有回环测试零改动。
+- **M2**：`ServerMatchFactory.Create` 开头 `Destroy(room)`（同房间旧节点先释放）；`_games[roomId]` 登记移到初始化**成功之后**，失败路径先 `FreeGameNode` 再抛出（异常由 H1 回退）；新增 `FreeGameNode` 供 `Destroy` 共用。
+
+### 24.5 验证与证据
+- `dotnet build`：0 错误（仅 `NU1900` 离线包审计警告）。
+- headless 全量套件：**全绿、0 失败**（`LobbyFlowTests` 3 → 7 例，新增 4 例见 `PLAN.md` §15.2）。stderr 仅有用例故意触发的 `res://NoSuchCard.tres`。
+- 一键三开实跑：4+ 轮完整对局循环通过；服务端日志 `建局完成 ×5 / 已释放房间 r1 的对局节点 ×4`（M2 实证：改动前这里是 ×0，旧局整棵 Manager 树一直挂着）；三进程 stderr 全 0。
+- **已知测试取舍**：`M1`（关房通知）与 `M7`（回收前通知）在**同进程回环 rig** 里无法稳定断言 —— 回环客户端在 `ServerHost.Stop()`/`Disconnect()` 的同一次调用内没有轮询机会，那"最后一帧"是否送达取决于传输尾部行为。故测试断言落在**服务端效果**（关房/回收/房间数）+ 独立验证"关房时客户端确实收到 `Closed`"；真实双进程下客户端每帧都在轮询，收尾消息由 `FlushOutbound` + 优雅断开双重保障。

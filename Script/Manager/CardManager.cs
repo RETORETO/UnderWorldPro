@@ -76,6 +76,14 @@ public partial class CardManager : Node
     /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
     public Script.Manager.EffectEngine EffectEngineRef { get; set; }
 
+    /// <summary>
+    /// 【批次 2·多对局隔离】显式注入的 PlayerManager 引用（由 `GameInitializer` 装配时注入）。
+    /// 用于目标精筛里的"条件式限制"（如 `AttachedToCharacterIfNoMind` 需查【心】）；
+    /// 传入 `TargetValidity.CheckRestrictions`，避免依赖进程级 `TargetValidity.PlayerManagerRef`
+    /// （后者在一个服务端进程跑多场对局时只会指向最后一局）。未注入时该链路退回静态兜底（旧路径/单测）。
+    /// </summary>
+    public PlayerManager PlayerManagerRef { get; set; }
+
     /// <summary>未显式注入时回退静态 Instance（向后兼容，测试/旧装配路径不因治理而破坏）。</summary>
     private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
@@ -469,7 +477,7 @@ public partial class CardManager : Node
         if (tmpl.TargetRules != null)
         {
             foreach (var rule in tmpl.TargetRules)
-                if (rule != null && MatchesRule(rule, target, sourceController))
+                if (rule != null && MatchesRule(rule, target, sourceController, PlayerManagerRef))
                     return true;
         }
 
@@ -483,7 +491,7 @@ public partial class CardManager : Node
                 if (e == null || e.Timing != EffectTiming.OnSorceryCast) continue;
                 var spec = e.Target;
                 if (spec == null || spec.Kind == TargetKind.None) continue;
-                if (MatchesSpec(spec, target, sourceController))
+                if (MatchesSpec(spec, target, sourceController, PlayerManagerRef))
                     return true;
             }
         }
@@ -492,13 +500,15 @@ public partial class CardManager : Node
 
     /// <summary>单条 TargetSpec（效果系统目标）匹配：先粗筛大类，再要求所有 Restrictions 满足（AND）。
     /// 与 MatchesRule 对称，供事务卡打出时按 EffectData.Target 裁决候选（目标真相源=效果系统）。</summary>
-    private static bool MatchesSpec(Script.Data.Effects.TargetSpec spec, CardInstance t, int sourceController)
+    private static bool MatchesSpec(Script.Data.Effects.TargetSpec spec, CardInstance t, int sourceController,
+        PlayerManager pm = null)
     {
         if (spec == null || t == null) return false;
         // 粗筛大类（与 MatchesRule 同一互斥映射）
         if (MapInstanceToTargetKind(t) != spec.Kind) return false;
         // 精筛条件（全部满足）——与结算复检共用 CheckRestrictions（单一真相源）
-        return Script.Manager.TargetValidity.CheckRestrictions(spec.Restrictions, spec.Param, t, sourceController);
+        return Script.Manager.TargetValidity.CheckRestrictions(
+            spec.Restrictions, spec.Param, t, sourceController, pm);
     }
 
     /// <summary>
@@ -512,12 +522,14 @@ public partial class CardManager : Node
     /// 注：LocalZone 由 CheckRestrictions 跳过；取目标阶段的本地区筛选目前由
     /// TurnManager.GetLocalZoneTargets 按地区槽位遍历实现，不经本方法（tres 未配置 LocalZone）。
     /// </summary>
-    public static bool MatchesRule(Script.Data.Effects.TargetRule rule, CardInstance t, int sourceController)
+    /// <param name="pm">本对局的 PlayerManager（多对局隔离）；null 时该链路退回进程级静态兜底。</param>
+    public static bool MatchesRule(Script.Data.Effects.TargetRule rule, CardInstance t, int sourceController,
+        PlayerManager pm = null)
     {
         if (rule == null || t == null) return false;
         // 1. 粗筛大类（取目标阶段专用：MapInstanceToTargetKind 为互斥映射）
         if (MapInstanceToTargetKind(t) != rule.Kind) return false;
         // 2. 精筛条件（全部满足）——与结算复检共用
-        return Script.Manager.TargetValidity.CheckRestrictions(rule.Restrictions, rule.Param, t, sourceController);
+        return Script.Manager.TargetValidity.CheckRestrictions(rule.Restrictions, rule.Param, t, sourceController, pm);
     }
 }

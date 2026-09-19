@@ -45,10 +45,10 @@ namespace Script.Tests
             // 桩路由：本用例越权路径不会触达业务逻辑
             var hub = new IntentHub(new StubIntentRouter());
 
-            // 连接映射为玩家 1，但意图声称自己是玩家 2 → 应判越权
+            // 连接映射为会话 p1（座位 1），但意图声称自己是玩家 2 → 应判越权
             var intent = PlayerIntent.Create(2, PlayerIntent.Kind.Pass);
             var json = IntentSerializer.SerializeIntent(intent);
-            var respJson = hub.HandleIntent(reportedPlayerId: 1, json);
+            var respJson = hub.HandleIntent("p1", 1, json);
             var resp = IntentSerializer.DeserializeResult(respJson);
 
             Assert.IsFalse(resp.Success, "越权意图应被拒绝");
@@ -59,28 +59,31 @@ namespace Script.Tests
         /// <summary>(3) 通道闭环：客户端经传输层上行意图，服务端收到并裁决（此处验证传输+反序列化+身份校验全链路）。</summary>
         public void TestIntentChannelLoopback()
         {
-            var transport = new LoopbackTransport();
+            // 批次 1：传输层会话寻址；本用例用"座位 1/2 ↔ 会话 p1/p2"的回环辅助。
+            var loop = new PlayerIdLoopback();
+            var transport = loop.Transport;
             transport.Start();
 
             // 服务端 IntentHub（桩路由；本用例验证"连接映射错配"被拒，不触达业务逻辑）
             var hub = new IntentHub(new StubIntentRouter());
-            transport.OnMessageReceived((playerId, msg) =>
+            transport.OnSessionMessage((sessionId, msg) =>
             {
+                // 服务端视角：该会话在房间里的座位是 2（第二个连入者），而意图声明 PlayerId=1 → 应判越权。
                 // 服务端侧：Phase B 信封 → 先解包再裁决；回执同样打信封（与 NetworkMatchLauncher 一致）
-                var resp = hub.HandleIntent(playerId, NetEnvelope.UnwrapPayload(msg));
-                transport.Send(playerId, NetEnvelope.Wrap(NetEnvelope.Types.IntentResult, resp));
+                var resp = hub.HandleIntent(sessionId, 2, NetEnvelope.UnwrapPayload(msg));
+                transport.SendToSession(sessionId, NetEnvelope.Wrap(NetEnvelope.Types.IntentResult, resp));
             });
 
             bool gotResult = false;
             IntentResult received = null;
             // 客户端侧：注册回包处理
-            transport.RegisterClient(1, (serverMsg) =>
+            loop.RegisterClient(1, (serverMsg) =>
             {
                 received = IntentClient.ParseResult(serverMsg);
                 gotResult = true;
             });
 
-            // 客户端发意图（本地玩家 1，PlayCard）
+            // 客户端发意图（本地座位 1，PlayCard）
             var client = new IntentClient(transport, 1);
             var id = client.SendIntent(PlayerIntent.Kind.PlayCard, "inst_7", "targetX");
 
@@ -88,7 +91,7 @@ namespace Script.Tests
             Assert.IsTrue(gotResult, "客户端应经回环收到服务端下行的 IntentResult");
             Assert.IsNotNull(received, "应解析出 IntentResult");
             Assert.AreEqual(id, received.IntentId, "下行结果应匹配上行 IntentId（correlation）");
-            // 服务端用 reportedPlayerId=2 裁决，意图声明 1 → 身份不符被拒（证明通道闭环 + 权威校验）
+            // 服务端用座位=2 裁决，意图声明 1 → 身份不符被拒（证明通道闭环 + 权威校验）
             Assert.IsFalse(received.Success, "连接映射与意图声明不符时应被服务端拒绝（通道闭环正确）");
         }
 
@@ -100,7 +103,7 @@ namespace Script.Tests
 
             var intent = PlayerIntent.Create(1, PlayerIntent.Kind.DebugCommand, "damage area 0 3");
             var json = IntentSerializer.SerializeIntent(intent);
-            var respJson = hub.HandleIntent(reportedPlayerId: 1, json);
+            var respJson = hub.HandleIntent("p1", 1, json);
             var resp = IntentSerializer.DeserializeResult(respJson);
 
             Assert.IsTrue(resp.Success, "DebugCommand 应被路由为合法意图");

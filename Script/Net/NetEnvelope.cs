@@ -29,6 +29,13 @@ namespace Script.Net
             public const string IntentResult = "intent_result";    // S→C：IntentResult（裁决回执）
             public const string ChoiceRequest = "choice_req";      // S→C：ChoiceRequest（请决策）
             public const string ChoiceResult = "choice_res";       // C→S：ChoiceResult（回包）
+
+            // ---- 大厅/房间（批次 1 新增；纯加法）----
+            public const string LobbyRequest = "lobby_req";        // C→S：LobbyRequest
+            public const string LobbyResponse = "lobby_res";       // S→C：LobbyResponse（请求应答）
+            public const string RoomState = "room_state";          // S→C：RoomState（全量房间状态）
+            public const string RoomList = "room_list";            // S→C：RoomListSnapshot（房间列表）
+            public const string ServerNotice = "server_notice";    // S→C：ServerNotice（非应答类通知）
         }
 
         /// <summary>包裹一条消息：返回 <c>V2:type|payload</c>。</summary>

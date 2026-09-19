@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://colnetserver"]
+
+[ext_resource type="Script" path="res://Script/Net/Godot/NetServerEntry.cs" id="1_netentry"]
+
+[node name="NetServer" type="Node"]
+script = ExtResource("1_netentry")

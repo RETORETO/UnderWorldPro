@@ -1,0 +1,149 @@
+[gd_scene load_steps=2 format=3 uid="uid://colroomol"]
+
+[ext_resource type="Script" path="res://Script/UI/Online/RoomOl.cs" id="1_roomol"]
+
+[node name="RoomOl" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_roomol")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.09, 0.1, 0.12, 1)
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 0
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -420.0
+offset_top = -260.0
+offset_right = 420.0
+offset_bottom = 260.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="RoomLabel" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 14.0
+offset_right = 800.0
+offset_bottom = 44.0
+text = "房间"
+
+[node name="Seat1Label" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 56.0
+offset_right = 800.0
+offset_bottom = 84.0
+text = "座位 1"
+
+[node name="Seat2Label" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 88.0
+offset_right = 800.0
+offset_bottom = 116.0
+text = "座位 2"
+
+[node name="DeckTitleLabel" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 140.0
+offset_right = 160.0
+offset_bottom = 168.0
+text = "我的卡组"
+
+[node name="DeckOption" type="OptionButton" parent="Panel"]
+layout_mode = 0
+offset_left = 130.0
+offset_top = 138.0
+offset_right = 620.0
+offset_bottom = 170.0
+
+[node name="DeckButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 632.0
+offset_top = 138.0
+offset_right = 800.0
+offset_bottom = 172.0
+text = "重新提交卡组"
+
+[node name="DeckStatusLabel" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 180.0
+offset_right = 800.0
+offset_bottom = 208.0
+text = "我的卡组：未提交"
+autowrap_mode = 2
+
+[node name="ResultLabel" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 216.0
+offset_right = 800.0
+offset_bottom = 252.0
+visible = false
+text = "本局已结束"
+
+[node name="ReadyButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 330.0
+offset_right = 200.0
+offset_bottom = 372.0
+text = "准备"
+
+[node name="StartButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 212.0
+offset_top = 330.0
+offset_right = 392.0
+offset_bottom = 372.0
+text = "开始对局"
+
+[node name="KickButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 404.0
+offset_top = 330.0
+offset_right = 584.0
+offset_bottom = 372.0
+text = "踢出对手"
+
+[node name="RematchButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 404.0
+offset_top = 330.0
+offset_right = 584.0
+offset_bottom = 372.0
+visible = false
+text = "再来一局"
+
+[node name="LeaveButton" type="Button" parent="Panel"]
+layout_mode = 0
+offset_left = 620.0
+offset_top = 330.0
+offset_right = 800.0
+offset_bottom = 372.0
+text = "离开房间"
+
+[node name="StatusLabel" type="Label" parent="Panel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 388.0
+offset_right = 800.0
+offset_bottom = 440.0
+text = "等待服务端状态…"
+autowrap_mode = 2

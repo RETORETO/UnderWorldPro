@@ -5,6 +5,7 @@ public partial class MainMenu : Control
     private Button _startButton;
     private Button _deckButton;
     private Button _quitButton;
+    private Button _onlineButton;   // 【增量 B】联机对战（大厅页）
 
     public override void _Ready()
     {
@@ -12,11 +13,14 @@ public partial class MainMenu : Control
         _startButton = GetNode<Button>("ButtonContainer/StartButton");
         _deckButton = GetNode<Button>("ButtonContainer/DeckButton");
         _quitButton = GetNode<Button>("ButtonContainer/QuitButton");
+        // 联机入口：场景里可能尚未加该按钮（旧场景），故用 GetNodeOrNull 容错
+        _onlineButton = GetNodeOrNull<Button>("ButtonContainer/OnlineButton");
 
         // 绑定按钮点击事件
         _startButton.Pressed += OnStartPressed;
         _deckButton.Pressed += OnDeckPressed;
         _quitButton.Pressed += OnQuitPressed;
+        if (_onlineButton != null) _onlineButton.Pressed += OnOnlinePressed;
 
         // 同步 GameManager 状态（已是 MainMenu 场景，GoToState 内部会跳过重载）
         if (GameManager.Instance != null)
@@ -28,6 +32,13 @@ public partial class MainMenu : Control
         GD.Print("点击开始游戏，切换到大厅");
         // 统一经 GameManager（应用级 Controller）流转场景（问题 3 修复）
         GameManager.Instance.GoToState(GameManager.GameState.Lobby);
+    }
+
+    /// <summary>【增量 B】进入联机大厅页（在线专用场景；单机「开始游戏」流程不受影响）。</summary>
+    private void OnOnlinePressed()
+    {
+        GD.Print("【主菜单】进入联机大厅");
+        GameManager.Instance.GoToState(GameManager.GameState.LobbyOnline);
     }
 
     private void OnDeckPressed()

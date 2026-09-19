@@ -38,10 +38,11 @@ namespace Script.Net
 
         /// <summary>
         /// 服务端：处理一条收到的意图（json）。
-        /// playerId 由传输层上报（权威），必须与 intent.PlayerId 一致；否则判越权拒绝。
-        /// 返回序列化后的 IntentResult，供传输层下行给对应玩家。
+        /// sessionId = 传输层上报的**会话 id**（权威来源）；seat = 该会话在当前房间的座位（=对局内 playerId）。
+        /// 必须与 intent.PlayerId 一致，否则判越权拒绝（语义与改造前一致，只是身份来源从"连接编号"改为"会话的座位"）。
+        /// 返回序列化后的 IntentResult，供传输层下行给对应会话。
         /// </summary>
-        public string HandleIntent(int reportedPlayerId, string json)
+        public string HandleIntent(string sessionId, int seat, string json)
         {
             PlayerIntent intent;
             try
@@ -59,13 +60,13 @@ namespace Script.Net
             }
 
             // 身份校验：防止客户端越权代操作其他玩家
-            if (intent.PlayerId != reportedPlayerId)
+            if (intent.PlayerId != seat)
             {
                 return IntentSerializer.SerializeResult(new IntentResult
                 {
                     IntentId = intent.IntentId,
                     Success = false,
-                    Error = $"越权：意图声明 PlayerId={intent.PlayerId} 与连接映射 {reportedPlayerId} 不符",
+                    Error = $"越权：意图声明 PlayerId={intent.PlayerId} 与连接（会话 {sessionId}）的座位 {seat} 不符",
                 });
             }
 
@@ -182,12 +183,14 @@ namespace Script.Net
     }
 
     /// <summary>
-    /// 【C/S 化 P3·模块C】客户端侧意图发送器：把本地意图经传输层上行到服务端。
-    /// 持有 INetTransport 与本地玩家编号；SendIntent 返回 correlation id 供匹配下行 IntentResult。
+    /// 【C/S 化 P3·模块C / 批次 1】客户端侧意图发送器：把本地意图经传输层上行到服务端。
+    /// 持有 INetTransport 与**本地座位号**（对局内 playerId；由房间绑定会话后确定）；
+    /// 传输层只需 `SendToServer`（客户端只有一条到服务端的连接，无需寻址）。
     /// </summary>
     public class IntentClient
     {
         private readonly INetTransport _transport;
+        /// <summary>本地座位号（=对局内 playerId 1/2）。</summary>
         public int LocalPlayerId { get; }
 
         public IntentClient(INetTransport transport, int localPlayerId)
@@ -201,7 +204,16 @@ namespace Script.Net
         {
             var intent = PlayerIntent.Create(LocalPlayerId, kind, args);
             var payload = IntentSerializer.SerializeIntent(intent);
-            _transport.Send(LocalPlayerId, NetEnvelope.Wrap(NetEnvelope.Types.Intent, payload));
+            _transport.SendToServer(NetEnvelope.Wrap(NetEnvelope.Types.Intent, payload));
+            return intent.IntentId;
+        }
+
+        /// <summary>按指定座位构造意图并上行（仅回环/演示用：同一进程扮演多个座位时区分身份）。</summary>
+        public string SendIntentAs(int playerId, PlayerIntent.Kind kind, params string[] args)
+        {
+            var intent = PlayerIntent.Create(playerId, kind, args);
+            var payload = IntentSerializer.SerializeIntent(intent);
+            _transport.SendToServer(NetEnvelope.Wrap(NetEnvelope.Types.Intent, payload));
             return intent.IntentId;
         }
 

@@ -16,6 +16,12 @@ namespace Script.Net
     /// </summary>
     public static class SnapshotSerializer
     {
+        /// <summary>
+        /// 快照报文前缀（**唯一真相源**）：对局通道上"快照"与信封消息（`V2:<type>|…`）共用一条连接，
+        /// 靠本前缀区分。服务端下发、客户端识别、以及对局宿主（`MatchHost`）都必须引用本常量。
+        /// </summary>
+        public const string SnapPrefix = "SNAP:";
+
         private static readonly JsonSerializerOptions Options = new JsonSerializerOptions
         {
             WriteIndented = false,

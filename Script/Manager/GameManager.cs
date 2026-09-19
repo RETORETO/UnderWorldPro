@@ -7,7 +7,11 @@ public partial class GameManager : Node
 {
     public static GameManager Instance { get; private set; }  // 添加这一行
 
-    public enum GameState { MainMenu, Lobby, Room, Arena, DeckBuilder }
+    /// <summary>
+    /// 应用级场景状态。`LobbyOnline`/`RoomOnline`/`OnlineArena` 为**联机专用**（增量 B 追加，不动单机三态语义）：
+    /// 大厅页 → 房间页 → 联机战场页；单机 `Lobby/Room/Arena` 保持原样。
+    /// </summary>
+    public enum GameState { MainMenu, Lobby, Room, Arena, DeckBuilder, LobbyOnline, RoomOnline, OnlineArena }
     public GameState CurrentState { get; private set; }
 
     // 状态 → 场景路径映射（唯一真相源，避免散落在各 View）
@@ -18,6 +22,10 @@ public partial class GameManager : Node
         { GameState.Room,        "res://Scenes/Room.tscn" },
         { GameState.Arena,       "res://Scenes/Arena/Arena.tscn" },
         { GameState.DeckBuilder,  "res://Scenes/DeckBuilder.tscn" },
+        // 联机专用场景（新建；单机场景未被改动）
+        { GameState.LobbyOnline, "res://Scenes/Net/LobbyOl.tscn" },
+        { GameState.RoomOnline,  "res://Scenes/Net/RoomOl.tscn" },
+        { GameState.OnlineArena, "res://Scenes/Net/OnlineArena.tscn" },
     };
 
     public override void _Ready()
@@ -49,6 +57,24 @@ public partial class GameManager : Node
             return;
         }
         GetTree().ChangeSceneToFile(path);
+    }
+
+    /// <summary>
+    /// 【增量 B】延迟切换场景：**在网络回调 / 节点处理 / 场景加载过程中请求切场景时必须用它**。
+    /// 原因：`ChangeSceneToFile` 会在当前帧的节点处理期间立即增删子节点，Godot 会报
+    /// "Parent node is busy adding/removing children" 并可能抛 `ObjectDisposedException`。
+    /// 实现：把 defer 挂在 **SceneTree** 上（比挂在 Node 上更晚、更安全），并先行更新状态枚举。
+    /// </summary>
+    public void GoToStateDeferred(GameState newState)
+    {
+        CurrentState = newState;
+        if (!ScenePaths.TryGetValue(newState, out string path) || string.IsNullOrEmpty(path))
+        {
+            GD.Print($"[GameManager] 状态 {newState} 暂无对应场景，仅更新枚举");
+            return;
+        }
+        if (GetTree().CurrentScene?.SceneFilePath == path) return;   // 已在该场景：不重复切换
+        GetTree().CallDeferred(SceneTree.MethodName.ChangeSceneToFile, path);
     }
 
     /*

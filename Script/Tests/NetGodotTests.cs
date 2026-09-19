@@ -5,33 +5,38 @@ using Script.Net;
 namespace Script.Tests
 {
     /// <summary>
-    /// 【C/S 化 P3·模块A 集成验证】真实 ENet 联机回环：
+    /// 【C/S 化 P3·模块A 集成验证 / 批次 1 会话化】真实 ENet 联机回环：
     /// 同进程内起一个服务端 transport + 一个客户端 transport，经 127.0.0.1 真实 socket 握手收发。
-    /// 验证 GodotEnetTransport 的 StartServer/StartClient/Send/OnMessageReceived/Poll 端到端可用，
-    /// 玩家编号(1) ↔ ENet peer id 映射正确。
+    /// 验证 GodotEnetTransport 的 StartServer/StartClient/SendToSession/SendToServer/OnSessionMessage/Poll
+    /// 端到端可用，且**服务端为连接分配的会话 id** 能正确用于定向回包。
     /// </summary>
     public class NetGodotTests : TestRunner
     {
         public void TestEnetRealTransportLoopback()
         {
             const int port = 18910;
-            var server = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Server) { Port = (ushort)port };
+            var server = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Server)
+            {
+                Port = (ushort)port,
+                MaxClients = 16,
+            };
             var client = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Client)
             {
                 Port = (ushort)port,
                 ServerAddress = "127.0.0.1",
-                LocalPlayerId = 1
             };
 
             string serverGot = null;
+            string serverSawSession = null;
             string clientGot = null;
 
-            server.OnMessageReceived((pid, msg) =>
+            server.OnSessionMessage((sessionId, msg) =>
             {
                 serverGot = msg;
-                server.Send(pid, "PONG:" + pid); // 服务端回包
+                serverSawSession = sessionId;
+                server.SendToSession(sessionId, "PONG:" + sessionId);   // 服务端按会话定向回包
             });
-            client.OnMessageReceived((pid, msg) => { clientGot = msg; });
+            client.OnSessionMessage((_, msg) => { clientGot = msg; });
 
             server.Start();
             client.Start();
@@ -42,16 +47,21 @@ namespace Script.Tests
             {
                 server.Poll();
                 client.Poll();
-                if (server.IsPlayerConnected(1))
+                if (client.IsClientConnected())
                 {
-                    client.Send(1, "PING");
+                    client.SendToServer("PING");
                 }
                 if (serverGot != null && clientGot != null) break;
                 Thread.Sleep(10);
             }
 
             Assert.IsTrue(serverGot == "PING", "服务端应经真实 ENet 收到客户端 PING");
-            Assert.IsTrue(clientGot == "PONG:1", "客户端应经真实 ENet 收到服务端回包 PONG:1");
+            Assert.IsTrue(!string.IsNullOrEmpty(serverSawSession) && serverSawSession.StartsWith("s"),
+                $"服务端应为连接分配会话 id（形如 s1），实际={serverSawSession ?? "null"}");
+            Assert.IsTrue(server.ConnectedSessionCount == 1, "服务端应有且仅有 1 个会话");
+            Assert.IsTrue(server.IsSessionConnected(serverSawSession), "该会话应处于已连接状态");
+            Assert.IsTrue(clientGot == "PONG:" + serverSawSession,
+                $"客户端应经真实 ENet 收到服务端按会话定向的回包 PONG:{serverSawSession}，实际={clientGot}");
 
             server.Stop();
             client.Stop();
