@@ -359,12 +359,27 @@ public partial class PlayerManager : Node
     public void ApplySnapshot(System.Collections.Generic.List<Script.Net.PlayerSnapshot> players)
     {
         if (players == null) return;
+        _projectedDeployCovertBlocked.Clear();
         foreach (var p in players)
         {
             var data = GetPlayer(p.PlayerId);
             if (data == null) continue;
             if (p.IsGameOver) _isGameOver = true;
+            // 【P1】全局封锁秘密派遣（JC068-B）：服务端权威态随快照投影到客户端，
+            // 供客户端派遣门禁（DeployCovertEligibility）与服务端同解。
+            if (p.DeployCovertBlocked) _projectedDeployCovertBlocked.Add(p.PlayerId);
         }
     }
+
+    // ============================================================
+    // 【P1】客户端投影的"全局封锁秘密派遣"态（JC068-B）
+    // 服务端权威在 EffectEngine 的封锁表（持续效果注册表）；客户端无该引擎，只能读快照投影值。
+    // 命名带 Projected 以免与服务端权威查询混淆。
+    // ============================================================
+    private readonly System.Collections.Generic.HashSet<int> _projectedDeployCovertBlocked
+        = new System.Collections.Generic.HashSet<int>();
+
+    /// <summary>该玩家（按快照投影）当前是否被封锁秘密派遣。快照未携带/未收到时为 false。</summary>
+    public bool IsDeployCovertBlockedProjected(int playerId) => _projectedDeployCovertBlocked.Contains(playerId);
 }
 

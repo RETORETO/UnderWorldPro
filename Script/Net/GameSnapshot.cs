@@ -47,6 +47,56 @@ namespace Script.Net
         public List<ZoneCardRef> InvestigationCards = new List<ZoneCardRef>();
         /// <summary>上述调查卡的决策者玩家编号（0=无待决）。</summary>
         public int InvestigationOwnerPlayerId;
+
+        /// <summary>
+        /// 【P2·合法性投影】服务端**为该查看者预先算好**的操作合法性视图（可发动 / 合法目标集合）。
+        ///
+        /// 存在的意义（消灭"两套判定"）：客户端原本自己调 `CardManager.IsLegalPlayTarget` /
+        /// `ActivateEligibility.CanActivate` 做提前判断，而那要求客户端把服务端全部输入都投影齐
+        /// （本局 PlayerManager、静止标记、运行时授予…）。只要漏一项就会两端不一致。
+        /// 改为服务端用**同一份规则函数**算好候选集合下发后，客户端只做"渲染 + 成员判断"，
+        /// 规则实现只剩服务端一份；且候选范围由服务端决定，客户端不再有自己的枚举范围（曾经的窄范围缺口）。
+        ///
+        /// null 表示服务端未生成（旧服务端 / 纯测试路径）→ 客户端**退回调用同一份规则函数**本地判定
+        /// （该路径在 P0/P1 之后输入已补齐，同样一致）。
+        /// </summary>
+        public GameViewSnap View;
+    }
+
+    /// <summary>【P2】一条能力级合法目标投影（激活类效果：来源卡 + EffectId → 目标卡 UID）。</summary>
+    public class AbilityTargetSnap
+    {
+        public string SourceUid;
+        public string EffectId;
+        public List<string> TargetUids = new List<string>();
+    }
+
+    /// <summary>【P2】一条打出级合法目标投影（手牌 → 目标卡 UID）。</summary>
+    public class PlayTargetSnap
+    {
+        public string SourceUid;
+        public List<string> TargetUids = new List<string>();
+    }
+
+    /// <summary>
+    /// 【P2·合法性投影】服务端算给某个查看者的"操作合法性"纯数据视图（已按查看者过滤）。
+    /// 全部由服务端 Manager 层用生产规则函数算出，客户端只读不算。
+    /// </summary>
+    public class GameViewSnap
+    {
+        /// <summary>本视图对应的查看者座位。</summary>
+        public int ViewerPlayerId;
+
+        /// <summary>当前"可发动"的场上卡 UID（服务端 `ActivateEligibility.CanActivate` 的结论）。
+        /// 客户端据此做可发动高亮与激活拖拽起手门禁，不再自行判定。</summary>
+        public List<string> ActivatableUids = new List<string>();
+
+        /// <summary>激活类效果各自的可选目标（来源卡 UID + EffectId → 目标卡 UID 集合）。
+        /// 只包含"至少有一个合法目标"的条目。</summary>
+        public List<AbilityTargetSnap> AbilityTargets = new List<AbilityTargetSnap>();
+
+        /// <summary>手牌打出时的合法目标卡 UID 集合（含场上卡与秘社；地区目标仍由落点位置表达）。</summary>
+        public List<PlayTargetSnap> PlayTargets = new List<PlayTargetSnap>();
     }
 
     /// <summary>一条玩家级费用修正的快照投影（纯数据，对应 EffectEngine.TimedMod 中 Kind==CostMod 的条目）。</summary>
@@ -66,6 +116,11 @@ namespace Script.Net
         public int StorybookCount;   // 故事书/资源计数（按实际字段定）
         public bool IsGameOver;
         public int ScoreTotal;       // 胜利分数（分数区总分，联机客户端展示/结算用）
+
+        /// <summary>【P1】该玩家当前是否被"未横置的阿格斯IV"封锁秘密派遣（JC068-B 全局封锁）。
+        /// 权威来源是服务端 `EffectEngine.IsDeployCovertBlocked`（持续效果注册表），客户端无该引擎，
+        /// 故必须随快照下行；否则客户端派遣门禁（DeployCovertEligibility）会放行、直到服务端才拒绝。</summary>
+        public bool DeployCovertBlocked;
     }
 
     /// <summary>一张卡在某一时刻的运行时状态投影（纯数据）。</summary>
@@ -99,6 +154,29 @@ namespace Script.Net
         public int CurrentPower;
         public int CurrentDefense;
         public List<MagicDomain> MagicDomains = new List<MagicDomain>();
+
+        // ---- 【P1·运行时状态投影补全】----
+        // 背景：客户端不运行 EffectEngine，因此凡"由持续/静止效果在服务端写入实例"的状态，
+        // 若不随快照下行，客户端上的同一份规则函数（IsLegalPlayTarget / AreaStatsCalculator / CardUI …）
+        // 必然算出与服务端不同的结果。以下字段即为该补齐集。
+        /// <summary>静止/禁止标记（`Script.Data.Effects.StaticKind` 的整数值，如 CannotBeAttached=0）。
+        /// 用 int 承载以免 Net/ 直接依赖 Manager 层枚举类型（对齐 CurrentPhase 的既有约定）。
+        /// 消费点：`CardManager.IsLegalPlayTarget` 的"不能被装备结附"拦截。</summary>
+        public List<int> StaticFlags = new List<int>();
+        /// <summary>当前实际子类别（模板固有 + 运行时授予，如 JC030 授予"吸血鬼"）。
+        /// 消费点：`CardInstance.HasSubCategory` / `TargetRestriction.CurrentSubCategory` / 卡面子类别显示。</summary>
+        public List<string> SubCategories = new List<string>();
+        /// <summary>运行时授予的关键字（如持续效果授予的【公开】）。消费点：`HasKeyword` / `HasPublicKeyword`。</summary>
+        public List<string> GrantedKeywords = new List<string>();
+        /// <summary>运行时授予的图标。消费点：`HasIcon` 与卡面图标显示。</summary>
+        public List<string> GrantedIcons = new List<string>();
+        /// <summary>运行时授予的属性计数（"先手调查"/"调查"/"战斗"等）。
+        /// 消费点：`CardInstance.GetAttribute`（如 `AreaStatsCalculator` 的白眼先手调查加成）。</summary>
+        public Dictionary<string, int> GrantedAttributes = new Dictionary<string, int>();
+        /// <summary>先手调查/先手战斗当前值（模板固有 + 运行时授予，Grant 已折入）。
+        /// 消费点：CardUI 白眼标签等读取 `CurrentFirstStrike*` 的展示。</summary>
+        public int CurrentFirstStrikeInvestigation;
+        public int CurrentFirstStrikeStrength;
 
         // ---- 规则深化字段（M3）：用于门禁/结算判定 ----
         /// <summary>本回合是否登场过（登场同回合不可攻击/不可额外行动）。</summary>

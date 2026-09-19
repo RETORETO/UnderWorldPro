@@ -59,12 +59,14 @@ namespace Script.Net
         /// <summary>
         /// 为指定观看者过滤快照：隐藏区替换为占位引用，其余字段按引用复用（不改动原快照）。
         /// </summary>
-        public static GameSnapshot ForPlayer(GameSnapshot full, int viewerPlayerId)
+        /// <param name="view">【P2】服务端为该观看者算好的合法性投影（见 `LegalityProjection`）；
+        /// null = 不附带（旧服务端/测试路径），客户端将退回调用同一份规则函数本地判定。</param>
+        public static GameSnapshot ForPlayer(GameSnapshot full, int viewerPlayerId, GameViewSnap view = null)
         {
             if (full == null) return null;
             if (viewerPlayerId <= 0) return full;   // 不过滤（服务端自省/测试）
 
-            var view = new GameSnapshot
+            var filtered = new GameSnapshot
             {
                 TurnCount = full.TurnCount,
                 FirstPlayerId = full.FirstPlayerId,
@@ -78,20 +80,22 @@ namespace Script.Net
                 Random = full.Random,
                 CostMods = full.CostMods,
                 Zones = FilterZoneList(full.Zones, viewerPlayerId),
+                // 【P2·合法性投影】服务端算好的候选集合随本查看者的快照下发（客户端只读不算）
+                View = view ?? full.View,
             };
 
             // 地区牌堆对双方都隐藏（只看数量）
             if (full.WorldDeckCards != null)
             {
-                view.WorldDeckCards = new List<ZoneCardRef>();
+                filtered.WorldDeckCards = new List<ZoneCardRef>();
                 for (int i = 0; i < full.WorldDeckCards.Count; i++)
-                    view.WorldDeckCards.Add(MakeHiddenRef(full.WorldDeckCards[i], i));
+                    filtered.WorldDeckCards.Add(MakeHiddenRef(full.WorldDeckCards[i], i));
             }
 
             // 待分配的调查卡：只发给决策者本人
-            FilterInvestigation(full, view, viewerPlayerId);
+            FilterInvestigation(full, filtered, viewerPlayerId);
 
-            return view;
+            return filtered;
         }
 
         /// <summary>待分配的调查卡只发给决策者本人（其他人收到空表，避免泄露对手牌库内容）。</summary>

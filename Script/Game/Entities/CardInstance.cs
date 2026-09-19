@@ -249,6 +249,58 @@ namespace Script.Game.Entities
             }
         }
 
+        /// <summary>
+        /// 【P1·C/S 投影回填】按快照恢复"运行时状态"（静止/禁止标记、当前子类别、运行时授予、先手能力值）。
+        ///
+        /// 存在意义：真跨进程客户端**不运行 EffectEngine**（没有持续效果注册表），若这些状态不入快照，
+        /// 客户端上任何读取它们的判定/展示都会与服务端不一致。典型三例：
+        ///  · JC001-A/JC030-B 的 CannotBeAttached 静止标记缺失 → 客户端以为可以装备结附，服务端拒绝；
+        ///  · JC030-C 授予的"吸血鬼"子类别缺失 → 卡面子类别/基于子类别的判定两端不同；
+        ///  · JC001 白眼 / JC030 黑眼 / JC060 光环的授予属性缺失 → 客户端地区统计（AreaStatsCalculator）
+        ///    与 CardUI 白眼标签少算数值。
+        ///
+        /// 关键纪律：这里【直接覆盖】各集合，**不走 Grant()/Revoke()**——Grant 对"调查/战斗/先手调查"
+        /// 会就地叠加 Current*，而 Current*（CurrentInvestigation / CurrentStrength / CurrentFirstStrike*）
+        /// 已随快照独立投影到位，再走 Grant 就二次叠加了。
+        /// </summary>
+        public void RestoreProjectedState(
+            IEnumerable<StaticKind> staticFlags,
+            IEnumerable<string> currentSubCategories,
+            IEnumerable<string> grantedKeywords,
+            IEnumerable<string> grantedIcons,
+            IDictionary<string, int> grantedAttributes,
+            int currentFirstStrikeInvestigation,
+            int currentFirstStrikeStrength)
+        {
+            _staticFlags.Clear();
+            if (staticFlags != null)
+                foreach (var f in staticFlags) _staticFlags.Add(f);
+
+            // 当前子类别 = 模板固有 ∪ 快照运行时值（并集而非覆盖：模板固有项在服务端恒成立，漏掉只会造成假阴性）
+            CurrentSubCategories.Clear();
+            if (PlayerTemplate?.SubCategories != null)
+                foreach (var s in PlayerTemplate.SubCategories) CurrentSubCategories.Add(s);
+            if (currentSubCategories != null)
+                foreach (var s in currentSubCategories)
+                    if (!string.IsNullOrEmpty(s)) CurrentSubCategories.Add(s);
+
+            _grantedKeywords.Clear();
+            if (grantedKeywords != null)
+                foreach (var k in grantedKeywords)
+                    if (!string.IsNullOrEmpty(k)) _grantedKeywords.Add(k);
+            _grantedIcons.Clear();
+            if (grantedIcons != null)
+                foreach (var i in grantedIcons)
+                    if (!string.IsNullOrEmpty(i)) _grantedIcons.Add(i);
+            _grantedAttributes.Clear();
+            if (grantedAttributes != null)
+                foreach (var kv in grantedAttributes)
+                    if (!string.IsNullOrEmpty(kv.Key) && kv.Value != 0) _grantedAttributes[kv.Key] = kv.Value;
+
+            CurrentFirstStrikeInvestigation = currentFirstStrikeInvestigation;
+            CurrentFirstStrikeStrength = currentFirstStrikeStrength;
+        }
+
         // ---------- 伤害/创伤 ----------
         private int _damage = 0;
         public int Damage

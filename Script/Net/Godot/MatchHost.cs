@@ -258,12 +258,19 @@ namespace Script.Net.Godot
             {
                 string sid = SessionOfSeat(seat);
                 if (string.IsNullOrEmpty(sid) || !_transport.IsSessionConnected(sid)) continue;
-                var view = SnapshotFilter.ForPlayer(snap, seat);
+                var view = SnapshotFilter.ForPlayer(snap, seat, BuildLegalityView(seat));
                 _transport.SendToSession(sid, SnapshotSerializer.SnapPrefix + SnapshotSerializer.Serialize(view));
             }
 
             OnServerSnapshot?.Invoke(snap);
         }
+
+        /// <summary>【P2·合法性投影】为某座位生成"可发动/合法目标"投影（服务端算，客户端只读）。</summary>
+        private GameViewSnap BuildLegalityView(int seat)
+            => Game == null
+                ? null
+                : Script.Manager.LegalityProjection.Build(Game.CardManager, Game.PlayerManager, Game.TurnManager,
+                    Game.ZoneManager, seat);
 
         /// <summary>只向某座位下发（该座位掉线/未绑定时静默跳过）。</summary>
         public void PushSnapshotToSeat(int seat)
@@ -272,7 +279,7 @@ namespace Script.Net.Godot
             if (string.IsNullOrEmpty(sid) || !_transport.IsSessionConnected(sid)) return;
             var snap = Game?.BuildSnapshot();
             if (snap == null) return;
-            var view = SnapshotFilter.ForPlayer(snap, seat);
+            var view = SnapshotFilter.ForPlayer(snap, seat, BuildLegalityView(seat));
             _transport.SendToSession(sid, SnapshotSerializer.SnapPrefix + SnapshotSerializer.Serialize(view));
             OnServerSnapshot?.Invoke(snap);
         }

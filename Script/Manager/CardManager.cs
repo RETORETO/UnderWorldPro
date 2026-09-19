@@ -291,6 +291,16 @@ public partial class CardManager : Node
         inst.AbilityUsedThisTurn = r.AbilityUsedThisTurn;
         inst.IsHidden = r.IsHidden;   // Phase B 信息隔离：占位实例标记（只画卡背，不参与规则/交互）
         inst.SyncVersion(r.VersionId);
+
+        // 【P1·运行时状态投影补全】静止标记 / 当前子类别 / 运行时授予 / 先手值：
+        // 客户端不运行 EffectEngine，这些状态必须由快照带过来，客户端上的判定与展示才与服务端同解。
+        // （单进程回环复用同一实例时等价于"照抄自己"，无副作用；真跨进程则把服务端真值搬过来。）
+        var staticFlags = new List<StaticKind>();
+        if (r.StaticFlags != null)
+            foreach (var f in r.StaticFlags) staticFlags.Add((StaticKind)f);
+        inst.RestoreProjectedState(staticFlags, r.SubCategories, r.GrantedKeywords, r.GrantedIcons,
+            r.GrantedAttributes, r.CurrentFirstStrikeInvestigation, r.CurrentFirstStrikeStrength);
+
         return inst;
     }
 
@@ -465,8 +475,12 @@ public partial class CardManager : Node
 
         // D19-⑤：静止效果"不能被装备结附"——仅当打出的是【装备】类附属卡（子类型含"装备"，含运行时授予）
         // 且目标带 CannotBeAttached 标记时，禁止将其选为目标（打出阶段即拦截，而非结算后才进墓地）。
+        // 【P0·同一判定不静默降级】原写法为 `EE != null && EE.HasStaticFlag(target, …)`：
+        // EffectEngine 只是 CardInstance.StaticFlags 的查询转发（见 EffectEngine.HasStaticFlag），
+        // 加 EE 判空会让"客户端没有 EffectEngine 实例"直接吞掉整条规则（静默放行非法目标）。
+        // 改为直读实例标记：只要该标记随快照投影到位（见 ZoneCardRef.StaticFlags），两端判定天然一致。
         if (dragging.CurrentSubCategories.Contains("装备")
-            && EE != null && EE.HasStaticFlag(target, StaticKind.CannotBeAttached))
+            && target.HasStaticFlag(StaticKind.CannotBeAttached))
         {
             GD.Print($"⛔ [目标拦截] 装备 {tmpl.CardName} 不能以 {target.PlayerTemplate?.CardName} 为目标（不能被装备结附）");
             return false;

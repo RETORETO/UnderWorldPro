@@ -1,0 +1,113 @@
+using System.Collections.Generic;
+using Script.Data.Cards;
+using Script.Data.Effects;
+using Script.Enums;
+using Script.Game.Entities;
+using Script.Net;
+
+namespace Script.Manager
+{
+    /// <summary>
+    /// 【P2·合法性投影】服务端为某个查看者预先算好"操作合法性"（可发动 / 合法目标），随快照下发。
+    ///
+    /// 目的（消灭两套判定）：客户端原先自己调 `CardManager.IsLegalPlayTarget` / `ActivateEligibility.CanActivate`
+    /// 做提前判断。这些函数本身是**同一份实现**，但客户端要把服务端全部输入投影齐（本局 PlayerManager、
+    /// 静止标记、运行时授予、候选范围…）才能得到同解，漏一项就漂移（JC005 有【心】被挡、JC001 装备结附被放行…）。
+    /// 改为服务端算好候选集合下发后：
+    ///   · 客户端只做"渲染 + 成员判断"，不再需要自己拼输入；
+    ///   · 候选范围由服务端决定（客户端不再有自己的枚举范围，消除"只扫争夺区"这类结构性缺口）；
+    ///   · 规则实现只剩服务端一份，新增限制/状态天然同步。
+    ///
+    /// 纪律：本类**只调用**生产规则函数（IsLegalPlayTarget / CanActivate / IsLegalActivateTarget），
+    /// 不复制任何判定逻辑；客户端在无投影时退回调用同一批函数（见 ArenaOl 的包装方法）。
+    /// </summary>
+    public static class LegalityProjection
+    {
+        /// <summary>为 viewerPlayerId 生成合法性投影；viewerPlayerId &lt;= 0 或依赖缺失时返回 null（客户端将退回本地判定）。</summary>
+        public static GameViewSnap Build(CardManager cm, PlayerManager pm, TurnManager tm, ZoneManager zm,
+            int viewerPlayerId)
+        {
+            if (cm == null || pm == null || tm == null || zm == null || viewerPlayerId <= 0) return null;
+
+            var view = new GameViewSnap { ViewerPlayerId = viewerPlayerId };
+
+            // 候选池：争夺区 + 附属区 + 秘社。
+            // 与单机 `Arena.BeginSorceryTargetSelection` / 联机事务卡选目标窗口的候选范围一致，
+            // 由服务端统一决定，客户端不再各自枚举。
+            var candidates = new List<CardInstance>();
+            candidates.AddRange(cm.GetAreaCards() ?? new List<CardInstance>());
+            candidates.AddRange(zm.GetZoneCards(CardZone.AttachedZone, 0));
+            candidates.AddRange(zm.GetZoneCards(CardZone.CouncilZone, 0));
+
+            // ---------- 1) 手牌打出的合法卡目标（事务/附属/角色的"卡目标"）----------
+            foreach (var hand in zm.GetZoneCards(CardZone.Hand, viewerPlayerId))
+            {
+                if (hand?.PlayerTemplate == null) continue;
+                var entry = new PlayTargetSnap { SourceUid = hand.UID };
+                foreach (var t in candidates)
+                {
+                    if (t == null || t == hand) continue;
+                    if (cm.IsLegalPlayTarget(hand, t)) entry.TargetUids.Add(t.UID);
+                }
+                view.PlayTargets.Add(entry);
+            }
+
+            // ---------- 2) 可发动 + 3) 激活类效果的合法目标 ----------
+            foreach (var card in EnumerateViewerFieldCards(cm, zm, viewerPlayerId))
+            {
+                // 可发动：与客户端高亮/拖拽起手同一门禁；ignoreAtomicLock 见方法注释
+                // （快照可能在服务端原子段内生成，照实返回 false 会让客户端整块失去高亮；
+                //   时序门禁由服务端在 ActivateAbility 意图入口强制）。
+                bool activatable = ActivateEligibility.CanActivate(card, tm, pm, cm, ignoreAtomicLock: true);
+                if (activatable) view.ActivatableUids.Add(card.UID);
+
+                foreach (var e in EnumerateActivationEffects(card))
+                {
+                    if (e?.Target == null || !e.Target.NeedsSelection) continue;
+                    var entry = new AbilityTargetSnap { SourceUid = card.UID, EffectId = e.EffectId };
+                    foreach (var t in candidates)
+                    {
+                        if (t == null || t == card) continue;
+                        if (ActivateEligibility.IsLegalActivateTarget(card, e, t, cm, pm))
+                            entry.TargetUids.Add(t.UID);
+                    }
+                    if (entry.TargetUids.Count > 0) view.AbilityTargets.Add(entry);
+                }
+            }
+
+            return view;
+        }
+
+        /// <summary>查看者控制的场上卡（争夺区 + 附属区 + 秘社），与客户端高亮遍历范围一致。</summary>
+        private static IEnumerable<CardInstance> EnumerateViewerFieldCards(CardManager cm, ZoneManager zm, int viewerPlayerId)
+        {
+            foreach (var c in cm.GetAreaCards() ?? new List<CardInstance>())
+                if (c != null && c.ControllerId == viewerPlayerId) yield return c;
+            foreach (var c in zm.GetZoneCards(CardZone.AttachedZone, 0))
+                if (c != null && c.ControllerId == viewerPlayerId) yield return c;
+            foreach (var c in zm.GetZoneCards(CardZone.CouncilZone, 0))
+                if (c != null && c.ControllerId == viewerPlayerId) yield return c;
+        }
+
+        /// <summary>一张卡的激活类效果（角色/附属 ActivationOptions 与秘社 ActivationOptions 统一枚举）。</summary>
+        private static IEnumerable<EffectData> EnumerateActivationEffects(CardInstance card)
+        {
+            if (card == null) yield break;
+            if (card.PlayerTemplate is PlayerCardData tmpl && tmpl.EffectDataList != null)
+            {
+                foreach (var e in tmpl.EffectDataList)
+                    if (e != null && e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)
+                        yield return e;
+            }
+            else if (card.CouncilTemplate is CouncilCardData council && council.ActivationOptions != null)
+            {
+                foreach (var opt in council.ActivationOptions)
+                {
+                    if (opt?.EffectDataList == null) continue;
+                    foreach (var e in opt.EffectDataList)
+                        if (e != null && e.Timing == EffectTiming.CouncilActivated) yield return e;
+                }
+            }
+        }
+    }
+}

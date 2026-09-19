@@ -1022,7 +1022,14 @@ namespace Script.Manager
         private int GetPrereqLoyaltyValue(CardInstance card, ContinuousPrereqSpec spec)
         {
             var pm = TurnManagerRef?.PlayerManagerRef;
-            if (pm == null) return 0;
+            if (pm == null)
+            {
+                // 【P0·缺依赖要吵出来】原实现静默 return 0：前提被判"不满足"，持续效果（白眼/黑刀/光环）整块不生效，
+                // 且日志上看不出原因（历史上探针即因此把白眼判成未生效）。这里显式告警。
+                GD.PushWarning($"[EffectEngine] 持续效果前提判定需要本局 PlayerManager（经 TurnManagerRef 取），" +
+                    $"但未注入 → 忠诚按 0 处理，效果 {card?.PlayerTemplate?.CardName} 的前提将判为不满足");
+                return 0;
+            }
             var loyalty = pm.GetDomainLoyalty(card.ControllerId);
             loyalty.TryGetValue(spec.Domain, out int v);
             return v;

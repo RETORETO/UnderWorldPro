@@ -304,7 +304,9 @@ namespace Script.Net.Godot
             {
                 string sid = SessionOfSeat(pid);
                 if (string.IsNullOrEmpty(sid) || !_serverTransport.IsSessionConnected(sid)) continue;
-                var view = Script.Net.SnapshotFilter.ForPlayer(snap, pid);
+                var view = Script.Net.SnapshotFilter.ForPlayer(snap, pid,
+                    Script.Manager.LegalityProjection.Build(_serverGame?.CardManager, _serverGame?.PlayerManager,
+                        _serverGame?.TurnManager, _serverGame?.ZoneManager, pid));
                 var json = SNAP_PREFIX + Script.Net.SnapshotSerializer.Serialize(view);
                 _serverTransport.SendToSession(sid, json);
             }

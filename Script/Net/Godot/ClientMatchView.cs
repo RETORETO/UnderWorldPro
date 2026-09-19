@@ -127,6 +127,12 @@ namespace Script.Net.Godot
             // 独立投影 PlayerManager / StackManager / TurnManager（仅状态投影，不驱动规则）
             ClientPlayerManager = new PlayerManager();
             ClientPlayerManager.SetZoneManager(ClientZoneManager);
+            // 【P0·双端同一判定】把本局投影 PlayerManager 注入客户端 CardManager：
+            // 目标精筛里的"条件式限制"（如 JC005 的 AttachedToCharacterIfNoMind 需读资产区【心】）
+            // 经 `CardManager.PlayerManagerRef` → `TargetValidity.CheckRestrictions` 求值；
+            // 未注入时该链路静默退回进程级 `TargetValidity.PlayerManagerRef`（客户端进程恒为 null）→
+            // 表现为"有【心】却只能选结附角色的附属"，即客户端本地提前判断与服务端不一致。
+            ClientCardManager.PlayerManagerRef = ClientPlayerManager;
             ClientStackManager = new StackManager();
             ClientStackManager.SetCardManager(ClientCardManager);
             ClientTurnManager = new TurnManager();

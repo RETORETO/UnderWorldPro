@@ -838,8 +838,13 @@ namespace Script.UI
             return n;
         }
 
-        /// <summary>联机「可发动」高亮：复用单机 ActivateEligibility.CanActivate（客户端投影管理器已具备其全部依赖），
-        /// 对争夺区 + 附属区已渲染的卡刷新 CardUI.SetActivatableHighlight。与单机 Arena.RefreshActivateHighlights 同源规则。</summary>
+        /// <summary>
+        /// 联机「可发动」高亮：**优先读服务端下发的合法性投影**（`GameViewSnap.ActivatableUids`，
+        /// 由服务端用 `ActivateEligibility.CanActivate` 算出），客户端不再自行拼输入判定；
+        /// 无投影（旧服务端/测试路径）时退回调用**同一份规则函数**本地求值。
+        /// 两条路都指向同一实现，配合 P0/P1 的输入补齐（本局 PlayerManager / 静止标记 / 运行时授予已投影），
+        /// 客户端与服务端从此同解。
+        /// </summary>
         private void RefreshActivateHighlights()
         {
             var zone = _matchClient?.ClientZoneManager;
@@ -855,8 +860,32 @@ namespace Script.UI
                 if (inst == null || inst.IsHidden) continue;   // 占位实例（信息隔离）不参与可发动判定
                 if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                ui.SetActivatableHighlight(ActivateEligibility.CanActivate(inst, turn, player, cardMgr));
+                ui.SetActivatableHighlight(IsActivatableForClient(inst));
             }
+        }
+
+        /// <summary>服务端为本客户端下发的合法性投影（随最近一次快照；null=未下发）。</summary>
+        private Script.Net.GameViewSnap ClientLegalityView => _matchClient?.LastSnapshot?.View;
+
+        /// <summary>某张场上卡此刻是否"可发动"（投影优先，退回同一规则函数）。</summary>
+        private bool IsActivatableForClient(CardInstance inst)
+        {
+            if (inst == null) return false;
+            var view = ClientLegalityView;
+            if (view != null) return view.ActivatableUids != null && view.ActivatableUids.Contains(inst.UID);
+            return ActivateEligibility.CanActivate(inst, _matchClient?.ClientTurnManager,
+                _matchClient?.ClientPlayerManager, _matchClient?.ClientCardManager);
+        }
+
+        /// <summary>某张卡作为打出目标是否合法（投影优先，退回同一规则函数）。</summary>
+        private bool IsLegalPlayTargetForClient(CardInstance src, CardInstance tgt)
+        {
+            if (src == null || tgt == null) return false;
+            var view = ClientLegalityView;
+            var entry = view?.PlayTargets?.Find(x => x != null && x.SourceUid == src.UID);
+            if (entry != null) return entry.TargetUids.Contains(tgt.UID);
+            // 无投影 / 该来源不在服务端手牌投影中（异常竞态）→ 退回调用同一份规则函数本地求值
+            return _matchClient?.ClientCardManager?.IsLegalPlayTarget(src, tgt) == true;
         }
 
         /// <summary>重建双方玩家牌库：用 DeckZone 组件显示卡背堆叠 + 数量（与单机一致）。
@@ -1692,8 +1721,9 @@ namespace Script.UI
 
         /// <summary>
         /// 拖拽手牌期间高亮合法目标（对齐单机 `CardDragController.UpdateDragTargetHighlights`）：
-        /// 仅在"无蒙版"时生效；合法目标由客户端投影 CardManager 的 `IsLegalPlayTarget` 判定（与单机同一规则入口）；
-        /// 本方秘社卡若为合法目标亦高亮。每帧调用（拖拽是移动过程，无事件可依）。
+        /// 仅在"无蒙版"时生效；合法目标**优先取服务端下发的合法性投影**（`GameViewSnap.PlayTargets`），
+        /// 无投影时退回调用与服务端同一份规则函数（`CardManager.IsLegalPlayTarget`）本地求值。
+        /// 每帧调用（拖拽是移动过程，无事件可依）。
         /// </summary>
         private void UpdateHandDragTargetHighlights()
         {
@@ -1738,7 +1768,7 @@ namespace Script.UI
                 // 高亮范围与落点命中范围一致：仅争夺区/附属区（对齐单机 UpdateDragTargetHighlights 只遍历 AreaCardUIs）
                 var zone = ui.Instance.CurrentZone;
                 if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone) continue;
-                bool legal = cardMgr.IsLegalPlayTarget(dragging.Instance, ui.Instance);
+                bool legal = IsLegalPlayTargetForClient(dragging.Instance, ui.Instance);
                 bool was = _handDragHighlighted.Contains(ui);
                 if (legal && !was) { ui.SetTargetHighlight(true); _handDragHighlighted.Add(ui); }
                 else if (!legal && was) { ui.SetTargetHighlight(false); _handDragHighlighted.Remove(ui); }
@@ -1749,7 +1779,7 @@ namespace Script.UI
                 ? FindOwnCouncilUi()
                 : null;
             if (ownCouncilUi?.Instance != null)
-                ownCouncilUi.SetTargetHighlight(cardMgr.IsLegalPlayTarget(dragging.Instance, ownCouncilUi.Instance));
+                ownCouncilUi.SetTargetHighlight(IsLegalPlayTargetForClient(dragging.Instance, ownCouncilUi.Instance));
         }
 
         /// <summary>清除拖拽期间的合法目标高亮。</summary>
@@ -1776,21 +1806,38 @@ namespace Script.UI
         }
 
         /// <summary>计算某激活效果在客户端投影中的合法卡目标 UID 集合（卡目标；地区目标暂缓）。
-        /// 复用单机 ActivateEligibility.IsLegalActivateTarget（其 cm 形参实现中未解引用，传 null 安全）。</summary>
+        /// 【P2·单一判定】优先读服务端投影（`GameViewSnap.AbilityTargets`：服务端用
+        /// `ActivateEligibility.IsLegalActivateTarget` 逐个候选算出）；无该条目时退回调用同一份规则函数
+        /// 本地求值（输入已在 P0/P1 补齐：本局 PlayerManager + 静止标记 + 运行时授予均随快照到位）。</summary>
         private HashSet<string> ComputeLegalCardTargetUids(CardInstance source, EffectData ability)
         {
             var legal = new HashSet<string>();
             if (source == null || ability?.Target == null || !ability.Target.NeedsSelection) return legal;
             if (ability.Target.Kind == TargetKind.Area) return legal;
+
+            var view = ClientLegalityView;
+            if (view?.AbilityTargets != null)
+            {
+                var proj = view.AbilityTargets.Find(x => x != null && x.SourceUid == source.UID
+                                                         && x.EffectId == ability.EffectId);
+                if (proj != null)
+                {
+                    foreach (var u in proj.TargetUids) legal.Add(u);
+                    return legal;
+                }
+            }
+
             var zone = _matchClient?.ClientZoneManager;
-            if (zone == null) return legal;
+            var cardMgr = _matchClient?.ClientCardManager;
+            var playerMgr = _matchClient?.ClientPlayerManager;
+            if (zone == null || cardMgr == null) return legal;
             var cards = zone.GetZoneCards(CardZone.AreaZone, 0);
             if (cards == null) return legal;
             foreach (var c in cards)
             {
                 if (c == null || c == source) continue;
                 if (ability.Target.IsLocalZone && c.ZoneDetailId != source.ZoneDetailId) continue;
-                if (ActivateEligibility.IsLegalActivateTarget(source, ability, c, null)) legal.Add(c.UID);
+                if (ActivateEligibility.IsLegalActivateTarget(source, ability, c, cardMgr, playerMgr)) legal.Add(c.UID);
             }
             return legal;
         }
@@ -1914,16 +1961,27 @@ namespace Script.UI
             var zone = _matchClient.ClientZoneManager;
             if (clientCardMgr == null || zone == null) return;
 
-            // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类，与单机一致）
-            var candidates = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
-            candidates.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
-            candidates.AddRange(zone.GetZoneCards(CardZone.CouncilZone, 0));
-
+            // 【P2·单一判定】候选优先取服务端投影（`GameViewSnap.PlayTargets`：服务端已用
+            // `CardManager.IsLegalPlayTarget` 对完整的候选池算过一遍）；
+            // 无投影时退回本地按同一规则函数枚举候选（候选池与单机 Arena.BeginSorceryTargetSelection 一致）。
             var legal = new List<string>();
-            foreach (var t in candidates)
+            var projEntry = ClientLegalityView?.PlayTargets?.Find(x => x != null && x.SourceUid == card.UID);
+            if (projEntry != null)
             {
-                if (t == null || t == card || t.IsHidden) continue;
-                if (clientCardMgr.IsLegalPlayTarget(card, t)) legal.Add(t.UID);
+                legal.AddRange(projEntry.TargetUids);
+            }
+            else
+            {
+                // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类，与单机一致）
+                var candidates = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
+                candidates.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
+                candidates.AddRange(zone.GetZoneCards(CardZone.CouncilZone, 0));
+
+                foreach (var t in candidates)
+                {
+                    if (t == null || t == card || t.IsHidden) continue;
+                    if (clientCardMgr.IsLegalPlayTarget(card, t)) legal.Add(t.UID);
+                }
             }
             if (legal.Count == 0)
             {
@@ -2053,11 +2111,12 @@ namespace Script.UI
             if (ability == null) return false;
 
             // 与单机 CardDragController.TryBeginActivateDragAt 同源门禁：优先权 + 费用 + 生效区 + 行动窗口 + 有合法目标
+            // 【P2】改为"服务端投影优先 + 同一规则函数兜底"，客户端不再自行拼输入
             var cardMgr = _matchClient?.ClientCardManager;
             var turn = _matchClient?.ClientTurnManager;
             var player = _matchClient?.ClientPlayerManager;
             if (cardMgr == null || turn == null || player == null) return false;
-            if (!ActivateEligibility.CanActivate(inst, turn, player, cardMgr)) return false;
+            if (!IsActivatableForClient(inst)) return false;
 
             _activateDragSource = hit;
             _activateDragAbility = ability;
@@ -2139,16 +2198,19 @@ namespace Script.UI
 
         /// <summary>
         /// 某张**本地手牌**在当前蒙版下是否允许被拖起（对齐单机 `CardDragController.IsDraggableUnderMask`）：
-        ///  - 派遣暗藏：复用规则层同一静态函数 `DeployCovertEligibility.IsEligible`（非角色卡 / 带【公开】→ 不可拖起）；
+        ///  - 派遣暗藏：复用规则层同一静态函数 `DeployCovertEligibility.IsEligible`（非角色卡 / 带【公开】/ 被全局封锁 → 不可拖起）；
         ///  - 建立资产 / 无蒙版：均可拖起。
-        /// 注：动作内的阶段/行动权/次数/封锁校验不在客户端复刻，非法操作仍由服务端拒绝并回执提示。
+        /// 注：动作内的阶段/行动权/次数校验不在客户端复刻，非法操作仍由服务端拒绝并回执提示。
+        /// 【P1】全局封锁秘密派遣（JC068-B）由快照投影态作为入参喂给同一函数：
+        /// 原先客户端对此完全无感（能拖起、等服务端拒绝），现在与服务端同解。
         /// </summary>
         private bool IsDraggableUnderOnlineMask(CardInstance inst)
         {
             if (inst == null) return false;
             return _maskMode switch
             {
-                MaskMode.DeployCovert => DeployCovertEligibility.IsEligible(inst),
+                MaskMode.DeployCovert => DeployCovertEligibility.IsEligible(inst,
+                    _matchClient?.ClientPlayerManager?.IsDeployCovertBlockedProjected(_localPlayerId) == true),
                 _ => true,
             };
         }
@@ -2411,7 +2473,8 @@ namespace Script.UI
         /// 本地玩家手牌拖拽结束：**严格对齐单机 `CardDragController.OnCardDragEnded` 的落点语义**：
         ///  ① 拖回自己手牌区 → 取消（不发意图，卡自行归位）；
         ///  ② 蒙版模式（派遣暗藏/建立资产）→ 专属分支；
-        ///  ③ 目标卡：**仅当为合法打出目标**（`IsLegalPlayTarget`）才取（秘社同理）；
+        ///  ③ 目标卡：**仅当为合法打出目标**才取（秘社同理）——判据见 `IsLegalPlayTargetForClient`
+        ///     （服务端投影优先 + 同一规则函数兜底）；
         ///  ④ 地区落点：角色卡取"己方争夺区"；其它卡仅当其允许 Area 目标时才取（对齐单机 D48）；
         ///  ⑤ 角色卡未落在己方争夺区 → 不发意图（等价单机"退回手牌"）；
         ///  ⑥ 事务卡需目标且两者皆空 → 弹出选目标（对齐单机 `BeginSorceryTargetSelection`）；
@@ -2477,9 +2540,10 @@ namespace Script.UI
             bool requiresTarget = tmpl.GetRequiresTarget();
 
             // ③ 目标卡：仅"合法打出目标"才算命中（对齐单机 IsLegalCardTarget；避免把非法落点直接发给服务端）
+            // 【P2】合法性判据优先取服务端投影（IsLegalPlayTargetForClient 内部：投影优先 + 同一规则函数兜底）
             string targetCardUid = "";
             var hitUi = PickFieldCardAt(dropPos);   // 仅争夺区/附属区（不含手牌，对齐单机 PickAreaCardAt）
-            if (hitUi?.Instance != null && clientCardMgr != null && clientCardMgr.IsLegalPlayTarget(inst, hitUi.Instance))
+            if (hitUi?.Instance != null && clientCardMgr != null && IsLegalPlayTargetForClient(inst, hitUi.Instance))
                 targetCardUid = hitUi.Instance.UID;
             // 秘社（CouncilCardUI 不在 _cardUIMap）：命中本方秘社区且为合法目标时才取（对齐单机）
             if (string.IsNullOrEmpty(targetCardUid) && clientCardMgr != null)
@@ -2490,7 +2554,7 @@ namespace Script.UI
                 {
                     var councilCards = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.CouncilZone, _localPlayerId);
                     var councilInst = councilCards?.Find(c => c != null);
-                    if (councilInst != null && clientCardMgr.IsLegalPlayTarget(inst, councilInst))
+                    if (councilInst != null && IsLegalPlayTargetForClient(inst, councilInst))
                         targetCardUid = councilInst.UID;
                 }
             }

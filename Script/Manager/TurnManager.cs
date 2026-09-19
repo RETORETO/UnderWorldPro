@@ -1775,14 +1775,17 @@ public partial class TurnManager : Node
     public bool CanPlayerDeployCovert(int playerId)
     {
         // 阿格斯IV全局封锁：未横置的阿格斯IV封锁其控制者的对手
-        return !EE.IsDeployCovertBlocked(playerId);
+        return !(EE?.IsDeployCovertBlocked(playerId) ?? false);
     }
 
     public bool CanDeployCovert(CardInstance instance)
     {
         // 判定体抽取到 DeployCovertEligibility（单一真相源），联机客户端（快照投影、无 TurnManager 实例）
         // 复用同一静态函数做"拖起资格"预检；此处保持原签名与语义不变（单机行为零变化）。
-        return DeployCovertEligibility.IsEligible(instance);
+        // 【P1·同一判定含封锁】全局封锁（JC068）不再是"只在服务端动作里判"的旁路：由本方法把
+        // 本局权威封锁态作为入参喂给同一函数，客户端则喂快照投影态（PlayerManager.IsDeployCovertBlockedProjected），
+        // 两端从此共用一份判定。
+        return DeployCovertEligibility.IsEligible(instance, !CanPlayerDeployCovert(instance?.ControllerId ?? -1));
     }
 
     /// <summary>
@@ -2379,6 +2382,9 @@ public partial class TurnManager : Node
                     AvailableMana = pm.GetAvailableMana(pid),
                     IsGameOver = pm.IsGameOver,
                     ScoreTotal = pm.GetScoreTotal(pid),
+                    // 【P1】全局封锁秘密派遣（JC068-B）：权威在 EffectEngine 的封锁表，客户端没有该引擎，
+                    // 必须随快照下行，否则客户端派遣门禁与服务端不一致。
+                    DeployCovertBlocked = EE?.IsDeployCovertBlocked(pid) ?? false,
                 });
             }
         }

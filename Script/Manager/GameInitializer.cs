@@ -477,17 +477,9 @@ public partial class GameInitializer : Node
         foreach (var c in pending)
         {
             if (c == null) continue;
-            snap.InvestigationCards.Add(new Script.Net.ZoneCardRef
-            {
-                Uid = c.UID,
-                TemplateUid = c.Template?.UID,
-                OwnerId = c.OwnerId,
-                ControllerId = c.ControllerId,
-                Zone = c.CurrentZone,
-                ZoneOwnerId = c.OwnerId,
-                Damage = c.Damage,
-                IsTapped = c.IsTapped,
-            });
+            // 走统一投影入口（ZoneManager.ProjectCard），避免"待决调查卡"另有一份字段不全的手写映射——
+            // 单进程回环下 ApplySnapshot 会把引用套回同一批共享实例，字段不全的映射会反过来抹掉服务端状态。
+            snap.InvestigationCards.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
         }
     }
 
@@ -495,9 +487,17 @@ public partial class GameInitializer : Node
     /// 【Phase B·信息隔离】构建"发给某个玩家"的快照视图：隐藏信息（对手手牌/牌库、地区牌堆）替换为占位引用，
     /// 只保留数量与顺序；公开区（争夺区/附属/封印/墓地/资产/分数/秘社/堆叠/地区/势力标记/费用修正）原样下发。
     /// viewerPlayerId &lt;= 0 表示不过滤（返回完整快照，供服务端自省/测试）。
+    ///
+    /// 【P2·合法性投影】同时附带"服务端为该玩家算好的可发动/合法目标集合"（`LegalityProjection`），
+    /// 使客户端只做渲染与成员判断，不再自行拼输入做提前判断（消灭两套判定的根源）。
     /// </summary>
     public Script.Net.GameSnapshot BuildSnapshotFor(int viewerPlayerId)
-        => Script.Net.SnapshotFilter.ForPlayer(BuildSnapshot(), viewerPlayerId);
+    {
+        var full = BuildSnapshot();
+        if (full == null) return null;
+        var view = Script.Manager.LegalityProjection.Build(CardManager, PlayerManager, TurnManager, ZoneManager, viewerPlayerId);
+        return Script.Net.SnapshotFilter.ForPlayer(full, viewerPlayerId, view);
+    }
 
     /// <summary>查询玩家起手数：若有秘社则用其 StartingHandSize，否则回退默认 InitialHandSize</summary>
     private int GetCouncilHandSize(int playerId)

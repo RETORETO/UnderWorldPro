@@ -311,7 +311,16 @@ namespace Script.Manager
         private static bool HasMindDomain(int controllerId, PlayerManager pm = null)
         {
             pm ??= PlayerManagerRef;
-            if (pm == null || controllerId < 0) return false;
+            if (pm == null || controllerId < 0)
+            {
+                // 【P0·缺依赖要吵出来】条件式限制的求值必须拿到"本局" PlayerManager；两端任一装配漏注入都会
+                // 得到与服务端相反的结果（历史上客户端就是因此把"有【心】"判成"无【心】"）。故这里显式告警，
+                // 不再静默按"不满足"处理而无人察觉。
+                Godot.GD.PushWarning("[TargetValidity] 条件式限制需要本局 PlayerManager，但调用方未传参且未注入 " +
+                    "TargetValidity.PlayerManagerRef → 本次按【不满足】判定（请检查装配：生产路径应由 " +
+                    "CardManager.PlayerManagerRef / 客户端 ClientMatchView 注入）");
+                return false;
+            }
             var loyalty = pm.GetDomainLoyalty(controllerId);
             return loyalty.TryGetValue(MagicDomain.Mind, out int v) && v >= 1;
         }

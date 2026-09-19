@@ -775,11 +775,14 @@ public partial class ZoneManager : Node
         return list;
     }
 
-    /// <summary>单卡运行时状态 → ZoneCardRef 投影（纯数据映射，字段对齐 CardInstance 运行时属性）。</summary>
-    private Script.Net.ZoneCardRef ToCardRef(CardInstance c, CardZone zone, int playerId)
+    /// <summary>单卡运行时状态 → ZoneCardRef 投影（纯数据映射，字段对齐 CardInstance 运行时属性）。
+    /// 【单一映射入口】`ZoneManager.ToSnapshot` 与 `GameInitializer.FillInvestigationCards` 等所有
+    /// "实例→引用"的投影都必须走本方法：历史上待决调查卡的投影是另一份手写映射（只带 5 个字段），
+    /// 单进程回环下会反过来把共享实例的运行时状态抹掉。新增字段只改这里一处。</summary>
+    public static Script.Net.ZoneCardRef ProjectCard(CardInstance c, CardZone zone, int playerId)
     {
         if (c == null) return null;
-        return new Script.Net.ZoneCardRef
+        var r = new Script.Net.ZoneCardRef
         {
             Uid = c.UID,
             TemplateUid = c.Template?.UID,
@@ -809,7 +812,27 @@ public partial class ZoneManager : Node
             VersionId = c.VersionId,
             AbilityUsedThisTurn = c.AbilityUsedThisTurn,
         };
+
+        // 【P1·运行时状态投影补全】静止标记 / 当前子类别 / 运行时授予 / 先手值：
+        // 客户端不运行 EffectEngine，这些状态只能随快照走，否则客户端上的同一份规则函数必然算出不同结果。
+        foreach (var f in c.StaticFlags) r.StaticFlags.Add((int)f);
+        if (c.CurrentSubCategories != null)
+            foreach (var s in c.CurrentSubCategories) r.SubCategories.Add(s);
+        if (c.GrantedKeywords != null)
+            foreach (var k in c.GrantedKeywords) r.GrantedKeywords.Add(k);
+        if (c.GrantedIcons != null)
+            foreach (var i in c.GrantedIcons) r.GrantedIcons.Add(i);
+        if (c.GrantedAttributes != null)
+            foreach (var kv in c.GrantedAttributes) r.GrantedAttributes[kv.Key] = kv.Value;
+        r.CurrentFirstStrikeInvestigation = c.CurrentFirstStrikeInvestigation;
+        r.CurrentFirstStrikeStrength = c.CurrentFirstStrikeStrength;
+
+        return r;
     }
+
+    /// <summary>单卡运行时状态 → ZoneCardRef 投影（实例侧薄封装，语义见 <see cref="ProjectCard"/>）。</summary>
+    private Script.Net.ZoneCardRef ToCardRef(CardInstance c, CardZone zone, int playerId)
+        => ProjectCard(c, zone, playerId);
 
     // ==================== C/S 化·第一批：状态快照导入（重建区域真相） ====================
     // 与 ToSnapshot() 对称：将纯数据 ZoneCardRef 列表还原为本局区域桶。

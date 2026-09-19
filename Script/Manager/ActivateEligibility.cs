@@ -49,7 +49,7 @@ namespace Script.Manager
                         // 门禁 4：需选目标时，场上须有合法目标
                         if (e.Target != null && e.Target.NeedsSelection)
                         {
-                            if (!HasLegalTarget(card, e, cm)) continue;
+                            if (!HasLegalTarget(card, e, cm, pm)) continue;
                         }
 
                         result.Add((card, e));
@@ -67,7 +67,7 @@ namespace Script.Manager
                             if (e.Cost > mana) continue;
                             if (e.Target != null && e.Target.NeedsSelection)
                             {
-                                if (!HasLegalTarget(card, e, cm)) continue;
+                                if (!HasLegalTarget(card, e, cm, pm)) continue;
                             }
                             result.Add((card, e));
                         }
@@ -77,14 +77,19 @@ namespace Script.Manager
             return result;
         }
 
-        /// <summary>判定某张场上卡能否发动其激活能力（用于单卡高亮）。</summary>
-        public static bool CanActivate(CardInstance card, TurnManager tm, PlayerManager pm, CardManager cm)
+        /// <summary>判定某张场上卡能否发动其激活能力（用于单卡高亮）。
+        /// <param name="pm">本对局的 PlayerManager（多对局隔离 / 客户端投影）：需选目标的效果经它求值条件式限制，缺失会失真。</param>
+        /// <param name="ignoreAtomicLock">【仅投影生成用】忽略"原子操作进行中"这一时序门禁：
+        /// 服务端生成客户端视图（快照）时可能正处于原子段内，若照实返回 false，客户端会整块失去"可发动"高亮。
+        /// 时序门禁由服务端在意图入口（ActivateAbility）强制，不依赖本查询。</param>
+        public static bool CanActivate(CardInstance card, TurnManager tm, PlayerManager pm, CardManager cm,
+            bool ignoreAtomicLock = false)
         {
             if (card?.PlayerTemplate is not PlayerCardData tmpl)
             {
                 // 秘社卡：PlayerTemplate==null，改用 CouncilTemplate 的 ActivationOptions 判定
                 if (card?.CouncilTemplate is CouncilCardData councilTmpl)
-                    return CanActivateCouncil(card, councilTmpl, tm, pm, cm);
+                    return CanActivateCouncil(card, councilTmpl, tm, pm, cm, ignoreAtomicLock);
                 return false;
             }
             // 通用门禁 G0（默认生效，所有激活卡适用）：暗藏/背面朝上的卡不可作为激活来源。
@@ -102,7 +107,7 @@ namespace Script.Manager
             if (tm?.PriorityPlayerId != playerId) return false;
             // 规则层原子锁（核心需求 7.3）：原子操作（出牌/结算/触发排序/选目标窗口）执行期间
             // 冻结响应权，任何激活能力（含快速行动 JC003 类）均不可在原子期间发动，与 Pass/PlayCard 一致。
-            if (tm != null && tm.IsAtomicLocked) return false;
+            if (tm != null && tm.IsAtomicLocked && !ignoreAtomicLock) return false;
             int mana = pm?.GetAvailableMana(playerId) ?? 0;
 
             foreach (var e in tmpl.EffectDataList)
@@ -124,20 +129,21 @@ namespace Script.Manager
                 if (!string.IsNullOrEmpty(e.ActivateCondition) &&
                     e.ActivateCondition.Contains("横置本角色") &&
                     card.IsTapped) continue;
-                if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm)) continue;
+                if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm, pm)) continue;
                 return true;
             }
             return false;
         }
 
         /// <summary>秘社激活门禁：遍历 ActivationOptions 各选项的 EffectDataList，任一可发动即返回 true。</summary>
-        private static bool CanActivateCouncil(CardInstance card, CouncilCardData councilTmpl, TurnManager tm, PlayerManager pm, CardManager cm)
+        private static bool CanActivateCouncil(CardInstance card, CouncilCardData councilTmpl, TurnManager tm,
+            PlayerManager pm, CardManager cm, bool ignoreAtomicLock = false)
         {
             // 通用门禁 G0（默认生效，所有激活卡适用）：暗藏/背面朝上的卡不可作为激活来源。
             if (card.IsCovert) return false;
             var playerId = card.ControllerId;
             if (tm?.PriorityPlayerId != playerId) return false;
-            if (tm != null && tm.IsAtomicLocked) return false;
+            if (tm != null && tm.IsAtomicLocked && !ignoreAtomicLock) return false;
             int mana = pm?.GetAvailableMana(playerId) ?? 0;
 
             foreach (var opt in councilTmpl.ActivationOptions)
@@ -154,7 +160,7 @@ namespace Script.Manager
                     if (!string.IsNullOrEmpty(e.ActivateCondition) &&
                         e.ActivateCondition.Contains("横置本角色") &&
                         card.IsTapped) continue;
-                    if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm)) continue;
+                    if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm, pm)) continue;
                     return true;
                 }
             }

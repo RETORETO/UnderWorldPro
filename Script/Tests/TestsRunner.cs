@@ -53,6 +53,7 @@ namespace Script.Tests
                 new SessionGuardTests(),             // 批次 1：未 Hello 拒绝 / 版本不匹配断开 / 幂等（重复 RequestId）/ 脏数据 / 非对局通道拒绝
                 new MatchIsolationTests(),           // 批次 2：一个进程两场对局互不串（世界/效果结算/MatchHost 路由与快照下行/停服清理）
                 new LobbyFlowTests(),                // 增量 A：完整流程自检（真实 ENet 双客户端走完 建房→加入→卡组→准备→开局→结束→重开）+ 权限边界
+                new ClientServerParityTests(),        // P0~P2：服务端权威 vs 真跨进程客户端投影的规则判定一致性（同解闸门）
             };
 
             var redlines = new List<string>();
