@@ -1,4 +1,4 @@
-﻿using Script.Enums;
+using Script.Enums;
 using Script.Game.Entities;
 
 namespace Script.Data.Effects
@@ -39,6 +39,22 @@ namespace Script.Data.Effects
         /// <summary>玩家已选择的场上目标卡 UID。</summary>
         public string SelectedTargetUid { get; set; }
 
+        /// <summary>
+        /// 【K16·模式分支·触发版】**触发**类"选择一项"（`EffectData.Modes`）所选模式下标（-1＝无模式/未选）。
+        /// 与打出路径口径一致（**入堆叠时选定、入堆叠后不可更改**，见 §7.4b A5）：
+        /// 由 `TurnManager.EnsureTargetThenPush*` 在入堆叠前经 `IGameUIHooks.PromptEffectMode`
+        /// （联机＝`ChoiceRequest.Kind.SelectEffectMode`；无 UI 时确定性兜底第一个模式）选定，
+        /// 再由 `PushTriggerToStack` 写入 `StackEntry.ModeIndex`，结算时只执行该模式的动作。
+        /// </summary>
+        public int ModeIndex { get; set; } = -1;
+
+        /// <summary>
+        /// 【K24·玩家目标】玩家已选择的**目标玩家号**（-1＝未选/无玩家目标）。
+        /// 与 `SelectedTargetUid` 并列：触发类效果若以玩家为目标（`TargetSpec.Kind=Player`），
+        /// 在触发入堆叠前经"独立选择窗口"选定后填入，`PushTriggerToStack` 写入 `StackEntry.TargetPlayerId`。
+        /// </summary>
+        public int SelectedPlayerId { get; set; } = -1;
+
         /// <summary>反应触发的固定上下文卡 UID（如"刚打出的卡"），区别于 SelectedTargetUid（玩家选择的目标）。
         /// 由 CollectTriggeredEffects 在收集时填入（contextCard.UID），结算时作为条件判定的上下文（如 PlayedSorcery）。</summary>
         public string TargetCardUid { get; set; }
@@ -57,6 +73,24 @@ namespace Script.Data.Effects
         /// 然后 PushTriggerToStack 写入 StackEntry.TargetAreaId，最终供条件 WinnerInSameArea 判定
         /// “胜者获胜地区 == 本触发卡所在地区”，从而让跨地区卡在收集阶段即不入栈。</summary>
         public string TargetAreaId { get; set; } = null;
+
+        /// <summary>
+        /// 【触发语义】**触发条件满足时，来源卡所在的地区 UID**（null/空=未快照，回退实时 `Source.ZoneDetailId`）。
+        ///
+        /// 存在意义：触发只看条件是否满足过，不看来源此刻场景。死亡触发（卡已进墓地）与"进场即死"的
+        /// 进场触发在窗口打开时，来源卡的 `ZoneDetailId` 已为 null —— 若拿它当"本地区"基准，
+        /// 需要选目标的此类触发会因"取不到本地区候选"而整条被丢弃。
+        /// 因此由 `TriggerRegistry` 收集时从 `TriggerContext.SourceAreaAtTrigger` 填入，供
+        /// `TurnManager.GetLocalZoneTargets`（取候选）与 `CaptureTargetSnapshot`（结算复检基准）使用。
+        /// </summary>
+        public string SourceAreaAtTrigger { get; set; } = null;
+
+        /// <summary>
+        /// 【K1】本次触发事件携带的数量（`TriggerContext.ExtraInt`；-1 = 无数量语义）。
+        /// 由 `TriggerRegistry.HandleEvent` 收集时填入，`PushTriggerToStack` 写入 `StackEntry.EventAmount`，
+        /// 结算时供动态值表达式 `事件数量` 求值（JC040「遏制X，X＝此次弃牌的数量」）。
+        /// </summary>
+        public int EventAmount { get; set; } = -1;
 
         /// <summary>是否需要目标。</summary>
         /// <remarks>

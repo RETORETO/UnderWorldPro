@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot;
 
 namespace Script.Tests
@@ -54,6 +54,77 @@ namespace Script.Tests
                 new MatchIsolationTests(),           // 批次 2：一个进程两场对局互不串（世界/效果结算/MatchHost 路由与快照下行/停服清理）
                 new LobbyFlowTests(),                // 增量 A：完整流程自检（真实 ENet 双客户端走完 建房→加入→卡组→准备→开局→结束→重开）+ 权限边界
                 new ClientServerParityTests(),        // P0~P2：服务端权威 vs 真跨进程客户端投影的规则判定一致性（同解闸门）
+                new P1EffectFoundationsTests(),       // P1：触发接线 / 新增目标限制 / 图标属性 / Gain负数 / 潜伏现身 Pay / 费用过滤串
+                new P1NewCardsTests(),                // P1 新卡：JC006/010/029/039/042/058/071/075/088/090/091/102/103/112（结构 + 关键行为）
+                new TriggerSceneSemanticsTests(),     // 触发语义：触发不看当前场景（死亡触发/进场即死）+ 本地区=触发时所处地区 + 离场护栏
+                new P2DiscardTests(),                 // P2：弃牌原语（自选/随机/被指定者自选/施术者指定）+ OnDiscard 接线 + 弃牌非死亡
+                new P2SealSearchShuffleTests(),        // P2：封印（方向矩阵/牌库顶/手牌/背面隔离/OnSealed）+ 检索（筛选/范围/去向/洗牌口径）+ 洗牌
+                new P2SearchCardsTests(),              // P2 落地卡：JC007（检索≤2费法术/书籍+展示）/ JC025（牺牲检索猎手）/ JC130（抓2弃1）/ JC131（检索任意牌）
+                new P2MoreCardsTests(),                // P2 落地卡（第3批）：JC026/053/066/076/085/099/100/108/109/119 的"前提已具备"效果行
+                new P3KeywordsTests(),                 // P3 词条：隐匿 / 屏障 / 撤回 / 非资产 / XX标志X（PlaceCounter）/ 杀伤X
+                new P4LeaderTests(),                   // P4 词条：领袖（同控制者场上至多 1 个；进场超限立刻选一个牺牲、不入堆叠；进场触发照常）
+                new P4CurbTests(),                     // P4 原语：遏制X（RemovePowerMark / X≥总数自动全清 / 按地区分配且每地区上限=该地区标记数）
+                new P4PredictionTests(),               // P4 原语：预测X（牌库顶 X 张任意数量置顶/底；复用调查对抗分配窗口与联机字段）
+                new JC051Tests(),                      // P4：JC051 检索『结附』去向按被检索卡自身 TargetRules 选宿主；无合法宿主按"无合法目标"处理
+                new P3PhaseGateTests(),                // P3·K26：阶段排除（ExcludedPhases／分配战斗伤害阶段；覆盖 JC008 灵能激发）
+                new P3UseLimitTests(),                 // P3·K23：次数上限（每张卡每回合每能力；版本号变动重置；覆盖 JC032 血族长老）
+                new P3TargetZoneTests(),               // P3·K14：墓地/手牌/资产目标（候选池/筛选/阵营/版本号丢失；覆盖 JC086 窃尸人）
+                new P3MassTests(),                     // P3·K2：群体动作（AllInArea 集合 + 一次结算完整执行；覆盖 JC052 终焉的诗寇蒂 / JC050 丧钟回响）
+                new P3DynamicValueTests(),             // P3·K1：动态数值 X（求值来源 / $X 替换 / X=0 不发动；覆盖 JC040 安普莎 / JC097 阿斯旺）
+                new P3DrawBatchTests(),                // P3·OnDraw 按批粒度 + JC080 凯拉（一次抓牌＝一批，X＝该批张数；TriggerBySelf）
+                new P3MultiTargetTests(),              // P3·K15：多目标槽位（至多 2 个目标/至少 1 个/禁止原地移动）+ JC021 狭路相逢
+                new P3ConditionalBranchTests(),        // P3·K17：条件式动作分支（If/Else 二选一）+ JC004 力场法师
+                new P3RemoveTokenTests(),              // P3·A：RemoveToken（地区势力标志移除，直接移除不走遏制分配）+ JC095 唐·格鲁尼
+                new P3PrereqKindTests(),               // P3·B：持续前提扩展（所在地区无敌方角色 / 有本方·敌方势力标志）+ JC016 / JC084
+                new P3PutToAreaTests(),                // P3·C：PutToArea（墓地角色牌置入地区）+ K15 双目标 + JC092 死灵召唤 / JC133 操控死尸
+                new P3GrantToHostTests(),              // P3·D：持续授予落点＝结附宿主（GrantToHost）+ JC116 左轮 / JC073 捕梦网
+                new P3AuraFilterTests(),               // P3·E：光环筛选扩展（组织/关键词/仅本地区/防御力授予）+ JC051 / JC059 / JC105
+                new P3ModeBranchTests(),               // P3·K16：模式分支（打出付费前选定、入堆叠不可改）+ JC063 警车追捕
+                new P3OptionalPayTests(),              // P3·K11：可选支付 + 数值输入框（支付N/不支付；挂起续算）+ JC061 / JC100
+                new P3StrikeStackingTests(),           // P3·K13：袭击数值叠加 + 运行期授予的袭击参与触发收集 + JC038 列恩
+                new P3ScaledGrantTests(),              // P3·F：按计数缩放的持续授予（ScaleExpr）+ JC037 / JC045 / JC109
+                new P3ZoneConvertTests(),              // P3·G：MoveToZone 区域转换（牌库顶→资产区 / 自身→资产区）+ JC126 / JC120
+                new P3InspectTests(),                  // P3·H：检视（私密查看，不改状态）+ JC062 调查档案（至多两个目标暗藏者）
+                new P3PlayerTargetTests(),             // P3·K24：玩家目标（任意/本方/对手 + 独立窗口 + 与槽位组合）+ JC111 混沌蝴蝶
+                new P3InvestigationWonTests(),         // P3：调查对抗获胜时机（OnInvestigationWon）+ JC072 博学的贤者
+                new P3DeathBranchTests(),              // P3：门禁+分支双条件（BranchPredicate）+ JC031 唤灵师
+                new P3TurnMemoryTests(),               // P3：回合内事件记忆位（势力标志被移除）+ 激活前门禁 + JC053 鸣钟教派徽记②
+                new P3TwoPlayerDiscardTests(),         // P3：多玩家弃牌编排（双方各弃一张）+ JC041 禁婆②
+                new P3PendingEffectTests(),            // P3：宿主种类前提 + 一次性待触发承诺 + JC082 索亚之书
+                new P3StepPledgeTests(),               // P3：步骤级承诺（下个准备步骤免费现身）+ JC024 S.P.T董事局②
+                new P3ControlTransferTests(),          // P3：控制权转移 + 到期归还 + JC129 操控心智
+                new P3ActionOutcomeTests(),            // P3：动作成果判定（"若你如此做"）+ JC009 远东六号科研所 / JC087 格鲁尼的走私客
+                new P3DestroyOnTargetTests(),           // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
+                new P3RuntimeKeywordTests(),           // P3·K13：运行期授予的触发类关键词参与收集 + 群体 Gain 主体 + JC024①/ JC089
+                new P3CompositeTargetTests(),          // P3：复合目标限制（SpecAlt 两条声明 OR）+ HostIsCouncil + JC043 纵火狂
+                new P3LatentTests(),                   // P3：新时机「被潜伏/翻面时」(OnLatent) + 群体伤害 + JC054 蒙古死亡蠕虫①
+                new P3GraveyardPlayTests(),            // P3·K27：来源门禁 + 墓地行动（从墓地正面打出）+ JC085 复生行尸②
+                new P3HandActivateTests(),             // P3·K27：手牌行动（Scope=HandZone 的激活）+ 来源生效区门禁 + JC110 闲人的绿地①
+                new P3RenewableCostModTests(),         // P3：持续性玩家级费用修正（每回合可再生的一次性）+ JC026 洛特尼科夫①
+                new P3RevealCostTests(),               // P3：付费通道隔离（打出/现身）+ JC033 家族传承①
+                new P3PreventDamageTests(),            // P3·K3 第一批：防止伤害（伤害护盾）+ JC078 光能盾
+                new P3MirrorSealedIconsTests(),        // P3：图标镜像（持续授予来源改写＝被封印角色牌的能力图标）+ JC066 封魔瓶瑟琳娜②
+                new P3SkipAreaCombatTests(),           // P3·K18 第一批：地区级"略过对抗"（静态规则）+ JC098 陷入疯狂的人群②
+                new P3CovertPowerExclusionTests(),     // P3·K21：地区级"敌方暗藏者不参与势力对抗" + JC023 范·弥尔顿
+                new P3CounterTargetTests(),            // P3·K21：目标须带卡上标志（HasCounter）+ 移动到目标所在地区 + JC069 警犬②
+                new P3WinAreaDestinationTests(),       // P3·K3 第一批：地区赢取时的去处替代 + JC079 圣婴②
+                new P3NoUntapSealedTests(),            // P3·K29：重置步骤钩子 + "其上有封印的敌方角色不能被重置" + JC108 织梦人②
+                new P3ExtraPowerContestTests(),        // P3·K18 第二批：地区级"额外进行一次势力对抗" + JC067 约翰·F·纳特里②
+                new P3SacrificeCostTests(),            // P3·K22 第一批：牺牲一个角色作代价（发动者自选/不可暗藏者/触发死亡时机）+ JC094
+                new P3SacrificeCost2Tests(),           // P3·K22 续：JC093 授予结附宿主 / JC096 可牺牲自身 / JC038 子类别筛选 + 玩家弃牌
+                new P3TurnAreaCombatSkipTests(),       // P3·K18 第二批·本回合型：地区三步骤全略过 + JC118 停战协议
+                new P3DamageRedirectTests(),           // P3·K3·持续型伤害重定向：JC077 庇佑圣灵 / JC121 空鸣御守
+                new P3IconReplaceTests(),              // P3·K20 第一批·图标替换＝属性替换 + JC106 酒神秘仪
+                new P3IconSuppressionTests(),          // P3·K20·持续型"失去图标" + JC123 饮魂者朱迪②
+                new P3DomainSuppressionTests(),        // P3·K20·持续型"失去魔法领域图标" + JC099 徘徊的鬼魂③
+                new P3TextBlankTests(),                // P3·K20 收尾：文本空白（失去效果）+ JC101 直视深渊
+                new P3GrantedAbilityTests(),           // P3·K13·运行期授予激活能力 + JC019 弥尔顿的镇魔枪
+                new P3ActivationAreaTargetTests(),     // P3·K15·激活能力的"目标地区"：JC117 红眼航班 / JC033 家族传承①
+                new P3TriggerModeChoiceTests(),        // P3·K16·触发版「选择一项」（入堆叠时选定）：JC110 闲人的绿地②
+                new P3DeathSealTests(),                // P3·K3·死亡类第一批（触发路线）：JC105 噩梦领主②
+                new P3DrawFromBottomTests(),           // P3·非抓牌式取牌（不广播 OnDraw）：JC049 深渊细语②
+                new P3RulingBatchTests(),              // 用户口径批：JC022 战斗获胜近似判定 / JC074 快速行动授予 / JC122 锁定者禁现身
+                new P3PathUniquenessTests(),           // P3·K25「道途」唯一性（与领袖同款：玩家选一个牺牲）：JC034①
             };
 
             var redlines = new List<string>();
@@ -63,6 +134,13 @@ namespace Script.Tests
                 r.RunAll();
                 GD.Print(r.Report());
                 if (!r.AllPassed) allOk = false;
+                // 【稳定性】每个套件之间主动做一次"完整 GC + 终结器排空"：
+                // 测试会创建大量 RefCounted（PlayerCardData/EffectData/TargetSpec/EffectAction…），
+                // 若交给 GC 在任意分配点触发终结，会命中 Godot 的 RefCounted 终结器竞态
+                // （`gchandle.is_released()` → Fatal error 0xC000001D），表现为**偶发原生崩溃**（与业务逻辑无关）。
+                // 在套件边界集中回收，可把终结时机钉在确定、串行的位置。
+                System.GC.Collect();
+                System.GC.WaitForPendingFinalizers();
             }
 
             if (redlines.Count > 0)

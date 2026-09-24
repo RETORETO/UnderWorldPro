@@ -1,4 +1,4 @@
-﻿using Script.Game.Entities;
+using Script.Game.Entities;
 using Script.Data.Effects;
 using System.Collections.Generic;
 
@@ -40,11 +40,43 @@ namespace Script.Game.Entities
         /// <summary>结算负载：目标地区槽位 id（PlayToArea / Attachment 结附地区时使用）</summary>
         public string TargetAreaId { get; set; }
 
+        /// <summary>
+        /// 【K16·模式分支】本条选定的模式序号（`EffectData.Modes` 的下标；-1＝无模式分支）。
+        /// 口径（用户 2026-09）：**打出时选定、付费之前**，选定后入堆叠**不可更改**；结算只执行该模式。
+        /// </summary>
+        public int ModeIndex { get; set; } = -1;
+
         /// <summary>结算负载：目标卡 UID（Attachment 结附于卡 / 事务指向场上卡时使用，可为空）</summary>
         public string TargetCardUid { get; set; }
 
+        /// <summary>
+        /// 【K15·多目标】本条目选定的**全部目标卡 UID**（有序，与效果声明的槽位顺序一致）。
+        /// 单目标条目可继续只用 <see cref="TargetCardUid"/>；多目标（`EffectData.TargetSlots`）时本列表为准，
+        /// 且 `TargetCardUid` 取列表首项（兼容既有箭头绘制与联机快照）。
+        /// </summary>
+        public List<string> TargetCardUids { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 【K15·多目标】与 <see cref="TargetCardUids"/> **同序**的入栈版本号（D16 丢失判定逐目标比对：
+        /// 任一目标版本号变化即判该目标丢失）。
+        /// </summary>
+        public List<int> TargetVersionIds { get; set; } = new List<int>();
+
         /// <summary>结算负载：源卡 UID（卡片型固定等于 SourceCard.UID；效果型可空）</summary>
         public string SourceCardUid { get; set; }
+
+        /// <summary>
+        /// 【K24·玩家目标】本条目选定的**目标玩家号**（-1＝无玩家目标）。单目标效果用它；
+        /// 多目标（含玩家槽）时以 <see cref="TargetPlayerIds"/> 为准，本字段取首个玩家槽的值。
+        /// 与卡目标同口径：**入堆叠时锁定**，结算时不再重选。
+        /// </summary>
+        public int TargetPlayerId { get; set; } = -1;
+
+        /// <summary>
+        /// 【K24·玩家目标】本条目选定的**全部玩家槽目标**（按玩家槽对齐；留空槽写 -1）。
+        /// 与 <see cref="TargetCardUids"/> 同一"按槽对齐"纪律（见 `MultiTargetSlots.SlotAlignedPlayerIds`）。
+        /// </summary>
+        public List<int> TargetPlayerIds { get; set; } = new List<int>();
 
         /// <summary>
         /// 过程记忆：目标在堆叠期间是否"曾丢失"。只置位、不清位（即使目标后来恢复合法也不撤销），
@@ -83,6 +115,13 @@ namespace Script.Game.Entities
 
         /// <summary>结算负载（Kind=AreaWon）：赢取该地区的玩家 ID</summary>
         public int WinnerId { get; set; }
+
+        /// <summary>
+        /// 【K1】本次触发事件携带的数量（`TriggerContext.ExtraInt`，如"本次弃牌的总张数"），-1 = 无。
+        /// 由 `PushTriggerToStack` 从 `StackEffectInstance.EventAmount` 写入，结算时透传给
+        /// `EffectEngine.ResolveEffect` 供动态值表达式 `事件数量` 求值。
+        /// </summary>
+        public int EventAmount { get; set; } = -1;
 
         /// <summary>结算负载（Kind=Trigger）：关联的入堆叠效果实例（含来源、目标、强制标记等运行时状态）。</summary>
         public StackEffectInstance StackEffect { get; set; }

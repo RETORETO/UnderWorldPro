@@ -33,6 +33,10 @@ namespace Script.Net
             if (r.IsHidden) return true;                     // 已是占位
             // 牌库：对**双方**都不可见（单机也只看卡背与数量，从不暴露牌序）
             if (r.Zone == CardZone.Deck) return true;
+            // 【P2】背面朝上封印卡（JC119「你的对手不能检视该牌」）：仅封印者本人可见牌面，
+            // 其他人只收到占位（"这儿有一张封印牌"，不知是什么牌）。封印关系本身是公开信息，仍随占位下发。
+            if (r.Zone == CardZone.SealedZone && r.IsSealedFaceDown && r.ControllerId != viewerPlayerId)
+                return true;
             // 手牌：自己的可见、对手的隐藏
             return IsPlayerOwnedHiddenZone(r.Zone) && r.ZoneOwnerId != viewerPlayerId;
         }
@@ -43,15 +47,21 @@ namespace Script.Net
             // 占位 UID 稳定可复现（同一观看者/区域/序号 → 同一 UID），便于客户端跨快照复用同一占位实例。
             string owner = src != null ? src.ZoneOwnerId.ToString() : "-1";
             string zone = src != null ? ((int)src.Zone).ToString() : "0";
+            // 【P2】封印卡的"封印在谁身上/哪个地区"是公开信息（否则客户端画不出卡背的挂载位置），
+            // 只有牌面身份属于隐藏信息，故 SealedZone 的占位保留宿主/地区引用。
+            bool sealZone = src != null && src.Zone == CardZone.SealedZone;
             return new ZoneCardRef
             {
                 Uid = $"{HiddenUidPrefix}{zone}_{owner}_{index}",
                 TemplateUid = null,
                 Zone = src?.Zone ?? CardZone.Hand,
                 ZoneOwnerId = src?.ZoneOwnerId ?? -1,
-                ZoneDetailId = null,     // 隐藏区无地区/宿主语义（手牌/牌库/牌堆）
+                ZoneDetailId = sealZone ? src.ZoneDetailId : null,
                 OwnerId = src?.ZoneOwnerId ?? -1,
                 ControllerId = src?.ZoneOwnerId ?? -1,
+                IsSeal = sealZone && (src?.IsSeal ?? false),
+                IsSealedFaceDown = sealZone && (src?.IsSealedFaceDown ?? false),
+                SealedByUid = sealZone ? src.SealedByUid : null,
                 IsHidden = true,
             };
         }

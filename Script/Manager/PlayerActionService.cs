@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -48,6 +48,45 @@ public class PlayerActionService
     // ---------- 出牌意图 ----------
     public bool PlayCard(int playerId, string cardUid, string targetUid = null, string targetCardUid = null)
         => _turnManager.PlayCard(playerId, cardUid, targetUid, targetCardUid);
+
+    /// <summary>【K15·多目标】单机"多目标事务卡"打出意图：逐槽取目标 + 确认面板 → 确认后由 Controller 入堆叠。</summary>
+    public void BeginMultiTargetPlay(int playerId, string cardUid)
+        => _turnManager.BeginMultiTargetPlay(playerId, cardUid);
+
+    /// <summary>【K16·模式分支】单机"选择一项"卡牌打出意图：先选定模式（付费前）→ 取该模式目标 → 入堆叠。</summary>
+    public void BeginModeCardPlay(int playerId, string cardUid)
+        => _turnManager.BeginModeCardPlay(playerId, cardUid);
+
+    /// <summary>
+    /// 【K16·模式分支·联机】服务端权威路径：若该卡声明了 `Modes` 且已注入输入网关 → 由服务端驱动
+    /// "选模式 → 选目标 → 入堆叠"（异步；期间持原子锁）。返回 true＝已接管本次打出。
+    /// </summary>
+    public bool TryBeginModeCardPlayOnline(int playerId, string cardUid)
+    {
+        var inst = _cardManager.GetInstance(cardUid);
+        var effect = Script.Manager.MultiTargetSlots.FindModeEffect(
+            inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
+        if (effect == null || _turnManager.InputGateway == null) return false;
+        Godot.GD.Print($"[K16 模式·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（选模式 → 选目标 → 入堆叠）");
+        _ = _turnManager.PlayModeCardAsync(playerId, cardUid);
+        return true;
+    }
+
+    /// <summary>
+    /// 【K15·多目标·联机】服务端权威路径：若该卡声明了多目标槽位且已注入输入网关，
+    /// 则**由服务端驱动**"逐槽下发选择请求 → ConfirmTargets 确认 → 入堆叠"（异步；期间持原子锁）。
+    /// 返回 true＝已接管本次打出（调用方不要再走同步 `PlayCard`）；false＝按普通卡处理。
+    /// </summary>
+    public bool TryBeginMultiTargetPlayOnline(int playerId, string cardUid)
+    {
+        var inst = _cardManager.GetInstance(cardUid);
+        var effect = Script.Manager.MultiTargetSlots.FindMultiTargetEffect(
+            inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
+        if (effect == null || _turnManager.InputGateway == null) return false;
+        Godot.GD.Print($"[K15 多目标·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（逐槽请求 + 确认面板）");
+        _ = _turnManager.PlayMultiTargetCardAsync(playerId, cardUid);
+        return true;
+    }
 
     // ---------- 暗藏 / 资产意图 ----------
     public bool DeployCovert(int playerId, string cardUid, string areaUid)
@@ -156,6 +195,30 @@ public class PlayerActionService
     /// </summary>
     public void ActivateAbility(CardInstance source, EffectData data, CardInstance target)
         => EE.ActivateAbility(source, data, target);
+
+    /// <summary>
+    /// 【K24·玩家目标】发动"以玩家为目标"的激活能力（如 JC111 混沌蝴蝶的两条快速行动）：
+    /// 目标由 View 的**独立选择窗口**收集后作为 `targetPlayerId` 传入，与卡目标参数互不冲突。
+    /// </summary>
+    public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId)
+        => EE.ActivateAbility(source, data, target, targetPlayerId);
+
+    /// <summary>
+    /// 【K22】发动带"**牺牲一个角色**"代价的激活能力：`sacrificeUid` ＝**发动者自己选择**的被牺牲角色
+    /// （由 View 的选择窗口收集；空 → 引擎走确定性兜底第一个合法候选）。
+    /// 代价合法性与支付（含"牺牲＝死亡 → 触发死亡时机"）仍在 Controller（`EffectEngine`）收口。
+    /// </summary>
+    public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId,
+        string sacrificeUid)
+        => EE.ActivateAbility(source, data, target, targetPlayerId, sacrificeUid, null);
+
+    /// <summary>
+    /// 【K15】发动需要"**目标地区**"的激活能力（JC117 移动到目标地区 / JC033① 置于目标地区）：
+    /// 	argetAreaId 由 View 的地区选择窗收集，入堆叠时锁定。
+    /// </summary>
+    public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId,
+        string sacrificeUid, string targetAreaId)
+        => EE.ActivateAbility(source, data, target, targetPlayerId, sacrificeUid, targetAreaId);
 
     /// <summary>回合开始重置玩家基础行动次数（派遣暗藏/建立资产/先手破平 各 1）。原由 Arena 直接调用 PlayerManager.ResetActionCharges。</summary>
     public void ResetActionCharges(int playerId) => _playerManager.ResetActionCharges(playerId);

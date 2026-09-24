@@ -101,6 +101,16 @@ namespace Script.Data.Cards
         /// 含 PlayTiming.Response 效果的事务卡直接取 C档（取消门禁，任意有优先权时打出），忽略本开关。</summary>
         [Export] public bool LimitToActionPhaseOnly { get; set; } = false;
 
+        /// <summary>
+        /// 【P3·K27】"**墓地行动**"：该卡可以**从墓地中正面打出**（就如同其在你的手上一样）。
+        /// 卡文例：JC085 复生行尸「墓地行动：你可以从墓地中正面打出复生行尸，就如同其在你的手上一样。
+        /// （你仍需要支付其费用，且需满足其忠诚需求。）」。
+        /// 消费点：① `TurnManager.PlayCard` 的**来源门禁**（默认只允许从手牌打出，本标志额外放行"墓地"来源）；
+        /// ② `LegalityProjection` 的打出候选（把墓地中声明了本标志的卡也列为可打出源）。
+        /// 费用/忠诚/行动步骤等其余门禁**照常**（卡文"就如同其在你的手上一样"）。
+        /// </summary>
+        [Export] public bool PlayableFromGraveyard { get; set; } = false;
+
         /// <summary>事务卡是否含"可响应打出"效果（PlayTiming.Response）。
         /// 仅事务卡有意义；命中则返回 true（C档：取消门禁，可响应窗口打出）。
         /// 角色/附属永不调用此方法进入 C档。</summary>
@@ -230,12 +240,23 @@ namespace Script.Data.Cards
             //【打出/效果目标分离】角色/附属的激活、触发能力目标（CharacterActivated/AttachmentActivated/
             // EnterTrigger 等）是"激活时"选，与"打出时"无关，绝不在此聚合——否则 JC003（角色·激活能力）、
             // JC020/JC012（附属·激活能力）的激活目标会污染打出允许目标大类。
+            //【K15】多目标槽位（`EffectData.TargetSlots`）的大类同样纳入聚合：
+            //  卡文"选择目标本方角色和/或目标敌方角色 + 目标地区" 需要 UI 知道"要选角色与地区"。
             var fromEffects = new System.Collections.Generic.List<TargetKind>();
             if (EffectDataList != null)
             {
                 foreach (var e in EffectDataList)
                 {
                     if (e == null || e.Timing != EffectTiming.OnSorceryCast) continue;
+                    if (Manager.MultiTargetSlots.IsMultiTarget(e))
+                    {
+                        foreach (var slot in e.TargetSlots)
+                        {
+                            var sk = slot?.Spec?.Kind ?? TargetKind.None;
+                            if (sk != TargetKind.None && !fromEffects.Contains(sk)) fromEffects.Add(sk);
+                        }
+                        continue;
+                    }
                     var t = e?.Target;
                     if (t == null || t.Kind == TargetKind.None) continue;
                     if (!fromEffects.Contains(t.Kind)) fromEffects.Add(t.Kind);
@@ -286,6 +307,7 @@ namespace Script.Data.Cards
                     // 从 EffectDataList 聚合【打出时机】目标（仅事务卡 OnSorceryCast 打出结算）。
                     //【打出/效果目标分离】激活/触发能力目标（CharacterActivated 等）是"激活时"选，
                     // 与"打出时"无关，绝不在此判定——否则 JC003 角色卡会被其激活能力误判为"需要目标"。
+                    //【K15】声明了多目标槽位的效果 → 一定需要选目标（逐槽收集）。
                     if (EffectDataList != null)
                     {
                         bool anyNeeds = false;
@@ -293,6 +315,7 @@ namespace Script.Data.Cards
                         foreach (var e in EffectDataList)
                         {
                             if (e == null || e.Timing != EffectTiming.OnSorceryCast) continue;
+                            if (Manager.MultiTargetSlots.IsMultiTarget(e)) return true;
                             var t = e?.Target;
                             if (t == null || t.Kind == TargetKind.None) continue;
                             anyTarget = true;

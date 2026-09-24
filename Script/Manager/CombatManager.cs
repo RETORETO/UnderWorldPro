@@ -204,11 +204,17 @@ public partial class CombatManager : Node
     /// <summary>网络化胜方结算：势力瞬时、战斗伤害分配、调查放回牌库 + 抽牌。</summary>
     private async Task ResolveWinnerAsync(CombatType type, string areaUid, int areaNo, int winner, int diff)
     {
+        // 【P3·杀伤N】与单机路径同源：战斗对抗可分配伤害 = 获胜点数 + 获胜方参与战斗的杀伤值之和
+        if (type == CombatType.Strength) diff += KillBonus(areaUid, winner);
+
         GD.Print($"  🏆 地区{areaNo}({areaUid}) {TypeName(type)} 结算结果（网络化）— 获胜方: 玩家{winner}，获胜点数: {diff}");
 
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
+            // 【P3·声望】势力对抗结束触发（联机路径，与单机同源）
+            _triggerEmitPoints?.PowerCombatEnded(areaUid);
+            Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
             return;
         }
 
@@ -243,7 +249,17 @@ public partial class CombatManager : Node
                 LoserPlayerId = loser,
                 CombatTypeValue = (int)type,
             };
-            var result = await InputGateway.RequestChoice(winner, req);
+            // 【K26】分配窗口打开期间（含 await 等待玩家分配）：置位，供 `PhaseGateRule` 拒绝"分配战斗伤害阶段"排除的效果
+            IsDamageAssignmentOpen = true;
+            ChoiceResult result = null;
+            try
+            {
+                result = await InputGateway.RequestChoice(winner, req);
+            }
+            finally
+            {
+                IsDamageAssignmentOpen = false;
+            }
             if (result == null || result.Cancelled)
             {
                 GD.Print("  📍 战斗对抗未分配伤害（取消），伤害流失");
@@ -314,11 +330,17 @@ public partial class CombatManager : Node
 
         ActionService.ReturnAfterInvestigation(winner, toTop, toBottom);
         ActionService.DrawCards(winner, 1);
+        // 【P3·调查对抗获胜】联机路径：分配完成后广播（与单机同一条顺序：窗口内事务先完成）。
+        _triggerEmitPoints?.OnInvestigationWon(winner, areaUid);
     }
 
     /// <summary>胜方结算分支（从 ResolveAreaCombat 抽出，供平局破平后复用）。</summary>
     private void ResolveWinner(CombatType type, string areaUid, int areaNo, int winner, int diff, System.Action onComplete)
     {
+        // 【P3·杀伤N】战斗对抗：获胜方在本地区参与战斗的【杀伤N】角色，其 N 累加进"可分配伤害"。
+        // 规则文本："拥有杀伤效果的角色如果参与了战斗对抗并且获胜，战斗对抗造成的可分配伤害增加 X；多个杀伤角色可累加。"
+        if (type == CombatType.Strength) diff += KillBonus(areaUid, winner);
+
         // 统一的对抗结果输出：获胜方、获胜地区、获胜点数
         GD.Print($"  🏆 地区{areaNo}({areaUid}) {TypeName(type)} 结算结果 — 获胜方: 玩家{winner}，获胜地区: 地区{areaNo}，获胜点数: {diff}");
 
@@ -326,6 +348,10 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
+            // 【P3·声望】势力对抗结束触发（含胜负；声望不依赖对抗胜负）
+            _triggerEmitPoints?.PowerCombatEnded(areaUid);
+            // 【P3·声望】引擎级落地：该地区声望角色较多的一方 +1 势力标志（多个声望只放一个）
+            Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
             onComplete?.Invoke();
             return;
         }
@@ -344,22 +370,63 @@ public partial class CombatManager : Node
             });
             return;
         }
+        // 【P3·调查对抗获胜】调查对抗的触发同样在**调查窗口关闭之后**广播（与战斗对抗同一条顺序纪律：
+        // "先处理窗口内的事务 → 再结算获胜触发"），否则触发排序窗口会与调查分配窗口背靠背同时弹出，
+        // 且触发效果会提前改变场上状态、让玩家基于错误状态分配牌库顶。
+        if (type == CombatType.Investigation)
+        {
+            OpenCombatWindow(type, areaUid, areaNo, winner, diff, () =>
+            {
+                _triggerEmitPoints?.OnInvestigationWon(winner, areaUid);
+                onComplete?.Invoke();
+            });
+            return;
+        }
         OpenCombatWindow(type, areaUid, areaNo, winner, diff, onComplete);
     }
 
     /// <summary>对抗类型：Investigation=调查对抗、Strength=战斗对抗（以"战力 Strength"比对的对抗）、Power=势力对抗。</summary>
     public enum CombatType { Investigation, Strength, Power }
 
+    /// <summary>
+    /// 【P3·杀伤N】求和：该地区内、由 <paramref name="winner"/> 控制、且是**角色**的卡的"杀伤"属性值。
+    /// 规则文本：拥有杀伤的角色参与战斗对抗并获胜 → 该次可分配伤害 +N；多个杀伤角色累加。
+    /// 取值经属性通道（`Attribute="杀伤"`，随快照投影，两端同源），角色性由卡类别判断（附属不参与战斗对抗）。
+    /// </summary>
+    private int KillBonus(string areaUid, int winner)
+    {
+        if (_zoneManager == null) return 0;
+        int sum = 0;
+        foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
+        {
+            if (c == null || c.ControllerId != winner) continue;
+            var tmpl = c.PlayerTemplate;
+            if (tmpl == null || (tmpl.CategoryFlag & Script.Enums.CardCategory.Character) == 0) continue;
+            int k = c.GetAttribute("杀伤");
+            if (k > 0) { sum += k; GD.Print($"  💥 杀伤加成：{tmpl.CardName} +{k}"); }
+        }
+        if (sum > 0) GD.Print($"  💥 地区{areaUid} 玩家{winner} 杀伤总加成 = {sum}");
+        return sum;
+    }
+
     /// <summary>计算某地区该对抗类型的胜负与差值。纯计算语义：平局返回 (0, 0)，不含破平决策。
     /// 破平（先手破平特权）由 ResolveAreaCombat 在平局分支中依据规则异步处理。</summary>
-    private (int winner, int diff) ComputeResult(string areaUid, CombatType type)
-    {
+    private (int winner, int diff) ComputeResult(string areaUid, CombatType type)    {
         int p1 = SumPlayerValue(areaUid, 1, type);
         int p2 = SumPlayerValue(areaUid, 2, type);
         if (p1 == p2) return (0, 0);
         int winner = p1 > p2 ? 1 : 2;
         return (winner, Math.Abs(p1 - p2));
     }
+
+    /// <summary>
+    /// 【K26】"分配战斗伤害阶段"是否正在进行＝**战斗对抗的伤害分配窗口处于打开状态**（用户 2026-09 口径：
+    /// 只指"窗口打开的那一小段"，而非整个 `TurnPhase.CombatStrength`）。
+    /// 触点在两条对抗路径上都置位/复位：单机 `OpenCombatWindow`（窗口关闭回调复位）、联机 `ResolveWinnerAsync`（await 前后）。
+    /// 消费点：`PhaseGateRule`（效果声明 `ExcludedPhases="分配战斗伤害阶段"` → 该窗口期间不可发动/打出），
+    /// 权威链＝`TurnManager.IsDamageAssignmentOpen` → `ActivateEligibility`/`EffectEngine.ActivateAbility`/`TurnManager.PlayCard`。
+    /// </summary>
+    public bool IsDamageAssignmentOpen { get; internal set; }
 
     /// <summary>通过事件外抛"打开对抗窗口"请求（不直接调用 UI）。无订阅方时按平局跳过。</summary>
     private void OpenCombatWindow(CombatType type, string areaUid, int areaNo, int winner, int diff, System.Action onResolved)
@@ -372,8 +439,16 @@ public partial class CombatManager : Node
         }
 
         GD.Print($"  🔲 地区{areaNo}({areaUid}) {TypeName(type)}：请求打开对抗窗口(areaNo={areaNo})");
+        // 【K26】"分配战斗伤害阶段"＝**分配窗口打开的那一小段**（用户 2026-09 口径）：
+        // 战斗对抗窗口期间置位，窗口关闭（onResolved）后复位；`PhaseGateRule` 据此拒绝声明了该阶段排除的效果。
+        bool isStrength = type == CombatType.Strength;
+        if (isStrength) IsDamageAssignmentOpen = true;
         // 事件参数：(type, winnerPlayer, diff, areaNo, onResolved) —— 由 Arena 订阅并实例化对应窗口
-        OnCombatWindowRequired?.Invoke(type, winner, diff, areaNo, onResolved);
+        OnCombatWindowRequired?.Invoke(type, winner, diff, areaNo, () =>
+        {
+            if (isStrength) IsDamageAssignmentOpen = false;
+            onResolved?.Invoke();
+        });
     }
 
     // ============================================================

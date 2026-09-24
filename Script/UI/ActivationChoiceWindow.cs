@@ -38,6 +38,9 @@ namespace Script.UI
         /// 默认 false：保持原行为（可取消、点窗外即关闭），不影响其他非强制效果。</summary>
         public bool ForceChoice = false;
 
+        /// <summary>【P2】自定义窗口标题（如"从牌库中寻找一张法术"）。空 = 用默认标题"选择激活效果"。</summary>
+        public string CustomTitle;
+
         private void EnsureButtonBox()
         {
             if (_buttonBox != null) return;
@@ -57,7 +60,7 @@ namespace Script.UI
 
         public override void _Ready()
         {
-            Title = "选择激活效果";
+            Title = string.IsNullOrEmpty(CustomTitle) ? "选择激活效果" : CustomTitle;
             EnsureButtonBox();
             Size = new Vector2I(420, 120);
 

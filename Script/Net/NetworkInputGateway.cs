@@ -88,8 +88,18 @@ namespace Script.Net
             {
                 case ChoiceRequest.Kind.SelectTriggerOrder: return 60;
                 case ChoiceRequest.Kind.SelectTarget: return 60;
+                case ChoiceRequest.Kind.SelectHandCard: return 60;   // 【P2】手牌选择（弃牌等）
                 case ChoiceRequest.Kind.CombatInvestigation: return 60;
                 case ChoiceRequest.Kind.CombatStrength: return 60;
+                case ChoiceRequest.Kind.CurbMarks: return 60;   // 【P4】遏制X 的按地区分配
+                case ChoiceRequest.Kind.Prediction: return 60;  // 【P4】预测X 的顶/底分配
+                case ChoiceRequest.Kind.SelectZoneCard: return 60;   // 【K14】墓地/手牌选卡
+                case ChoiceRequest.Kind.MultiTargetSlot: return 60;  // 【K15】多目标逐槽选择
+                case ChoiceRequest.Kind.ConfirmTargets: return 30;   // 【K15】多目标确认面板（纯确认，短超时）
+                case ChoiceRequest.Kind.SelectEffectMode: return 45;  // 【K16】模式分支"选择一项"
+                case ChoiceRequest.Kind.NumberInput: return 60;       // 【K11】数值输入框（支付 N / 选数字）
+                case ChoiceRequest.Kind.InspectCards: return 30;     // 【P3·H】检视（私密查看，纯确认）
+                case ChoiceRequest.Kind.SelectPlayer: return 45;     // 【K24】玩家目标（选项少，短于选卡）
                 case ChoiceRequest.Kind.ForceChoice: return 45;
                 case ChoiceRequest.Kind.PayOrTap: return 45;
                 case ChoiceRequest.Kind.TieBreak: return 30;

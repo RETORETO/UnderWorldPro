@@ -78,6 +78,12 @@ public partial class GameInitializer : Node
     /// 具名字段便于每次 InitializeAll 先反订阅再订阅，避免重复累加。</summary>
     private System.Action<Script.Game.Entities.CardInstance, CardChangeKind> _cardStateContinuityHandler;
 
+    /// <summary>【P3·B】势力标志变动 → 持续前提重判的订阅句柄（装配层持有，便于解绑/多局隔离）。</summary>
+    private System.Action<string, int, int> _marksContinuityHandler;
+
+    /// <summary>【K13】区域移动后 → 光环重算的订阅句柄（装配层持有，联机服务端与 headless 同样生效）。</summary>
+    private System.Action<Script.Game.Entities.CardInstance, Script.Enums.CardZone, int, string> _postMoveAuraHandler;
+
     // ============================================================
     // 初始化入口（由 Arena._Ready 调用）
     // ============================================================
@@ -126,7 +132,16 @@ public partial class GameInitializer : Node
         {
             if (card == null) return;
             if (kind == CardChangeKind.TappedChanged) effectEngine.ReevaluatePrereqs(card.ControllerId);
-            else if (kind == CardChangeKind.CovertChanged) effectEngine.ReevaluateAuras(card.ControllerId);
+            else if (kind == CardChangeKind.CovertChanged)
+            {
+                effectEngine.ReevaluateAuras(card.ControllerId);
+                // 【P3·F】翻面也会改变"你操控的暗藏者数量"（JC037 每操控一个暗藏者 → 一个黑眼）→ 双方都重判
+                effectEngine.ReevaluatePrereqs(card.ControllerId);
+                effectEngine.ReevaluatePrereqs(card.ControllerId == 1 ? 2 : 1);
+                // 【P3·"被潜伏/翻面时"】只在本卡**翻为暗藏者**时广播（反方向＝现身，走既有 UncoverTrigger）。
+                if (card.IsCovert)
+                    triggerEmitPoints.OnLatent(card, card.ControllerId, card.ZoneDetailId ?? "");
+            }
         };
         CardManager.OnCardStateChanged -= _cardStateContinuityHandler;
         CardManager.OnCardStateChanged += _cardStateContinuityHandler;
@@ -157,7 +172,22 @@ public partial class GameInitializer : Node
         ZoneManager.EffectEngineRef = effectEngine;            // 静态单例治理：显式注入 EffectEngine
         CardManager.SetZoneManager(ZoneManager);
         PlayerManager.SetZoneManager(ZoneManager);   // 忠诚/费用来自资产区
-        if (VerboseSetup) GD.Print("  ✅ ZoneManager");
+        // 【P3·灵体】伤害防止钩子：把"灵体"规则接到伤害唯一收口 `CardManager.DealDamageToInstance`。
+        // 语义见 `DamageRules`（对手在本地区的魔法领域图标少于灵体控制者 → 防止该次伤害 → 不判死、不触发死亡）。
+        // 【P3·K3】并联"伤害护盾"（JC078 光能盾：本回合内该角色受到的**所有**伤害被防止）——
+        // 两条防止规则**并联**（任一成立即防止），都走同一个收口，故都不会产生死亡触发。
+        CardManager.DamagePreventer = (target, amount) =>
+            Script.Manager.DamageRules.IsSpiritPrevention(target, ZoneManager)
+            || effectEngine?.IsDamagePrevented(target) == true;
+        // 【P4·领袖】进场规则钩子：同控制者场上至多 1 个领袖；进场超限 → 立刻由该控制者选一个牺牲（不入堆叠）。
+        // 挂在"进场触点"（MoveToArea 的非场地区→争夺区、且持续效果已注册之后），见 `LeaderRule`。
+        ZoneManager.OnCardEnteredArea = card => Script.Manager.LeaderRule.EnforceOnEntry(card, CardManager, effectEngine);
+        // 【P3·K25】「道途」唯一性（JC034「你只能操控至多一个道途」；用户 2026-09 口径＝与领袖同款、玩家选一个牺牲）：
+        // 挂在**任意区域变更之后**（`OnPostMove`）——道途是"结附于本方秘社"的附属卡（落 `AttachedZone`），
+        // 不经过 `OnCardEnteredArea`（那只覆盖争夺区进场），故用通用移动钩子覆盖进场/回场/移动等落点，见 `PathRule`。
+        ZoneManager.OnPostMove += (movedCard, zone, playerId, detailId)
+            => Script.Manager.PathRule.EnforceOnEntry(movedCard, CardManager, effectEngine);
+        if (VerboseSetup) GD.Print("  ✅ ZoneManager（含灵体伤害防止钩子 / 领袖唯一性规则钩子 / 道途唯一性规则钩子）");
 
         // 4. TurnManager（回合流程、阶段切换）
         TurnManager = new TurnManager();
@@ -167,6 +197,7 @@ public partial class GameInitializer : Node
         TurnManager.EffectEngineRef = effectEngine;   // 静态单例治理：必须在 SetTriggerSystem 之前注入（其内部 EE.IsStackCircuitBroken）
         ZoneManager.TurnManagerRef = TurnManager;     // 静态单例治理：替代 ZoneManager 内 TurnManager.Instance
         TurnManager.SetTriggerSystem(triggerRegistry, triggerEmitPoints, eventBus);   //【MVC 收口】注入触发系统三实例
+        TurnManager.SetRandomSource(RandomSource);   //【P2】随机弃牌等需要可复现随机源
         if (VerboseSetup) GD.Print("  ✅ TurnManager");
 
 
@@ -189,6 +220,34 @@ public partial class GameInitializer : Node
         AreaManager = new AreaManager();
         AddChild(AreaManager);
         AreaManager.Initialize(WorldDeckManager, ZoneManager, StackManager);
+        AreaManager.SetTriggerEmitPoints(triggerEmitPoints);   //【P1】OnAreaWon / OnMarkerPlaced 发点依赖
+        // 【P3·B】势力标志增减 → 重判持续前提（JC084 街头混混"所在地区有本方/敌方势力标志 → 白星/白眼"）。
+        // 与 CardManager 的 TappedChanged 同思路：把联动下沉到装配层，联机服务端（无 Arena）同样生效。
+        _marksContinuityHandler = (areaUid, p1, p2) =>
+        {
+            effectEngine.ReevaluatePrereqs(1);
+            effectEngine.ReevaluatePrereqs(2);
+        };
+        AreaManager.OnMarksChanged -= _marksContinuityHandler;
+        AreaManager.OnMarksChanged += _marksContinuityHandler;
+        // 【K13】区域移动后重算**光环**：授权会随"离场"被清空（如"暗藏→现身"时序），必须按当前场上重新判定。
+        // 此前该重算只在 View（Arena.OnPostMove）里做 → **联机服务端与 headless 路径会漏**，
+        // 导致 JC038 这类"光环授予袭击"在角色现身时刻丢失。下沉到装配层后两端一致（ReevaluateAuras 幂等）。
+        _postMoveAuraHandler = (card, zone, playerId, detailId) =>
+        {
+            effectEngine.ReevaluateAuras(playerId);
+            effectEngine.ReevaluateAuras(playerId == 1 ? 2 : 1);
+            // 【P3】持续授予自愈：换区/落位会重建派生数值 → 数值型授予（如 JC089「宿主 -1 防御」）需按登记表补回。
+            effectEngine.ReapplyMissingContinuousGrants(playerId);
+            effectEngine.ReapplyMissingContinuousGrants(playerId == 1 ? 2 : 1);
+            // 【P3·K13/K20】"运行期授予的激活能力"（JC019）与"持续抑制"（JC099/JC101/JC123）也须随卡的进出场重算。
+            // 放在这里（＝**任何移动都会经过的统一后置刷新**）而不是只放在 `ReevaluatePrereqs`：
+            // 后者在"该玩家没有带前提的持续效果"时会提前返回，会**漏掉**这次重算（本轮实测踩到）。
+            effectEngine.ReapplyGrantedAbilities();
+            effectEngine.ReapplySuppressions();
+        };
+        ZoneManager.OnPostMove -= _postMoveAuraHandler;
+        ZoneManager.OnPostMove += _postMoveAuraHandler;
         TurnManager.SetAreaManager(AreaManager);     // 注入：赢取地区检查/结算依赖
         if (VerboseSetup) GD.Print("  ✅ AreaManager");
 

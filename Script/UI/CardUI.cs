@@ -1,7 +1,8 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Script.Enums;
+using Script.Data.Effects;
 using Script.Game.Entities;
 
 namespace Script.UI
@@ -125,10 +126,25 @@ namespace Script.UI
         // 鼠标移动跟随已在 _Process 中处理（_isDragging 时直接跟随鼠标），此处不再处理移动。
         // 保留空实现以便后续需要时扩展；拖拽状态完全由 GuiInput 的按下/释放驱动。
 
+        /// <summary>
+        /// 【K27】该卡是否声明了"**手牌行动**"（`Scope = ZoneScope.HandZone` 的激活类效果）。
+        /// 供双击分支判断"手牌中的卡是否可按激活处理"（普通手牌卡不受影响，仍走拖拽出牌）。
+        /// </summary>
+        private static bool HasHandScopedActivation(CardInstance inst)
+        {
+            var tmpl = inst?.PlayerTemplate;
+            if (tmpl?.EffectDataList == null) return false;
+            foreach (var e in tmpl.EffectDataList)
+            {
+                if (e == null || e.Scope != ZoneScope.HandZone) continue;
+                if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated
+                    or EffectTiming.CouncilActivated or EffectTiming.ManeuverTrigger) return true;
+            }
+            return false;
+        }
         // GuiInput 处理按下/释放（Godot 命中分发正常时走这里；若命中失败则由 Arena 全局 _Input 驱动）
         private void OnGuiInput(InputEvent @event)
-        {
-            // 暗藏者现身：争夺区内背面朝上的卡，双击（任意拖拽态均可）即请求现身；
+        {            // 暗藏者现身：争夺区内背面朝上的卡，双击（任意拖拽态均可）即请求现身；
             // 先于 CanDrag 判断，因为暗藏者通常 CanDrag=false（背面不可拖拽出牌）。
             if (@event is InputEventMouseButton revealMouse
                 && revealMouse.ButtonIndex == MouseButton.Left
@@ -145,12 +161,19 @@ namespace Script.UI
 
             // 附属卡双击激活：与秘社双击一致，单击不再弹窗（JC012 交互修正）。
             // 先于 CanDrag 判断，因为附属卡通常 CanDrag=false（不可拖拽出牌）。
+            // 【K24】场上【正面角色】（争夺区、未暗藏）同样双击即请求激活：其激活能力可能"以玩家为目标"
+            // （JC111 混沌蝴蝶），而玩家不是场上节点、无法用"拖到目标上"表达 → 必须由双击进选择窗口。
+            // 争夺区卡 CanDrag=false（见 Arena.Layout），故不会与拖拽出牌冲突。
+            // 【K27】**手牌**中的"手牌行动"卡（声明 `Scope=HandZone` 的激活能力，如 JC110）同样双击请求激活；
+            // 该分支在 `CanDrag` 之前 `AcceptEvent`，因此不会触发拖拽出牌（其余手牌不受影响）。
             if (@event is InputEventMouseButton activateMouse
                 && activateMouse.ButtonIndex == MouseButton.Left
                 && activateMouse.Pressed
                 && activateMouse.DoubleClick
                 && _instance != null
-                && _instance.IsAttached)
+                && (_instance.IsAttached
+                    || (_instance.CurrentZone == CardZone.AreaZone && !_instance.IsCovert)
+                    || (_instance.CurrentZone == CardZone.Hand && HasHandScopedActivation(_instance))))
             {
                 EmitSignal(SignalName.AttachmentDoubleClicked, this);
                 AcceptEvent();

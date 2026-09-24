@@ -309,6 +309,8 @@ namespace Script.UI
                     return OpenOnlineStrengthWindow(req);
                 case Script.Net.ChoiceRequest.Kind.CombatInvestigation:
                     return OpenOnlineInvestigationWindow(req);
+                case Script.Net.ChoiceRequest.Kind.Prediction:
+                    return OpenOnlinePredictionWindow(req);
                 case Script.Net.ChoiceRequest.Kind.TieBreak:
                     return OpenOnlineTieBreakWindow(req);
                 case Script.Net.ChoiceRequest.Kind.PayOrTap:
@@ -317,6 +319,14 @@ namespace Script.UI
                     return OpenOnlineTriggerOrderWindow(req);
                 case Script.Net.ChoiceRequest.Kind.SelectTarget:
                     return OpenOnlineTargetSelectionWindow(req);
+                case Script.Net.ChoiceRequest.Kind.MultiTargetSlot:
+                case Script.Net.ChoiceRequest.Kind.ConfirmTargets:
+                case Script.Net.ChoiceRequest.Kind.SelectEffectMode:
+                case Script.Net.ChoiceRequest.Kind.NumberInput:
+                case Script.Net.ChoiceRequest.Kind.InspectCards:
+                    // 【K15/K16/K11/P3·H】多目标逐槽选择 / 确认面板 / 模式分支"选择一项" / 数值输入框 / 检视（私密）：
+                    // 走通用决策面板的对应 Build* 分支（ChoicePromptPanel）。
+                    return false;
                 default:
                     return false;
             }
@@ -422,6 +432,61 @@ namespace Script.UI
             _onlineCombatWindowOpen = true;
             _activationSelectionBusy = true;
             GD.Print($"[ArenaOl] 调查对抗窗口已打开（地区{req.AreaNo}，待分配 {cards.Count} 张）");
+            return true;
+        }
+
+        /// <summary>
+        /// 【P4·预测X】复用单机调查对抗分配窗口（`InvestigationWindow`）：把牌库顶 X 张拖到"牌库顶/牌库底"两区。
+        /// 与调查对抗的唯一差别：标题为"预测X"、**不抽牌**。
+        /// 待分配的 X 张必须随请求下发（`OptionCardRefs`，决策等待期间服务端不推快照），否则退回通用决策面板。
+        /// 回包语义与调查对抗一致：`SelectedUids` = 置于牌库顶的牌（有序），其余按原序置底（服务端权威结算）。
+        /// </summary>
+        private bool OpenOnlinePredictionWindow(Script.Net.ChoiceRequest req)
+        {
+            var win = LoadWindowScene<InvestigationWindow>(ref _investigationWindowScene, "res://Scenes/CombatResolution/InvestigationWindow.tscn");
+            if (win == null) return false;
+
+            var cards = new List<CardInstance>();
+            var clientCardMgr = _matchClient?.ClientCardManager;
+            if (clientCardMgr != null && req.OptionCardRefs != null)
+            {
+                foreach (var r in req.OptionCardRefs)
+                {
+                    if (r == null) continue;
+                    var inst = clientCardMgr.RebuildFromRef(r);
+                    if (inst != null) cards.Add(inst);
+                }
+            }
+            if (cards.Count == 0)
+            {
+                GD.PrintErr("[ArenaOl] 预测窗口：未拿到待分配牌（请求缺 OptionCardRefs），退回通用决策面板");
+                win.QueueFree();
+                return false;
+            }
+
+            AddChild(win);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 150);
+            win.Popup();
+            win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
+            win.Configure(req.PlayerId, 0, cards,
+                (pid, toTop, toBottom) =>
+                {
+                    var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
+                    if (toTop != null) foreach (var c in toTop) if (c != null) res.SelectedUids.Add(c.UID);
+                    _matchClient?.SendChoiceResult(res);
+                    _onlineInvestigationWindow = null;
+                    _onlineCombatWindowOpen = false;
+                    _activationSelectionBusy = false;
+                    GD.Print($"[ArenaOl] 预测置顶已回包：牌库顶 {res.SelectedUids.Count} 张");
+                },
+                (pid, count) => { /* 预测不是抽牌：联机同样不抽牌 */ },
+                $"预测{cards.Count}：将任意数量置于牌库顶（其余置于牌库底）");
+
+            _onlineInvestigationWindow = win;
+            _onlineCombatWindowOpen = true;
+            _activationSelectionBusy = true;
+            GD.Print($"[ArenaOl] 预测窗口已打开（待分配 {cards.Count} 张）");
             return true;
         }
 
@@ -1972,10 +2037,14 @@ namespace Script.UI
             }
             else
             {
-                // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类，与单机一致）
+                // 候选：争夺区角色 + 附属区附属 + 秘社 + 资产区 + 墓地（覆盖事务卡可能的目标种类，与单机/LegalityProjection 一致）
                 var candidates = new List<CardInstance>(zone.GetZoneCards(CardZone.AreaZone, 0));
                 candidates.AddRange(zone.GetZoneCards(CardZone.AttachedZone, 0));
                 candidates.AddRange(zone.GetZoneCards(CardZone.CouncilZone, 0));
+                candidates.AddRange(zone.GetZoneCards(CardZone.AssetZone, 1));
+                candidates.AddRange(zone.GetZoneCards(CardZone.AssetZone, 2));
+                candidates.AddRange(zone.GetZoneCards(CardZone.Graveyard, 1));
+                candidates.AddRange(zone.GetZoneCards(CardZone.Graveyard, 2));
 
                 foreach (var t in candidates)
                 {
@@ -2254,8 +2323,10 @@ namespace Script.UI
             return _activateLegalUids.Contains(hit.Instance.UID) ? hit.Instance.UID : null;
         }
 
-        /// <summary>客户端按快照投影的费用修正计算某张卡的减费额（匹配规则与服务端 GetCostModification 一致：
-        /// FilterText 空=全匹配；否则卡名含 FilterText 或 Organization == FilterText）。纯展示，不参与结算。</summary>
+        /// <summary>客户端按快照投影的费用修正计算某张卡的减费额。
+        /// 【P1·同一判定】匹配规则改调服务端同一份 `CostModFilter.Matches`（旧语义：卡名含/组织等；
+        /// 扩展语义：组织:/子类别:/域:/有域图标），避免"客户端显示 -1、服务端按 -0 结算"的两套逻辑。
+        /// 纯展示，不参与结算。</summary>
         private int ComputeClientCostMod(CardInstance inst)
         {
             var mods = _matchClient?.ClientCostMods;
@@ -2265,9 +2336,7 @@ namespace Script.UI
             foreach (var m in mods)
             {
                 if (m == null || m.PlayerId != inst.ControllerId) continue;
-                if (string.IsNullOrEmpty(m.FilterText)
-                    || (!string.IsNullOrEmpty(tmpl.CardName) && tmpl.CardName.Contains(m.FilterText))
-                    || (!string.IsNullOrEmpty(tmpl.Organization) && tmpl.Organization == m.FilterText))
+                if (Script.Manager.CostModFilter.Matches(m.FilterText, inst, tmpl.CardName, tmpl.Organization))
                     total += m.Amount;
             }
             return total;
@@ -2578,6 +2647,14 @@ namespace Script.UI
             if (IsSorceryRequiringTarget(inst)
                 && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
             {
+                // 【K15·多目标】声明了 TargetSlots 的卡：客户端**不本地取目标**，只发"裸打出意图"，
+                // 由服务端逐槽下发 `MultiTargetSlot` 选择请求、最后下发 `ConfirmTargets` 确认（用户 2026-09 口径）。
+                if (IsMultiTargetCard(inst))
+                {
+                    _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid, "", "");
+                    GD.Print($"[ArenaOl] 【K15 多目标】上行 PlayCard（无目标，由服务端驱动逐槽选择+确认）: {tmpl.CardName}");
+                    return;
+                }
                 BeginOnlinePlayCardTargetSelection(inst);
                 return;
             }
@@ -2614,6 +2691,11 @@ namespace Script.UI
             if ((tmpl.CategoryFlag & CardCategory.Sorcery) == 0) return false;
             return tmpl.GetRequiresTarget();
         }
+
+        /// <summary>【K15】该卡是否声明了多目标槽位（由服务端驱动逐槽选择 + 确认面板）。</summary>
+        private static bool IsMultiTargetCard(CardInstance inst)
+            => inst?.PlayerTemplate is PlayerCardData tmpl
+            && Script.Manager.MultiTargetSlots.FindMultiTargetEffect(tmpl, Script.Data.Effects.EffectTiming.OnSorceryCast) != null;
 
         /// <summary>按卡模板 UID 推断卡图目录（与 CardUI/StackEntryUI 的规则一致）。</summary>
         private static string ResolvePlayerCardImagePath(string uid)

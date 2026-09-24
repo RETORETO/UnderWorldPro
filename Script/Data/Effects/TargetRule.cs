@@ -23,6 +23,12 @@ namespace Script.Data.Effects
         // —— 以下为静态属性筛选类（候选合法性 + 结算前丢失均可复用，无需快照比对）——
         NotStaticSubCategory, // 目标【静态模板】SubCategories 不含 Param（"非某类别"，如"非人类"）：含该子类别即不通过
         CostAtLeast,        // 目标【静态印刷费用】PlayerTemplate.Cost >= int.Parse(Param)（如"3"）：低于门槛即不通过
+        // ---- 【P1】新增精筛条件（均为静态/当前属性条件，故取目标阶段与结算复检都评估）----
+        CostAtMost,         // 目标【静态印刷费用】<= Param 门槛（如"2"）。Param 可单独写，也可按 '|' 分段
+        Tapped,             // 目标当前【已横置】（如 JC010「消灭目标已横置的角色」）
+        HasMagicDomainIcon, // 目标【具有魔法领域图标】（实例 MagicDomains 非空，回退模板；-1 哨兵=无领域，如 JC006）
+        Organization,       // 目标【静态】Organization == Param（阵营/组织筛选，如"王座会""国家机构""鸣钟教派"）
+        HasKeyword,         // 目标当前具有 Param 关键字（运行时授予 ∪ 模板固有，语义同 HasPublicKeyword）
         // —— 以下为目标动态属性筛选类（候选合法性用；结算前"属性变化"丢失已由版本号方案统一覆盖，无需快照比对）——
         // 注意：2026-08-11 起，原 ControllerChangedToEnemy/Friendly、SubCategoryGained/Lost 等"结算前变化"类枚举已删除——
         // 其语义（控制者/子类别变化即判丢失）现由 D16 版本号方案统一覆盖：任何控制者/子类别变化都会 BumpVersion ，
@@ -32,10 +38,31 @@ namespace Script.Data.Effects
                             // 【逻辑暂缓未实现】：需在 CardManager.MatchesRule 加此 case，
                             // 读 CardInstance 的战力字段（参考 CostAtLeast 写法，读 PlayerTemplate.Strength/CurrentStrength），
                             // 满足"有战力"才通过；结算前若失去战力（版本号方案会判丢失）无需额外处理。
-        AttachedToCharacterIfNoMind, // 条件式：资产区【无】【心】(心灵领域忠诚≥1) 时，目标须结附于角色；
-                            // 有【心】时此限制不生效（放行任意附属）。用于 JC005 裂解术：
+        AttachedToCharacterIfNoMind, // 条件式：资产区【无】【心】(心灵领域忠诚≥1) 时，目标须结附于角色；                            // 有【心】时此限制不生效（放行任意附属）。用于 JC005 裂解术：
                             // "消灭目标结附于角色的附属；若资产区有【心】则改为消灭目标附属"。
                             // 仅在【取目标(打出)阶段】评估（结算时不复检，见 TargetValidity.Check 规则）。
+        /// <summary>
+        /// 【P3】目标须是**结附于秘社**的附属（`AttachedTo` 是秘社实例）。
+        /// 用途：JC043 纵火狂「消灭目标**结附于秘社**或**本地区**上的附属」——与 `TargetSpec.SpecAlt` 组合表达 OR
+        /// （另一条用 `LocalZone`＝结附于本地区）。
+        /// </summary>
+        HostIsCouncil,
+        /// <summary>
+        /// 【P3】目标须是**直接结附于地区**的附属（无宿主：`AttachedTo == null`，挂在地区容器上）。
+        /// 与 `LocalZone` 组合即"结附于**本地区**的附属"；与 `HostIsCouncil` 一起用于 JC043 的两条 OR。
+        /// 注：结附于**角色**的附属其 `ZoneDetailId` 也是宿主所在地区，故单靠 `LocalZone` 无法区分
+        /// "结附于地区"与"结附于该地区的角色"——必须另有本限制。
+        /// </summary>
+        AttachedToArea,
+        /// <summary>
+        /// 【P3·K21】**目标须带有指定卡上标志**（`Param` = 标志名，如 `"锁定标志"`）——判定 `卡.Counters[标志名] ≥ 1`。
+        /// 用途：JC069 警犬「移动到一个具有**锁定标志**的角色/暗藏者所在的地区」；
+        /// JC122/JC123/JC124 的"具有锁定标志/哲人石标志的角色"同款筛选亦可复用。
+        /// 口径：只支持"至少一个"（数量门槛形式尚未登记）；**运行时标志**（`AddCounter`/`RemoveCounter` 即时生效），
+        /// 与 `TargetValidity.CheckRestrictions` 单一真相源共用 → 取目标与结算复检同一判定。
+        /// 注：卡上标志的增减**不**触发 `BumpVersion`，故"结算前标志被移除"由结算复检（同一 `CheckRestrictions`）兜住。
+        /// </summary>
+        HasCounter,
         // 未来扩展位（按需添加 case）：Tapped, Untapped, HasKeyword, HasAttribute, LoyaltyColor, Domain, StrengthAtLeast...
     }
 
@@ -47,6 +74,9 @@ namespace Script.Data.Effects
     public interface ITargetDesc
     {
         TargetKind Kind { get; }
+        /// <summary>【K14·或种类】第二个可接受的大类（`None` = 无）。卡文"目标附属**或**资产"这类**单目标二选一**用它表达：
+        /// 与 `Kind` 构成 OR（其余限制条件对两个大类同样适用）。打出规则的多条 `TargetRule` 是另一条 OR 通路。</summary>
+        TargetKind KindAlt { get; }
         bool NeedsSelection { get; }
         /// <summary>精筛条件列表（全部满足才通过）。空=仅按大类。校验链据此推导 IsLocalZone 等静态/位置类判定。</summary>
         Godot.Collections.Array<TargetRestriction> Restrictions { get; }
@@ -84,6 +114,7 @@ namespace Script.Data.Effects
 
         // ---- ITargetDesc 实现（玩家卡单目标，固定语义）----
         bool ITargetDesc.NeedsSelection => Kind != TargetKind.None;
+        TargetKind ITargetDesc.KindAlt => TargetKind.None;   // 打出规则以"多条 TargetRule"表达 OR，不使用 KindAlt
         bool ITargetDesc.IsLocalZone => Restrictions.Contains(TargetRestriction.LocalZone);
         bool ITargetDesc.IncludeCovert => IncludeCovert;
 

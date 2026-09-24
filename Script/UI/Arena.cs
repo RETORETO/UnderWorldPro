@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -625,6 +625,277 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             EffectEngine.Instance.ResolvePrepareUpkeep(source, payAmount, pay: canPay);
             Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
         }
+    }
+
+    /// <summary>
+    /// 【P2】弃牌 UI：让 `chooserPlayerId` 从候选手牌中选一张（候选属于 `discarderId`）。
+    /// 一般情形 chooser == discarder（自己弃自己的牌）；JC114 情形 chooser = 施术者（从对手手牌中指定）。
+    /// View 只负责"展示候选手牌 + 收集选择"，实际弃牌由 Controller 经回调执行（View 不写 Model）。
+    /// </summary>
+    public void PromptDiscard(int discarderId, int chooserPlayerId, System.Collections.Generic.List<CardInstance> candidates,
+        System.Action<CardInstance> onPicked)
+    {
+        // 弃牌 = 强制版通用选卡（必须选一张，不允许取消）。窗口细节统一收口在 PromptPickCard（单一实现）。
+        PromptPickCard(chooserPlayerId,
+            chooserPlayerId == discarderId ? "请选择要弃掉的手牌" : $"请从玩家{discarderId} 的手牌中指定一张弃掉",
+            candidates, allowCancel: false,
+            picked => { if (picked != null) onPicked?.Invoke(picked); });
+    }
+
+    /// <summary>
+    /// 【P2】通用选卡 UI：让 `chooserPlayerId` 从候选卡中选一张（封印取手牌 / 检索取牌 / 弃牌共用）。
+    /// View 只负责"展示候选 + 收集选择"，实际动作由 Controller 经回调执行（View 不写 Model）。
+    /// </summary>
+    public void PromptPickCard(int chooserPlayerId, string prompt, System.Collections.Generic.List<CardInstance> candidates,
+        bool allowCancel, System.Action<CardInstance> onPicked)
+    {
+        if (candidates == null || candidates.Count == 0)
+        {
+            // 无候选：视为"不选"（检索"没找到"的唯一合法结果；弃牌侧调用方已保证候选非空）
+            GD.Print($"[Arena] PromptPickCard 无候选（{prompt}）→ 回调 null");
+            onPicked?.Invoke(null);
+            return;
+        }
+        var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+        if (win == null)
+        {
+            // 无窗口兜底：由 Controller 侧的确定性兜底继续（不在此处写 Model）
+            GD.Print("[Arena] PromptPickCard 无可用窗口，交由 Controller 兜底");
+            onPicked?.Invoke(allowCancel ? null : candidates[0]);
+            return;
+        }
+
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+        foreach (var c in candidates)
+        {
+            if (c == null) continue;
+            var captured = c;
+            items.Add(new ActivationChoiceItem
+            {
+                Label = captured.PlayerTemplate?.CardName ?? captured.UID,
+                OnChosen = () => onPicked?.Invoke(captured),
+            });
+        }
+        // allowCancel=false：必须选一张才能继续（点窗外/取消均不允许）
+        win.ForceChoice = !allowCancel;
+        win.CustomTitle = string.IsNullOrEmpty(prompt) ? null : prompt;
+        win.Init(items);
+        AddChild(win);
+        win.PopupCentered();
+    }
+
+    /// <summary>
+    /// 【P4·遏制X】UI：让**被遏制者**从场上各地区中选择一处移除 1 个本方势力标志。
+    /// 语义（用户规则）：`X &lt; 该玩家标记总数` 时由被遏制者按地区分配，**每地区上限＝该地区标记数**；
+    /// 因此 Controller（`CurbRule`）**逐次**询问（每次 1 个），本方法只负责"展示候选 + 收集选择"。
+    /// X ≥ 总数时不会走到这里（自动全清、不弹窗）。
+    /// View 只回传选中的地区 UID，实际移除由 Controller 在回调内落地（View 不写 Model）。
+    /// </summary>
+    public void PromptCurbMarks(int curbedPlayerId, int remaining,
+        System.Collections.Generic.List<CurbMarkOption> options, System.Action<string> onPickedAreaUid)
+    {
+        if (options == null || options.Count == 0)
+        {
+            onPickedAreaUid?.Invoke(null);
+            return;
+        }
+        var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+        if (win == null)
+        {
+            // 无窗口兜底：交回 Controller 走确定性分配
+            GD.Print("[Arena] PromptCurbMarks 无可用窗口，交由 Controller 兜底");
+            onPickedAreaUid?.Invoke(null);
+            return;
+        }
+
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+        foreach (var o in options)
+        {
+            if (o == null) continue;
+            var captured = o;
+            items.Add(new ActivationChoiceItem
+            {
+                Label = $"地区{captured.SlotIndex}（可移除 {captured.Removable}）",
+                OnChosen = () => onPickedAreaUid?.Invoke(captured.AreaUid),
+            });
+        }
+        // 强制选择：遏制分配给被遏制者本人，必须选一处（不取消/点窗外不关闭）
+        win.ForceChoice = true;
+        win.CustomTitle = $"遏制{remaining}：请选择要移除本方势力标志的地区";
+        win.Init(items);
+        AddChild(win);
+        win.PopupCentered();
+    }
+
+    /// <summary>
+    /// 【P4·预测X】UI：把"牌库顶 X 张"交给预测者分配置顶/置底。
+    /// 复用口径（用户指定）：**直接复用调查对抗分配窗口**（`InvestigationWindow`：拖到"牌库顶/牌库底"两区，
+    /// 同一区内左右顺序即置回顺序）；差别只有：标题改为"预测X"、**不抽牌**、牌由 Controller 取出/置回。
+    /// View 只负责展示与收集分配，置回由 Controller 经回调统一落地（View 不写 Model）。
+    /// 无窗口时回调 (null, cards) → Controller 走确定性兜底（原序全部留在牌库顶）。
+    /// </summary>
+    public void PromptPrediction(int predictorId, int count, System.Collections.Generic.List<CardInstance> cards,
+        System.Action<System.Collections.Generic.List<CardInstance>, System.Collections.Generic.List<CardInstance>> onConfirmed)
+    {
+        if (cards == null || cards.Count == 0) { onConfirmed?.Invoke(null, cards); return; }
+        var win = _investigationWindowScene?.Instantiate<InvestigationWindow>();
+        if (win == null)
+        {
+            GD.Print("[Arena] PromptPrediction 无可用窗口，交由 Controller 兜底");
+            onConfirmed?.Invoke(null, cards);
+            return;
+        }
+        AddChild(win);
+        var vpSize = GetViewport().GetVisibleRect().Size;
+        win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
+        win.Popup();
+        win.Configure(predictorId, 0, cards,
+            (pid, toTop, toBottom) => onConfirmed?.Invoke(toTop, toBottom),
+            (pid, n) => { /* 预测不是抽牌：不执行任何抽牌 */ },
+            $"预测{count}：将任意数量置于牌库顶（其余置于牌库底）");
+    }
+
+    /// <summary>
+    /// 【K15·多目标】UI：**逐槽取目标 → 确认面板 → 确认后交回 Controller**（用户 2026-09 口径）。
+    ///  · 每处理一个槽都**重新**向 Controller 索取候选（`candidatesForSlot`）——地区槽先选，
+    ///    卡槽候选随之排除"已在目标地区内的角色"（FAQ 禁止原地移动）；
+    ///  · 可留空的槽提供"不选（留空）"项；任何时候都能"取消（不打出）"→ `onConfirmed(null)`；
+    ///  · 全部槽处理完 → **确认面板**列出已选目标：`确认（加入堆叠）` / `取消（不打出）`；
+    ///  · View 只收集选择；合法性复检、付费、入堆叠一律由 Controller（`TurnManager.PlayCard`）执行。
+    /// </summary>
+    public void PromptMultiTargets(CardInstance source, Script.Data.Effects.EffectData data,
+        System.Func<int, System.Collections.Generic.List<TargetChoice>, SlotCandidates> candidatesForSlot,
+        System.Action<System.Collections.Generic.List<TargetChoice>> onConfirmed)
+    {
+        if (data?.TargetSlots == null || data.TargetSlots.Count == 0)
+        {
+            onConfirmed?.Invoke(null);
+            return;
+        }
+        var choices = new System.Collections.Generic.List<TargetChoice>();
+        for (int i = 0; i < data.TargetSlots.Count; i++) choices.Add(TargetChoice.Empty);
+        int slotCount = data.TargetSlots.Count;
+
+        AskSlot(0);
+
+        void AskSlot(int index)
+        {
+            if (index >= slotCount) { Confirm(); return; }
+            var cand = candidatesForSlot?.Invoke(index, choices);
+            string label = (cand != null && !string.IsNullOrEmpty(cand.Label))
+                ? cand.Label : MultiTargetSlots.SlotLabel(data, index);
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            if (cand != null && cand.IsArea)
+            {
+                foreach (var uid in cand.AreaUids)
+                {
+                    var captured = uid;
+                    items.Add(new ActivationChoiceItem
+                    {
+                        Label = $"地区{_areaManager?.GetSlotIndex(captured) ?? 0}",
+                        OnChosen = () => { choices[index] = TargetChoice.Area(captured); AskSlot(index + 1); },
+                    });
+                }
+            }
+            else if (cand != null)
+            {
+                foreach (var c in cand.Cards)
+                {
+                    if (c == null) continue;
+                    var captured = c;
+                    items.Add(new ActivationChoiceItem
+                    {
+                        Label = captured.PlayerTemplate?.CardName ?? captured.UID,
+                        OnChosen = () => { choices[index] = TargetChoice.Card(captured.UID); AskSlot(index + 1); },
+                    });
+                }
+            }
+            // 可留空的槽：给出"不选"出口（卡文"和/或"）
+            if (cand == null || cand.Optional)
+            {
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = "不选（留空）",
+                    OnChosen = () => { choices[index] = TargetChoice.Empty; AskSlot(index + 1); },
+                });
+            }
+            items.Add(new ActivationChoiceItem
+            {
+                Label = "取消（不打出）",
+                OnChosen = () => onConfirmed?.Invoke(null),
+            });
+            OpenChoiceWindow($"选择{label}（第 {index + 1}/{slotCount} 个目标槽）", items, force: true);
+        }
+
+        void Confirm()
+        {
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>
+            {
+                new ActivationChoiceItem
+                {
+                    Label = "确认（加入堆叠）",
+                    OnChosen = () => onConfirmed?.Invoke(choices),
+                },
+                new ActivationChoiceItem
+                {
+                    Label = "取消（不打出）",
+                    OnChosen = () => onConfirmed?.Invoke(null),
+                },
+            };
+            OpenChoiceWindow($"确认目标：{MultiTargetSlots.Describe(data, choices, _cardManager)}", items, force: true);
+        }
+    }
+
+    /// <summary>
+    /// 【K11·可选支付 / 数值输入】UI：弹出**数值输入框**（输入 N → 确认/取消）。
+    /// 口径（用户 2026-09）：输入的数字即为 N；取消/不支付 → 回调 -1。
+    /// View 只收集数字；扣费与后续动作由 Controller 执行（View 不写 Model）。
+    /// </summary>
+    public void PromptNumberInput(int chooserPlayerId, string prompt, int min, int max, int defaultValue,
+        string confirmLabel, string cancelLabel, System.Action<int> onChosen)
+    {
+        var win = new NumberInputWindow();
+        win.Init(prompt, min, max, defaultValue, confirmLabel, cancelLabel);
+        win.OnConfirmed = value => onChosen?.Invoke(value);
+        AddChild(win);
+        win.PopupCentered();
+    }
+
+    /// <summary>
+    /// 【K16·模式分支】UI：把"选择一项"列成按钮让玩家选定（**付费之前**）。
+    /// View 只收集选择（回传下标；取消 = -1），付费/入堆叠由 Controller 执行（View 不写 Model）。
+    /// </summary>
+    public void PromptEffectMode(CardInstance source, Script.Data.Effects.EffectData data, System.Action<int> onChosen)
+    {
+        if (data?.Modes == null || data.Modes.Count == 0) { onChosen?.Invoke(-1); return; }
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+        for (int i = 0; i < data.Modes.Count; i++)
+        {
+            int captured = i;
+            items.Add(new ActivationChoiceItem
+            {
+                Label = data.Modes[i]?.Label ?? $"选项{captured + 1}",
+                OnChosen = () => onChosen?.Invoke(captured),
+            });
+        }
+        items.Add(new ActivationChoiceItem { Label = "取消（不打出）", OnChosen = () => onChosen?.Invoke(-1) });
+        OpenChoiceWindow($"{source?.PlayerTemplate?.CardName}：选择一项", items, force: true);
+    }
+
+    /// <summary>【K15】用通用选择窗展示一组按钮项（多目标逐槽选择 / 确认面板共用）。</summary>
+    private void OpenChoiceWindow(string title, System.Collections.Generic.List<ActivationChoiceItem> items, bool force)
+    {
+        var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+        if (win == null)
+        {
+            GD.Print($"[Arena] OpenChoiceWindow 无可用窗口（{title}）");
+            return;
+        }
+        win.ForceChoice = force;
+        win.CustomTitle = title;
+        win.Init(items);
+        AddChild(win);
+        win.PopupCentered();
     }
 
     /// <summary>退出场景时反订阅全部逻辑层/静态事件，避免残留回调访问已释放节点。</summary>
@@ -1317,7 +1588,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 {
                     return;
                 }
-                _actionService.ActivateAbility(inst, ability, null);
+                BeginActivate(inst, ability, null, -1);
                 RefreshActivateHighlights();
                 return;
             }
@@ -1334,7 +1605,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             {
                 if (opt?.EffectDataList == null || opt.EffectDataList.Count == 0) return;
                 // 取第一个 EffectData 发动（本秘社两选项均单一 EffectData、无目标）
-                _actionService.ActivateAbility(inst, opt.EffectDataList[0], null);
+                BeginActivate(inst, opt.EffectDataList[0], null, -1);
                 RefreshActivateHighlights();
             });
         }
@@ -1376,11 +1647,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     return;
                 if (only.Target is { NeedsSelection: true })
                 {
-                    BeginAttachmentActivateWithTarget(inst, only);
+                    BeginActivateWithTarget(inst, only);
                 }
                 else
                 {
-                    _actionService.ActivateAbility(inst, only, null);
+                    BeginActivate(inst, only, null, -1);
                     RefreshActivateHighlights();
                 }
                 return;
@@ -1412,10 +1683,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         if (items[idx].Disabled) return;
                         var ab = abilities[idx];
                         if (ab.Target is { NeedsSelection: true })
-                            BeginAttachmentActivateWithTarget(inst, ab);
+                            BeginActivateWithTarget(inst, ab);
                         else
                         {
-                            _actionService.ActivateAbility(inst, ab, null);
+                            BeginActivate(inst, ab, null, -1);
                             RefreshActivateHighlights();
                         }
                     }
@@ -1426,12 +1697,145 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             win.PopupCentered();
         }
 
+        /// <summary>
+        /// 【K22】"**牺牲一个角色**"作代价：先弹选择窗让**发动者自己选**被牺牲的角色，选完再发动
+        /// （把选定 UID 一并交给 Controller 复检/支付代价）。候选＝`ActivateEligibility.GetSacrificeCandidates`
+        /// （与权威复检同源：本方争夺区、非暗藏者除非卡文允许、子类别/本地区/排除自身等筛选）。
+        /// </summary>
+        private void BeginActivateWithSacrifice(CardInstance inst, EffectData ability, CardInstance target, int targetPlayerId, string areaUid = null)
+        {
+            var candidates = Script.Manager.ActivateEligibility.GetSacrificeCandidates(inst, ability);
+            if (candidates.Count == 0)
+            {
+                GD.PrintErr($"[Arena] 牺牲代价无候选：{ability.EffectId}");
+                return;
+            }
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (var c in candidates)
+            {
+                var picked = c;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"牺牲 {picked.PlayerTemplate?.CardName}",
+                    OnChosen = () =>
+                    {
+                        _actionService.ActivateAbility(inst, ability, target, targetPlayerId, picked.UID, areaUid);
+                        RefreshActivateHighlights();
+                    }
+                });
+            }
+            items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = () => { } });
+            OpenChoiceWindow("选择要牺牲的角色", items, force: true);
+        }
+
+        /// <summary>
+        /// 【P3·K22】发动激活能力的**统一入口**（View 侧）：带"牺牲一个角色"代价的效果先走选择窗
+        /// （`BeginActivateWithSacrifice`，由**发动者自己选**）；其余直接透传 Controller。
+        /// 所有激活分派路径（双击/选框/拖拽落点）都经此处，避免漏接线导致"有代价的能力按兜底候选发动"。
+        /// </summary>
+        private void BeginActivate(CardInstance inst, EffectData ability, CardInstance target, int targetPlayerId)
+        {
+            if (inst == null || ability == null) return;
+            // 【K15】需要"目标地区"的激活能力：先（若还没选卡目标就先选卡目标）→ 再弹**地区选择窗** →
+            // 最后把 (卡目标, 目标地区) 一并交给 Controller。用户口径与既有"入堆叠时锁定目标"一致。
+            if (ability.NeedsAreaTarget)
+            {
+                BeginActivateAreaSelection(inst, ability, target, targetPlayerId);
+                return;
+            }
+            if (ability.SacrificeCost != null)
+            {
+                BeginActivateWithSacrifice(inst, ability, target, targetPlayerId);
+                return;
+            }
+            _actionService.ActivateAbility(inst, ability, target, targetPlayerId);
+            RefreshActivateHighlights();
+        }
+
+        /// <summary>【K15】为需要"目标地区"的激活能力弹地区选择窗（候选＝`ActivateEligibility.GetAreaTargetCandidates`，
+        /// 已按 `AreaTargetExcludesCardArea` 排除卡目标当前所在地＝JC117"不能原地移动"）。</summary>
+        private void BeginActivateAreaSelection(CardInstance inst, EffectData ability, CardInstance cardTarget, int targetPlayerId)
+        {
+            var areas = Script.Manager.ActivateEligibility.GetAreaTargetCandidates(inst, ability, cardTarget);
+            if (areas.Count == 0)
+            {
+                GD.PrintErr($"[Arena] 无合法目标地区：{ability.EffectId}");
+                return;
+            }
+            _triggerCoordinator.RequestActivateTargetSelection(
+                inst.PlayerTemplate?.CardName ?? "激活效果",
+                true,                                   // isArea：走地区槽位选择
+                areas,
+                uid =>
+                {
+                    if (string.IsNullOrEmpty(uid)) return;
+                    if (ability.SacrificeCost != null)
+                        BeginActivateWithSacrifice(inst, ability, cardTarget, targetPlayerId, uid);   // 代价选择仍在 Controller 侧完成（目标地区一并带走）
+                    else
+                        _actionService.ActivateAbility(inst, ability, cardTarget, targetPlayerId, null, uid);
+                    RefreshActivateHighlights();
+                });
+        }
+
         /// <summary>生成单条激活效果在选框中的简短描述（优先 FaqNote，回退 EffectId）。</summary>
         private static string GetActivationAbilityLabel(CardInstance inst, EffectData ability)
         {
             if (!string.IsNullOrEmpty(ability.FaqNote)) return ability.FaqNote;
             if (!string.IsNullOrEmpty(ability.EffectId)) return ability.EffectId;
             return "激活效果";
+        }
+
+        /// <summary>
+        /// 【K24】激活效果"取目标"的统一分派：**玩家目标**走独立选择窗口（`PromptPlayerTarget`），
+        /// 其余（角色/附属/地区/非争夺区牌堆）沿用既有选目标窗。
+        /// </summary>
+        private void BeginActivateWithTarget(CardInstance inst, EffectData ability)
+        {
+            if (Script.Manager.PlayerTargetPool.IsPlayerSpec(ability.Target))
+                BeginActivateWithPlayerTarget(inst, ability);
+            else
+                BeginAttachmentActivateWithTarget(inst, ability);
+        }
+
+        /// <summary>
+        /// 【K24·玩家目标】独立选择窗口：把候选玩家列成按钮后回传玩家号（取消 = -1）。
+        /// 玩家不是场上的卡节点（无法点选/拖拽表达），故必须有独立窗口（用户 2026-09 口径）；
+        /// View 只收集选择，合法性复检/付费/入堆叠由 Controller（`ActivateAbility` / 触发入栈）执行（View 不写 Model）。
+        /// 同时是 `IGameUIHooks.PromptPlayerTarget` 的实现（触发路径在入堆叠前经此取值）。
+        /// </summary>
+        public void PromptPlayerTarget(int chooserPlayerId, string prompt,
+            System.Collections.Generic.List<int> candidates, System.Action<int> onChosen)
+        {
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (int pid in candidates)
+            {
+                int captured = pid;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = Script.Manager.PlayerTargetPool.Describe(_playerManager, captured),
+                    OnChosen = () => onChosen?.Invoke(captured),
+                });
+            }
+            items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = () => onChosen?.Invoke(-1) });
+            OpenChoiceWindow(string.IsNullOrEmpty(prompt) ? "选择目标玩家" : prompt, items, force: true);
+        }
+
+        /// <summary>为"以玩家为目标"的激活效果弹独立选择窗（如 JC111 混沌蝴蝶，来源多为角色卡）。</summary>
+        private void BeginActivateWithPlayerTarget(CardInstance inst, EffectData ability)
+        {
+            var candidates = Script.Manager.PlayerTargetPool.Collect(ability.Target, inst.ControllerId, _playerManager);
+            if (candidates.Count == 0)
+            {
+                GD.PrintErr($"[Arena] 目标玩家无候选：{ability.EffectId}");
+                return;
+            }
+            string name = inst.PlayerTemplate?.CardName ?? "激活效果";
+            PromptPlayerTarget(inst.ControllerId, $"{name}：选择目标玩家", candidates, pid =>
+            {
+                if (pid <= 0) return;
+                BeginActivate(inst, ability, null, pid);
+                RefreshActivateHighlights();
+            });
         }
 
         /// <summary>为附属激活效果（有目标，如 JC012 ②横置角色）弹出选目标窗。选完后发动并牺牲来源。</summary>
@@ -1456,7 +1860,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 (uid) =>
                 {
                     var target = _cardManager.GetInstance(uid);
-                    _actionService.ActivateAbility(inst, ability, target);
+                    BeginActivate(inst, ability, target, -1);
                     RefreshActivateHighlights();
                 });
         }
@@ -1472,8 +1876,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (_cardManager == null || _zoneManager == null || _triggerCoordinator == null) return;
 
         // 弹窗前预校验费用（与 TurnManager.PlayCard 一致，含时效费用修正），不足则直接退回手牌、不弹选目标窗。
+        // 【P1】传实例：与 TurnManager.PlayCard 同一重载，保证"子类别:/域:/有域图标"类过滤串两端一致。
         int cost = sorcery.PlayerTemplate.Cost
-            - Script.Manager.EffectEngine.Instance.GetCostModification(playerId, sorcery.PlayerTemplate.CardName, sorcery.PlayerTemplate.Organization);
+            - Script.Manager.EffectEngine.Instance.GetCostModification(
+                playerId, sorcery, sorcery.PlayerTemplate.CardName, sorcery.PlayerTemplate.Organization);
         if (cost < 0) cost = 0;
         if (cost > 0 && _playerManager.GetAvailableMana(playerId) < cost)
         {
@@ -1483,11 +1889,47 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             return;
         }
 
+        // 【K16·模式分支】声明了 `Modes` 的卡（卡文"选择一项"）：先选模式（付费前）→ 取该模式目标 → 入堆叠。
+        var modeEffect = Script.Manager.MultiTargetSlots.FindModeEffect(
+            sorcery.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
+        if (modeEffect != null)
+        {
+            GD.Print($"[Arena] 【K16 模式分支】{sorcery.PlayerTemplate?.CardName}：进入选模式 + 取目标流程");
+            _actionService.BeginModeCardPlay(playerId, sorcery.UID);
+            hand.Remove(cardUI);
+            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
+            cardUI.CanDrag = false;
+            ArrangeAllCardsInternal();
+            UpdateTurnUIInternal();
+            return;
+        }
+
+        // 【K15·多目标】声明了 `EffectData.TargetSlots` 的事务卡（如 JC021）：
+        // 走"逐槽取目标 → 确认面板 → 确认后才入堆叠"的专用流程（Controller 收口 `BeginMultiTargetPlay`）。
+        var multiEffect = Script.Manager.MultiTargetSlots.FindMultiTargetEffect(
+            sorcery.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
+        if (multiEffect != null)
+        {
+            GD.Print($"[Arena] 【K15 多目标】{sorcery.PlayerTemplate?.CardName}：进入逐槽取目标 + 确认面板流程");
+            _actionService.BeginMultiTargetPlay(playerId, sorcery.UID);
+            // 成功与否由 Controller 经确认面板回调决定；此处只负责刷新手牌/堆叠显示
+            hand.Remove(cardUI);
+            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
+            cardUI.CanDrag = false;
+            ArrangeAllCardsInternal();
+            UpdateTurnUIInternal();
+            return;
+        }
+
         var validUids = new System.Collections.Generic.List<string>();
-        // 候选：争夺区角色 + 附属区附属 + 秘社（覆盖事务卡可能的目标种类）
+        // 候选：争夺区角色 + 附属区附属 + 秘社 + 资产区 + 墓地（覆盖事务卡可能的目标种类；与 LegalityProjection 同源）
         var candidates = new List<CardInstance>(_zoneManager.GetZoneCards(CardZone.AreaZone, 0));
         candidates.AddRange(_zoneManager.GetZoneCards(CardZone.AttachedZone, 0));
         candidates.AddRange(_zoneManager.GetZoneCards(CardZone.CouncilZone, 0));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.AssetZone, 1));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.AssetZone, 2));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.Graveyard, 1));
+        candidates.AddRange(_zoneManager.GetZoneCards(CardZone.Graveyard, 2));
 
         foreach (var t in candidates)
         {

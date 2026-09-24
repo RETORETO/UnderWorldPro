@@ -98,7 +98,29 @@ namespace Script.Manager
             { GameEvent.OnCounter,     EffectTiming.OnCounter },     // 反应：卡/效果被终止(Counter)时（触点 E6-TODO 反制原语；关联 T9/D-2）
             { GameEvent.OnCardLeft,    EffectTiming.OnCardLeft },    // 触发：非死亡离场时（回手/封印移除等；触点离场判定）
             { GameEvent.OnCombatWon,   EffectTiming.OnCombatWon },   // 触发：战斗对抗获胜时（触点 CombatManager.ResolveWinner → TriggerEmitPoints.OnCombatWon；条件 CombatWinnerIsSelf）
+            { GameEvent.OnPowerCombatEnded, EffectTiming.OnPowerCombatEnded }, // 【P3】触发：势力对抗结束时（触点 CombatManager 势力分支 → TriggerEmitPoints.PowerCombatEnded；声望用）
+            { GameEvent.OnInvestigationWon, EffectTiming.OnInvestigationWon }, // 【P3】触发：调查对抗获胜时（触点 CombatManager 调查分支 → TriggerEmitPoints.OnInvestigationWon；条件 WinnerIsSelfInSameArea）
+            { GameEvent.OnLatent,      EffectTiming.OnLatent },        // 【P3】触发：本卡被潜伏/翻面为暗藏者时（触点装配层 CovertChanged → TriggerEmitPoints.OnLatent；自身语义）
         };
+
+        /// <summary>
+        /// 【P3·K13】把一个"关键词触发模板"克隆成**本条收集专用**的 `EffectData`（并带上可辨识的 EffectId）。
+        /// 不能直接复用模板实例：模板是共享的（`KeywordEffects.RuntimeTriggerTemplates`），
+        /// 而 EffectId 会参与 K23 次数登记与日志辨识，逐次克隆避免相互污染。
+        /// </summary>
+        private static Script.Data.Effects.EffectData CloneKeywordTemplate(Script.Data.Effects.EffectData src, string effectId)
+            => new Script.Data.Effects.EffectData
+            {
+                EffectId = effectId,
+                Timing = src.Timing,
+                Forced = src.Forced,
+                Condition = src.Condition,
+                Target = src.Target,
+                Actions = src.Actions,
+                Duration = src.Duration,
+                RequireSourceVersionUnchanged = src.RequireSourceVersionUnchanged,
+                FaqNote = src.FaqNote,
+            };
 
         /// <summary>
         /// 总线入口：由 GameEventBus.Dispatch 在每次事件广播时调用。统一负责"事件→时机→收集触发"的匹配。
@@ -146,6 +168,9 @@ namespace Script.Manager
                 if (card == null) continue;
                 var tmpl = card.PlayerTemplate;
                 if (tmpl == null) continue;
+                // 【P3·K20】"印刷文本框视作空白"（JC101）：被屏蔽的卡**失去效果** → 其效果不参与触发收集。
+                // 口径（用户 2026-09）：**不影响已经发动的效果**——已在堆叠上的条目照常结算（本处只管"收集"）。
+                if (EE?.IsTextBlank(card) == true) continue;
 
                 // 规则1：触发源区判定——交由内层 foreach 对每个效果用 IsEffectActiveInZone 做效果粒度判定
                 // （方案C：附属卡默认仅 AttachedZone；角色卡仅 AreaZone；显式声明 Scope 的效果按声明）。
@@ -154,13 +179,24 @@ namespace Script.Manager
                 // 进场/现身例外（规则1.6）仍在 foreach 内单独保留（仅触发来源卡自身），勿在此重复写区判断。
 
                 var effectDataList = tmpl.EffectDataList ?? new Godot.Collections.Array<Script.Data.Effects.EffectData>();
+                // 【触发语义·场景校正】触发只判"条件是否满足过"，不看来源此刻身在何处：
+                // 当扫描到的正是"事件主体卡"（或事件本身无主体卡，如赢取地区）时，用上下文带来的
+                // **触发时区域**替代实时 CurrentZone 做生效区判定。覆盖两类必须成立的场景：
+                //   · 死亡触发：卡进入墓地之后才有窗口 → 角色卡（默认生效区=争夺区）不会被误杀；
+                //   · 进场即死：进场触发窗口打开时卡已在墓地 → 同样照常收集。
+                // 旁观者（反应类，如 XG001 看别人打出事务）不是事件主体，仍按实时区域判定。
+                bool isEventSubject = (ctx.SourceCard == null || card == ctx.SourceCard);
+                CardZone? zoneAtTrigger = isEventSubject ? ctx.SourceZoneAtTrigger : null;
+                // 【K13】本卡的"袭击"汇总：卡面自带袭击（通过校验者）之和 + 运行期授予的袭击点数
+                int strikeSum = 0;
+                Script.Data.Effects.EffectData strikeTemplate = null;
                 foreach (var data in effectDataList)
                 {
                     if (data == null) continue;
                     if (data.Timing != timing) continue;
                     // 方案C：触发效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                     // 显式声明 Scope 的效果按声明（如未来墓地/手牌触发）。不在此区则跳过该效果。
-                    if (EE == null || !EffectEngine.IsEffectActiveInZone(data, card))
+                    if (EE == null || !EffectEngine.IsEffectActiveInZone(data, card, zoneAtTrigger))
                     {
                         skippedZone++;
                         continue;
@@ -170,7 +206,9 @@ namespace Script.Manager
                     // 仅当触发源卡 == 事件来源卡时才收集——避免任意卡进场/现身误触发他人身上的进场/现身类效果
                     // （如：公路骑士现身误触发巨石阵看护人的 JC002）。反应类时机（OnCardPlayed/PlayedSorcery 等）
                     // 不在此限，仍对所有场上卡全局扫描。
-                    if ((evt == GameEvent.EnterTrigger || evt == GameEvent.UncoverTrigger) && card != ctx.SourceCard)
+                    // 【P3】"被潜伏/翻面时"(OnLatent) 同属**自身**语义（只有被潜伏的那张卡自己的效果成立）。
+                    if ((evt == GameEvent.EnterTrigger || evt == GameEvent.UncoverTrigger || evt == GameEvent.OnLatent)
+                        && card != ctx.SourceCard)
                     {
                         continue;
                     }
@@ -204,6 +242,29 @@ namespace Script.Manager
                         continue;
                     }
 
+                    // 【K1】动态值 X 预判（用户口径：X=0 时该效果**不算发动**）：
+                    // 在**收集阶段**就用事件上下文求值，为 0（或表达式未登记/依赖未实现）→ 不收集该触发。
+                    if (EE != null && !string.IsNullOrWhiteSpace(data.ValueExpr))
+                    {
+                        var st = EE.EvaluateDynamicValue(data, card, conditionCard, ctx.TargetAreaId,
+                            ctx.ExtraInt, out _, out string dynReason);
+                        if (st == EffectEngine.DynamicValueState.Blocked)
+                        {
+                            GD.Print($"[Trigger] ⏹ 动态值 X 不可用（EffectId={data.EffectId}, 来源={tmpl.CardName}）→ 不收集（不发动）：{dynReason}");
+                            continue;
+                        }
+                    }
+
+                    // 【K13·袭击数值叠加】"袭击X"不逐条收集：先把**通过校验**的袭击来源（卡面自带 ∪ 运行期授予）
+                    // 合并为一个触发（总和＝各来源之和 + 运行期授予的袭击点数）——见本卡循环结束后的合成。
+                    if (data.IsStrike)
+                    {
+                        strikeSum += data.StrikeAmount;
+                        strikeTemplate ??= data;
+                        GD.Print($"[Trigger] 袭击来源记入汇总：{tmpl.CardName} +{data.StrikeAmount}（当前合计 {strikeSum}）");
+                        continue;
+                    }
+
                     // 规则2：归属来源卡控制者（D32 修正：ControllerId 为窗口分组依据）
                     var inst = new StackEffectInstance
                     {
@@ -215,15 +276,128 @@ namespace Script.Manager
                         TargetCardUid = ctx.ContextCard?.UID ?? "",
                         HasValidTarget = true,
                         IsAreaTarget = isManeuver,   // 仅机动取目标地区
+                        // 【K1】本次事件携带的数量（供"X＝此次弃牌的数量"等求值）
+                        EventAmount = ctx.ExtraInt,
                         // 对抗获胜方玩家 ID 透传（"X对抗获胜"类触发：威名等）。
                         // 经 PushTriggerToStack 落入 StackEntry.WinnerId，最终 ResolveEffect(winnerId) 供 WinnerIsSelf 判定。
                         WinnerId = ctx.TriggeringPlayerId,
                         // 对抗获胜地区 UID 透传（Y 方案：威名等需要在收集阶段即按地区过滤的触发）。
                         // 经 PushTriggerToStack 落入 StackEntry.TargetAreaId，最终供 WinnerInSameArea 判定。
                         TargetAreaId = ctx.TargetAreaId,
+                        // 【触发语义】"触发时所在地区"（死亡=死亡时所处地区 / 进场=进入的地区 / 赢取=被赢取地区）：
+                        // 供"本地区"取候选与结算复检使用，避免用已离场来源的 null ZoneDetailId 当基准。
+                        SourceAreaAtTrigger = isEventSubject ? ctx.SourceAreaAtTrigger : null,
                     };
                     collected.Add(inst);
                     GD.Print($"[Trigger] 触发收集: EffectId={data.EffectId}, 来源={tmpl.CardName}, 控制者=P{card.ControllerId}, 事件={evt}");
+                }
+
+                // 【K13·袭击合成】本卡的袭击来源（自带 ∪ 授予）汇总后**只收集一个**触发，伤害＝总和。
+                // 用户 2026-09 口径：多个袭击同时存在时**数值叠加**（已有袭击1 被授予袭击1 → 变为袭击2）。
+                // 仅在"现身触发"且该卡是事件主体时合成（现身袭击＝该角色自己现身）。
+                if (timing == EffectTiming.UncoverTrigger && card == ctx.SourceCard)
+                {
+                    int grantedStrike = card.GetAttribute("袭击");   // 运行期授予（如 JC038 光环）
+                    int totalStrike = strikeSum + grantedStrike;
+                    if (totalStrike > 0)
+                    {
+                        var baseData = strikeTemplate ?? Script.Data.Effects.KeywordEffects.Strike(1);
+                        var merged = Script.Data.Effects.KeywordEffects.StrikeWithAmount(baseData, totalStrike);
+                        collected.Add(new StackEffectInstance
+                        {
+                            UID = Guid.NewGuid().ToString("N"),
+                            Source = card,
+                            OwnerPlayerId = card.ControllerId,
+                            ControllerId = card.ControllerId,
+                            EffectDataRef = merged,
+                            TargetCardUid = ctx.ContextCard?.UID ?? "",
+                            HasValidTarget = true,
+                            IsAreaTarget = false,
+                            EventAmount = ctx.ExtraInt,
+                            WinnerId = ctx.TriggeringPlayerId,
+                            TargetAreaId = ctx.TargetAreaId,
+                            SourceAreaAtTrigger = ctx.SourceAreaAtTrigger,
+                        });
+                        GD.Print($"[Trigger] 【K13 袭击叠加】{tmpl.CardName}：自带 {strikeSum} + 授予 {grantedStrike} = **袭击{totalStrike}**（合并为一个触发）");
+                    }
+                }
+
+                // 【P3·K13】运行期授予的**触发类关键词**参与触发收集（如 JC024 授予的【机动】、JC089 授予的【威名】）：
+                // 卡面固有的关键词由上面的 `EffectDataList` 扫描收集；运行期授予的没有对应 EffectData，
+                // 故在此**合成**该关键词的触发形态模板（`KeywordEffects.RuntimeTriggerTemplates`），
+                // 并复用同一套判定（生效区 / 暗藏模式 / 条件）。卡面已固有该关键词时跳过（避免与上方扫描重复）。
+                foreach (var kv in Script.Data.Effects.KeywordEffects.RuntimeTriggerTemplates())
+                {
+                    var template = kv.Value;
+                    if (template == null || template.Timing != timing) continue;
+                    if (!card.HasKeyword(kv.Key)) continue;                    // 未被授予（运行期关键字集合）
+                    if (tmpl.HasInherentKeyword(kv.Key)) continue;             // 卡面固有 → 已由上方扫描收集
+                    if (!EffectEngine.IsEffectActiveInZone(template, card, zoneAtTrigger)) { skippedZone++; continue; }
+                    if (template.TriggerCovertMode == CovertTriggerMode.FaceUp && card.IsCovert) continue;
+                    if (template.TriggerCovertMode == CovertTriggerMode.CovertOnly && !card.IsCovert) continue;
+                    if (EE == null || !EE.EvaluateCondition(template.Condition?.Predicate, card, conditionCard,
+                            conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId))
+                    {
+                        skippedCond++;
+                        continue;
+                    }
+                    var synth = CloneKeywordTemplate(template, $"Keyword_{kv.Key}");
+                    collected.Add(new StackEffectInstance
+                    {
+                        UID = Guid.NewGuid().ToString("N"),
+                        Source = card,
+                        OwnerPlayerId = card.ControllerId,
+                        ControllerId = card.ControllerId,
+                        EffectDataRef = synth,
+                        TargetCardUid = ctx.ContextCard?.UID ?? "",
+                        HasValidTarget = true,
+                        IsAreaTarget = (timing == EffectTiming.ManeuverTrigger),   // 机动＝取目标地区
+                        EventAmount = ctx.ExtraInt,
+                        WinnerId = ctx.TriggeringPlayerId,
+                        TargetAreaId = ctx.TargetAreaId,
+                        SourceAreaAtTrigger = isEventSubject ? ctx.SourceAreaAtTrigger : null,
+                    });
+                    GD.Print($"[Trigger] 【K13 关键词触发】{tmpl.CardName}：运行期授予的【{kv.Key}】按 `{timing}` 收集");
+                }
+            }
+
+            // 【P3·一次性待触发承诺】把"本回合中，当你…下一次…时，你可以…"类承诺在**时机出现时**兑现一次：
+            // 承诺由 `EffectEngine.RegisterPending` 登记（效果声明 `EffectData.Pending`），此处按
+            // "时机一致 ∧ 归属玩家 == 本次事件相关玩家"取用，并**立即消费**（"下一次"只兑现一次；
+            // 与玩家最终是否执行动作无关）。兑现出来的触发与普通触发**同一条管线**（排序窗 → 入堆叠 → 让过 → 结算）。
+            var pendings = EE?.CollectPending(timing, ctx.TriggeringPlayerId);
+            if (pendings != null)
+            {
+                foreach (var rec in pendings)
+                {
+                    var spec = rec.Spec;
+                    if (spec?.Actions == null || spec.Actions.Count == 0) { EE.ConsumePending(rec); continue; }
+                    var pendingData = new Script.Data.Effects.EffectData
+                    {
+                        EffectId = $"Pending_{timing}_{rec.Source?.UID}",
+                        Timing = timing,
+                        Condition = new Script.Data.Effects.EffectCondition { Predicate = "Always" },
+                        Target = new Script.Data.Effects.TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
+                        Actions = spec.Actions,
+                        Forced = !spec.Optional,          // 卡文"你可以" → 非强制（可在排序窗放弃）
+                        Duration = "瞬时",
+                        FaqNote = "一次性承诺兑现（本回合下一次…）",
+                    };
+                    collected.Add(new StackEffectInstance
+                    {
+                        UID = Guid.NewGuid().ToString("N"),
+                        Source = rec.Source,
+                        OwnerPlayerId = rec.ControllerId,
+                        ControllerId = rec.ControllerId,
+                        EffectDataRef = pendingData,
+                        TargetCardUid = ctx.ContextCard?.UID ?? "",
+                        HasValidTarget = false,
+                        IsAreaTarget = false,
+                        WinnerId = ctx.TriggeringPlayerId,
+                        TargetAreaId = ctx.TargetAreaId,
+                    });
+                    EE.ConsumePending(rec);
+                    GD.Print($"[Trigger] 📜 承诺兑现：{rec.Source?.PlayerTemplate?.CardName} 在「{timing}」时机（收集为触发）");
                 }
             }
 

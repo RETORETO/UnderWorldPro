@@ -28,8 +28,19 @@ namespace Script.Net.Godot
         }
 
         public void Pass(int playerId) => _service.Pass(playerId);
+
+        /// <summary>
+        /// 打出卡牌意图。**【K15·多目标】**先看该卡是否声明了多目标槽位：
+        /// 是且已注入输入网关 → 服务端接管（逐槽下发 `MultiTargetSlot` → `ConfirmTargets` → 入堆叠，异步）；
+        /// 否则走原有同步 `PlayCard`（单目标/无目标卡行为不变）。
+        /// </summary>
         public void PlayCard(int playerId, string cardUid, string targetUid, string targetCardUid)
-            => _service.PlayCard(playerId, cardUid, targetUid, targetCardUid);
+        {
+            // 【K16·模式分支】"选择一项"类卡：服务端接管（先下发选模式 → 再取该模式目标 → 入堆叠）
+            if (_service.TryBeginModeCardPlayOnline(playerId, cardUid)) return;
+            if (_service.TryBeginMultiTargetPlayOnline(playerId, cardUid)) return;
+            _service.PlayCard(playerId, cardUid, targetUid, targetCardUid);
+        }
         public void DeployCovert(int playerId, string cardUid, string areaUid)
             => _service.DeployCovert(playerId, cardUid, areaUid);
         public void RevealCovert(int playerId, string cardUid) => _service.RevealCovert(playerId, cardUid);

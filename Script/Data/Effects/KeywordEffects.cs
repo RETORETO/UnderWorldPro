@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Godot.Collections;
 using Script.Enums;
 
@@ -19,6 +19,30 @@ namespace Script.Data.Effects
     /// </summary>
     public static class KeywordEffects
     {
+        /// <summary>
+        /// 【P3·K13】"**触发类**关键词"→ 其触发形态的模板（供**运行期授予**的关键字参与触发收集）。
+        ///
+        /// 背景：卡面固有的关键词由卡脚本写进 `EffectDataList`，触发收集时自然扫到；
+        /// 而**运行期授予**的关键字（如 JC024 授予【机动】、JC089 授予【威名】）没有对应的 EffectData，
+        /// 收集阶段会漏掉它。`TriggerRegistry` 用本表在收集时**合成**该关键词的触发效果，
+        /// 与卡面效果走同一条收集路径（生效区 / 暗藏模式 / 条件判定都照常）。
+        ///
+        /// 只登记"关键词本身就等价于一条触发效果"的词：
+        ///  · `机动` → `ManeuverTrigger`（对抗前窗口，选择另一地区移动过去）；
+        ///  · `威名` → `OnCombatWon`（战斗对抗获胜，在本地区放置一个势力标志）。
+        /// 不在表内的（`袭击` 由收集阶段的**数值合并**单独处理；`声望` 由引擎级 `RenownRule` 统一消费）
+        /// 一律不经本通道，避免重复结算。
+        /// </summary>
+        private static readonly System.Collections.Generic.Dictionary<string, EffectData> _triggerTemplates = new()
+        {
+            { "机动", Maneuver() },
+            { "威名", WeiMing() },
+        };
+
+        /// <summary>见 <see cref="_triggerTemplates"/>：运行期授予的关键字 → 触发形态模板（只读遍历用）。</summary>
+        public static System.Collections.Generic.Dictionary<string, EffectData> RuntimeTriggerTemplates()
+            => _triggerTemplates;
+
         /// <summary>
         /// 机动（Maneuver）：对抗阶段开始时（ManeuverTrigger），选择另一地区并将角色移动过去。
         /// 对应卡文："机动（在对抗阶段开始时，你可以将该角色移动至另一个地区。）"
@@ -110,6 +134,8 @@ namespace Script.Data.Effects
             {
                 EffectId = "",   // 调用方按"卡号_序号_关键词"规范补写，如 "JC030_1_strike"
                 Timing = EffectTiming.UncoverTrigger,
+                IsStrike = true,          // 【K13】标记为"袭击"：收集阶段会把多个袭击来源合并为一个触发（数值叠加）
+                StrikeAmount = amount,
                 Condition = new EffectCondition { Predicate = "Always" },
                 Target = new TargetSpec
                 {
@@ -124,6 +150,33 @@ namespace Script.Data.Effects
                 },
                 Duration = "瞬时",
                 FaqNote = "现身进场成功后触发；仅能选择同一地区的敌方/友方角色目标，不包括附属与暗藏者。"
+            };
+        }
+
+        /// <summary>
+        /// 【K13】以既有"袭击"效果为模板，生成一个**伤害＝amount** 的袭击效果（用于把多个袭击来源合并为**一个**触发）。
+        /// 模板只提供目标声明/条件/时效等结构（如卡面自带袭击的 `TargetSpec`），动作被替换为 `DealDamage{amount}`。
+        /// </summary>
+        public static EffectData StrikeWithAmount(EffectData template, int amount)
+        {
+            var prototype = template ?? Strike(1);
+            return new EffectData
+            {
+                EffectId = (string.IsNullOrEmpty(prototype.EffectId) ? "袭击" : prototype.EffectId) + "_merged",
+                Timing = EffectTiming.UncoverTrigger,
+                IsStrike = true,
+                StrikeAmount = amount,
+                Condition = prototype.Condition ?? new EffectCondition { Predicate = "Always" },
+                Target = prototype.Target,
+                Actions = new Array<EffectAction>
+                {
+                    new EffectAction { Verb = ActionVerb.DealDamage, Args = new Array<string> { amount.ToString() } },
+                },
+                Duration = string.IsNullOrEmpty(prototype.Duration) ? "瞬时" : prototype.Duration,
+                Scope = prototype.Scope,
+                TriggerCovertMode = prototype.TriggerCovertMode,
+                RequireSourceVersionUnchanged = prototype.RequireSourceVersionUnchanged,
+                FaqNote = $"袭击{amount}（由卡面自带袭击与运行期授予的袭击**叠加**合并而来）",
             };
         }
 
@@ -164,6 +217,225 @@ namespace Script.Data.Effects
                 Forced = false,  // 非强制触发（威名=可选结算）
                 Duration = "瞬时",
                 FaqNote = "战斗对抗获胜后在本地区放置一个势力标志；同一控制者同一地区单次战斗只放置一个（D2 去重）；非强制。"
+            };
+        }
+
+        // ==================== 【P3】词条规则（2026-09 用户给出完整规则文本） ====================
+
+        /// <summary>
+        /// 【P3】隐匿（Stealth）= 持续关键字：**该角色不能从手牌付费正面打出到争夺区**。
+        /// 用户规则：仅限制"从手牌付费正面打出到争夺区"这一种方式；其他进入争夺区的方式（秘密派遣、效果放置…）不受限制。
+        /// 实现：授予 `Keyword="隐匿"`；`TurnManager.PlayCard` 与 `PlayerCardData.HasInherentKeyword` 双向判定
+        /// （印在卡面上的隐匿走"模板固有"，运行期授予的走 `HasKeyword`）。
+        /// </summary>
+        public static EffectData Stealth()
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.HandZone,   // 手牌期即需生效（打出门禁发生在手牌）
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：隐匿（不能从手牌付费正面打出到争夺区）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "隐匿", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】撤回（Withdraw）= 持续关键字：**一个地区被赢取时，拥有撤回能力的卡回到 OWNER 手牌，而不是牌库底**。
+        /// 实现：授予 `Keyword="撤回"`；由 `AreaManager.ResolveAreaWon` 的"步骤3 区内卡归位"分支消费
+        /// （带撤回的顶层卡、以及带撤回的附属卡，都改走 `返回手牌`）。
+        /// </summary>
+        public static EffectData Withdraw()
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：撤回（地区被赢取时回 OWNER 手牌而非牌库底）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "撤回", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】非资产（NonAsset）= 持续关键字：**拥有非资产效果的卡不能被用于【建立资产】基础行动**。
+        /// 例外：可以通过其他效果变为资产（形态转换为"成为资产"不在本词条范围内）。
+        /// 实现：授予 `Keyword="非资产"`；由 `TurnManager.EstablishAsset` 的门禁消费。
+        /// </summary>
+        public static EffectData NonAsset()
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.HandZone,   // 手牌期即需生效（建立资产是手牌 → 资产区的行动）
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：非资产（不能用于建立资产基础行动）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "非资产", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】屏障（Barrier）= 持续关键字：**不能被敌方卡牌或能力指定为目标**。
+        /// 用户补充：一张卡若先被效果/卡牌指定为目标、之后才获得屏障，则结算时视为目标不合法
+        /// （由 `TargetValidity.Check` 的结算复检天然覆盖）。
+        /// 实现：授予 `Keyword="屏障"`（或实例标记 `HasGuard`）；判定收口在 `TargetValidity` 一处，
+        /// 取目标阶段（`CardManager.MatchesRule/MatchesSpec`）与结算复检（`TargetValidity.Check`）共用同一实现。
+        /// </summary>
+        public static EffectData Barrier()
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：屏障（不能被敌方卡牌或能力指定为目标）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "屏障", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】杀伤 N（Kill）= 持续属性：**参与战斗对抗并获胜时，该次战斗对抗造成的可分配伤害 +N**；多个杀伤角色可累加。
+        /// 实现：授予 `Attribute="杀伤"` 计 N（属性通道随快照投影，客户端/服务端同解）；
+        /// `CombatManager` 在战斗对抗结算时把获胜方**本地区参与战斗的角色**的杀伤值求和，加到可分配伤害上。
+        /// </summary>
+        /// <param name="amount">杀伤点数（卡文"杀伤1"/"杀伤2"）。</param>
+        public static EffectData Kill(int amount = 1)
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = $"关键字：杀伤{amount}（参与战斗对抗并获胜时，可分配伤害 +{amount}）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Attribute", Value = "杀伤", Amount = amount }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】声望（Renown）= 触发效果（用户 2026-09 规则文本）：
+        /// **每个势力对抗结束后**，由该地区中**拥有较多声望角色的一方**触发，给该地区添加一个势力标志；
+        /// 多个声望角色在场也只添加一个（去重与威名同款）；**不依赖势力对抗获胜**。
+        /// 实现：`Timing = OnPowerCombatEnded`（新时机，CombatManager 势力分支广播，含平局）+
+        ///      条件谓词 `RenownMajority`（该卡控制者在该地区的声望角色数 **严格多于** 对手）+ `PlaceToken{势力标志,1,声望}`。
+        /// 口径（已确认）：声望角色**不要求未横置**、**不要求参与该次对抗**，只要在该地区即可；双方相等/均为 0 → 不触发。
+        /// </summary>
+        public static EffectData Renown()
+        {
+            return new EffectData
+            {
+                EffectId = "",   // 调用方按"卡号_序号_词缀"规范补写
+                Timing = EffectTiming.OnPowerCombatEnded,
+                Condition = new EffectCondition { Predicate = "RenownMajority" },
+                Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
+                Actions = new Array<EffectAction>
+                {
+                    // Args[2]="声望" 启用单次"势力对抗"维度去重（同一方多个声望只放一个标志）
+                    new EffectAction { Verb = ActionVerb.PlaceToken, Args = new Array<string> { "势力标志", "1", "声望" } }
+                },
+                Forced = false,   // "由拥有较多声望角色的一方触发"——非强制（可放弃）
+                Duration = "瞬时",
+                FaqNote = "每次势力对抗结束后，本地区声望角色较多的一方放置一个势力标志（多个声望只放一个）。"
+            };
+        }
+
+        /// <summary>
+        /// 【P4】声望的**关键字形式**（只授予 `Keyword="声望"`，不挂卡级触发）：
+        /// 「声望」的规则本体已由 `RenownRule.ApplyIfMajority` 在**势力对抗结束时**统一消费
+        /// （消费点 = `CombatManager` 的势力对抗结束分支；按该地区双方"声望角色"数量比较，较多的一方 +1 势力标志）。
+        /// `RenownRule.CountRenownCharacters` 读取的就是"运行期授予的 `声望` 关键字 ∪ 卡面固有"。
+        ///
+        /// ⚠️ 与 <see cref="Renown"/> 的区别：`Renown()` 是**卡级触发形式**（OnPowerCombatEnded + PlaceToken），
+        /// 与引擎级规则并存时会**各放一次**势力标志（重复 +2）。故卡面只印"声望"、且引擎级规则已开时，
+        /// 一律用本方法宣告关键字，不要用 `Renown()`。
+        /// </summary>
+        public static EffectData RenownKeyword()
+        {
+            return new EffectData
+            {
+                EffectId = "",   // 调用方按"卡号_序号_关键词"规范补写
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：声望（势力对抗结束后，本地区声望角色较多的一方 +1 势力标志）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "声望", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P4】领袖（Leader）= 持续关键字 + **规则级唯一性约束**（用户 2026-09 规则文本）：
+        /// **同一控制者在场上至多 1 个拥有【领袖】的角色**；一个领袖进场后若超限，**立刻**由该控制者
+        /// 选一个（含刚进场的那个）**牺牲**——该牺牲是规则性结算，**不入堆叠**、不可响应；
+        /// **进场触发照常生效**（进场触发在进场时已收集入堆叠，不因规则牺牲而撤销）。
+        /// 实现：授予 `Keyword="领袖"`；由 `LeaderRule.EnforceOnEntry` 在进场触点
+        /// （`ZoneManager.MoveToArea` → `OnCardEnteredArea`）消费；决策路径见 `LeaderRule`。
+        /// </summary>
+        public static EffectData Leader()
+        {
+            return new EffectData
+            {
+                EffectId = "",   // 调用方按"卡号_序号_关键词"规范补写
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "关键字：领袖（同一控制者在场上至多 1 个领袖；超限立刻选一个牺牲）",
+                Duration = "常驻",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "领袖", Amount = 1 }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 【P3】XX标志X（如"时间标志1""锁定标志1""哲人石标志1"）= **强制进场触发**：
+        /// 卡片进场后触发，给触发这个效果的卡**本身**添加 X 个 XX 标志。
+        /// 实现：`EnterTrigger` + `Forced=true` + `PlaceCounter{标志名, X, "自身"}`；
+        /// 经 `CardManager.AddCounter` 收口（广播 `OnMarkerPlaced`）。
+        /// </summary>
+        /// <param name="markerName">标志名（如"时间标志"）。</param>
+        /// <param name="amount">数量 X。</param>
+        public static EffectData Marker(string markerName, int amount = 1)
+        {
+            return new EffectData
+            {
+                Timing = EffectTiming.EnterTrigger,
+                Condition = new EffectCondition { Predicate = "Always" },
+                Target = new TargetSpec { NeedsSelection = false },
+                Actions = new Array<EffectAction>
+                {
+                    new EffectAction
+                    {
+                        Verb = ActionVerb.PlaceCounter,
+                        Args = new Array<string> { markerName, amount.ToString(), "自身" }
+                    }
+                },
+                Forced = true,   // "强制进场触发"
+                Duration = "瞬时",
+                FaqNote = $"进场后强制给本卡放置 {amount} 个{markerName}。"
             };
         }
     }

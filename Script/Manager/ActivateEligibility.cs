@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -29,19 +29,38 @@ namespace Script.Manager
 
             // 遍历场上卡，按"当前控制者"过滤（核心需求 / D28）：夺控场景下以 ControllerId 归属，
             // 而非 OwnerId，确保控制者才能发动其控制的卡。
-            var field = cm.GetAreaCards();
-            if (field == null) return result;
-
+            // 【K27】"**手牌行动**"：显式声明 `Scope = ZoneScope.HandZone` 的激活类效果可在**手牌**中发动
+            // （JC110「手牌行动4」）→ 候选扫描把该玩家的手牌也纳入（效果粒度生效区判定会筛掉其余手牌效果）。
+            var field = cm.GetAreaCards() ?? new List<CardInstance>();
+            var scan = new List<CardInstance>(field);
+            var handCards = cm.ZoneManagerRef?.GetZoneCards(CardZone.Hand, playerId);
+            if (handCards != null)
+                foreach (var h in handCards)
+                    if (h != null && h.ControllerId == playerId && !scan.Contains(h)) scan.Add(h);
             int mana = pm.GetAvailableMana(playerId);
 
-            foreach (var card in field)
+            foreach (var card in scan)
             {
                 if (card?.ControllerId != playerId) continue;
+                // 【P3·K20】"文本视作空白"的卡失去效果 → 不提供任何候选能力（JC101）
+                if (Script.Manager.EffectEngine.Instance?.IsTextBlank(card) == true) continue;
                 if (card?.PlayerTemplate is PlayerCardData tmpl)
                 {
-                    foreach (var e in tmpl.EffectDataList)
+                    // 【P3·K13】候选＝卡面固有激活能力 ∪ **运行期授予的**激活能力（JC019 镇魔枪授予宿主的那条）
+                    foreach (var e in GetAllActivateAbilities(card))
                     {
                         if (e.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)) continue;
+
+                        // 【K26】阶段排除：该效果声明了"不可发动的阶段"且当前正处于该阶段 → 本效果不可发动
+                        if (PhaseGateRule.IsExcluded(e, tm)) continue;
+
+                        // 【K23】次数上限：该能力本回合已用满（每张卡·每回合·每能力）→ 不可发动
+                        if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+
+                        // 【K1】动态值 X 求值为 0（或表达式未登记）→ 该效果不算发动 → 不可发动
+                        if (Script.Manager.EffectEngine.Instance != null
+                            && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
+                               == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
 
                         // 门禁 3：费用足够
                         if (e.Cost > mana) continue;
@@ -51,6 +70,20 @@ namespace Script.Manager
                         {
                             if (!HasLegalTarget(card, e, cm, pm)) continue;
                         }
+
+                        // 【P3·K22】牺牲代价：没有可牺牲的角色 → 不可发动（与 EffectEngine 的"代价前置门禁"同解）
+                        if (e.SacrificeCost != null && GetSacrificeCandidates(card, e).Count == 0) continue;
+                        // 【P3·K15】需要"目标地区"的激活能力：没有可选地区 → 不可发动；
+                        // 声明"不能原地移动"（FAQ）时**至少要存在另一个地区**（卡目标尚未选定，只能做必要条件判断）
+                        if (e.NeedsAreaTarget)
+                        {
+                            int areaCount = GetAreaTargetCandidates(card, e).Count;
+                            if (areaCount == 0) continue;
+                            if (e.AreaTargetExcludesCardArea && areaCount < 2) continue;
+                        }
+
+                        // 【P3】门禁 5：激活类效果声明的结算条件（EffectCondition.Predicate）须满足
+                        if (!ConditionAllowsActivation(e, card)) continue;
 
                         result.Add((card, e));
                     }
@@ -64,11 +97,17 @@ namespace Script.Manager
                         foreach (var e in opt.EffectDataList)
                         {
                             if (e.Timing is not EffectTiming.CouncilActivated) continue;
+                            // 【K26】阶段排除（秘社激活同办）
+                            if (PhaseGateRule.IsExcluded(e, tm)) continue;
+                            // 【K23】次数上限（秘社激活同办）
+                            if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
                             if (e.Cost > mana) continue;
                             if (e.Target != null && e.Target.NeedsSelection)
                             {
                                 if (!HasLegalTarget(card, e, cm, pm)) continue;
                             }
+                            // 【P3】门禁 5：结算条件须满足
+                            if (!ConditionAllowsActivation(e, card)) continue;
                             result.Add((card, e));
                         }
                     }
@@ -96,6 +135,8 @@ namespace Script.Manager
             // 规则：仅正面朝上可激活；暗藏者（IsCovert）隐藏信息，不可发动任何激活能力。
             // 修复 JC003 BUG：原仅遍历 AreaZone 未判 IsCovert，导致背面朝上亦高亮可激活。
             if (card.IsCovert) return false;
+            // 【P3·K20】"印刷文本框视作空白"（JC101）→ 该卡**失去效果**：不可发动任何激活能力。
+            if (Script.Manager.EffectEngine.Instance?.IsTextBlank(card) == true) return false;
             // 【方案C】生效区门禁收敛到内层 foreach：对每个激活效果用 IsEffectActiveInZone 做效果粒度判定
             // （默认：附属=AttachedZone，角色=AreaZone；显式声明 Scope 的效果按声明）。
             // 旧整卡判定（isAtt + CurrentZone 一刀切 return false）已移除，勿再在别处重复写区判断，
@@ -110,13 +151,22 @@ namespace Script.Manager
             if (tm != null && tm.IsAtomicLocked && !ignoreAtomicLock) return false;
             int mana = pm?.GetAvailableMana(playerId) ?? 0;
 
-            foreach (var e in tmpl.EffectDataList)
+            // 【P3·K13】门禁同样覆盖**运行期授予的**激活能力（否则"授予的能力可发动性"与候选枚举会不一致）
+            foreach (var e in GetAllActivateAbilities(card))
             {
                 if (e.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)) continue;
                 // 方案C：激活效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                 // 显式声明 Scope 的效果按声明（如未来墓地/手牌激活）。不在此区则跳过该效果。
                 // 静态化调用：客户端（无 EffectEngine 实例）也能复用同一生效区判定（行为与原先一致）。
                 if (!EffectEngine.IsEffectActiveInZone(e, card)) continue;
+                // 【K26】阶段排除：当前阶段被该效果排除 → 不可发动（与 `EffectEngine.ActivateAbility` 权威门禁同解）
+                if (PhaseGateRule.IsExcluded(e, tm)) continue;
+                // 【K23】次数上限：该能力本回合已用满 → 不可发动
+                if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+                // 【K1】动态值 X 不可用（0 或求值失败）→ 不可发动
+                if (Script.Manager.EffectEngine.Instance != null
+                    && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
+                       == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
                 if (e.Cost > mana) continue;
                 // 窗口门禁（D9）：行动类激活仅限【自己行动步骤 + 堆叠为空 + 有行动权】
                 // （先手→ActionFirst，后手→ActionSecond，复用 CanEnterBasicActionMask）。
@@ -129,10 +179,56 @@ namespace Script.Manager
                 if (!string.IsNullOrEmpty(e.ActivateCondition) &&
                     e.ActivateCondition.Contains("横置本角色") &&
                     card.IsTapped) continue;
+                // 【P3·K22】牺牲代价：没有可牺牲的角色 → 不可发动（与 EffectEngine 的"代价前置门禁"同解，UI 据此置灰）
+                if (e.SacrificeCost != null && GetSacrificeCandidates(card, e).Count == 0) continue;
+                // 【P3·K15】需要"目标地区"的激活能力：没有可选地区 → 不可发动；
+                // 声明"不能原地移动"时**至少要存在另一个地区**（卡目标尚未选定 → 必要条件判断）
+                if (e.NeedsAreaTarget)
+                {
+                    int areaCount = GetAreaTargetCandidates(card, e).Count;
+                    if (areaCount == 0) continue;
+                    if (e.AreaTargetExcludesCardArea && areaCount < 2) continue;
+                }
+                // 【P3】激活类效果声明的**结算条件**（`EffectCondition.Predicate`）同样是发动前提：
+                // 不满足 → 不可发动（与 `EffectEngine.ActivateAbility` 的付费前门禁同源，UI 据此置灰）。
+                if (!ConditionAllowsActivation(e, card)) continue;
                 if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm, pm)) continue;
                 return true;
             }
             return false;
+        }
+
+        /// <summary>【P3·K15】某激活能力"目标地区"的**合法候选**（未声明 NeedsAreaTarget → 空表）。
+        /// 未指定卡目标时（＝候选枚举阶段）只按"地区存在"给候选；选定卡目标后再按
+        /// AreaTargetExcludesCardArea（JC117"不能原地移动"）过滤。</summary>
+        public static List<string> GetAreaTargetCandidates(CardInstance source, EffectData ability,
+            CardInstance cardTarget = null)
+            => Script.Manager.EffectEngine.Instance?.GetLegalAreaTargets(source, ability, cardTarget)
+               ?? new List<string>();
+
+        /// <summary>【P3·K22】某激活能力"牺牲一个角色"代价的**合法候选**（无此代价 → 空表）。
+        /// 单一实现委托 `EffectEngine.GetSacrificeCandidates`（与权威侧复检同源，不会分叉）。</summary>
+        public static List<CardInstance> GetSacrificeCandidates(CardInstance source, EffectData ability)
+        {
+            if (ability?.SacrificeCost == null || source == null) return new List<CardInstance>();
+            return Script.Manager.EffectEngine.Instance?.GetSacrificeCandidates(source, ability.SacrificeCost)
+                ?? new List<CardInstance>();
+        }
+
+        /// <summary>【P3·K13】某卡当前可发动的激活能力＝**卡面固有**（`EffectDataList`）∪ **运行期授予**
+        /// （JC019 镇魔枪授予宿主的能力）。View 的"多激活效果选择窗口"与候选枚举共用本方法
+        /// ——用户 2026-09 口径：宿主原本就有激活效果时，**在既有选择窗口里额外增列 1 项**。</summary>
+        public static List<EffectData> GetAllActivateAbilities(CardInstance card)
+        {
+            var result = new List<EffectData>();
+            if (card == null) return result;
+            if (card.PlayerTemplate is PlayerCardData tmpl && tmpl.EffectDataList != null)
+                foreach (var e in tmpl.EffectDataList)
+                    if (e != null && e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)
+                        result.Add(e);
+            var granted = Script.Manager.EffectEngine.Instance?.GetGrantedAbilities(card);
+            if (granted != null) result.AddRange(granted);
+            return result;
         }
 
         /// <summary>秘社激活门禁：遍历 ActivationOptions 各选项的 EffectDataList，任一可发动即返回 true。</summary>
@@ -152,6 +248,10 @@ namespace Script.Manager
                 foreach (var e in opt.EffectDataList)
                 {
                     if (e.Timing is not EffectTiming.CouncilActivated) continue;
+                    // 【K26】阶段排除（秘社激活同办）
+                    if (PhaseGateRule.IsExcluded(e, tm)) continue;
+                    // 【K23】次数上限（秘社激活同办）
+                    if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
                     if (e.Cost > mana) continue;
                     if (e.ActivateWindow.Contains("行动"))
                     {
@@ -218,8 +318,14 @@ namespace Script.Manager
             var kindB = CardManager.MapInstanceToTargetKind(target);
             // 大类匹配：目标种类 == 声明种类；或 IncludeCovert 放宽暗藏者（暗藏者被映射为 TargetKind.Covert，
             // 而非 Character，故声明 Kind=Character 的 JC003 需靠 IncludeCovert 覆盖暗藏者，符合"无视地区"规则）。
-            return (kindB == actTargetB.Kind) ||
+            bool kindOkB = (kindB == actTargetB.Kind) ||
                 (actTargetB.IncludeCovert && kindB == TargetKind.Covert);
+            if (!kindOkB) return false;
+            // 【P3·K21】**精筛条件必须同样生效**（修缺陷）：此前本分支只做大类粗筛 →
+            // 激活能力自己声明的 `Target.Restrictions` 被完全忽略（如 JC069「目标须带锁定标志」会对任意角色放行）。
+            // 与打出目标、结算复检共用 `TargetValidity.CheckRestrictions`（单一真相源：能选中的目标与结算时合法的目标一致）。
+            return TargetValidity.CheckRestrictions(actTargetB.Restrictions, actTargetB.Param, target,
+                source.ControllerId, pm);
         }
 
         public static bool HasLegalTarget(CardInstance source, EffectData ability, CardManager cm,
@@ -230,6 +336,19 @@ namespace Script.Manager
             // 否则 GetAreaCards 会遍历所有地区，本地区效果会把其他地区的目标也算合法。
             // pm（多对局隔离）：由调用方传入本局 PlayerManager；null 时链路退回进程级静态兜底。
             pm ??= cm.PlayerManagerRef;
+            // 【K24】玩家目标：候选＝"任意/本方/对手"限制下合法的玩家（不扫场上的卡）。
+            if (PlayerTargetPool.IsPlayerSpec(ability.Target))
+            {
+                if (ability.Target.Kind != TargetKind.Player && ability.Target.KindAlt != TargetKind.Player) return false;
+                return PlayerTargetPool.Collect(ability.Target, source.ControllerId, pm).Count > 0;
+            }
+            // 【K14】非争夺区目标（墓地/手牌/资产/附属/秘社/封印）：候选来自对应区域而非争夺区（`TargetZonePool` 单一实现）。
+            if (TargetZonePool.IsZonePileSpec(ability.Target))
+            {
+                var pile = TargetZonePool.Collect(ability.Target, source.ControllerId,
+                    cm.ZoneManagerRef, pm, source.ZoneDetailId);
+                return pile.Count > 0;
+            }
             var all = ability.Target != null && ability.Target.IsLocalZone
                 ? cm.GetAreaInstancesBySlot(source.ZoneDetailId)
                 : cm.GetAreaCards();
@@ -240,6 +359,19 @@ namespace Script.Manager
                 if (IsLegalActivateTarget(source, ability, c, cm, pm)) return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// 【P3】激活类效果的**结算条件**（`EffectCondition.Predicate`）是否允许发动。
+        /// 语义与 `EffectEngine.ActivateAbility` 的"付费前门禁"完全一致（同一谓词、同一判定入口）：
+        /// 条件为空/`Always` → 放行；否则按谓词求值（如 JC053 的 `EnemyPowerMarkRemovedThisTurn`）。
+        /// UI 的高亮/候选据此置灰，避免"点了却因条件不满足被拒"。
+        /// </summary>
+        private static bool ConditionAllowsActivation(EffectData e, CardInstance card)
+        {
+            if (e?.Condition == null || string.IsNullOrEmpty(e.Condition.Predicate)) return true;
+            if (e.Condition.Predicate == "Always") return true;
+            return EffectEngine.Instance.EvaluateCondition(e.Condition.Predicate, card, null, null, -1, null);
         }
     }
 }

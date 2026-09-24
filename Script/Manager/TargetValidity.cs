@@ -76,12 +76,32 @@ namespace Script.Manager
             CardInstance source, CardInstance target, ITargetDesc desc, TargetSnapshot? snapshot = null,
             PlayerManager pm = null)
         {
+            var primary = CheckOne(source, target, desc, snapshot, pm);
+            if (primary.valid) return primary;
+            // 【P3·复合目标限制】`SpecAlt`＝第二条**整条**目标声明：本体整条不通过时，改用别名那条整条复检
+            // （卡文"目标……或……"且两侧条件不同，如 JC043「结附于秘社**或**本地区」）。
+            if (desc is TargetSpec specAltHolder && specAltHolder.SpecAlt != null)
+            {
+                var alt = CheckOne(source, target, specAltHolder.SpecAlt, snapshot, pm);
+                if (alt.valid) return alt;
+            }
+            return primary;
+        }
+
+        private static (bool valid, TargetLossReason reason) CheckOne(
+            CardInstance source, CardInstance target, ITargetDesc desc, TargetSnapshot? snapshot = null,
+            PlayerManager pm = null)
+        {
             // 0. 实例不存在 / 已移出游戏
             if (target == null || target.CurrentZone == CardZone.Exiled)
                 return (false, TargetLossReason.Gone);
 
             // 1. 大类对应的合法区域（含翻面朝向判定）：离场或翻面都在此合一处理
+            //    【K14·或种类】`KindAlt` 非 None 时与 `Kind` 构成 OR（卡文"目标附属或资产"，JC107）：
+            //    主大类不通过就试第二个大类，两者都不通过才判丢失。
             var zoneCheck = CheckZoneAndFace(target, desc.Kind, desc.IncludeCovert);
+            if (!zoneCheck.valid && desc.KindAlt != TargetKind.None)
+                zoneCheck = CheckZoneAndFace(target, desc.KindAlt, desc.IncludeCovert);
             if (!zoneCheck.valid)
                 return (false, zoneCheck.reason);
 
@@ -103,9 +123,8 @@ namespace Script.Manager
                 }
             }
 
-            // 3. 合法性丧失（规则⑦·屏障）：屏障效果尚未实现，当前不判定。
-            //    后续实现屏障时在此恢复：屏障【不刷版本号】，仅在结算时静态判定 —— target.HasGuard → Illegal。
-            //    TODO(屏障): if (target.HasGuard) return (false, TargetLossReason.Illegal);
+            // 3. 合法性丧失（规则⑦·屏障）：**已在 CheckRestrictions 开头统一判定**（取目标阶段与结算复检共用），
+            //    此处不再重复实现，保留本注释说明历史 TODO 已落地（见 IsBarrierBlocking）。
 
             // 4. 结算复检 Restrictions（方案 B·单一真相源）：Friendly/Enemy/子类别/卡名/费用等
             //    与区域无关的属性条件，取目标阶段(CardManager.MatchesRule)与结算阶段共用 CheckRestrictions。
@@ -121,6 +140,24 @@ namespace Script.Manager
                 return (false, TargetLossReason.Illegal);
 
             return (true, TargetLossReason.None);
+        }
+
+        /// <summary>
+        /// 【P3·屏障】该目标是否"因屏障而不能被该来源指定为目标"。
+        /// 规则文本：拥有屏障的卡**不能被敌方卡牌或能力指定为目标**（己方来源不受限制）。
+        /// 屏障来源两类：① `CardInstance.HasGuard`（由 `Gain{"屏障"}` / `SetGuard` 设置，如 JC017）；
+        /// ② 运行期授予的关键字 `屏障`（`KeywordEffects.Barrier()`，如 JC073 的"获得屏障"），以及卡面固有声明。
+        /// <paramref name="sourceController"/> &lt;= 0（来源控制者未知）时**不拦**，避免把"无法判定敌我"误判为非法。
+        /// </summary>
+        public static bool IsBarrierBlocking(CardInstance target, int sourceController)
+        {
+            if (target == null) return false;
+            if (sourceController <= 0) return false;                     // 来源控制者未知 → 不判
+            if (target.ControllerId == sourceController) return false;    // 己方来源不受屏障限制
+            bool guarded = target.HasGuard
+                || target.HasKeyword("屏障")
+                || (target.PlayerTemplate?.HasInherentKeyword("屏障") ?? false);
+            return guarded;
         }
 
         /// <summary>剔除"仅取目标阶段"类限制（结算复检跳过），返回剩余限制列表。</summary>
@@ -162,6 +199,15 @@ namespace Script.Manager
             string param, CardInstance t, int sourceController, PlayerManager pm = null)
         {
             if (t == null) return false;
+            // 【P3·屏障】规则文本："不能被敌方卡牌或能力指定为目标"。
+            // 收口在此处 = 取目标阶段（CardManager.MatchesRule/MatchesSpec）与结算复检（Check）共用同一实现，
+            // 因此"先被指定为目标、之后才获得屏障"的情形在结算复检时自然判为目标不合法（用户补充规则）。
+            // 判定基准：源控制者已知（>=1）且与目标控制者不同 → 视作"敌方来源"；源控制者未知(-1)时不拦（避免误伤）。
+            if (IsBarrierBlocking(t, sourceController))
+            {
+                GD.Print($"⛔ [屏障] 目标 {t.PlayerTemplate?.CardName} 不能被敌方（P{sourceController}）指定为目标");
+                return false;
+            }
             if (restrictions == null) return true;
             param = param ?? string.Empty;
             foreach (var res in restrictions)
@@ -172,6 +218,23 @@ namespace Script.Manager
                         break;
                     case TargetRestriction.Friendly:
                         if (t.ControllerId != sourceController) return false;
+                        break;
+                    // 【P3·复合目标限制】目标须是**结附于秘社**的附属（JC043 的一条；另一条用 `LocalZone`）。
+                    case TargetRestriction.HostIsCouncil:
+                        if (t.AttachedTo == null || CardManager.MapInstanceToTargetKind(t.AttachedTo) != TargetKind.Council)
+                        {
+                            GD.Print($"⛔ [HostIsCouncil] 目标 {t.PlayerTemplate?.CardName} 未结附于秘社 → 不合法");
+                            return false;
+                        }
+                        break;
+                    // 【P3·复合目标限制】目标须是**直接结附于地区**的附属（无宿主；JC043 的另一条
+                    // 与 `LocalZone` 组合＝"结附于本地区的附属"，与"结附于该地区角色的附属"区分开）。
+                    case TargetRestriction.AttachedToArea:
+                        if (t.AttachedTo != null)
+                        {
+                            GD.Print($"⛔ [AttachedToArea] 目标 {t.PlayerTemplate?.CardName} 结附于卡（非地区）→ 不合法");
+                            return false;
+                        }
                         break;
                     case TargetRestriction.Enemy:
                         if (t.ControllerId == sourceController) return false;
@@ -200,8 +263,49 @@ namespace Script.Manager
                         string costParam = param.Contains("|") ? param.Split('|')[1] : param;
                         if (!int.TryParse(costParam, out int minCost) || t.PlayerTemplate?.Cost < minCost) return false;
                         break;
-                    case TargetRestriction.LocalZone:
-                        // 本地区：比较基准随阶段不同，交由调用方判定（结算侧见 Check 规则⑥），此处跳过。
+                    case TargetRestriction.LocalZone:                        // 本地区：比较基准随阶段不同，交由调用方判定（结算侧见 Check 规则⑥），此处跳过。
+                        break;
+                    // ---- 【P1】新增精筛条件 ----
+                    case TargetRestriction.CostAtMost:
+                    {
+                        // 目标静态印刷费用上限：高于 Param（整数文本）即不通过。
+                        // Param 约定：单独写门槛（"2"）；与其它限制共用 Param 时按 '|' 分段取第 2 段（第 0/1 段留给
+                        // NotStaticSubCategory / CostAtLeast），避免与既有约定冲突。
+                        string capParam = param.Contains("|")
+                            ? (param.Split('|').Length > 2 ? param.Split('|')[2] : param.Split('|')[^1])
+                            : param;
+                        if (!int.TryParse(capParam, out int maxCost) || t.PlayerTemplate?.Cost > maxCost) return false;
+                        break;
+                    }
+                    case TargetRestriction.Tapped:
+                        if (!t.IsTapped) return false;
+                        break;
+                    case TargetRestriction.HasMagicDomainIcon:
+                        // 实例领域优先、回退模板；印刷"-1"（无领域）视为没有图标。
+                        if (!t.HasAnyMagicDomainIcon) return false;
+                        break;
+                    case TargetRestriction.Organization:
+                    {
+                        string org = t.PlayerTemplate?.Organization ?? t.CouncilTemplate?.Organization ?? "";
+                        if (!string.Equals(org, param, System.StringComparison.Ordinal)) return false;
+                        break;
+                    }
+                    case TargetRestriction.HasCounter:
+                    {
+                        // 【P3·K21】目标须带指定**卡上标志**（JC069「具有锁定标志的角色」）：
+                        // 判定 `Counters[Param] ≥ 1`；标志名未给出（Param 空）→ 不通过（fail-closed，防拼错静默放行）。
+                        if (string.IsNullOrWhiteSpace(param))
+                        {
+                            Godot.GD.Print("[CheckRestrictions] HasCounter 缺少 Param（标志名）→ 不通过");
+                            return false;
+                        }
+                        t.Counters.TryGetValue(param.Trim(), out int counterCount);
+                        if (counterCount < 1) return false;
+                        break;
+                    }
+                    case TargetRestriction.HasKeyword:
+                        // 双层语义（与 CardInstance.HasPublicKeyword 一致）：运行时授予 ∪ 模板固有声明。
+                        if (!t.HasKeyword(param) && !(t.PlayerTemplate?.HasInherentKeyword(param) ?? false)) return false;
                         break;
                     case TargetRestriction.AttachedToCharacterIfNoMind:
                         // 条件式：仅取目标(打出)阶段评估。资产区【无】【心】(心灵领域忠诚≥1) 时，

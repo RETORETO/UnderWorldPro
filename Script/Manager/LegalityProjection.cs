@@ -31,22 +31,35 @@ namespace Script.Manager
 
             var view = new GameViewSnap { ViewerPlayerId = viewerPlayerId };
 
-            // 候选池：争夺区 + 附属区 + 秘社。
+            // 候选池：争夺区 + 附属区 + 秘社 + **资产区** + **墓地**。
             // 与单机 `Arena.BeginSorceryTargetSelection` / 联机事务卡选目标窗口的候选范围一致，
             // 由服务端统一决定，客户端不再各自枚举。
+            // 【K14】补 资产区/墓地：供"消灭目标附属或资产"（JC107）等以资产/墓地为目标的卡选到目标。
             var candidates = new List<CardInstance>();
             candidates.AddRange(cm.GetAreaCards() ?? new List<CardInstance>());
             candidates.AddRange(zm.GetZoneCards(CardZone.AttachedZone, 0));
             candidates.AddRange(zm.GetZoneCards(CardZone.CouncilZone, 0));
+            candidates.AddRange(zm.GetZoneCards(CardZone.AssetZone, 1));
+            candidates.AddRange(zm.GetZoneCards(CardZone.AssetZone, 2));
+            candidates.AddRange(zm.GetZoneCards(CardZone.Graveyard, 1));
+            candidates.AddRange(zm.GetZoneCards(CardZone.Graveyard, 2));
 
-            // ---------- 1) 手牌打出的合法卡目标（事务/附属/角色的"卡目标"）----------
-            foreach (var hand in zm.GetZoneCards(CardZone.Hand, viewerPlayerId))
+            // ---------- 1) 打出的合法卡目标（事务/附属/角色的"卡目标"）----------
+            // 【K27】"墓地行动"（`PlayableFromGraveyard`）：墓地中声明该标志的卡**同为可打出源**
+            // （"就如同其在你的手上一样"）→ 也为其枚举合法卡目标，供客户端拖拽/选择。
+            var playSources = new List<CardInstance>();
+            playSources.AddRange(zm.GetZoneCards(CardZone.Hand, viewerPlayerId));
+            foreach (var gy in zm.GetZoneCards(CardZone.Graveyard, viewerPlayerId))
+                if (gy?.PlayerTemplate != null && gy.PlayerTemplate.PlayableFromGraveyard) playSources.Add(gy);
+
+            foreach (var hand in playSources)
             {
                 if (hand?.PlayerTemplate == null) continue;
                 var entry = new PlayTargetSnap { SourceUid = hand.UID };
                 foreach (var t in candidates)
                 {
                     if (t == null || t == hand) continue;
+                    if (t.IsDying) continue;   // 【触发语义】正在死亡的卡不再是合法目标（与 GetLocalZoneTargets 同判据）
                     if (cm.IsLegalPlayTarget(hand, t)) entry.TargetUids.Add(t.UID);
                 }
                 view.PlayTargets.Add(entry);

@@ -38,6 +38,10 @@ public partial class AreaManager : Node
     private WorldDeckManager _worldDeckManager;
     private ZoneManager _zoneManager;
     private StackManager _stackManager;
+
+    /// <summary>【P1】触发广播封装层（由 GameInitializer 注入）：用于 OnAreaWon / OnMarkerPlaced 发点。</summary>
+    private Script.Manager.TriggerEmitPoints _triggerEmitPoints;
+    public void SetTriggerEmitPoints(Script.Manager.TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
     private CardManager _cardManager; // 跨进程投影：ApplySnapshot 用 RebuildFromRef 重建地区卡实例
 
     // 势力标记数据：按地区 UID 记录双方标记数（不实现赢取，仅累记）
@@ -238,6 +242,54 @@ public partial class AreaManager : Node
     /// 结算赢取地区5步（由 TurnManager.ResolveEntry 的 AreaWon 分支调用）。
     /// 步骤1（响应窗口）已由堆叠机制在结算前处理；此处执行步骤2~5。
     /// </summary>
+    /// <summary>
+    /// 【P3·撤回】判定一张卡是否"拥有撤回能力"：运行期授予的 `撤回` 关键字 ∪ 卡面固有声明（`HasInherentKeyword`）。
+    /// 与"公开"（`HasPublicKeyword`）同款双层判定——离场/效果失效时授予被移除，判定自然转 false。
+    /// </summary>
+    private static bool HasWithdraw(CardInstance card)
+        => card != null && (card.HasKeyword("撤回") || (card.PlayerTemplate?.HasInherentKeyword("撤回") ?? false));
+
+    /// <summary>【P3·K3·去处替代】地区被赢取时，若该卡声明了"赢取后的去处替代"（`WinAreaDestination`）且条件成立，
+    /// 就地把该卡按声明去处改判并返回 true（调用方据此跳过"送库底"）。判定/条件复用
+    /// `EffectEngine.ResolveWinAreaDestination`（与触发路径同一谓词实现）。
+    /// 当前支持的去处：`计分区`（JC079 圣婴「置入你的计分区，而非其拥有者牌库底」）、
+    /// `资产区`（JC120 庄严圣像「置入你的资产区，令其成为一个资产」）。
+    /// ⚠️ 为什么走替代而非触发：赢取结算里"本地区卡归位"是同步跑完的，入堆叠触发是异步的——
+    /// 触发结算时该卡早已躺进牌库底，改判去处无从谈起（见 `ResolveAreaWon` 的既有注释）。</summary>
+    private bool TryApplyWinAreaReplacement(CardInstance card, string areaUid, int winnerId)
+    {
+        var ee = Script.Manager.EffectEngine.Instance;
+        string dest = ee?.ResolveWinAreaDestination(card, areaUid, winnerId);
+        if (string.IsNullOrEmpty(dest) || _zoneManager == null) return false;
+        string name = card.PlayerTemplate?.CardName;
+        switch (dest)
+        {
+            case "计分区":
+                _zoneManager.MoveToScore(card, winnerId);
+                GD.Print($"[AreaManager] 去处替代：{name} → 玩家{winnerId} 计分区（而非牌库底）");
+                return true;
+            case "资产区":
+                // 与 `MoveToZone{"自身","资产区","正面"}` 同口径：正面置入（暗藏只存在于场上）。
+                card.SetCovert(false);
+                _zoneManager.MoveToAsset(card, winnerId);
+                GD.Print($"[AreaManager] 去处替代：{name} → 玩家{winnerId} 资产区（而非牌库底）");
+                return true;
+            default:
+                return false;   // 未识别的去处声明：按普通归位处理
+        }
+    }
+
+    /// <summary>【P3·撤回】把带撤回能力的卡移回其 OWNER 手牌（地区被赢取时的去向替代）。</summary>
+    private void ReturnWithdrawToHand(CardInstance card)
+    {
+        if (card == null) return;
+        // 走 CardManager 的"退回手牌"收口（解持续效果 + 复位状态 + 移动），语义与"回手"完全一致。
+        if (_cardManager != null) _cardManager.ReturnCardToHand(card);
+        else _zoneManager?.MoveToHand(card, card.OwnerId);
+        GD.Print($"[AreaManager] 撤回：{card.PlayerTemplate?.CardName} 回 OWNER(P{card.OwnerId}) 手牌（而非牌库底）");
+    }
+
+    /// <summary>结算赢取地区: 计分 + 触发 + 卡归位。</summary>
     public void ResolveAreaWon(string areaUid, int winnerId)
     {
         if (string.IsNullOrEmpty(areaUid) || !_areas.TryGetValue(areaUid, out var info)) return;
@@ -255,6 +307,12 @@ public partial class AreaManager : Node
             _zoneManager.MoveToScore(info.Instance, winnerId);
             GD.Print($"[AreaManager] 地区卡实例 {info.Instance.UID} 已进入玩家P{winnerId} 分数区");
         }
+
+        // 【P1·触发时机接线】地区赢取触发（OnAreaWon）：触点放在"步骤2 计分完成"之后、
+        // "步骤3 本地区卡送牌库底"之前——此时地区仍注册在原 UID 下、区内卡也还在，
+        // "当你赢取本地区时…"类效果的条件与目标都能正确取到。
+        // ⚠️ 触发入堆叠后是异步结算的：需要"改变本地区卡去向"的效果（JC079/JC116/JC120）仍属替代效果(K3)范畴。
+        _triggerEmitPoints?.OnAreaWon(areaUid, winnerId);
 
         // 清除本地区势力标记（赢取后标记归零，避免残留并随新地区/移除一并清理）
         if (_marks.ContainsKey(areaUid))
@@ -278,15 +336,36 @@ public partial class AreaManager : Node
         // 时由 ZoneManager 自动连带回库，避免重复移动。
         _zoneManager?.EnterAreaWonMode(() =>
         {
-            // 1) 顶层卡（角色/暗藏者）：回库底。其内部 EnterAreaWonMode 连带使"附属于角色的附属"也回库底（不重复处理）
+            // 【P3·撤回】规则文本："一个地区被赢取时，拥有撤回能力的卡回到 OWNER 手牌，而不是回到 OWNER 卡组"。
+            // 处理顺序：先摘出"带撤回的附属卡"（否则它会被宿主的连带回库一起带走），再判定顶层卡本身是否带撤回。
+            foreach (var card in cardsInArea)
+            {
+                if (card.AttachedCards != null)
+                {
+                    foreach (var att in new List<CardInstance>(card.AttachedCards))
+                    {
+                        if (HasWithdraw(att)) ReturnWithdrawToHand(att);
+                    }
+                }
+            }
+            // 1) 顶层卡（角色/暗藏者）：带撤回 → 回 OWNER 手牌；否则回库底。
             foreach (var card in cardsInArea)
             {
                 if (card.IsAttached) continue;   // 附属卡不在 _area，此判断保留防御性
+                // 【P3·K3·去处替代】JC079 圣婴「当你赢取本地区时，将圣婴置入你的计分区，而非其拥有者牌库底」：
+                // 与『撤回』同一实现位——就地改判去处（该卡文属"改变本地区卡去向"的替代效果，不入堆叠）。
+                if (TryApplyWinAreaReplacement(card, areaUid, winnerId)) continue;
+                if (HasWithdraw(card)) { ReturnWithdrawToHand(card); continue; }
                 _zoneManager.MoveToDeckBottom(card, card.OwnerId, false);
             }
-            // 2) 附属于地区的附属卡（AttachedTo==null，挂地区容器，不在任何角色 SealedCards/AttachedCards 里）：回库底
+            // 2) 附属于地区的附属卡（AttachedTo==null，挂地区容器，不在任何角色 SealedCards/AttachedCards 里）：回库底（带撤回者回手牌）
             foreach (var att in _zoneManager.GetZoneCards(CardZone.AttachedZone, 0, areaUid))
-                if (att.AttachedTo == null) _zoneManager.MoveToDeckBottom(att, att.OwnerId, false);
+            {
+                if (att.AttachedTo != null) continue;
+                if (TryApplyWinAreaReplacement(att, areaUid, winnerId)) continue;   // 【P3·K3】去处替代同办（JC120 庄严圣像）
+                if (HasWithdraw(att)) { ReturnWithdrawToHand(att); continue; }
+                _zoneManager.MoveToDeckBottom(att, att.OwnerId, false);
+            }
             // 3) 封印卡：封印于角色（角色的 SealedCards）与封印于地区（SealedZone 桶中 ZoneDetailId==地区）均回 OWNER 手牌（需求④）
             foreach (var role in cardsInArea)
             {
@@ -369,6 +448,10 @@ public partial class AreaManager : Node
         // 通过事件通知 UI 层刷新对应地区标记（不直接操作 UI 节点）
         OnMarksChanged?.Invoke(areaUid, m.p1, m.p2);
 
+        // 【P1·触发时机接线】标志放置触发（OnMarkerPlaced）：势力标志放置后广播。
+        // 该时机高频（对抗结算/威名/效果放置都会走），消费方需自行防自指递归（D-1 熔断兜底）。
+        _triggerEmitPoints?.OnMarkerPlaced("势力标志", amount, playerId, areaUid);
+
         // 注：赢取地区检查（TryStartAreaWin）不再在 AddPowerMark 内触发。
         // 原因：AddPowerMark 多从 EffectEngine 执行动作（如 JC035 的 PlaceToken）的嵌套调用中进入，
         // 若此时直接入栈"赢取地区"会嵌套进当前 ResolveStackTop 栈帧，打乱阶段优先权节拍。
@@ -379,6 +462,73 @@ public partial class AreaManager : Node
     /// <summary>查询某地区当前双方势力标记（便于调试/结算）</summary>
     public (int p1, int p2) GetMarks(string areaUid)
         => _marks.TryGetValue(areaUid, out var m) ? m : (0, 0);
+
+    /// <summary>查询某地区某玩家当前的势力标志数（0 = 无）。</summary>
+    public int GetPowerMark(string areaUid, int playerId)
+    {
+        if (string.IsNullOrEmpty(areaUid) || playerId <= 0) return 0;
+        if (!_marks.TryGetValue(areaUid, out var m)) return 0;
+        return playerId == 1 ? m.p1 : m.p2;
+    }
+
+    /// <summary>
+    /// 【P4·遏制】从某地区**移除**某玩家的势力标志（标记系统的减法侧；K6）。
+    /// 语义与 `AddPowerMark` 明确区分：`AddPowerMark` 带"新增量先抵扣对方标记"的净差逻辑，
+    /// 而**遏制是纯移除**——只减少被遏制者自己的标志，不影响对方。
+    /// 返回**实际移除数**（不足时按现有数量钳制，不会变成负数）。
+    /// 移除后同样经 `OnMarksChanged` 通知 UI（与放置对称）。
+    /// </summary>
+    public int RemovePowerMark(string areaUid, int playerId, int amount)
+    {
+        if (amount <= 0 || string.IsNullOrEmpty(areaUid) || playerId <= 0) return 0;
+        if (!_marks.TryGetValue(areaUid, out var m)) return 0;
+
+        int have = playerId == 1 ? m.p1 : m.p2;
+        int removed = Math.Min(amount, have);
+        if (removed <= 0) return 0;
+
+        if (playerId == 1) m = (m.p1 - removed, m.p2);
+        else m = (m.p1, m.p2 - removed);
+        _marks[areaUid] = m;
+
+        // 【P3·事件记忆位】"本回合中，玩家 P 的势力标志曾被移除"（JC053 鸣钟教派徽记的激活前提）：
+        // 只在**真的移除了 >0 个**时置位（请求但无可移除 → 不置位，与卡文"曾被移除"一致）。
+        MarkPowerMarkRemovedThisTurn(playerId);
+
+        int slotIndex = _areas.TryGetValue(areaUid, out var areaInfo) ? areaInfo.SlotIndex : -1;
+        GD.Print($"[AreaManager.Mark] 从 AreaSlot_{slotIndex}({areaUid}) 移除势力标记：玩家{playerId} -{removed}（请求 {amount}）→ " +
+                 $"当前标记 P1={m.p1}, P2={m.p2}");
+        OnMarksChanged?.Invoke(areaUid, m.p1, m.p2);
+        return removed;
+    }
+
+    // ==================== 【P3】本回合"势力标志曾被移除"记忆位 ====================
+    /// <summary>
+    /// 本回合内"其势力标志曾被移除"的玩家集合（每次真实移除 &gt;0 个即置位；**每个回合开始时清空**，
+    /// 由 `TurnManager` 的重置步骤调用 <see cref="ResetPowerMarkRemovedThisTurn"/>）。
+    /// 用途：JC053 鸣钟教派徽记「本回合中，若有**敌方**势力标志曾被移除，你可以抓一张牌」——
+    /// 记录的是"回合内的既成事实"，与"由谁造成"无关（卡文只要求"曾被移除"）。
+    /// </summary>
+    private readonly System.Collections.Generic.HashSet<int> _powerMarkRemovedThisTurn
+        = new System.Collections.Generic.HashSet<int>();
+
+    /// <summary>登记"玩家 playerId 的势力标志本回合曾被移除"。</summary>
+    public void MarkPowerMarkRemovedThisTurn(int playerId)
+    {
+        if (playerId <= 0) return;
+        _powerMarkRemovedThisTurn.Add(playerId);
+    }
+
+    /// <summary>玩家 playerId 的势力标志本回合是否曾被移除。</summary>
+    public bool HasPowerMarkRemovedThisTurn(int playerId) => _powerMarkRemovedThisTurn.Contains(playerId);
+
+    /// <summary>清空记忆位（回合开始的重置步骤调用）。</summary>
+    public void ResetPowerMarkRemovedThisTurn()
+    {
+        if (_powerMarkRemovedThisTurn.Count == 0) return;
+        _powerMarkRemovedThisTurn.Clear();
+        GD.Print("[AreaManager.Mark] 重置：本回合『势力标志曾被移除』记忆位已清空");
+    }
 
     /// <summary>清空所有地区标记（重置/测试用），通过事件通知 UI 层刷新</summary>
     public void ClearAllMarks()

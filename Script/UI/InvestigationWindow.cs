@@ -76,14 +76,17 @@ public partial class InvestigationWindow : Window
     /// <summary>初始化依赖并打开窗口。
     /// cards 为从胜者牌库顶取出的 X 张实例（已脱离数据层牌库）；
     /// onReturnConfirmed 在确认时回调（仅回传纯数据：牌库顶/底实例列表），由 Controller 统一完成数据层放回 + UI 牌库同步 + 抽牌；
-    /// onDraw 为胜者抽牌回调。</summary>
+    /// onDraw 为胜者抽牌回调。
+    /// titleOverride：【P4·预测X】复用本窗口时的标题覆盖（缺省 null = 调查对抗标题）；预测不抽牌，
+    /// 调用方传 onDraw = 空实现即可（窗口只负责"分配顶/底"这一件事）。</summary>
     public void Configure(int winnerPlayer, int areaNo, List<CardInstance> cards,
                           System.Action<int, List<CardInstance>, List<CardInstance>> onReturnConfirmed,
-                          Action<int, int> onDraw)
+                          Action<int, int> onDraw, string titleOverride = null)
     {
         _winnerPlayer = winnerPlayer;
         _areaNo = areaNo;
-        if (_titleLabel != null) _titleLabel.Text = $"{areaNo}地区调查对抗获胜";
+        if (_titleLabel != null)
+            _titleLabel.Text = string.IsNullOrEmpty(titleOverride) ? $"{areaNo}地区调查对抗获胜" : titleOverride;
         _onReturnConfirmed = onReturnConfirmed;
         _onDraw = onDraw;
         _cardInstances.Clear();

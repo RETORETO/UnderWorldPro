@@ -38,8 +38,31 @@ namespace Script.Data.Effects
         /// <summary>是否存在明确的引发玩家。</summary>
         public bool HasTriggeringPlayer => TriggeringPlayerId != NoPlayer;
 
-        /// <summary>附加整数参数（如回合号），扩展用。</summary>
+        /// <summary>附加整数参数（如回合号、标志数量），扩展用。</summary>
         public int ExtraInt { get; set; }
+
+        /// <summary>
+        /// 附加字符串参数（扩展用）：用于承载"标志/计数器类型名"（`OnMarkerPlaced`）、
+        /// "离开去向区名"（`OnCardLeft`）等文本上下文，避免为每个新时机再加字段。
+        /// </summary>
+        public string ExtraString { get; set; }
+
+        // ==================== 触发时场景快照（"触发不看当前场景"语义） ====================
+        // 规则：触发效果只判"触发条件是否满足过"，**不看来源卡此刻身在何处**；
+        // 但收集触发时会做"来源卡是否在其生效区"的判定，若直接用 `card.CurrentZone` 会误杀以下两类：
+        //  ① 死亡触发：卡在**进入墓地之后**才有触发窗口（死亡处理完才广播）→ 角色卡（默认生效区=争夺区）
+        //     会被判"不在生效区"而整条丢触发；
+        //  ② 进场即死：卡进场后被持续效果立即消灭，进场触发窗口打开时它已在墓地 → 同上丢失。
+        // 因此由发点把"**触发条件满足那一刻**的来源场景"带进上下文，收集侧与结算侧都以它为准。
+
+        /// <summary>触发条件满足时，来源卡所在的**区域**（null=未快照，回退实时 CurrentZone）。
+        /// 仅对"事件主体卡"（`SourceCard`）生效：旁观者（反应类）仍按实时区域判定。</summary>
+        public Script.Enums.CardZone? SourceZoneAtTrigger { get; set; }
+
+        /// <summary>触发条件满足时，来源卡所在的**地区 UID**——即"本地区"语义的唯一基准
+        /// （死亡＝死亡时所处地区；进场＝进入的地区；机动＝移动到的地区；离场＝离开前所在地区）。
+        /// 空=未快照（回退实时 ZoneDetailId）。</summary>
+        public string SourceAreaAtTrigger { get; set; }
 
         /// <summary>
         /// 条件判定用的"被检查对象"：优先 ContextCard，缺省回落到 SourceCard。

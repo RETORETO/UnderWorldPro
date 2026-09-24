@@ -76,5 +76,31 @@ namespace Script.Data.Effects
         /// 【后续拓展·B 预留】调查对抗获胜 → OnInvestigationWon；势力对抗(Power)获胜 → OnPowerWon；
         /// 同样携带 TriggeringPlayerId(胜者)+TargetAreaId(地区)，复用 WinnerIsSelf 条件链路。</summary>
         OnCombatWon,
+
+        /// <summary>【P3】势力对抗结束事件发生。映射到 EffectTiming.OnPowerCombatEnded。
+        /// 触发语义：**一次势力对抗结束时**广播（**无论胜负、含平局**；与 `OnCombatWon` 不同——后者只在"分出胜者的战斗对抗"后发）。
+        /// 供【声望】响应："每个势力对抗结束后，由该地区拥有较多声望角色的一方给该地区添加一个势力标记"。
+        /// ctx.TargetAreaId = 进行该次势力对抗的地区；ctx.TriggeringPlayerId = 0（无胜者语义；声望由条件自行比较双方声望角色数）。</summary>
+        OnPowerCombatEnded,
+
+        /// <summary>
+        /// 【P3·调查对抗获胜】（2026-09 补齐：原为"后续拓展·B 预留"）映射到 `EffectTiming.OnInvestigationWon`。
+        /// 触发语义：`CombatManager` 结算**调查对抗（Investigation）**分出胜者后广播（**平局/0:0 不广播**），
+        /// 与 `OnCombatWon`（只覆盖战斗对抗 Strength）并列。ctx.TriggeringPlayerId=胜者玩家Id，
+        /// ctx.TargetAreaId=该调查对抗所在地区；`SourceCard=null`（由收集阶段按"在场卡"各自注入 source）。
+        /// 供 JC072「当你赢得**其所参与**的调查对抗时…」类效果响应（条件 `WinnerIsSelfInSameArea` 正好表达
+        /// "本卡控制者获胜 ∧ 本卡就在该地区"）。
+        /// </summary>
+        OnInvestigationWon,
+
+        /// <summary>
+        /// 【P3·"被潜伏/翻面时"】卡牌**翻面为暗藏者**（`CardInstance.SetCovert(true)` 经状态中枢
+        /// `CardChangeKind.CovertChanged`）时广播。映射到 `EffectTiming.OnLatent`。
+        /// 触发语义：**自身**语义（只有"被潜伏的那张卡"自己的 `OnLatent` 效果会被收集，与进场/现身同款）；
+        /// 反方向（暗藏→正面）由既有的 `UncoverTrigger` 承担，本事件**只在 IsCovert 变 true 时**发。
+        /// ctx.SourceCard=被潜伏的卡，ctx.TargetAreaId/SourceAreaAtTrigger=其所在地区（供"本地区"类效果）。
+        /// 覆盖 JC054「潜伏强制触发：对本地区其他角色各 1 点伤害」。
+        /// </summary>
+        OnLatent,
     }
 }

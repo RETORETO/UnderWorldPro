@@ -37,6 +37,15 @@ public partial class ZoneManager : Node
     /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
     public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
 
+    /// <summary>
+    /// 【P4·规则钩子】卡**进场**（非场地区 → 争夺区，且卡此刻仍在争夺区）后的规则性检查点。
+    /// 触点位于 `MoveToArea` 的 `EnterTrigger` 广播与 `RegisterPersistent`（持续效果/关键字授予）**之后**：
+    /// 此时"进场触发"已收集完毕、"领袖"关键字已授予，规则钩子据此判定（例：领袖唯一性——
+    /// 同控制者场上至多 1 个领袖，超限立刻选一个牺牲且不入堆叠；见 `LeaderRule`）。
+    /// 装配见 `GameInitializer`；未装配时为 null（无副作用）。
+    /// </summary>
+    public System.Action<CardInstance> OnCardEnteredArea { get; set; }
+
     /// <summary>卡牌移动完成后触发，供 UI 层同步卡牌节点归属。参数: (card, toZone, playerId, detailId)</summary>
     public event Action<CardInstance, CardZone, int, string> OnCardMoved;
 
@@ -254,6 +263,17 @@ public partial class ZoneManager : Node
         host.SealedCards.Clear();
     }
 
+    /// <summary>
+    /// 【P3】效果驱动的**控制权变更**（JC129 操控心智"你获得目标敌方角色的控制权直到回合结束"）：
+    /// 只改 `ControllerId`（`OwnerId` 不变，与内部夺控语义一致），并走同一条 `TransferOwnership` 出口
+    /// （版本号 / 光环重算 / 前提取舍 / UI 刷新都随之发生）。
+    /// </summary>
+    public void ChangeController(CardInstance card, int newControllerId, bool bumpVersion = true)
+    {
+        if (card == null || newControllerId <= 0) return;
+        TransferOwnership(card, newControllerId, bumpVersion);
+    }
+
     /// <summary>将卡牌控制权转移到目标玩家（自由移动阶段只改 ControllerId，OwnerId 不变）。
     /// bumpVersion=false 时不刷新目标版本号（争夺区→争夺区移动的夺控换边场景，见 FireMoved 说明）。</summary>
     private void TransferOwnership(CardInstance card, int playerId, bool bumpVersion = true)
@@ -291,6 +311,10 @@ public partial class ZoneManager : Node
         // 注意顺序：必须先 ReevaluatePrereqs（用新控制者/新忠诚重算并改写数据），再 RefreshFirstStrikeStats
         // （把最新数据刷到 UI）；反之 UI 会显示重算前的旧值，表现为"数据变了 UI 没刷"。
         EE?.ReevaluatePrereqs(playerId);
+        // 【P3·B】"所在地区无敌方角色"这类前提取决于**对手**在该地区的卡：
+        // 对手的卡进出该地区时，重算的是"移动者控制者"的持续效果，本方卡不会重判 → 这里再对另一方重算一次
+        // （与 ReevaluateAuras 的"新旧地区都重算"同思路；ReevaluatePrereqs 内部按 playerId 过滤，重复调用无害）。
+        EE?.ReevaluatePrereqs(playerId == 1 ? 2 : 1);
         TurnManagerRef?.RefreshFirstStrikeStats();
         // 【MVC 收口】所有 move 路径（MoveToX / MoveCard / PM 命令专用移动）经此唯一出口，
         // 由 View 层订阅后统一刷新派生 UI（资产区领域忠诚、地区能力统计、分数、持续效果态），
@@ -372,10 +396,21 @@ public partial class ZoneManager : Node
         FireMoved(card, CardZone.Stack, playerId, null);
     }
 
+    /// <summary>【P1·触发接线】离场触发（OnCardLeft）：仅当卡"原本在场上"时广播（= 非死亡离场）。
+    /// 必须在区域字段被改写**之前**调用（OnCardLeft 的 TargetAreaId 取离开时的 ZoneDetailId）。</summary>
+    private void EmitCardLeftIfLeavingField(CardInstance card, CardZone fromZone, CardZone toZone)
+    {
+        bool wasOnField = fromZone == CardZone.AreaZone || fromZone == CardZone.AttachedZone
+                          || fromZone == CardZone.SealedZone;
+        if (!wasOnField) return;
+        _triggerEmitPoints?.OnCardLeft(card, card.ControllerId, fromZone.ToString(), toZone.ToString());
+    }
+
     /// <summary>进入手牌：转移归属 + 重置临时状态，清 ZoneDetailId</summary>
     public void MoveToHand(CardInstance card, int playerId)
     {
         if (card == null) return;
+        EmitCardLeftIfLeavingField(card, card.CurrentZone, CardZone.Hand);   // 【P1】回手类离场触发
         RemoveFromAllZones(card, CardZone.Hand);
         TransferOwnership(card, playerId);
         card.ResetToBaseState();
@@ -422,6 +457,7 @@ public partial class ZoneManager : Node
         // 仅当"非场地区 → 争夺区"时才视为进场（触发 EnterTrigger）；
         // 争夺区→争夺区移动（机动/夺控转移）fromZone 也是 AreaZone，不触发——符合规则（D37）。
         CardZone fromZone = card.CurrentZone;
+        string fromAreaDetail = card.ZoneDetailId;
         // 目标版本号策略（2026-08-11）：争夺区→争夺区的移动【不刷新版本号】，
         // 含跨地区机动与夺控换边；以其为目标的效果不因此丢失（"本地区"限制另由结算快照复检）。
         // 注意必须同时透传给 TransferOwnership，否则其内部 FireMoved 会抢先 Bump 一次。
@@ -449,8 +485,20 @@ public partial class ZoneManager : Node
             // D19 统一注册：通过 MOVE 命令（非结算路径）进入争夺区的卡，同样需要注册持续/静止效果
             // （如 JC001 通灵猫头鹰的"不能被装备结附"与"白眼=先手调查"）。与 TurnManager.ResolveEntry
             // 的 PlayToArea 分支保持一致，避免"MOVE 进场不生效"的漏注册。
-            EE?.RegisterPersistent(card);
+            // 【触发语义·配套】只在卡**此刻仍在争夺区**时注册：FireMoved 期间的持续效果重算可能让卡
+            // "进场即死"（已进墓地），此时注册会把死卡的持续/静止效果又挂回注册表（幽灵状态）。
+            // 注意：进场触发（上一行）**不设此保护**——进场即死的卡也必须照常触发。
+            if (card.CurrentZone == CardZone.AreaZone) EE?.RegisterPersistent(card);
+
+            // 【P4·规则钩子】进场后的规则性检查（此时持续效果/关键字已授予、进场触发已收集）。
+            // 当前消费方：领袖唯一性（`LeaderRule`）；卡已不在争夺区时不再检查。
+            if (card.CurrentZone == CardZone.AreaZone) OnCardEnteredArea?.Invoke(card);
         }
+        // 【P1·触发接线】场上移动触发（OnMove）：每次位置变更都发（含争夺区→争夺区机动/夺控）。
+        // 与上行 EnterTrigger 的区别：EnterTrigger 仅"非场地区→争夺区"发，故"当此角色进入一个地区时"
+        // （机动也算）类效果必须挂 OnMove。同区重放（from==to）不发，避免无意义触发。
+        if (fromZone != CardZone.AreaZone || !string.Equals(fromAreaDetail, areaDetailId, System.StringComparison.Ordinal))
+            _triggerEmitPoints?.OnMove(card, playerId, areaDetailId, fromAreaDetail);
     }
 
     /// <summary>进入附属子区域：不进 _area 桶，挂在宿主实例(AttachedTo)上，ZoneDetailId 记录所属地区。
@@ -460,6 +508,7 @@ public partial class ZoneManager : Node
     {
         if (card == null) return;
         CardZone fromZone = card.CurrentZone;
+        string fromZoneAreaDetail = card.ZoneDetailId;
         RemoveFromAllZones(card, CardZone.AttachedZone);
         TransferOwnership(card, playerId);
         card.CurrentZone = CardZone.AttachedZone;
@@ -469,8 +518,15 @@ public partial class ZoneManager : Node
         // 对无持续/静止效果的普通附属是无副作用空操作；防重复由 RegisterPersistent 内部去重。
         if (fromZone != CardZone.AttachedZone)
         {
-            EE?.RegisterPersistent(card);
+            // 【触发语义】附属进场触发：即便 FireMoved 期间因持续效果立即被消灭（此刻已在墓地），
+            // 进场触发也必须照常收集（Zone 覆盖由 TriggerEmitPoints 带入上下文；附属的进场区=附属区）。
+            _triggerEmitPoints?.EnterTrigger(card, playerId, areaDetailId, card.AttachedTo, CardZone.AttachedZone);
+            // 持续/静止效果注册同样要求"此刻确实还在附属区"（避免给已离场的卡挂幽灵注册）
+            if (card.CurrentZone == CardZone.AttachedZone) EE?.RegisterPersistent(card);
         }
+        // 【P1·触发接线】附属的"进入地区"同样算 OnMove（其 ZoneDetailId=宿主所在地区）
+        if (fromZone != CardZone.AttachedZone || !string.Equals(fromZoneAreaDetail, areaDetailId, System.StringComparison.Ordinal))
+            _triggerEmitPoints?.OnMove(card, playerId, areaDetailId, fromZoneAreaDetail);
         if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
         FireMoved(card, CardZone.AttachedZone, playerId, areaDetailId);
     }
@@ -493,6 +549,7 @@ public partial class ZoneManager : Node
     public void MoveToScore(CardInstance card, int playerId)
     {
         if (card == null) return;
+        EmitCardLeftIfLeavingField(card, card.CurrentZone, CardZone.ScoreZone);   // 【P1】进计分区类离场触发
         RemoveFromAllZones(card, CardZone.ScoreZone);
         TransferOwnership(card, playerId);
         card.ResetToBaseState();
@@ -523,6 +580,7 @@ public partial class ZoneManager : Node
     private void MoveToDeck(CardInstance card, int playerId, bool toTop)
     {
         if (card == null) return;
+        EmitCardLeftIfLeavingField(card, card.CurrentZone, CardZone.Deck);   // 【P1】回牌库类离场触发（含地区赢取送库底）
         RemoveFromAllZones(card, CardZone.Deck);   // 若来自牌库，同步从数据层牌库移除
         TransferOwnership(card, playerId);
         card.ResetToBaseState();
@@ -796,6 +854,8 @@ public partial class ZoneManager : Node
             IsSealed = c.IsSealed,
             IsAttached = c.IsAttached,
             IsSeal = c.IsSeal,
+            IsSealedFaceDown = c.IsSealedFaceDown,   // 【P2】背面朝上封印：随快照下行供客户端做信息隔离
+            HasGuard = c.HasGuard,                   // 【P3】屏障：客户端本地目标合法性判定要读它
             AttachedToUid = c.AttachedTo?.UID,
             SealedByUid = c.SealedBy?.UID,
             IsTapped = c.IsTapped,
@@ -826,6 +886,15 @@ public partial class ZoneManager : Node
             foreach (var kv in c.GrantedAttributes) r.GrantedAttributes[kv.Key] = kv.Value;
         r.CurrentFirstStrikeInvestigation = c.CurrentFirstStrikeInvestigation;
         r.CurrentFirstStrikeStrength = c.CurrentFirstStrikeStrength;
+        // 【K23】每回合每能力使用次数（客户端可发动判定要读；与服务端同解）
+        if (c.AbilityUsesThisTurn.Count > 0)
+        {
+            foreach (var kv in c.AbilityUsesThisTurn)
+            {
+                r.UsedAbilityIds.Add(kv.Key);
+                r.UsedAbilityCounts.Add(kv.Value);
+            }
+        }
 
         return r;
     }

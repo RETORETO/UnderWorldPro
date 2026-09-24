@@ -70,6 +70,10 @@ public partial class CardManager : Node
 
     public void SetZoneManager(ZoneManager zoneManager) => _zoneManager = zoneManager;
 
+    /// <summary>本局 ZoneManager 引用（只读）。供"按区域枚举目标候选"（如 K14 墓地/手牌目标池）复用同一真相源。
+    /// 未装配时为 null（调用方需判空）。</summary>
+    public ZoneManager ZoneManagerRef => _zoneManager;
+
     /// <summary>【MVC 收口】注入触发广播封装层（由 GameInitializer 调用）。</summary>
     public void SetTriggerEmitPoints(TriggerEmitPoints emitPoints) => _triggerEmitPoints = emitPoints;
 
@@ -142,12 +146,106 @@ public partial class CardManager : Node
     // 由 DealDamageToInstance 在写入伤害后做规则判定调用，不再由 Model 自触发。
     // ============================================================
     private void HandleInstanceDeath(CardInstance instance)
+        => ResolveDeath(instance, DeathCause.Damage);
+
+    /// <summary>
+    /// 死亡原因（死亡是一个**行为**，不是一个"卡从场上进墓地"的动作）。
+    /// 触发死亡触发的三种原因：伤害累积致死、被"消灭"、被"牺牲"。
+    /// 回手/回牌库（Bounce/撤回/地区赢取送库底）**不是**死亡，不广播。
+    /// </summary>
+    public enum DeathCause
     {
-        GD.Print($"[CardManager] 卡牌死亡: {instance.PlayerTemplate?.CardName} (UID: {instance.UID})");
-        MoveCardToGraveyard(instance);   // 委托 ZoneManager 处理区域移动（含 CurrentZone 修改）
-        instance.OnDeath?.Invoke(instance);  // 转发 Model 的纯数据死亡事件（供其他订阅方）
-        OnCardDied?.Invoke(instance);
+        Damage,     // 伤害+创伤 ≥ 防御（战斗伤害/效果伤害）
+        Destroy,    // 被"消灭"（ActionVerb.Destroy）
+        Sacrifice,  // 被"牺牲"（ActionVerb.Sacrifice / 激活代价"牺牲本角色"）
     }
+
+    /// <summary>
+    /// 【死亡语义·死亡阻止挂接点】供"不会被 A 效果消灭""不会被牺牲"类替代效果实现：
+    /// 返回 true = 本次**死亡行为被阻止**（卡留在场上）→ **不广播死亡触发**。
+    /// 与 `DamagePreventer` 的区别：本钩子阻止的是"死亡"本身（伤害可能已经落地/消灭已经点名），
+    /// `DamagePreventer` 阻止的是"伤害落地"（伤害没发生自然没有死亡）。由具体卡包/效果注册（默认 null = 不阻止）。
+    /// 语义要点：**没死就没有死亡触发** —— "A 效果成功生效但卡没死"不属于死亡。
+    /// </summary>
+    public System.Func<CardInstance, DeathCause, bool> DeathPreventer { get; set; }
+
+    /// <summary>
+    /// 【触发语义·死亡唯一入口】按"死亡行为"处理一张场上卡：先广播死亡（此刻卡仍在场上），再按去向离场。
+    ///
+    /// 关键设计（三条规则）：
+    ///  1. **死亡=行为**：伤害致死 / 消灭 / 牺牲 都走本方法 → 死亡触发必然成立；回手/回牌库不走本方法。
+    ///  2. **触发条件"卡在场上"在广播时天然成立**：广播发生在离场之前，故死亡触发的生效区判定不需要
+    ///     任何"墓地区"声明，也不依赖卡此刻的所在区。
+    ///  3. **去向与死亡无关**：`destination` 只决定卡去哪儿（默认墓地）。将来"替代效果"（如"所有卡不进入墓地、
+    ///     直接返回卡组"）只需改这里的去向，**死亡触发照常成立**——绝不能用"卡在墓地"当死亡判据。
+    /// </summary>
+    /// <param name="destination">离场去向（默认墓地；替代效果可改为牌库底/手牌等）。</param>
+    public void ResolveDeath(CardInstance instance, DeathCause cause, CardZone destination = CardZone.Graveyard)
+    {
+        if (instance == null) return;
+        CardZone zoneAtDeath = instance.CurrentZone;
+        string areaAtDeath = instance.ZoneDetailId;
+        bool onField = zoneAtDeath == CardZone.AreaZone || zoneAtDeath == CardZone.AttachedZone
+                       || zoneAtDeath == CardZone.SealedZone;
+
+        // 非场上来源（手牌/牌库/墓地/堆叠）→ 不是"死亡"行为：不广播，仅按去向兜底移动。
+        if (!onField)
+        {
+            GD.Print($"[CardManager] {instance.PlayerTemplate?.CardName} 在 {zoneAtDeath} 被{cause}：非场上卡，不产生死亡事件");
+            if (destination == CardZone.Graveyard && zoneAtDeath != CardZone.Graveyard)
+                MoveCardToGraveyard(instance);
+            return;
+        }
+
+        // 【死亡语义·唯一阻止点】替代/防止效果成立时：卡不死、留在场上、**不广播死亡触发**。
+        // 典型：「此卡不会因为敌方效果被消灭」「不能被牺牲」；伤害类则由 `DamagePreventer` 在伤害收口处拦下
+        // （伤害没落地 → 无死亡，同样不广播）。
+        if (DeathPreventer?.Invoke(instance, cause) == true)
+        {
+            GD.Print($"[CardManager] {instance.PlayerTemplate?.CardName} 本次死亡({cause})被效果阻止 → 卡留在场上、不产生死亡触发");
+            return;
+        }
+
+        GD.Print($"[CardManager] 卡牌死亡({cause}): {instance.PlayerTemplate?.CardName} (UID: {instance.UID})，死亡地={areaAtDeath}");
+
+        // 1) 广播死亡（此刻卡仍在场上；候选收集会按 IsDying 把它排除在目标之外）
+        instance.IsDying = true;
+        try
+        {
+            instance.OnDeath?.Invoke(instance);   // Model 纯数据死亡事件（供其他订阅方）
+            OnCardDied?.Invoke(instance);         // Controller 层既有 C# 事件（UI 订阅）
+            // 触发总线：带上"死亡那一刻"的区域/地区（此即规则要求的"触发时所在地区"，与去向无关）
+            _triggerEmitPoints?.OnCardDied(instance, instance.ControllerId, zoneAtDeath, areaAtDeath);
+        }
+        finally
+        {
+            instance.IsDying = false;
+        }
+
+        // 2) 按去向离场（死亡触发已成立，去向不参与判定）
+        switch (destination)
+        {
+            case CardZone.Deck:
+                _zoneManager?.MoveToDeckBottom(instance, instance.OwnerId, false);
+                break;
+            case CardZone.Hand:
+                ReturnCardToHand(instance);
+                break;
+            case CardZone.ScoreZone:
+                _zoneManager?.MoveToScore(instance, instance.OwnerId);
+                break;
+            default:
+                MoveCardToGraveyard(instance);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 【P1】"消灭"（`ActionVerb.Destroy`）专用入口：等价于 `ResolveDeath(..., DeathCause.Destroy)`。
+    /// 保留本方法名以兼容既有调用点；语义见 <see cref="ResolveDeath"/>。
+    /// </summary>
+    public void DestroyInstance(CardInstance instance)
+        => ResolveDeath(instance, DeathCause.Destroy);
 
     // ============================================================
     // 计数器
@@ -157,12 +255,24 @@ public partial class CardManager : Node
         if (instance == null) return;
         if (instance.IsSealed) return;   // 规则上移：封印守卫由 Controller 负责
         instance.AddCounter(type, amount);
+        // 【P3·F】卡上标志增减 → 重判"按计数缩放的持续授予"（如 JC045 每有一个时间标志 → 一个黑星）
+        EE?.ReevaluatePrereqs(instance.ControllerId);
+        // 【P3·K20】卡上标志增减 → 重算"持续失去图标"的受影响集合（JC123：具锁定标记者失去黑星/白星）
+        EE?.ReapplyIconSuppressions();
+        // 【P1·触发时机接线】卡上标志/指示物放置 → OnMarkerPlaced（此前无发点）。
+        // 该时机高频，消费方需自行防自指递归（D-1 熔断兜底）。
+        if (amount > 0) _triggerEmitPoints?.OnMarkerPlaced(type, amount, instance.ControllerId, instance.ZoneDetailId, instance);
     }
 
     public void RemoveCounter(CardInstance instance, string type, int amount = 1)
     {
         if (instance == null) return;
         instance.RemoveCounter(type, amount);
+        // 【P3·F】卡上标志减少 → 同样重判"按计数缩放的持续授予"
+        //（如 JC045 时间标志被移除 → 黑星数额随之减少；归零则整条授予被撤销）
+        EE?.ReevaluatePrereqs(instance.ControllerId);
+        // 【P3·K20】标志移除 → 重算"持续失去图标"（JC123：标志没了就该恢复黑星/白星）
+        EE?.ReapplyIconSuppressions();
     }
 
     // ============================================================
@@ -211,6 +321,9 @@ public partial class CardManager : Node
         if (!instance.IsCovert) return;   // 本就正面/非暗藏，无需现身（幂等保护，避免重复触发）
 
         instance.ResetToBaseState();       // 复位基础属性 + IsCovert=false（见 CardInstance.ResetToBaseState）
+        // 【K13/P3·E】`ResetToBaseState` 会**清空运行期授予**（含光环授予：如 JC038 授予的"袭击"）——
+        // 复位后必须立即按当前场上重算光环，否则"现身即丢失光环授予"（且光环登记表仍以为已授予，不会自动补回）。
+        EE?.ReevaluateAuras(instance.ControllerId);
         string areaId = instance.ZoneDetailId ?? "";
         // 现身 = 复用进场触发链 + 广播现身触发（D39 薄封装）
         _triggerEmitPoints?.EnterTrigger(instance, instance.ControllerId, areaId);
@@ -278,6 +391,8 @@ public partial class CardManager : Node
         inst.IsSealed = r.IsSealed;
         inst.IsAttached = r.IsAttached;
         inst.IsSeal = r.IsSeal;
+        inst.IsSealedFaceDown = r.IsSealedFaceDown;   // 【P2】背面朝上封印：影响客户端可见性（非规则）
+        inst.HasGuard = r.HasGuard;                   // 【P3】屏障：影响客户端本地目标合法性判定
         inst.IsTapped = r.IsTapped;
         inst.Damage = r.Damage;
         inst.Trauma = r.Trauma;
@@ -289,6 +404,13 @@ public partial class CardManager : Node
         if (r.MagicDomains != null) inst.MagicDomains.AddRange(r.MagicDomains);
         inst.EnteredThisTurn = r.EnteredThisTurn;
         inst.AbilityUsedThisTurn = r.AbilityUsedThisTurn;
+        // 【K23】每回合每能力使用次数随快照下行（客户端 `CanActivate` 与服务端同解，否则"已达上限仍高亮"）
+        {
+            var pairs = new List<KeyValuePair<string, int>>();
+            int n = Math.Min(r.UsedAbilityIds?.Count ?? 0, r.UsedAbilityCounts?.Count ?? 0);
+            for (int i = 0; i < n; i++) pairs.Add(new KeyValuePair<string, int>(r.UsedAbilityIds[i], r.UsedAbilityCounts[i]));
+            inst.SetAbilityUsesThisTurn(pairs);
+        }
         inst.IsHidden = r.IsHidden;   // Phase B 信息隔离：占位实例标记（只画卡背，不参与规则/交互）
         inst.SyncVersion(r.VersionId);
 
@@ -413,12 +535,57 @@ public partial class CardManager : Node
     // ============================================================
     // 伤害管理
     // ============================================================
+    /// <summary>
+    /// 【死亡语义·伤害防止挂接点】供"灵体（JC 包=防止伤害）""防止伤害""护盾"等实现：
+    /// 返回 true = 本次伤害被**全部防止** → 不写伤害 → 不判死 → **不产生死亡触发**。
+    /// 由具体卡包/效果注册（默认 null = 无防止，行为不变）。
+    /// 语义要点：死亡触发的成立前提是"死亡真的发生了"；伤害被防止就没有死亡，故绝不能广播死亡触发。
+    /// </summary>
+    public System.Func<CardInstance, int, bool> DamagePreventer { get; set; }
+
     public void DealDamageToInstance(CardInstance instance, int amount, bool isTrauma = false)
+        => DealDamageToInstance(instance, amount, isTrauma, allowRedirect: true, unpreventable: false);
+
+    /// <summary>
+    /// 【P3·K13】`unpreventable`：本次伤害**不能被防止**（JC019 镇魔枪授予的"该伤害不能被防止"）——
+    /// 跳过 `DamagePreventer`（灵体 + 伤害护盾），直接落地；**重定向**不受影响（那是"改由谁承受"而非"防止"）。
+    /// </summary>
+    public void DealDamageToInstance(CardInstance instance, int amount, bool isTrauma, bool allowRedirect)
+        => DealDamageToInstance(instance, amount, isTrauma, allowRedirect, unpreventable: false);
+
+    /// <summary>
+    /// 【P3·K3】`allowRedirect`：是否允许把本次伤害**改由其它卡承受**（JC077 庇佑圣灵 / JC121 空鸣御守）。
+    /// 重定向后递归调用时传 false —— **一次伤害只重定向一次**（防"你来我往"乒乓），
+    /// 但承受方自身的"防止"（灵体/护盾）仍在其落地时照常判定。
+    /// </summary>
+    public void DealDamageToInstance(CardInstance instance, int amount, bool isTrauma, bool allowRedirect,
+        bool unpreventable)
     {
         if (instance == null || !instance.HasDefense) return;
         // 暗藏者(IsCovert)潜伏状态，免疫一切伤害（含后续效果系统造成的伤害）：
         // 统一在此收口，避免任何伤害来源绕过战斗窗口的承伤判定伤到暗藏者。
         if (instance.IsCovert) return;
+        // 【P3·K3】持续型"伤害改由某卡承受"（不是触发、也不是防止）：先于"防止"判定，改判承伤对象。
+        if (allowRedirect && amount > 0)
+        {
+            var bearer = EE?.ResolveDamageRedirect(instance);
+            if (bearer != null && !ReferenceEquals(bearer, instance))
+            {
+                GD.Print($"[CardManager] ⇄ {instance.PlayerTemplate?.CardName} 本次 {amount} 点伤害改为由 " +
+                         $"{bearer.PlayerTemplate?.CardName} 承受（持续重定向）");
+                DealDamageToInstance(bearer, amount, isTrauma, allowRedirect: false, unpreventable: unpreventable);
+                return;
+            }
+        }
+        // 【死亡语义】伤害防止（灵体/防止伤害类）：防止成功 → 不写伤害 → 不判死 → 不触发死亡
+        // 【P3·K13】"不能被防止"的伤害跳过本分支（JC019 授予的能力）
+        if (amount > 0 && !unpreventable && DamagePreventer?.Invoke(instance, amount) == true)
+        {
+            GD.Print($"[CardManager] {instance.PlayerTemplate?.CardName} 本次 {amount} 点伤害被防止 → 不写伤害、不产生死亡");
+            return;
+        }
+        if (amount > 0 && unpreventable)
+            GD.Print($"[CardManager] ⚠ {instance.PlayerTemplate?.CardName} 本次 {amount} 点伤害**不能被防止** → 直接落地");
         if (isTrauma)
             instance.TakeTrauma(amount);
         else
@@ -441,21 +608,57 @@ public partial class CardManager : Node
     public void UntapAll()
     {
         if (_zoneManager == null) return;
-        int count = 0;
+        int count = 0, blocked = 0;
         foreach (var zone in new[] { CardZone.AreaZone, CardZone.Hand, CardZone.AssetZone, CardZone.AttachedZone })
             foreach (var c in _zoneManager.GetZoneCards(zone, 0))
-                if (c.IsTapped) { c.SetTapped(false); count++; }   // SetTapped 发 TappedChanged（阿格斯IV竖置恢复封锁）
-        GD.Print($"🔓 重置步骤：解除 {count} 张卡牌横置（含资产、结附卡，费用恢复）");
+            {
+                if (!c.IsTapped) continue;
+                // 【P3·K29】静止规则：其上有牌封印的**敌方角色**在重置步骤中不能被重置（JC108 织梦人）。
+                // 判定入口＝`EffectEngine.IsUntapBlocked`（单一实现；来源在场期间全局生效，卡文无"本地区"限定）。
+                if (EE?.IsUntapBlocked(c) == true)
+                {
+                    blocked++;
+                    GD.Print($"[CardManager] 🔒 {c.PlayerTemplate?.CardName} 其上有牌封印 → 重置步骤不解除横置（JC108）");
+                    continue;
+                }
+                c.SetTapped(false); count++;   // SetTapped 发 TappedChanged（阿格斯IV竖置恢复封锁）
+            }
+        GD.Print($"🔓 重置步骤：解除 {count} 张卡牌横置（含资产、结附卡，费用恢复）" +
+                 (blocked > 0 ? $"；{blocked} 张因『其上有牌封印』被锁定未重置" : ""));
+    }
+
+    /// <summary>
+    /// 【K23】重置步骤：清空**所有卡**的本回合"每能力"使用次数（"该能力每回合只能发动一次/两次"）。
+    /// 计数粒度＝每张卡·每回合·每能力（`CardInstance.GetAbilityUsesThisTurn`）。
+    /// 另：按用户口径，卡版本号变动时该卡的计数也会单独清空（`CardInstance.BumpVersion`）。
+    /// </summary>
+    public void ResetAllAbilityUsesThisTurn()
+    {
+        int n = 0;
+        foreach (var c in GetAllInstances())
+        {
+            if (c == null) continue;
+            if (c.AbilityUsesThisTurn.Count == 0) continue;
+            c.ResetAbilityUsesThisTurn();
+            n++;
+        }
+        GD.Print($"♻️ 重置步骤：清空 {n} 张卡的『每回合每能力』使用次数");
     }
 
     // ============================================================
     // 打出目标合法性（MVC 收口-P3）：原在 View(Arena) 内嵌的规则粗筛，上移至 Controller
     // ============================================================
 
-    /// <summary>把场上卡实例映射为打出/激活目标种类（粗筛）。public 供激活框架复用。</summary>
+    /// <summary>把场上卡实例映射为打出/激活目标种类（粗筛）。public 供激活框架复用。
+    /// 【K14】墓地/手牌/**资产**目标**按所在区域优先映射**（与卡的类别无关：墓地里的角色牌是"墓地目标"、
+    /// 资产区里的附属牌是"资产目标"）——用户 2026-09 口径：允许指定对手的手牌/墓地/资产，
+    /// 结算时按版本号判丢失（**除"争夺区→争夺区"外的一切区域切换都刷新版本号**，见 `ZoneManager.FireMoved`）。</summary>
     public static TargetKind MapInstanceToTargetKind(CardInstance inst)
     {
         if (inst == null) return TargetKind.None;
+        if (inst.CurrentZone == CardZone.Graveyard) return TargetKind.Graveyard;   // 【K14】墓地目标
+        if (inst.CurrentZone == CardZone.Hand) return TargetKind.Hand;             // 【K14】手牌目标
+        if (inst.CurrentZone == CardZone.AssetZone) return TargetKind.Asset;       // 【K14】资产目标
         if (inst.IsCovert) return TargetKind.Covert;          // 暗藏者
         if (inst.IsAttached) return TargetKind.Attachment;     // 附属
         // 秘社（CouncilCardData，承载于 CouncilZone）：即便 PlayerTemplate 为 null 也要识别
@@ -518,8 +721,9 @@ public partial class CardManager : Node
         PlayerManager pm = null)
     {
         if (spec == null || t == null) return false;
-        // 粗筛大类（与 MatchesRule 同一互斥映射）
-        if (MapInstanceToTargetKind(t) != spec.Kind) return false;
+        // 粗筛大类（与 MatchesRule 同一互斥映射）；【K14】`KindAlt` 非 None 时与 `Kind` 构成 OR
+        var kind = MapInstanceToTargetKind(t);
+        if (kind != spec.Kind && (spec.KindAlt == TargetKind.None || kind != spec.KindAlt)) return false;
         // 精筛条件（全部满足）——与结算复检共用 CheckRestrictions（单一真相源）
         return Script.Manager.TargetValidity.CheckRestrictions(
             spec.Restrictions, spec.Param, t, sourceController, pm);

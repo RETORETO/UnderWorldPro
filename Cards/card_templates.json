@@ -1,4 +1,4 @@
-{
+﻿{
   "Templates": [
     {
       "Kind": 0,
@@ -18446,7 +18446,7 @@
       "Kind": 0,
       "UID": "JC079_shengying",
       "CardName": "\u5723\u5A74",
-      "Score": 0,
+      "Score": 1,
       "SubCardName": null,
       "UniqueField": null,
       "Cost": 1,

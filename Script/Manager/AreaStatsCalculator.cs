@@ -46,8 +46,13 @@ namespace Script.Manager
                 CombatManager.CombatType.Investigation => card.CurrentInvestigation
                     + (isFirst ? card.GetAttribute("先手调查") : 0),
                 // 战斗结算读实例当前战力值（含 JC060 光环授予的"战斗"属性 +1），而非仅模板 GetTotalStrength
-                CombatManager.CombatType.Strength => card.CurrentStrength,
-                CombatManager.CombatType.Power => tmpl.GetTotalPower(isFirst),
+                // 【P1】白刀=先手战斗：与"白眼=先手调查"同构——仅先手方叠加（白刀不折进 CurrentStrength，避免非先手时误加）。
+                CombatManager.CombatType.Strength => card.CurrentStrength
+                    + (isFirst ? card.GetAttribute("先手战斗") : 0),
+                // 【P1】势力改用实例值：原实现只读模板 GetTotalPower(isFirst)，导致"黑星=势力"（实例授予 CurrentPower）
+                // 与"白星=先手势力"（实时授予属性）完全不参与对抗结算。改读实例后与调查/战力口径统一。
+                CombatManager.CombatType.Power => card.CurrentPower
+                    + (isFirst ? card.GetAttribute("先手势力") : 0),
                 _ => 0
             };
         }
@@ -65,6 +70,15 @@ namespace Script.Manager
             return (f & CardCategory.Character) != 0 || (f & CardCategory.Attachment) != 0;
         }
 
+        /// <summary>【P3·K21】该卡本次是否被"地区级静止规则"排除出统计（JC023 范·弥尔顿
+        /// 「所有本地区的**敌方**暗藏者不能参与势力对抗」）。
+        /// 只影响**暗藏者**：正面角色/附属不受影响；"敌方"＝非静止规则来源卡的控制者（不对称，本方暗藏者照常参与）。
+        /// 判定入口＝`EffectEngine.ExcludesCovertPower`（按卡**当前**所在地实时匹配地区）。
+        /// 因暗藏者的调查/战斗本为 0，实际效果＝其势力贡献（1+先手势力）归零。</summary>
+        private static bool IsExcludedByAreaStaticRule(CardInstance card, string areaUid)
+            => card.IsCovert
+            && EffectEngine.Instance?.ExcludesCovertPower(areaUid, card.ControllerId) == true;
+
         /// <summary>
         /// 计算某玩家在本地区（指定 slotUid）的三项能力之和（调查/战斗/势力），含先手加成与暗藏者规则。
         /// 返回 (inv, bat, pow)。横置卡不计入；非参与身份（如地区卡、资产卡、议会卡）不计入。
@@ -81,6 +95,7 @@ namespace Script.Manager
                 if (card.ControllerId != playerId) continue;
                 if (card.IsTapped) continue;                 // 横置不提供任何能力
                 if (!IsStatParticipant(card)) continue;      // 仅角色/附属/暗藏者参与
+                if (IsExcludedByAreaStaticRule(card, slotUid)) continue;   // 【P3·K21】敌方暗藏者被静止规则排除
 
                 inv += ValueOf(card, CombatManager.CombatType.Investigation, playerManager);
                 bat += ValueOf(card, CombatManager.CombatType.Strength, playerManager);
@@ -103,6 +118,7 @@ namespace Script.Manager
             {
                 if (card.ControllerId != playerId) continue;
                 if (card.IsTapped) continue;            // 横置不提供任何能力
+                if (IsExcludedByAreaStaticRule(card, areaUid)) continue;   // 【P3·K21】与 GetAreaStats 同一规则
                 total += ValueOf(card, type, playerManager);
             }
             return total;

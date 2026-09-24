@@ -24,7 +24,13 @@ namespace Script.Game.Entities
         // VersionId 与入栈时不同，即判目标丢失（无需再为每个属性效果单独广播）。
         // 与 UID 互补：UID=身份（整局不变，定位"哪张卡"）；VersionId=状态版本（判"是否还是入栈时那张合法目标"）。
         public int VersionId { get; private set; } = 0;
-        public void BumpVersion() => VersionId++;
+        /// <summary>自增状态版本号。**附带效果**：按用户 2026-09 口径，版本号变动时该卡的
+        /// "每回合只能发动一次/两次"限制**重新可用**（`_abilityUsesThisTurn` 一并清空）。</summary>
+        public void BumpVersion()
+        {
+            VersionId++;
+            ResetAbilityUsesThisTurn();   // 【K23】版本号变动 → 使用次数限制重置（用户口径）
+        }
         // C/S 化·第一批：快照重建时按权威态恢复版本号（覆盖自增，保证双端一致）
         internal void SyncVersion(int v) => VersionId = v;
         // C/S 化·第一批：快照重建时按权威态恢复 UID（极端路径：实例晚于快照建立）
@@ -50,6 +56,24 @@ namespace Script.Game.Entities
         public List<MagicDomain> MagicDomains { get; } = new List<MagicDomain>();
         public bool HasMagicDomain(MagicDomain d) => MagicDomains.Contains(d);
 
+        /// <summary>
+        /// 【P1】是否"具有魔法领域图标"（供 `TargetRestriction.HasMagicDomainIcon` 等复用，两端同源）。
+        /// 判定顺序：实例当前领域（已含运行时授予）非空 → 真；否则回退模板印刷领域，并忽略 `-1` 哨兵（= 印刷"无领域"）。
+        /// 之所以回退模板：`MagicDomains` 仅由 `ResetToBaseValues` 从模板拷入，未经过该步的实例（如尚在手牌）会是空表。
+        /// </summary>
+        public bool HasAnyMagicDomainIcon
+        {
+            get
+            {
+                if (MagicDomains.Count > 0) return true;
+                var tmplDomains = PlayerTemplate?.MagicDomains;
+                if (tmplDomains == null) return false;
+                foreach (var d in tmplDomains)
+                    if ((int)d != -1) return true;
+                return false;
+            }
+        }
+
         // ---------- 先手能力值（当前实际值，含持续效果加成） ----------
         // 白眼=先手调查能力：持续效果满足前提时，每"白眼"给 FirstStrikeInvestigation +1（对应卡文"白眼白眼"叠加）。
         public int CurrentFirstStrikeInvestigation { get; set; }
@@ -65,9 +89,25 @@ namespace Script.Game.Entities
 
         // ---------- 状态标记 ----------
         public bool IsTapped { get; set; }
+
+        /// <summary>
+        /// 【触发语义】"正在死亡"标记：`CardManager.ResolveDeath` 在**广播死亡事件期间**置位、离场完成后清除。
+        /// 用途：死亡触发窗口是在卡还留在场上时打开的（触发条件"卡在场上"天然成立），此时它**已不再是合法目标**，
+        /// 故候选收集（`TurnManager.GetLocalZoneTargets` / `LegalityProjection`）需按本标记排除"正在死的卡"。
+        /// 常态为 false，不参与快照投影。
+        /// </summary>
+        public bool IsDying { get; set; }
         public bool IsSealed { get; set; }
         public bool IsAttached { get; set; }
         public bool IsSeal { get; set; }   // 本卡是否为"封印卡"（封印了别的对象），镜像 IsAttached
+
+        /// <summary>
+        /// 【P2·封印信息隔离】本封印卡是否为"背面朝上"封印（JC119：**你的对手不能检视该牌**）。
+        /// 仅对封印卡（<see cref="IsSeal"/>==true）有意义：为 true 时，快照投影对**非控制者**隐藏其牌面
+        /// （`ZoneCardRef.IsSealedFaceDown` → `SnapshotFilter`/客户端只画卡背），控制者本人始终可见。
+        /// 与 <see cref="IsCovert"/> 区分：暗藏是场上正/背面状态、影响对抗与承伤；本标记纯信息隔离，不影响任何规则判定。
+        /// </summary>
+        public bool IsSealedFaceDown { get; set; }
         public bool HasGuard { get; set; }
         public bool IsCovert { get; set; }        // 暗藏状态(背面朝上,场上暗藏者)
         public bool ExtraCostPaid { get; set; }   // 额外费用是否已支付(结算时玩家选择)
@@ -85,6 +125,43 @@ namespace Script.Game.Entities
         // 进场时机判定（EnterTrigger 过滤）与能力使用限制失真。
         public bool EnteredThisTurn { get; set; }
         public bool AbilityUsedThisTurn { get; set; }
+
+        // ---------- 【K23】每回合"每张卡每能力"使用次数（"该能力每回合只能发动一次/两次"） ----------
+        // 用户 2026-09 口径：计数基准 = **每张卡 · 每回合 · 每能力**（按 EffectId 分别计数）；
+        // 且**该卡版本号变动时，限制重新可用**（见 BumpVersion）。
+        // 回合重置：`TurnManager.DoReset`（重置步骤）→ `CardManager.ResetAllAbilityUsesThisTurn()`。
+        // 声明：`EffectData.MaxUsesPerTurn`（0 = 不限次）。
+        private readonly Dictionary<string, int> _abilityUsesThisTurn = new Dictionary<string, int>();
+
+        /// <summary>本回合某能力（EffectId）已发动次数；未发动过返回 0。</summary>
+        public int GetAbilityUsesThisTurn(string effectId)
+            => (!string.IsNullOrEmpty(effectId) && _abilityUsesThisTurn.TryGetValue(effectId, out var n)) ? n : 0;
+
+        /// <summary>登记一次发动（计数 +1）。调用点＝"发动被接受"的那一刻（激活=入堆叠前；触发=入堆叠结算前）。</summary>
+        public void MarkAbilityUsedThisTurn(string effectId)
+        {
+            if (string.IsNullOrEmpty(effectId)) return;
+            _abilityUsesThisTurn[effectId] = GetAbilityUsesThisTurn(effectId) + 1;
+        }
+
+        /// <summary>该能力本回合是否已达上限（max &lt;= 0 = 不限次）。</summary>
+        public bool IsAbilityLimitReached(string effectId, int maxPerTurn)
+            => maxPerTurn > 0 && GetAbilityUsesThisTurn(effectId) >= maxPerTurn;
+
+        /// <summary>清空本卡的本回合能力计数（回合重置 / 版本号变动时调用）。</summary>
+        public void ResetAbilityUsesThisTurn() => _abilityUsesThisTurn.Clear();
+
+        /// <summary>快照投影用：本回合已使用的能力与次数（只读）。</summary>
+        public IReadOnlyDictionary<string, int> AbilityUsesThisTurn => _abilityUsesThisTurn;
+
+        /// <summary>快照恢复（客户端投影）：以权威态覆盖本卡的本回合能力计数。</summary>
+        public void SetAbilityUsesThisTurn(IEnumerable<KeyValuePair<string, int>> pairs)
+        {
+            _abilityUsesThisTurn.Clear();
+            if (pairs == null) return;
+            foreach (var kv in pairs)
+                if (!string.IsNullOrEmpty(kv.Key) && kv.Value > 0) _abilityUsesThisTurn[kv.Key] = kv.Value;
+        }
 
         // ---------- 状态变更中枢（Model 自身事件，供 Controller 订阅转发） ----------
         // 【MVC 修复】原实现直接调用 CardManager.Notify* 静态总线，形成 Model→Controller 反向依赖。
@@ -186,12 +263,28 @@ namespace Script.Game.Entities
                     if (!_grantedAttributes.ContainsKey(value)) _grantedAttributes[value] = 0;
                     _grantedAttributes[value] += amount;
                     if (_grantedAttributes[value] == 0) _grantedAttributes.Remove(value);
+
                     // 白眼=先手调查：每"白眼"(Attribute="先手调查")给先手调查+1（卡文"白眼白眼"叠加）
                     if (value == "先手调查") CurrentFirstStrikeInvestigation += amount;
                     // 黑眼=调查：每"黑眼"(Attribute="调查")给基础调查+1（JC030 等，不受先手限制）
                     else if (value == "调查") CurrentInvestigation += amount;
                     // 黑刀=战力：每"黑刀"(Attribute="战斗")给基础战力+1（JC060 光环，对称调查做法；实际结算经 AreaStatsCalculator 读 CurrentStrength）
                     else if (value == "战斗") CurrentStrength += amount;
+                    // 【P1】白刀=先手战力：与"先手调查"同构——记入 CurrentFirstStrikeStrength，
+                    // 由 AreaStatsCalculator 在"本卡控制者恰为先手"时叠加（不折进 CurrentStrength，避免非先手时误加）。
+                    else if (value == "先手战斗") CurrentFirstStrikeStrength += amount;
+                    // 【P1】黑星=势力：折进 CurrentPower（与"调查"折进 CurrentInvestigation 对称）。
+                    else if (value == "势力") CurrentPower += amount;
+                    // 【P1】白星=先手势力：无对应实例字段（模板只有 FirstStrikePower），由 AreaStatsCalculator 实时读取。
+                    // 注：以上 6 个是"能力图标 ↔ 属性"的完整映射——黑刀/白眼/黑眼/白刀/黑星/白星。
+                    // 【P3·E】防御力：光环类"获得+N防御力"（JC059）经此调整 `CurrentDefense`，
+                    // 语义与 `EffectEngine` 的 `Gain{"防御"}` 完全一致（原本无防御则先归 0，下限钳到 -1）。
+                    else if (value == "防御")
+                    {
+                        if (CurrentDefense < 0) CurrentDefense = 0;
+                        CurrentDefense += amount;
+                        if (CurrentDefense < -1) CurrentDefense = -1;
+                    }
                     break;
                 case "MagicDomain":
                     // JC060 光环：给被影响角色实例层追加魔法领域（如"心"=心灵领域），供其他效果/UI 识别
@@ -219,17 +312,29 @@ namespace Script.Game.Entities
                 case "Keyword": _grantedKeywords.Remove(value); break;
                 case "Icon": _grantedIcons.Remove(value); break;
                 case "Attribute":
-                    if (_grantedAttributes.ContainsKey(value))
-                    {
-                        _grantedAttributes[value] -= amount;
-                        if (_grantedAttributes[value] <= 0) _grantedAttributes.Remove(value);
-                    }
+                    // 【幂等护栏】只有"确实登记过该属性授予"时才回退派生数值：
+                    // 否则重复撤销（如光环撤销 + 自愈/换区清空后的重算）会把 `CurrentDefense` 等数值扣穿
+                    // （表现为"防御力变成 0/负值"）。Grant/Revoke 必须成对，且多源叠加时按 amount 精确还原。
+                    if (!_grantedAttributes.ContainsKey(value)) break;
+                    _grantedAttributes[value] -= amount;
+                    if (_grantedAttributes[value] <= 0) _grantedAttributes.Remove(value);
+
                     // 白眼=先手调查：撤销时回退先手调查
                     if (value == "先手调查") CurrentFirstStrikeInvestigation -= amount;
                     // 黑眼=调查：撤销时回退基础调查
                     else if (value == "调查") CurrentInvestigation -= amount;
                     // 黑刀=战力：撤销时回退基础战力
                     else if (value == "战斗") CurrentStrength -= amount;
+                    // 【P1】白刀=先手战力：撤销时回退（与 Grant 对称）
+                    else if (value == "先手战斗") CurrentFirstStrikeStrength -= amount;
+                    // 【P1】黑星=势力：撤销时回退基础势力（与 Grant 对称）
+                    else if (value == "势力") CurrentPower -= amount;
+                    // 【P3·E】防御力：撤销时回退（与 Grant 对称；防御不得低于 -1 哨兵）
+                    else if (value == "防御")
+                    {
+                        CurrentDefense -= amount;
+                        if (CurrentDefense < -1) CurrentDefense = -1;
+                    }
                     break;
                 case "MagicDomain":
                     // JC060 光环撤销：仅移除"运行时授予"的域（来自 _grantedDomains），模板固有域不动
@@ -367,17 +472,59 @@ namespace Script.Game.Entities
             int whiteEyes = GetAttribute("先手调查");
             CurrentFirstStrikeInvestigation = PlayerTemplate.FirstStrikeInvestigation + whiteEyes;
             CurrentFirstStrikeStrength = PlayerTemplate.FirstStrikeStrength;
+            // 【P3·E】防御力：基础防御 + 当前已授予的"防御"属性（光环"获得+N防御力"，如 JC059）。
+            // ⚠ 必须与其它属性同款重算，否则"属性重算（RefreshFirstStrikeStats）→ 光环撤销"会多减一次，
+            // 表现为防御力被扣穿（如 3 → 1）。
+            // 【P3·K13 修正】判据必须是 `!= 0`：**负值授予**（如 JC089「受此结附的角色 -1 防御」）
+            // 在旧写法 `> 0` 下会被跳过 → 复位后减益凭空消失。
+            int grantedDefense = GetAttribute("防御");
+            if (grantedDefense != 0)
+            {
+                if (CurrentDefense < 0) CurrentDefense = 0;
+                CurrentDefense += grantedDefense;
+                if (CurrentDefense < -1) CurrentDefense = -1;
+            }
+            // 【P1】白刀/黑星：先手战力与势力同样按"基础 + 授予"重建（保持与 调查/战斗 对称）
+            CurrentFirstStrikeStrength += GetAttribute("先手战斗");
+            CurrentPower += GetAttribute("势力");
             // 实例魔法领域：模板固有（过滤-1哨兵）+ 运行时授予（_grantedDomains，JC060 光环等）两部分。
             // 对称 JC001 白眼机制：重算时从"模板固有 + 授予集合"直接重建，不依赖反推，避免每回合先手重算冲刷光环授予的域。
-            MagicDomains.Clear();
-            if (PlayerTemplate.MagicDomains != null)
-                foreach (var d in PlayerTemplate.MagicDomains)
-                    if ((int)d != -1) MagicDomains.Add(d); // B1：-1哨兵归一化为空列表（无领域）
-            foreach (var d in _grantedDomains) // 运行时授予：来自光环，自然不含-1，叠加回最终列表
-                if (!MagicDomains.Contains(d)) MagicDomains.Add(d);
+            // 【P3·K20】领域抑制期间（"失去所有魔法领域图标"）→ `RebuildDomains` 会跳过重填（否则重算会把图标复活）。
+            RebuildDomains();
         }
 
         public bool HasDefense => PlayerTemplate != null && PlayerTemplate.Defense >= 0;
+
+        /// <summary>【P3·K20】**魔法领域图标被抑制**（"失去所有魔法领域图标"：JC099 / JC101）：
+        /// 抑制期间实例的 `MagicDomains` 为空，且 `ResetToBaseValues` 重建时也会**跳过**领域重填
+        /// （否则任何一次属性重算都会把图标"复活"）。`RestoreDomains()` 精确恢复。</summary>
+        public bool AreDomainsSuppressed { get; private set; }
+
+        public void SuppressAllDomains()
+        {
+            if (AreDomainsSuppressed) return;
+            AreDomainsSuppressed = true;
+            MagicDomains.Clear();
+        }
+
+        public void RestoreDomains()
+        {
+            if (!AreDomainsSuppressed) return;
+            AreDomainsSuppressed = false;
+            RebuildDomains();
+        }
+
+        /// <summary>按"模板固有（去 -1 哨兵）+ 运行期授予"重建领域集合；抑制期间不填。</summary>
+        private void RebuildDomains()
+        {
+            MagicDomains.Clear();
+            if (AreDomainsSuppressed) return;
+            if (PlayerTemplate?.MagicDomains != null)
+                foreach (var d in PlayerTemplate.MagicDomains)
+                    if ((int)d != -1) MagicDomains.Add(d);
+            foreach (var d in _grantedDomains)
+                if (!MagicDomains.Contains(d)) MagicDomains.Add(d);
+        }
 
         // ============================================================
         // 伤害/创伤管理（纯数据写入，不包含规则判定与死亡流程）
@@ -477,6 +624,7 @@ namespace Script.Game.Entities
             IsSealed = false;
             IsAttached = false;
             IsSeal = false;   // 重置时清除封印卡标记
+            IsSealedFaceDown = false;   // 【P2】离场/回手即不再是封印卡，背面标记一并清除
             HasGuard = false;
             SetCovert(false);       // 暗藏只存在于场上,离开时解除(经 SetCovert 发 CovertChanged 事件)
             ExtraCostPaid = false;  // 重新进入手牌/卡组时重置额外费用支付态

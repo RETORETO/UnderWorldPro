@@ -142,6 +142,12 @@ namespace Script.Net
         public bool IsSealed;
         public bool IsAttached;
         public bool IsSeal;          // 本卡是封印卡（镜像 IsAttached）
+        /// <summary>【P2】封印卡是否"背面朝上"封印（JC119）：为 true 时对非控制者做信息隔离（只画卡背）。
+        /// 与 IsCovert 无关：暗藏影响规则，本字段只影响可见性。</summary>
+        public bool IsSealedFaceDown;
+        /// <summary>【P3】屏障（`CardInstance.HasGuard`）：不能被敌方卡牌或能力指定为目标。
+        /// 客户端本地目标合法性判定（`TargetValidity.IsBarrierBlocking`）要读它，不投影会导致两端判定分叉。</summary>
+        public bool HasGuard;
         /// <summary>附属卡结附的宿主 UID（IsAttached=true 且结附于卡时有效；结附地区则为空）。</summary>
         public string AttachedToUid;
         /// <summary>封印卡封印的宿主 UID（IsSeal=true 且封印于卡时有效；封印地区则为空）。</summary>
@@ -187,6 +193,15 @@ namespace Script.Net
 
         /// <summary>本卡是否已发动过能力（每回合重置，简化）。</summary>
         public bool AbilityUsedThisTurn;
+
+        /// <summary>
+        /// 【K23】本回合"每能力"使用次数的投影（与 <see cref="UsedAbilityCounts"/> **同序一一对应**）：
+        /// EffectId 列表。客户端 `ActivateEligibility.CanActivate` 需要它来判断"每回合一次/两次"是否已用满，
+        /// 否则客户端会给出与服务端相反的"可发动"高亮。
+        /// </summary>
+        public List<string> UsedAbilityIds = new List<string>();
+        /// <summary>与 <see cref="UsedAbilityIds"/> 同序的已使用次数（&gt;0 才会下发）。</summary>
+        public List<int> UsedAbilityCounts = new List<int>();
     }
 
     public class StackEntrySnap

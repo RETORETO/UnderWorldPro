@@ -93,6 +93,17 @@ public partial class StackManager : Node
             }
         }
 
+        // 【K15·多目标】逐目标登记版本号（与 `TargetCardUids` 同序；任一目标版本变化即该目标丢失）
+        if (_cardManager != null && entry.TargetCardUids != null && entry.TargetCardUids.Count > 0)
+        {
+            entry.TargetVersionIds.Clear();
+            foreach (var uid in entry.TargetCardUids)
+            {
+                var t = string.IsNullOrEmpty(uid) ? null : _cardManager.GetInstance(uid);
+                entry.TargetVersionIds.Add(t?.VersionId ?? -1);
+            }
+        }
+
 
         if (_sequenceCount >= MaxStackSequence)
             GD.PrintErr($"⛔ [Stack] 累计压入达上限 {MaxStackSequence}，触发熔断：后续禁止触发效果／打出卡牌／激活能力，直至堆叠清空");
