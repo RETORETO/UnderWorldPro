@@ -59,6 +59,13 @@ namespace Script.Manager
         /// </summary>
         public System.Action<CardInstance, EffectTiming, CardInstance> PushTriggerForCard { get; set; }
 
+        /// <summary>
+        /// 【JC124·构筑级全局触发】收集器（由装配层注入 `DeckLevelTriggerRule.Collect`）：
+        /// 在**常规场上实例扫描之后**调用，把"只要在开局卡组里就生效"的触发（与来源卡当前身处何处无关）
+        /// 合成出来并**并入同一批收集结果**（走完全相同的触发管线：排序窗口 → 入堆叠 → 让过 → 结算）。
+        /// </summary>
+        public Func<EffectTiming, TriggerContext, EffectEngine, List<StackEffectInstance>> DeckLevelCollector { get; set; }
+
         /// <summary>走排序窗口（RunTriggerPhase）的时机集合。</summary>
         /// 注意：进场触发(EnterTrigger)/现身触发(UncoverTrigger) 现已统一走 RunTriggerPhase 排序窗口
         /// （需求：触发效果收集后先经玩家排序窗口确认，再依次入堆叠，而非直接入栈）；
@@ -194,6 +201,10 @@ namespace Script.Manager
                 {
                     if (data == null) continue;
                     if (data.Timing != timing) continue;
+                    // 【JC124·构筑级全局触发】带该声明的效果**不走**"扫描场上实例"的常规收集：
+                    // 它由 `DeckLevelTriggerRule` 按"已登记玩家"合成（来源＝卡组里的那张实例）。
+                    // 若在此同时收集，那张牌在场时会**重复收集**（同一死亡角色被回场两次）。
+                    if (data.DeckLevelRegistration) continue;
                     // 方案C：触发效果生效区判定（效果粒度）。默认：附属=AttachedZone，角色=AreaZone；
                     // 显式声明 Scope 的效果按声明（如未来墓地/手牌触发）。不在此区则跳过该效果。
                     if (EE == null || !EffectEngine.IsEffectActiveInZone(data, card, zoneAtTrigger))
@@ -207,7 +218,12 @@ namespace Script.Manager
                     // （如：公路骑士现身误触发巨石阵看护人的 JC002）。反应类时机（OnCardPlayed/PlayedSorcery 等）
                     // 不在此限，仍对所有场上卡全局扫描。
                     // 【P3】"被潜伏/翻面时"(OnLatent) 同属**自身**语义（只有被潜伏的那张卡自己的效果成立）。
-                    if ((evt == GameEvent.EnterTrigger || evt == GameEvent.UncoverTrigger || evt == GameEvent.OnLatent)
+                    // 【P0·修复】"进入/移动到某个地区"(OnMove) 也同属**自身**语义：卡文都是
+                    // 「当**此卡**进入一个地区时」（JC061/JC087），而 `OnMove` 是"任何卡位置变更都广播"的事件
+                    // ⇒ 若不在此限，别人的角色移动/进场会误触发本卡的效果（实测：对手暗藏者进场即触发 JC061）。
+                    // 若将来出现"当**其他**角色进入本地区时"这类**旁观**效果，需另加时机或谓词（不在此放开）。
+                    if ((evt == GameEvent.EnterTrigger || evt == GameEvent.UncoverTrigger
+                         || evt == GameEvent.OnLatent || evt == GameEvent.OnMove)
                         && card != ctx.SourceCard)
                     {
                         continue;
@@ -235,7 +251,7 @@ namespace Script.Manager
                     // ContextCard 为空时回落 SourceCard，见 TriggerContext.EffectiveContextCard）
                     // 威名触发(OnCombatWon)需传入 ctx.TriggeringPlayerId 供 WinnerIsSelf 判定（D1：Emit 时未填 SourceCard）。
                     // 同时传入 ctx.TargetAreaId 供 WinnerInSameArea 判定（Y 方案：获胜地区 == 本卡所在地区才入栈）。
-                    if (EE == null || !EE.EvaluateCondition(data.Condition?.Predicate, card, conditionCard, conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId))
+                    if (EE == null || !EE.EvaluateCondition(data.Condition?.Predicate, card, conditionCard, conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId, data.Condition?.Param))
                     {
                         skippedCond++;
                         GD.Print($"[Trigger] 触发条件不满足（EffectId={data.EffectId}, 来源={tmpl.CardName}, 事件={evt}），跳过");
@@ -398,6 +414,18 @@ namespace Script.Manager
                     });
                     EE.ConsumePending(rec);
                     GD.Print($"[Trigger] 📜 承诺兑现：{rec.Source?.PlayerTemplate?.CardName} 在「{timing}」时机（收集为触发）");
+                }
+            }
+
+            // 【JC124·构筑级全局触发】"只要这张牌一开始加入玩家卡组就能触发"的触发（构筑级登记）：
+            // 与普通触发共用同一条管线，故直接并入本批收集结果（判定复用 `EffectEngine.EvaluateCondition`）。
+            if (DeckLevelCollector != null)
+            {
+                var deckLevel = DeckLevelCollector(timing, ctx, EE);
+                if (deckLevel != null && deckLevel.Count > 0)
+                {
+                    collected.AddRange(deckLevel);
+                    GD.Print($"[Trigger] 事件 {evt} 构筑级（卡组级）触发收集：{deckLevel.Count} 条");
                 }
             }
 

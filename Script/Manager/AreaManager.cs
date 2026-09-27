@@ -106,6 +106,25 @@ public partial class AreaManager : Node
     public int GetSlotIndex(string areaUid)
         => (!string.IsNullOrEmpty(areaUid) && _areas.TryGetValue(areaUid, out var info)) ? info.SlotIndex : 0;
 
+    /// <summary>某地区 UID 的**地区卡实例**（未注册返回 null）。</summary>
+    public CardInstance GetAreaInstance(string areaUid)
+        => (!string.IsNullOrEmpty(areaUid) && _areas.TryGetValue(areaUid, out var info)) ? info.Instance : null;
+
+    /// <summary>
+    /// 【P3·K21·JC041】该地区是否具有指定**地区子类别**（"水域"是**地区卡**的子类别，例：
+    /// `Cards/Data/AreaCards/DQ001_chenmodefeixu.tres` 的 `SubCategories = ["遗迹","水域"]`）。
+    /// 判定读**地区卡模板** `AreaCardData.SubCategories`（地区没有实例级形态，故无运行期覆盖问题）。
+    /// </summary>
+    public bool AreaHasSubCategory(string areaUid, string subCategory)
+    {
+        if (string.IsNullOrWhiteSpace(areaUid) || string.IsNullOrWhiteSpace(subCategory)) return false;
+        var subs = GetAreaInstance(areaUid)?.AreaTemplate?.SubCategories;
+        if (subs == null) return false;
+        foreach (var s in subs)
+            if (string.Equals(s, subCategory.Trim(), System.StringComparison.Ordinal)) return true;
+        return false;
+    }
+
     /// <summary>任务地区销毁后，其后的槽位编号前移（Arena 在前移 AreaSlot 时同步调用）</summary>
     public void ShiftSlotIndicesFrom(int removedSlotIndex)
     {

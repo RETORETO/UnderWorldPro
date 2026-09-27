@@ -32,6 +32,8 @@ namespace Script.Tests
         private const string P_Jc012 = "res://Cards/Data/PlayerCards/JC/JC012_weimushouwanghuiji.tres"; // 附属（结附秘社）
         private const string P_Jc020 = "res://Cards/Data/PlayerCards/JC/JC020_yinbidefeidao.tres";      // [装备,武器] 附属
         private const string P_Jc068 = "res://Cards/Data/PlayerCards/JC/JC068_agesIV.tres";            // 全局封锁秘密派遣
+        private const string P_Jc081 = "res://Cards/Data/PlayerCards/JC/JC081_yaluoer.tres";           // [前缀] 除装备与祝福外不受附属（子类别白名单）
+        private const string P_Jc089 = "res://Cards/Data/PlayerCards/JC/JC089_duxuezuzhou.tres";       // [诅咒] 附属（结附角色，白名单外）
         private const string P_Council = "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres";
 
         private GameInitializer _server;
@@ -350,6 +352,37 @@ namespace Script.Tests
                 "基础调查值不应因回填授予属性而二次叠加");
             Assert.AreEqual(card.CurrentStrength, cCard.CurrentStrength,
                 "基础战力值不应因回填授予属性而二次叠加");
+        }
+
+        /// <summary>【JC081·[前缀]】"除装备与祝福外不受附属"（子类别白名单静止规则）两端同解。
+        /// 规则判定是**静态 helper 读卡面印刷规则**（客户端也持有注入后的模板），
+        /// 故除"客户端本地判定 = 服务端判定"外，还断言客户端能从投影实例读出同一份白名单。</summary>
+        public void TestParity_JC081_只受装备与祝福附属两端同解()
+        {
+            SetupMatch(mindAssets: 0);
+            var jc081 = ServerCard(P_Jc081, CardZone.AreaZone, "parity_area");   // 目标：只受【装备】【祝福】结附
+            var jc020 = ServerCard(P_Jc020, CardZone.Hand);                      // [装备,武器] 附属 → 白名单内
+            var jc089 = ServerCard(P_Jc089, CardZone.Hand);                      // [诅咒] 附属 → 白名单外
+            SyncClient();
+
+            var c081 = ClientCard(jc081);
+            var c020 = ClientCard(jc020);
+            var c089 = ClientCard(jc089);
+            Assert.IsNotNull(c081, "客户端应重建 JC081");
+            Assert.IsNotNull(c089, "客户端应重建 JC089");
+
+            Assert.AreEqual("装备,祝福", EffectEngine.GetAttachSubCategoryWhitelist(jc081),
+                "服务端：JC081 的白名单＝装备,祝福");
+            Assert.AreEqual("装备,祝福", EffectEngine.GetAttachSubCategoryWhitelist(c081),
+                "客户端：从投影实例必须读出同一份白名单（判定不依赖 EffectEngine 实例）");
+
+            Assert.IsTrue(ServerLegalPlay(jc020, jc081), "服务端：【装备】类附属可结附 JC081");
+            Assert.IsTrue(ClientLegalPlay(c020, c081), "客户端：同样放行");
+            Assert.IsTrue(ProjectionHasPlayTarget(c020, c081), "服务端投影应把 JC081 列为该装备的合法目标");
+
+            Assert.IsFalse(ServerLegalPlay(jc089, jc081), "服务端：【诅咒】类附属不能结附 JC081");
+            Assert.IsFalse(ClientLegalPlay(c089, c081), "客户端必须同样拒绝（两端同一判定实现）");
+            Assert.IsFalse(ProjectionHasPlayTarget(c089, c081), "服务端投影不应把 JC081 列为该诅咒的合法目标");
         }
 
         private static List<Script.Data.Effects.EffectData> ServerActivationEffects(CardInstance card)

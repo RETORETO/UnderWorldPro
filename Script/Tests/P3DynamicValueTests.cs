@@ -12,8 +12,9 @@ namespace Script.Tests
     /// 【K1·动态数值 X】按用户 2026-09 口径实现并锁定：
     ///  · 效果用 `EffectData.ValueExpr` 声明取值表达式，动作参数用占位符 `$X`（引擎替换，**不改模板数据**）；
     ///  · 已登记来源：`事件数量`（本次事件携带数量）、`计数:区域:…`、`计数:卡上标志:…`、`计数:地区标志:…`；
-    ///    `玩家选择` 需数值输入 UI（**未实现** → fail-closed）；
-    ///  · **X=0 时该效果不算发动**（用户明确）：触发不收集、激活不可发动、结算直接跳过；
+    ///    **`玩家选择`（2026-09 已交付）**＝玩家在**数值输入窗**里给出数字（JC083；范围由 `ValueMin/ValueMax` 声明，
+    ///    声明 `ValueMin=0` 时 **0 合法且不套用"X=0 ⇒ 不发动"**）；未取值（无 UI）→ fail-closed；
+    ///  · **X=0 时该效果不算发动**（用户明确；适用于"数量"型 X）：触发不收集、激活不可发动、结算直接跳过；
     ///    表达式未登记/依赖未实现同样按"不发动"处理（避免拼错静默算成 0 或全量）。
     /// 覆盖卡：**JC040 安普莎**（敌方弃牌 → 遏制X，X＝此次弃牌数量）、**JC097 阿斯旺**（袭击X，X＝你墓地中角色牌数）。
     /// </summary>
@@ -126,11 +127,19 @@ namespace Script.Tests
             EffectValueResolver.Evaluate("计数:地区标志:对手:本地区", Ctx(game, src), out int power, out _);
             Assert.AreEqual(3, power, "『本地区对手势力标志数』＝3");
 
-            // 未登记 / 玩家选择 → fail-closed（不发动）
+            // 未登记 / 玩家选择（未取值）→ fail-closed（不发动）
             Assert.AreEqual(EffectValueResolver.ValueEvalResult.Fail,
                 EffectValueResolver.Evaluate("随便写的表达式", Ctx(game, src), out _, out _), "未登记表达式 → fail-closed");
             Assert.AreEqual(EffectValueResolver.ValueEvalResult.Fail,
-                EffectValueResolver.Evaluate("玩家选择", Ctx(game, src), out _, out _), "『玩家选择』需数值输入 UI → 当前 fail-closed");
+                EffectValueResolver.Evaluate("玩家选择", Ctx(game, src), out _, out _),
+                "『玩家选择』**尚未取值**（无 UI / 未走数值输入窗）→ fail-closed");
+            // 【K1·JC083】已取值时按玩家给出的数字求值（0 也合法：JC083 的 X 是"猜测值"而非"数量"）
+            var ctxChosen = Ctx(game, src);
+            ctxChosen.PlayerChosenValue = 0;
+            ctxChosen.HasPlayerChosenValue = true;
+            Assert.AreEqual(EffectValueResolver.ValueEvalResult.Ok,
+                EffectValueResolver.Evaluate("玩家选择", ctxChosen, out int chosen0, out _), "已取值 → Ok");
+            Assert.AreEqual(0, chosen0, "取到的就是玩家选择的数字（0 合法）");
             Assert.AreEqual(EffectValueResolver.ValueEvalResult.NoExpr,
                 EffectValueResolver.Evaluate("", Ctx(game, src), out _, out _), "空表达式＝无动态值");
         }

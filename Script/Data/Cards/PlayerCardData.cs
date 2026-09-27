@@ -79,6 +79,14 @@ namespace Script.Data.Cards
         /// <summary>额外费用是否强制（IsExtraCostMandatory）—— true 表示必须支付额外费用才能打出</summary>
         [Export] public bool IsExtraCostMandatory { get; set; }
 
+        /// <summary>
+        /// 【P3·K10】**额外费用**结构化声明（用户 2026-09 口径 A21–A24）：打出这张牌的**费用之一**，
+        /// 在付费阶段、**卡入堆叠之前**付清、不可被响应。消费点＝`TurnManager.PlayCard`。
+        /// 例：JC049（牺牲一个角色，必须支付）/ JC081（展示任意数量手牌减费，可选）/ JC135（支付 X 费，X＝目标印刷费用）。
+        /// 注：上面两个文本字段（`ExtraCostDescription`/`IsExtraCostMandatory`）为早期占位，保留兼容。
+        /// </summary>
+        [Export] public Script.Data.Effects.ExtraCostSpec ExtraCost { get; set; }
+
         /// <summary>效果列表（Effects）—— 卡牌产生的效果ID或描述字符串列表</summary>
         [Export] public Array<string> Effects { get; set; } = new Array<string>();
 

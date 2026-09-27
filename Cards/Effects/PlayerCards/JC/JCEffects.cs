@@ -1,4 +1,4 @@
-﻿namespace Cards.Effects.PlayerCards.JC
+namespace Cards.Effects.PlayerCards.JC
 {
     /// <summary>
     /// JC 系列效果统一注册入口。
@@ -65,6 +65,9 @@
             // 【P3·付费通道隔离】家族传承：本方暗藏者付费翻面（现身）费用 -1（不影响打出）。
             JC033_jiazuchuancheng_Effects.Register();
             JC035_chuanmeimozhou_Effects.Register();
+            // 【P3·K4】初拥：持续夺控受结附角色（初拥离场归还拥有者）+ 人类类别改写为吸血鬼；
+            // 宿主翻面为暗藏者 ⇒ 初拥按通用规则被消灭（AttachmentRule）。
+            JC036_chuyong_Effects.Register();
             JC039_wangzuohuihuiji_Effects.Register();
             // 【K1 动态值 X】安普莎：敌方弃牌时遏制X（X＝此次弃牌数量；X=0 不发动）。
             JC040_anpushamingfudeshinv_Effects.Register();
@@ -76,11 +79,34 @@
             JC044_zainanshizhe_Effects.Register();
             JC045_zhongbaijisi_Effects.Register();
             JC046_wumiantuluzhe_Effects.Register();
-            // 【P3·非抓牌式取牌】从牌库底"取牌"而非"抓牌"（不广播 OnDraw；FAQ："并不算抓牌"）
+            // 【K10 额外费用】"牺牲一个角色"作打出费用（必须支付；无合法牺牲对象则不能打出）
             JC049_shenyuanxiyu_Effects.Register();        // 快速行动：将你牌库底的两张牌置于手中
+            // 【K10 额外费用】"支付 X 费"（X＝先选定目标的印刷费用）+ 快速行动：消灭目标印刷费用为 X 的附属
+            JC135_yuzhen_Effects.Register();
+            // 【K10 额外费用】展示任意数量手牌 → 每张【圣贤】/具【圣】图标之牌费用 -1（可选，不展示＝全额）
+            JC081_yaluoer_Effects.Register();
+            // 【K1·玩家选择】准备步骤：选一个数字（0～20）→ 展示牌库顶；费用相同入手（不算抓牌），否则置底
+            JC083_ruizhidesifenkesi_Effects.Register();
+            // 行动1横置：查看目标玩家手牌 → 可选牺牲自身 → 由你指定其一张手牌弃掉
+            JC114_haoqideheike_Effects.Register();
+            // 【P3·K4 实例级形态】花园地精像：成「地精角色」（角色/附属组合）+ 白眼/黑刀/黑星/1防御 到回合结束
+            JC027_huayuandijingxiang_Effects.Register();
+            // 【P3·K4 实例级形态】鲜血奴仆：牺牲后以「鲜血」附属身份重新进场并结附于目标吸血鬼角色
+            JC028_xianxuenupu_Effects.Register();
+            // 【P3·K21】戒严：非【国家机构】角色不可正面打出/移动进入本地区 + 准备步骤"支付1否则牺牲"
+            JC064_jieyan_Effects.Register();
             // 【用户 2026-09 口径批】战斗获胜近似判定 / 快速行动授予 / 锁定标记禁现身
             JC022_yinluxianzi_Effects.Register();         // 触发：赢下本卡所在地区的战斗对抗 → 抓一张
             JC034_xinshouzhidao_Effects.Register();       // 【K25】你只能操控至多一个道途（PathRule 与领袖同款）
+            JC115_beiyongzijin_Effects.Register();        // 【K19】临时费用池：快速行动横置 → 你获得1
+            JC055_annisiduola_Effects.Register();         // 准备步骤：在目标角色或附属上放置一个时间标志
+            JC048_zuzhoushalou_Effects.Register();        // 准备步骤强制触发：放标志 → 按地区标志数群体伤害 → ≥3 牺牲自身
+            // 【K22·多玩家/对手侧】"由指定玩家自己选择牺牲"（先手先选 → 后选可见 → 一起牺牲）
+            JC113_wuxingdaodanjing_Effects.Register();    // 进场强制触发：每位玩家各牺牲一个附属
+            JC134_shenpan_Effects.Register();             // 行动：每位玩家牺牲一个资产
+            JC065_shenwenxianyiren_Effects.Register();    // 快速行动：选地区 → 对手牺牲该地区一个暗藏者；遏制1
+            JC128_tizuiyang_Effects.Register();           // 行动：目标对手移除3标志或牺牲一个角色（A12）
+            JC127_zhongju_Effects.Register();             // 行动：清空目标地区势力标志；若该地区时间标志 ≥3 则消灭该地区所有角色
             JC074_tiankongdejiaohui_Effects.Register();   // 快速行动：目标角色 +黑眼×2 +声望 直到回合结束
             // 【K2 群体动作】行动/触发类"对该地区所有角色生效"的卡
             JC047_liehuozhongwei_Effects.Register();      // 行动：选地区 → 对地区内所有角色各 1 点伤害

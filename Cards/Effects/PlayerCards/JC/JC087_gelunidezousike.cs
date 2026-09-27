@@ -11,8 +11,9 @@ namespace Cards.Effects.PlayerCards.JC
     ///
     /// 实现：
     ///  · **撤回** ＝ `KeywordEffects.Withdraw()`（地区被赢取时回 OWNER 手牌）；
-    ///  · **触发** ＝ `EnterTrigger`（进入一个地区＝进场到该地区；本卡**没有【机动】关键词**，
-    ///    故按既有"进场触发"口径处理——带【机动】的 JC061 才用 `ManeuverTrigger`）；
+    ///  · **触发** ＝ **`OnMove`（进入/移动到某个地区之后）**——`ZoneManager.MoveToArea` 在位置变更后广播，
+    ///    带 `SourceAreaAtTrigger`＝新地区；**进场（手牌→争夺区）与"争夺区→争夺区"移动（被 JC117 等效果移动）都覆盖**。
+    ///    ⚠ 修复记录：原挂 `EnterTrigger`（只在"非场地区→争夺区"时发）⇒ 被效果移动时不触发，与卡文"进入一个地区"不符。
     ///  · 目标 ＝ **本地区**的目标**本方**角色（`IsLocalZone` + `Friendly`）；
     ///  · 动作链 ＝ `Latent{目标}` → `PlaceToken{势力标志,1}`（落点＝来源所在地区）；
     ///  · **"若你如此做"** 由**动作成果**机制承担：`Latent` 未真正生效（目标已是暗藏者/已离场/未选目标）
@@ -32,8 +33,9 @@ namespace Cards.Effects.PlayerCards.JC
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC087_1_LatentAllyThenPlaceMark",
-                Timing = EffectTiming.EnterTrigger,
+                Timing = EffectTiming.OnMove,   // 「进入一个地区」＝位置变更后（覆盖进场 + 跨地区移动）
                 Forced = false,                     // 卡文"你可以"
+                // 自身语义由引擎保证（`TriggerRegistry` 的 OnMove/EnterTrigger 同款白名单），无需写条件。
                 Condition = new EffectCondition { Predicate = "Always" },
                 Target = new TargetSpec
                 {

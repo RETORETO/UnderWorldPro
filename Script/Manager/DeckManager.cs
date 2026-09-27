@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Enums;
 using Script.IO;
@@ -99,6 +99,11 @@ public partial class DeckManager : Node
         if (playerId == 0 || playerId == 1) if (VerboseMoves) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
         if (playerId == 0 || playerId == 2) if (VerboseMoves) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
 
+        // 【JC124·构筑级触发】"只要这张牌一开始加入玩家卡组就能触发" —— 卡组装载后按玩家登记一次
+        // （多张同名只生效一份；此后该牌无论身处何处都照常生效）。
+        if (playerId == 0 || playerId == 1) Script.Manager.DeckLevelTriggerRule.RegisterFromDeck(1, _player1Deck);
+        if (playerId == 0 || playerId == 2) Script.Manager.DeckLevelTriggerRule.RegisterFromDeck(2, _player2Deck);
+
         if (playerId == 0 || playerId == 1) ShufflePlayer1();
         if (playerId == 0 || playerId == 2) ShufflePlayer2();
         if (VerboseMoves) GD.Print("✅ 卡组已洗牌");
@@ -139,6 +144,10 @@ public partial class DeckManager : Node
 
         if (playerId == 0 || playerId == 1) if (VerboseMoves) GD.Print($"✅ 玩家1卡组: {_player1Deck.Count} 张");
         if (playerId == 0 || playerId == 2) if (VerboseMoves) GD.Print($"✅ 玩家2卡组: {_player2Deck.Count} 张");
+
+        // 【JC124·构筑级触发】同 `InitFromDeckList`：卡组装载后按玩家登记一次（多张同名只生效一份）。
+        if (playerId == 0 || playerId == 1) Script.Manager.DeckLevelTriggerRule.RegisterFromDeck(1, _player1Deck);
+        if (playerId == 0 || playerId == 2) Script.Manager.DeckLevelTriggerRule.RegisterFromDeck(2, _player2Deck);
 
         if (playerId == 0 || playerId == 1) ShufflePlayer1();
         if (playerId == 0 || playerId == 2) ShufflePlayer2();

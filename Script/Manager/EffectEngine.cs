@@ -233,8 +233,22 @@ namespace Script.Manager
             System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId)
         {
             if (data == null) return;
+            _currentEffectData = data;   // 【P3·K4】供动词读取本效果的声明（如 `FormChange`）
             // 【K24】本次结算的目标玩家（动作里 `"目标玩家"` 的解析来源）：必须在动作序列执行前设定。
             _currentTargetPlayerId = targetPlayerId;
+
+            // 【K1·"玩家选择"型动态值】前置取值：本效果声明 `ValueExpr="玩家选择"` 且本次尚无玩家给定的数字
+            // → **先弹数值输入窗**（用户口径 A36：复用既有数值输入窗），把"待续结算"上下文存下并挂起；
+            // 回调里写回选择值后**重入本方法**，此时动态值可求值、动作按 `$X` 正常展开。
+            // 取消/无 UI → 该效果**不发动**（fail-closed，绝不替玩家猜一个数字）。
+            if (IsPlayerChoiceValue(data) && _playerChosenValue < 0)
+            {
+                if (BeginPlayerValuePrompt(data, source, target, targetAreaId, winnerId, targetVersionId,
+                        eventAmount, choices, modeIndex, targetPlayerId))
+                    return;   // 已挂起（等玩家输入）
+                GD.Print($"[EffectEngine] ⏹ 玩家选择型取值无 UI 可用：{data.EffectId} → 不发动");
+                return;
+            }
             // 【K16】按选定模式取"本次实际生效的动作序列"（无模式分支时＝`data.Actions`）；
             // 目标声明由 `ValidateTargetAtResolve(..., modeIndex)` 内部同样按模式解析。
             var effActions = data.ActionsFor(modeIndex);
@@ -277,10 +291,10 @@ namespace Script.Manager
                 // 如死亡触发里刚死亡的角色）——触发条件的语义对象是它，不是玩家选定的目标；
                 // 非触发路径（激活/打出）无上下文卡 → 维持既有口径（回落 `target`）。
                 var condCtx = TriggerContextCard ?? target;
-                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId);
+                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
                 if (met && !string.IsNullOrEmpty(data.Condition.BranchPredicate))
                 {
-                    met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId);
+                    met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
                     if (!met) GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
                 }
                 if (!met)
@@ -347,11 +361,94 @@ namespace Script.Manager
         private int _currentValue;
         private bool _hasCurrentValue;
 
+        // ==================== 【K1】"玩家选择"型取值（JC083「选择一个数字」） ====================
+        /// <summary>玩家已选择的数字（-1＝尚未选择）。取值窗回调后写入，并在**该次结算内消费一次**。</summary>
+        private int _playerChosenValue = -1;
+
+        /// <summary>待续结算上下文（等数值输入窗答复；回调里重入 `ResolveEffect`）。</summary>
+        private sealed class PendingResolve
+        {
+            public EffectData Data;
+            public CardInstance Source;
+            public CardInstance Target;
+            public string TargetAreaId;
+            public int WinnerId;
+            public int TargetVersionId;
+            public int EventAmount;
+            public System.Collections.Generic.IList<TargetChoice> Choices;
+            public int ModeIndex;
+            public int TargetPlayerId;
+        }
+
+        private PendingResolve _pendingResolve;
+
+        /// <summary>该效果是否声明了"玩家选择"型动态值。</summary>
+        private static bool IsPlayerChoiceValue(EffectData data)
+            => data != null && !string.IsNullOrWhiteSpace(data.ValueExpr)
+               && data.ValueExpr.Trim() == "玩家选择";
+
+        /// <summary>【JC055②】该效果是否声明了"代价数量"型动态值（X＝本次激活已支付的标志代价数量）。</summary>
+        private static bool IsCostPaidValue(EffectData data)
+            => data != null && !string.IsNullOrWhiteSpace(data.ValueExpr)
+               && (data.ValueExpr.Trim() == "代价数量" || data.ValueExpr.Trim() == "已付代价数量");
+
+        /// <summary>【JC055②】本次激活已支付的"标志代价数量"（X）→ 入堆叠时随 `StackEntry.EventAmount`
+        /// 下发，结算时作为 `事件数量` 供 `ValueExpr="代价数量"` 读取（-1＝无）。</summary>
+        private int _pendingPaidCounterX = -1;
+
+        /// <summary>当前是否已持有玩家选择的数字（测试/取证用）。</summary>
+        public bool HasPlayerChosenValue => _playerChosenValue >= 0;
+
+        /// <summary>
+        /// 【K1】弹出数值输入窗并挂起结算：范围＝`data.ValueMin..ValueMax`（缺省 1..9；JC083＝0..20，A31）。
+        /// 返回 true＝已挂起（等回调）；false＝无 UI 可用（调用方按"不发动"处理）。
+        /// 回调：选择值写回 `_playerChosenValue` → 重入 `ResolveEffect` 完成结算；**取消 → 不发动**。
+        /// </summary>
+        private bool BeginPlayerValuePrompt(EffectData data, CardInstance source, CardInstance target,
+            string targetAreaId, int winnerId, int targetVersionId, int eventAmount,
+            System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId)
+        {
+            if (UIHooks == null) return false;
+            int chooser = source?.ControllerId ?? -1;
+            if (chooser < 0) return false;
+            int min = System.Math.Max(0, data.ValueMin);
+            int max = System.Math.Max(min, data.ValueMax);
+            _pendingResolve = new PendingResolve
+            {
+                Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
+                WinnerId = winnerId, TargetVersionId = targetVersionId, EventAmount = eventAmount,
+                Choices = choices, ModeIndex = modeIndex, TargetPlayerId = targetPlayerId,
+            };
+            string prompt = $"{source?.PlayerTemplate?.CardName}：请选择一个数字（{min}～{max}）";
+            UIHooks.PromptNumberInput(chooser, prompt, min, max, min, "确认", "取消", chosen =>
+            {
+                var p = _pendingResolve;
+                _pendingResolve = null;
+                if (p == null) return;
+                if (chosen < 0)
+                {
+                    GD.Print($"[EffectEngine] 玩家{chooser} 取消数字选择 → {p.Data.EffectId} 不发动");
+                    return;
+                }
+                GD.Print($"[EffectEngine] 玩家{chooser} 选择数字 {chosen}（{p.Data.EffectId}）");
+                _playerChosenValue = chosen;
+                ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
+                    p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
+            });
+            return true;
+        }
+
         /// <summary>
         /// 【K24】本次结算的**目标玩家号**（-1＝无玩家目标）。动作参数里写 `"目标玩家"` 时指向它
         /// （见 `ResolvePlayerSide`、`Inspect` 的 `目标玩家牌库顶/手牌` 写法）。
         /// </summary>
         private int _currentTargetPlayerId = -1;
+
+        /// <summary>【P3·K4】**本次结算的 EffectData**（动词执行期可读）——供 `TransformForm` 取 `FormChange` 形态声明
+        /// （动词签名只有 action/source/target，没有 data）。生命周期与 `TriggerContextCard` 同款：
+        /// 每次结算入口覆盖一次，**不在结算末尾清空**（K11 挂起续算的动作链仍要能读到）。
+        /// </summary>
+        private EffectData _currentEffectData;
 
         /// <summary>【K24】本次结算的目标玩家号（只读；供 View/测试取证）。</summary>
         public int CurrentTargetPlayerId => _currentTargetPlayerId;
@@ -391,12 +488,29 @@ namespace Script.Manager
             reason = null;
             if (data == null || string.IsNullOrWhiteSpace(data.ValueExpr)) return DynamicValueState.NotApplicable;
 
+            // 【K1】"玩家选择"型：X 是**玩家给出的数字**（JC083 的"猜测值"），不是"数量"——
+            // 声明 `ValueMin=0` 时 **X=0 合法且效果照常结算**（不套用"X=0 ⇒ 不发动"，否则猜不出
+            // "印刷费用为 0 的牌"）；未取值 → Blocked（fail-closed）。
+            if (IsPlayerChoiceValue(data))
+            {
+                if (_playerChosenValue < 0)
+                {
+                    reason = "『玩家选择』尚未取值";
+                    return DynamicValueState.Blocked;
+                }
+                value = _playerChosenValue;
+                _playerChosenValue = -1;   // 每次结算只消费一次，避免串到后续效果
+                return DynamicValueState.Ok;
+            }
+
             var ctx = new EffectValueResolver.ValueContext
             {
                 Source = source,
                 Target = target,
                 TargetAreaId = targetAreaId,
                 EventAmount = eventAmount,
+                PlayerChosenValue = _playerChosenValue,
+                HasPlayerChosenValue = _playerChosenValue >= 0,
                 ZoneManager = ZoneManagerRef,
                 CardManager = CM,
                 PlayerManager = TurnManagerRef?.PlayerManagerRef,
@@ -725,11 +839,11 @@ namespace Script.Manager
             {
                 // 【K3·死亡类·A10】同同步路径：上下文卡优先用"触发上下文卡"（见同步路径注释）。
                 var condCtx = TriggerContextCard ?? target;
-                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId);
+                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
                 // 【P3·门禁 + 分支】同同步路径：BranchPredicate 不满足也走 ElseBranch（JC031）
                 if (met && !string.IsNullOrEmpty(data.Condition.BranchPredicate))
                 {
-                    met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId);
+                    met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
                     if (!met) GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
                 }
                 if (!met)
@@ -920,6 +1034,16 @@ namespace Script.Manager
                 return;
             }
 
+            // 【P2·联机断链修复·JC119】"展示封印在守秘人上的所有牌 → 你可以打出其中一张（视作快速、不需付费）"：
+            // 原先只有单机 `UIHooks` 分支，联机（服务端无 View）落到"兜底＝不打出"⇒ 该卡在联机侧**永远不生效**。
+            // 现补齐网关分支：**先公开展示全部** → 向该玩家下发 `SelectHandCard`（可取消＝不打）→
+            // 忠诚预检 → 登记免费打出（后续由 `TurnManager` 在原子锁解除后按正常打出流程执行）。
+            if (action.Verb == ActionVerb.RevealSealedAndQueueFreePlay && InputGateway != null)
+            {
+                await RevealSealedAndQueueFreePlayViaGatewayAsync(source);
+                return;
+            }
+
             // 【P2】检索：经网关向控制者下发 SelectDeckCard（候选含展示引用，牌库对双方不可见）。
             if (action.Verb == ActionVerb.Search && InputGateway != null)
             {
@@ -1082,6 +1206,88 @@ namespace Script.Manager
                         GD.Print($"[EffectEngine] ⚠ Draw 跳过：source={(source == null ? "null" : source.PlayerTemplate?.CardName)}, OwnerId={(source?.OwnerId)}");
                     }
                     break;
+
+                // 【P3·K22·多玩家/对手侧】"由指定玩家**自己选择**牺牲"（口径 A11/A12）：
+                // Args：[种类(角色/附属/资产/暗藏者), 谁(每位玩家/目标玩家/自己/对手), 地区(任意/本地区/目标地区)]。
+                //  · **每位玩家**：按**先手优先**顺序逐个询问（先选者先记录，后选者可见——UI 侧高亮由 View 负责），
+                //    全部选定后**一起牺牲**（原子锁期间不分死亡先后）；**无候选者跳过、什么都不付出**（A11 补充）；
+                //  · **目标玩家/对手**：只问该玩家（K24 玩家目标在入堆叠时锁定，见 `_currentTargetPlayerId`）；
+                //  · 决策路径：单机 `IGameUIHooks.PromptPickCard(该玩家 id, …)`；无 UI → 确定性兜底取第一个候选；
+                //  · 牺牲＝死亡（`ResolveDeath(Sacrifice)`），**照常触发死亡时机**。
+                // 【P3·K22/A12】JC128 替罪羊："除非目标玩家选择并移除 N 个他所拥有的势力标志，否则该玩家牺牲一个角色"。
+                //  · **标志不足 N → 必须牺牲**（A12：不询问）；
+                //  · 标志足够 → 询问目标玩家：**确认＝移除 N 个标志**（复用 `CurbRule` 的"由他按地区分配"）；**取消＝走牺牲路线**；
+                //  · **没有角色时也可以选牺牲路线 → 此时什么都不付出**（`SacrificeChoice` 无候选即跳过）。
+                case ActionVerb.BribeOrSacrifice:
+                {
+                    int needMarks = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var bribeN)) ? bribeN : 1;
+                    string kind = ArgAt(action, 1, "角色");
+                    int targetPlayer = _currentTargetPlayerId > 0 ? _currentTargetPlayerId
+                        : (source != null ? (source.ControllerId == 1 ? 2 : 1) : -1);
+                    var am = TurnManagerRef?.AreaManagerRef;
+                    if (targetPlayer <= 0 || am == null)
+                    {
+                        GD.Print("[EffectEngine] ⚠ BribeOrSacrifice 跳过：无法确定目标玩家/地区管理器缺失");
+                        break;
+                    }
+                    int owned = CurbRule.TotalMarks(am, targetPlayer);
+                    bool mayPay = owned >= needMarks;                 // A12：不足 → 必须牺牲，不再询问
+                    bool payChosen = false;
+                    if (mayPay)
+                    {
+                        if (UIHooks != null)
+                        {
+                            UIHooks.PromptNumberInput(targetPlayer,
+                                $"是否移除 {needMarks} 个你所拥有的势力标志？（取消则牺牲一个{KindName(kind)}）",
+                                needMarks, needMarks, needMarks, "移除标志", "改为牺牲",
+                                chosen => payChosen = chosen >= needMarks);
+                        }
+                        else
+                        {
+                            payChosen = true;   // 无 UI（headless/测试）：能付则付（与既有同类兜底口径一致）
+                            GD.Print($"[EffectEngine] BribeOrSacrifice：无 UI → 玩家{targetPlayer} 确定性兜底选择支付标志");
+                        }
+                    }
+                    if (payChosen)
+                    {
+                        CurbRule.Resolve(this, source, needMarks, "对手");
+                        GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 选择移除 {needMarks} 个势力标志（而非牺牲）");
+                        break;
+                    }
+                    GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 走牺牲路线（无合法候选则什么都不付出）");
+                    ResolveSacrificeChoice(new EffectAction
+                    {
+                        Verb = ActionVerb.SacrificeChoice,
+                        Args = new Array<string> { kind, "目标玩家", "任意" },
+                    }, source, targetAreaId);
+                    break;
+                }
+
+                case ActionVerb.SacrificeChoice:
+                {
+                    ResolveSacrificeChoice(action, source, targetAreaId);
+                    break;
+                }
+
+                // 【P3·K19】获得临时费用（JC115「快速行动，横置：你获得1」）：Args[0]＝数量（缺省 1）。
+                // 口径（用户 2026-09 §7.4b A26）：所有费用都是**无色费用**；临时费用**优先花费**、
+                // **任意步骤结束时清除**（清空点＝`TurnManager.EnterPhase` 的每次阶段流转）。
+                case ActionVerb.GrantTemporaryMana:
+                {
+                    int tempAmt = (action.Args.Count > 0 && int.TryParse(action.Args[0], out var parsedTemp)) ? parsedTemp : 1;
+                    var pmTemp = TurnManagerRef?.PlayerManagerRef;
+                    if (pmTemp != null && source != null && source.ControllerId > 0)
+                    {
+                        pmTemp.GrantTemporaryMana(source.ControllerId, tempAmt);
+                        GD.Print($"[EffectEngine] 临时费用：玩家{source.ControllerId} 获得 {tempAmt}（当前 {pmTemp.GetTemporaryMana(source.ControllerId)}）");
+                        Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                    }
+                    else
+                    {
+                        GD.Print($"[EffectEngine] ⚠ GrantTemporaryMana 跳过：PlayerManager/来源缺失（source={(source == null ? "null" : source.PlayerTemplate?.CardName)}）");
+                    }
+                    break;
+                }
 
                 case ActionVerb.DrawFromBottom:
                 {
@@ -1408,6 +1614,238 @@ namespace Script.Manager
                     break;
                 }
 
+                // 【K1·JC083】展示来源控制者的**牌库顶一张牌**，按"印刷费用是否等于玩家所选数字"分流：
+                // 相同 → 置入其**手牌**（FAQ/口径 A31：**不算抓牌** → 不广播 `OnDraw`）；
+                // 不相同 → 置入其**牌库底**。牌库为空 → 无事发生。
+                // Args[0]＝期望的印刷费用（通常写 `$X`，由"玩家选择"型动态值代入）。
+                case ActionVerb.RevealTopAndTakeIfCostIs:
+                {
+                    int want = int.TryParse(ArgAt(action, 0, "0"), out var wantCost) ? wantCost : 0;
+                    int owner = source?.ControllerId ?? -1;
+                    var deck = TurnManagerRef?.GetDeckOf(owner);
+                    if (deck == null || deck.Count == 0)
+                    {
+                        GD.Print($"[EffectEngine] RevealTopAndTakeIfCostIs：玩家{owner} 牌库为空，无事发生");
+                        break;
+                    }
+                    var topCard = deck[0];   // 牌库约定：索引 0 = 牌库顶
+                    if (topCard == null) break;
+                    int topCost = topCard.PlayerTemplate?.Cost ?? -1;
+                    RevealCardPublicly(topCard, owner);   // "展示牌库顶的一张牌"＝公开展示（不改变规则状态）
+                    if (topCost == want)
+                    {
+                        CM?.MoveCardToHand(topCard);
+                        GD.Print($"[EffectEngine] 🔎 牌库顶「{topCard.PlayerTemplate?.CardName}」印刷费用 {topCost} ＝ 所选 {want} → 置入手牌（**不算抓牌**，不广播 OnDraw）");
+                    }
+                    else
+                    {
+                        TurnManagerRef?.ReturnCardToDeck(owner, topCard.UID, toTop: false);
+                        GD.Print($"[EffectEngine] 🔎 牌库顶「{topCard.PlayerTemplate?.CardName}」印刷费用 {topCost} ≠ 所选 {want} → 置入牌库底");
+                    }
+                    break;
+                }
+
+                // 【JC114】"**你可以从中选择一张，并牺牲好奇的黑客，若你如此做**，该玩家弃掉你所选择的牌"：
+                // **可选的牺牲自身**——与 `PayOptional` 同一交互原语（数值输入窗 0/1，按钮"牺牲/不牺牲"）：
+                //  · 选择牺牲 → `ResolveDeath(Sacrifice)`（**牺牲＝死亡，照常触发死亡时机**）→ 动作链**继续**
+                //    （后续动作以"已捕获的来源/控制者"结算，如 JC015/JC096 的牺牲代价同款语义）；
+                //  · 不牺牲 / 无 UI → 置 `_actionChainAborted` → **后续动作整段跳过**（"若你如此做"）。
+                case ActionVerb.SacrificeSelfOptional:
+                {
+                    if (source == null || CM == null)
+                    {
+                        GD.Print("[EffectEngine] ⚠ SacrificeSelfOptional 跳过：来源或 CardManager 缺失（视为不牺牲）");
+                        _actionChainAborted = true;
+                        break;
+                    }
+                    if (UIHooks == null)
+                    {
+                        GD.Print("[EffectEngine] ⚠ SacrificeSelfOptional 无 UI：确定性兜底＝**不牺牲**（绝不替玩家牺牲）");
+                        _actionChainAborted = true;
+                        break;
+                    }
+                    int sacChooser = source.ControllerId;
+                    SuspendChainForInput();
+                    UIHooks.PromptNumberInput(sacChooser,
+                        $"{source.PlayerTemplate?.CardName}：是否牺牲它？（牺牲后才弃掉你指定的那张牌）",
+                        0, 1, 0, "牺牲", "不牺牲", chosen =>
+                        {
+                            if (chosen <= 0)
+                            {
+                                GD.Print($"[EffectEngine] 玩家{sacChooser} 选择**不牺牲** → 中止后续动作（SacrificeSelfOptional）");
+                                _actionChainAborted = true;
+                            }
+                            else
+                            {
+                                GD.Print($"[EffectEngine] ✝ 可选牺牲：{source.PlayerTemplate?.CardName} 被牺牲（发动者选择）");
+                                CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
+                                Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                            }
+                            ContinuePendingChain();
+                        });
+                    break;   // 已挂起：ExecuteActionsFrom 记录续算点
+                }
+
+                // 【P3·K4·JC027/JC028】**实例级形态转换**：把本效果声明的 `FormChange` 施加到对象卡上
+                //（**只改实例**：类别覆盖 / 卡名覆盖 / 印刷效果失活 + 形态效果表 / 印刷图标与防御清零 / 追加子类别）。
+                // Args：[对象（`自身` 缺省 / `目标`）, 期限（`常驻` 缺省 / `直到回合结束`）]。
+                // 期限含"回合结束"时登记时效项（`TimedMod{Kind="Form"}`），到期由 `ExpireTurnEndEffects` 撤销形态。
+                case ActionVerb.TransformForm:
+                {
+                    var spec = _currentEffectData?.FormChange;
+                    if (spec == null)
+                    {
+                        GD.Print($"[EffectEngine] ⚠ TransformForm 跳过：{_currentEffectData?.EffectId} 未声明 FormChange");
+                        break;
+                    }
+                    var subject = ArgAt(action, 0, "自身") == "目标" ? (target ?? source) : source;
+                    if (subject == null) { GD.Print("[EffectEngine] ⚠ TransformForm 跳过：对象为空"); break; }
+                    string term = ArgAt(action, 1, "常驻");
+                    // 【顺序关键】先按**印刷效果表**注销旧的持续/静止登记（否则"原有的效果"会残留生效），
+                    // 再施加形态覆盖，最后按**形态效果表**重新注册（JC028"损失了原有的效果"）。
+                    bool willSuppress = spec.SuppressPrintedEffects;
+                    if (willSuppress) UnregisterPersistent(subject);
+                    subject.ApplyFormOverride(
+                        ToCardCategory(spec.Category),
+                        spec.Name,
+                        spec.SuppressPrintedEffects,
+                        spec.ZeroPrintedStatistics,
+                        spec.Effects);
+                    GD.Print($"[EffectEngine] 🧬 形态转换：{subject.PlayerTemplate?.CardName} → "
+                           + $"类别={subject.EffectiveCategoryFlag} 名={subject.EffectiveCardName}"
+                           + $"（{(spec.SuppressPrintedEffects ? "印刷效果失活" : "保留印刷效果")}，期限={term}）");
+                    // 追加子类别（JC027「地精」）：走既有子类别授予通道
+                    foreach (var sub in spec.AddSubCategories ?? new Array<string>())
+                    {
+                        if (string.IsNullOrWhiteSpace(sub)) continue;
+                        subject.Grant("SubCategory", sub.Trim(), 1);
+                    }
+                    if (willSuppress)
+                    {
+                        subject.ResetToBaseValues(false);
+                        if (subject.CurrentZone == CardZone.AreaZone || subject.CurrentZone == CardZone.AttachedZone)
+                            RegisterPersistent(subject);
+                    }
+                    if (term.Contains("回合结束"))
+                        RegisterTimedMod(new TimedMod
+                        {
+                            TargetUid = subject.UID,
+                            Kind = "Form",
+                            Value = string.Join(",", spec.AddSubCategories ?? new Array<string>()),
+                            ExpireTurn = CurrentTurn,
+                        });
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                    break;
+                }
+
+                // 【P3·K21·JC064 戒严】"准备步骤**强制**触发：**支付1，否则牺牲戒严**"（用户口径 A19：
+                // **由玩家选择**支付或牺牲）——与 `PayOptional`/`SacrificeSelfOptional` 同一交互原语：
+                //  · **可支付**（费用 ≥ N）→ 弹 0/1 窗口（确认＝"支付 N" / 取消＝"牺牲"）：
+                //    选择支付 → `SpendMana(N)` 后动作链继续；选择牺牲 → `ResolveDeath(Sacrifice)`；
+                //  · **不可支付**（费用不足）→ **不询问、直接牺牲**（卡文"否则"的必然结果）；
+                //  · 无 UI → 确定性兜底＝**能付就付**（不替玩家放弃已能支付的代价）。
+                case ActionVerb.PayOrSacrificeSelf:
+                {
+                    int amount = (action.Args != null && action.Args.Count > 0 && int.TryParse(action.Args[0], out var amt3))
+                        ? System.Math.Max(0, amt3) : 1;
+                    if (source == null || CM == null) { GD.Print("[EffectEngine] ⚠ PayOrSacrificeSelf 跳过：来源缺失"); break; }
+                    int payer3 = source.ControllerId;
+                    var pm3 = TurnManagerRef?.PlayerManagerRef;
+                    bool canPay = amount == 0 || (pm3 != null && pm3.GetAvailableMana(payer3) >= amount);
+
+                    if (!canPay)
+                    {
+                        GD.Print($"[EffectEngine] ✝ 可用费用不足 {amount} → 直接牺牲 {source.PlayerTemplate?.CardName}（PayOrSacrificeSelf）");
+                        CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
+                        Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                        break;
+                    }
+                    if (UIHooks == null)
+                    {
+                        GD.Print($"[EffectEngine] ⚠ PayOrSacrificeSelf 无 UI：确定性兜底＝支付 {amount}（不必牺牲）");
+                        pm3?.SpendMana(payer3, amount);
+                        break;
+                    }
+                    SuspendChainForInput();
+                    UIHooks.PromptNumberInput(payer3,
+                        $"{source.PlayerTemplate?.CardName}：支付 {amount} 还是牺牲它？（当前可用 {pm3?.GetAvailableMana(payer3) ?? 0}）",
+                        0, 1, 1, $"支付 {amount}", "牺牲", chosen =>
+                        {
+                            if (chosen <= 0)
+                            {
+                                GD.Print($"[EffectEngine] ✝ 玩家{payer3} 选择不支付 → 牺牲 {source.PlayerTemplate?.CardName}");
+                                CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
+                            }
+                            else
+                            {
+                                bool ok3 = pm3 == null || amount == 0 || pm3.SpendMana(payer3, amount);
+                                GD.Print($"[EffectEngine] {(ok3 ? "✓" : "✗")} 玩家{payer3} 支付 {amount}（PayOrSacrificeSelf）");
+                                if (!ok3) CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);   // 支付失败 → 兜底牺牲
+                            }
+                            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                            ContinuePendingChain();
+                        });
+                    break;   // 已挂起
+                }
+
+                // 【JC119 守秘人】"死亡触发：**展示封印在守秘人上的所有牌**，你可以**打出其中一张**，
+                // 视作它具有【快速】且不需要支付其费用（但仍需满足忠诚需求）。将不打出的牌移回其拥有者手上。"
+                // 用户 2026-09 口径（本轮答复）：
+                //  · 死亡触发在**原子锁之后**结算；此时**封印牌已按规则回到拥有者手牌**（`ZoneManager.DetachSealedCards`
+                //    置 `ReturnedFromSealHostUid` 标记）→ **直接从手牌**取那批牌（"刚刚由于封印效果回到手牌的牌"）；
+                //  · 顺序＝**先公开展示全部** → **由你选一张**（可取消＝不打）→ **走正常打出流程**
+                //    （不在结算期嵌套打出：登记到 `TurnManager` 的免费打出队列，原子锁解除后按
+                //    `PlayCard(freePlay:true, asIfQuick:true)` 执行＝**免费 + 视作快速 + 忠诚照常校验**）；
+                //  · "将不打出的牌移回其拥有者手上"＝**天然成立**（它们本就在手牌）。
+                case ActionVerb.RevealSealedAndQueueFreePlay:
+                {
+                    if (source == null || CM == null || TurnManagerRef == null) { GD.Print("[EffectEngine] ⚠ RevealSealedAndQueueFreePlay 跳过：依赖缺失"); break; }
+                    int owner = source.ControllerId;
+                    var hand = ZoneManagerRef?.GetZoneCards(CardZone.Hand, owner)
+                        ?? new System.Collections.Generic.List<CardInstance>();
+                    var candidates = new System.Collections.Generic.List<CardInstance>();
+                    foreach (var c in hand)
+                    {
+                        if (c == null || c.IsDying) continue;
+                        if (!string.Equals(c.ReturnedFromSealHostUid ?? "", source.UID, System.StringComparison.Ordinal)) continue;
+                        if (TurnManagerRef.HasQueuedFreePlay(c.UID)) continue;      // 已登记过（防重复）
+                        candidates.Add(c);
+                    }
+                    if (candidates.Count == 0)
+                    {
+                        GD.Print($"[EffectEngine] RevealSealedAndQueueFreePlay：{source.PlayerTemplate?.CardName} 没有『刚由封印回手』的牌 → 无事发生");
+                        break;
+                    }
+                    // ① 先**公开展示全部**（卡文"展示封印在守秘人上的所有牌"）
+                    foreach (var c in candidates) RevealCardPublicly(c, owner);
+                    // ② 由控制者选一张（可取消＝不打）；无 UI → 兜底不打出（绝不替玩家出牌）
+                    if (UIHooks == null)
+                    {
+                        GD.Print("[EffectEngine] ⚠ RevealSealedAndQueueFreePlay 无 UI：兜底＝不打出（牌留在手牌）");
+                        break;
+                    }
+                    SuspendChainForInput();
+                    UIHooks.PromptPickCard(owner,
+                        $"{source.PlayerTemplate?.CardName}：可免费打出其中一张（视作快速；不需付费，仍需忠诚）",
+                        candidates, allowCancel: true, picked =>
+                        {
+                            if (picked == null)
+                            {
+                                GD.Print($"[EffectEngine] 玩家{owner} 选择不打出封印牌 → 全部留在手牌");
+                            }
+                            else if (picked.PlayerTemplate == null || !TurnManagerRef.PlayerManagerRef.CanPayLoyalty(owner, picked.PlayerTemplate))
+                            {
+                                GD.PrintErr($"[EffectEngine] ⛔ 免费打出被拒：{picked.PlayerTemplate?.CardName} 不满足忠诚需求 → 留在手牌");
+                            }
+                            else
+                            {
+                                TurnManagerRef.EnqueueFreePlay(owner, picked.UID);
+                            }
+                            ContinuePendingChain();
+                        });
+                    break;   // 已挂起
+                }
+
                 // 【P3·G】把某张牌移到指定区域（"成为一个资产 / 移回手上"等去处转换）。
                 // Args：[对象(自身/目标/牌库顶), 目的区(资产区/争夺区/手牌/牌库底), 朝向(正面/暗藏)]。
                 case ActionVerb.MoveToZone:
@@ -1459,6 +1897,14 @@ namespace Script.Manager
                             string area = !string.IsNullOrEmpty(targetAreaId) ? targetAreaId : (source?.ZoneDetailId ?? "");
                             if (string.IsNullOrEmpty(area)) { GD.Print("[EffectEngine] ⚠ MoveToZone：推不出争夺区落点，跳过"); break; }
                             CM?.MoveCardToArea(card, area);
+                            // 【JC124】`Args[3]="拥有者"`：回场后**由拥有者操控**（卡文"并由其拥有者操控"）——
+                            // 走夺控统一出口 `ZoneManager.ChangeController`（OwnerId 不变、控制者改为拥有者），
+                            // 用于"该角色此前被夺控（如 JC036 初拥）后死亡再回场"的场合。
+                            if (ArgAt(action, 3, "") == "拥有者" && card.ControllerId != card.OwnerId)
+                            {
+                                ZoneManagerRef?.ChangeController(card, card.OwnerId);
+                                GD.Print($"[EffectEngine] MoveToZone：{card.PlayerTemplate?.CardName} 回场后交回**拥有者**（玩家{card.OwnerId}）操控");
+                            }
                             GD.Print($"[EffectEngine] MoveToZone：{card.PlayerTemplate?.CardName} → 争夺区 {area}");
                             break;
                         }
@@ -1656,11 +2102,54 @@ namespace Script.Manager
                     break;
                 }
 
+                // 【P2·修复】以下四个动词**尚未实现**：原先是"空 case 标签"直接**落到下方 `Attach` 的执行体**，
+                // 一旦有卡声明它们就会**静默把来源卡结附到目标身上**（错误行为，且没有任何报错）。
+                // 现改为各自独立的"显式未实现"分支：打错误日志、不做任何模型改动（fail-closed）。
+                // 若要启用某个动词，请实现其执行体并把该 label 从本组移除（勿再堆叠在别的 case 之上）。
                 case ActionVerb.GenerateToken:
+                    GD.PrintErr($"[EffectEngine] ⛔ GenerateToken 尚未实现（{string.Join(",", action.Args)}）→ 本次不做任何改动");
+                    break;
                 case ActionVerb.Investigate:
+                    GD.PrintErr($"[EffectEngine] ⛔ Investigate（调查对抗）尚未实现 → 本次不做任何改动");
+                    break;
                 case ActionVerb.Strength:
+                    GD.PrintErr($"[EffectEngine] ⛔ Strength（战斗对抗）尚未实现 → 本次不做任何改动");
+                    break;
                 case ActionVerb.Power:
+                    GD.PrintErr($"[EffectEngine] ⛔ Power（势力对抗）尚未实现 → 本次不做任何改动");
+                    break;
+                // 【P3·K12】把**来源卡自己**结附到宿主上（JC121 空鸣御守「进场触发：将空鸣御守结附于位于本地区的
+                // 目标本方角色」——"附属进场时自行选定结附目标"这条死角）。
+                // Args：[宿主（缺省"目标"；也支持"自身"＝把目标结附到来源上）]。
+                // 落点与"检索结附"（`AttachSearchedCard`）同款：`IsAttached=true` / `AttachedTo=宿主` /
+                // 宿主 `AttachedCards` 收录 / `ZoneManager.MoveToAttachedZone(卡, 宿主所在地区, 控制者)`
+                // （宿主是秘社时地区写空串——秘社实例无 `ZoneDetailId`）。
                 case ActionVerb.Attach:
+                {
+                    string hostSide = ArgAt(action, 0, "目标");
+                    var attachCard = source;
+                    CardInstance attachHost = hostSide == "自身" ? source : target;
+                    if (attachCard == null || attachHost == null)
+                    {
+                        GD.Print($"[EffectEngine] ⚠ Attach 跳过：被结附者/宿主为空（Args[0]={hostSide}）");
+                        break;
+                    }
+                    if (attachCard == attachHost)
+                    {
+                        GD.Print("[EffectEngine] ⚠ Attach 跳过：不能结附到自身");
+                        break;
+                    }
+                    bool councilHost = attachHost.CurrentZone == CardZone.CouncilZone;
+                    attachCard.IsAttached = true;
+                    attachCard.AttachedTo = attachHost;
+                    attachHost.AttachedCards ??= new System.Collections.Generic.List<CardInstance>();
+                    if (!attachHost.AttachedCards.Contains(attachCard)) attachHost.AttachedCards.Add(attachCard);
+                    string attachArea = councilHost ? "" : (attachHost.ZoneDetailId ?? "");
+                    ZoneManagerRef?.MoveToAttachedZone(attachCard, attachArea, attachCard.ControllerId >= 1 ? attachCard.ControllerId : 1);
+                    GD.Print($"[EffectEngine] 结附：{attachCard.PlayerTemplate?.CardName} → 宿主 {attachHost.PlayerTemplate?.CardName}（地区={attachArea}）");
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                    break;
+                }
                 case ActionVerb.Win:
                     GD.Print($"[EffectEngine] {action.Verb} TODO：执行器待实现");
                     break;
@@ -1839,6 +2328,8 @@ namespace Script.Manager
                     // 展示引用：客户端据此渲染卡面（选择者本人可见，无需额外授权字段）
                     var refr = global::ZoneManager.ProjectCard(c, CardZone.Hand, discarderId);
                     if (refr != null) req.OptionCardRefs.Add(refr);
+                    // 【P2·联机可读性】显示名随请求下发（对手手牌对客户端是隐藏占位 → 只能靠服务端给名字）
+                    req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
                 }
                 var result = await InputGateway.RequestChoice(chooserPlayerId, req);
                 if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
@@ -1848,6 +2339,13 @@ namespace Script.Manager
                 }
                 var picked = CM?.GetInstance(result.SelectedUid);
                 if (picked == null) { GD.Print("[EffectEngine] ⚠ Discard 回调卡不存在，中止"); break; }
+                // 【P2·联机权威复检】回包必须命中"服务端本次下发的候选"（＝该弃牌者手牌中、本批尚未选中的牌）。
+                // 原先只判"实例存在"，客户端可回包任意 UID（如场上/对手手牌）把它当弃牌结果弃掉。
+                if (!candidates.Contains(picked))
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 弃牌回包 {result.SelectedUid} 不在本次合法候选中 → 中止本批（fail-closed）");
+                    break;
+                }
                 pickedAll.Add(picked);
             }
             // 本批一次性弃掉（OnDiscard 只广播一次，ExtraInt = 本批张数）
@@ -1879,6 +2377,8 @@ namespace Script.Manager
                 req.OptionUids.Add(c.UID);
                 var refr = global::ZoneManager.ProjectCard(c, CardZone.Hand, chooserPlayerId);
                 if (refr != null) req.OptionCardRefs.Add(refr);
+                // 【P2·联机可读性】显示名随请求下发（封印自己的手牌；客户端占位卡无模板 → 靠服务端给名字）
+                req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
             }
             var result = await InputGateway.RequestChoice(chooserPlayerId, req);
             if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
@@ -1888,6 +2388,12 @@ namespace Script.Manager
             }
             var picked = CM?.GetInstance(result.SelectedUid);
             if (picked == null) { GD.Print($"[EffectEngine] ⚠ Seal 回包卡不存在：{result.SelectedUid}"); return; }
+            // 【P2·联机权威复检】回包必须是"服务端下发的候选之一"（＝封印者此刻的手牌）。
+            if (!hand.Contains(picked))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 封印回包 {result.SelectedUid} 不在本次合法候选中 → 拒绝（fail-closed）");
+                return;
+            }
             SealAndReport(picked, host, faceDown);
         }
 
@@ -2034,6 +2540,84 @@ namespace Script.Manager
             return false;
         }
 
+        // ==================== 【P2·联机】JC119 展示封印牌 → 免费打出一张 ====================
+
+        /// <summary>
+        /// 【P2·联机断链修复·JC119】守秘人②：**经网关**执行"展示封印牌 → 由控制者选一张免费打出"。
+        /// 与单机分支（`ExecuteVerb` 的同名 case）**同一口径**：
+        ///  · 候选＝控制者手牌中"**刚由本卡封印回手**"（`ReturnedFromSealHostUid == source.UID`）且尚未登记过的牌；
+        ///  · **先公开展示全部**（卡文"展示封印在守秘人上的所有牌"）；
+        ///  · 下发 `SelectHandCard`（`ForceChoice=false` ⇒ 允许放弃＝一张都不打）；
+        ///  · 回包**权威复检**（必须命中候选）→ **忠诚预检**（卡文"但仍需满足忠诚需求"）→
+        ///    `TurnManager.EnqueueFreePlay`（真正的打出在原子锁解除后由 `ProcessQueuedFreePlays` 走正常打出流程）；
+        ///  · 取消/超时/不满足忠诚 → **不打**（牌留在手牌，"移回拥有者手上"天然成立）。
+        /// 原先只有单机 `UIHooks` 分支 ⇒ 联机落到"兜底＝不打出"，该卡在联机侧**永远不生效**。
+        /// </summary>
+        private async System.Threading.Tasks.Task RevealSealedAndQueueFreePlayViaGatewayAsync(CardInstance source)
+        {
+            if (source == null || CM == null || TurnManagerRef == null || InputGateway == null) return;
+            int owner = source.ControllerId;
+            var candidates = CollectSealedReturnedCards(source, owner);
+            if (candidates.Count == 0)
+            {
+                GD.Print($"[EffectEngine] RevealSealedAndQueueFreePlay（联机）：{source.PlayerTemplate?.CardName} 没有『刚由封印回手』的牌 → 无事发生");
+                return;
+            }
+            foreach (var c in candidates) RevealCardPublicly(c, owner);   // ① 先公开展示全部
+
+            var req = new Script.Net.ChoiceRequest
+            {
+                PlayerId = owner,
+                RequestKind = Script.Net.ChoiceRequest.Kind.SelectHandCard,
+                SourceUid = source.UID,
+                Prompt = $"{source.PlayerTemplate?.CardName}：可免费打出其中一张（视作快速；不需付费，仍需忠诚）",
+                ForceChoice = false,   // 卡文"你可以…"：允许放弃（一张都不打）
+            };
+            foreach (var c in candidates)
+            {
+                req.OptionUids.Add(c.UID);
+                var refr = global::ZoneManager.ProjectCard(c, CardZone.Hand, owner);
+                if (refr != null) req.OptionCardRefs.Add(refr);
+                req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
+            }
+
+            var result = await InputGateway.RequestChoice(owner, req);
+            if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
+            {
+                GD.Print($"[EffectEngine] 玩家{owner} 选择不打出封印牌 → 全部留在手牌");
+                return;
+            }
+            var picked = CM.GetInstance(result.SelectedUid);
+            if (picked == null || !candidates.Contains(picked))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 免费打出回包 {result.SelectedUid} 不在候选内 → 拒绝（fail-closed）");
+                return;
+            }
+            var pm = TurnManagerRef.PlayerManagerRef;
+            if (picked.PlayerTemplate == null || pm == null || !pm.CanPayLoyalty(owner, picked.PlayerTemplate))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 免费打出被拒：{picked.PlayerTemplate?.CardName} 不满足忠诚需求 → 留在手牌");
+                return;
+            }
+            TurnManagerRef.EnqueueFreePlay(owner, picked.UID);
+        }
+
+        /// <summary>【JC119·共用】"刚由 <paramref name="source"/> 封印回手、且尚未登记免费打出"的手牌集合
+        /// （单机/联机两条路径共用，避免口径分叉）。</summary>
+        private System.Collections.Generic.List<CardInstance> CollectSealedReturnedCards(CardInstance source, int owner)
+        {
+            var result = new System.Collections.Generic.List<CardInstance>();
+            if (source == null || ZoneManagerRef == null || TurnManagerRef == null) return result;
+            foreach (var c in ZoneManagerRef.GetZoneCards(CardZone.Hand, owner))
+            {
+                if (c == null || c.IsDying) continue;
+                if (!string.Equals(c.ReturnedFromSealHostUid ?? "", source.UID, System.StringComparison.Ordinal)) continue;
+                if (TurnManagerRef.HasQueuedFreePlay(c.UID)) continue;   // 已登记过（防重复）
+                result.Add(c);
+            }
+            return result;
+        }
+
         // ==================== 【P2】检索（Search） ====================
 
         /// <summary>
@@ -2075,6 +2659,9 @@ namespace Script.Manager
                 req.OptionUids.Add(c.UID);
                 var refr = global::ZoneManager.ProjectCard(c, CardZone.Deck, searcher);
                 if (refr != null) req.OptionCardRefs.Add(refr);
+                // 【P2·联机可读性】候选显示名随请求下发：牌库对客户端是**隐藏占位**（无模板/无卡面），
+                // 客户端只能拿到原始 UID ⇒ 玩家"看不到卡名却必须选"。显示名由服务端给出（单一真相源）。
+                req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
             }
 
             var result = await InputGateway.RequestChoice(searcher, req);
@@ -2087,6 +2674,14 @@ namespace Script.Manager
             if (picked == null)
             {
                 GD.Print($"[EffectEngine] ⚠ 检索回包卡不存在：{result.SelectedUid}");
+                return;
+            }
+            // 【P2·联机权威复检】回包必须命中"**服务端本次下发的候选**"（＝在检索者牌库中 ∧ 通过筛选 ∧ 未越界）。
+            // 原先只判"实例存在"，客户端可回包任意 UID（如对手手牌/墓地里的牌）把它当检索结果取走。
+            // 与 K10/K15/遏制/预测的复检同一口径（fail-closed：不合规 → 本次检索不生效、不洗牌）。
+            if (!matches.Contains(picked))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 检索回包 {result.SelectedUid} 不在本次合法候选中 → 拒绝（fail-closed）");
                 return;
             }
             TurnManagerRef.RemoveCardFromDeckOf(picked.OwnerId, picked);
@@ -2531,17 +3126,38 @@ namespace Script.Manager
                     int pid = (source != null ? source.ControllerId : (target != null ? target.ControllerId : -1));
                     string filter = args.Count >= 3 ? args[2] : "";
                     bool consumeOnce = args.Count >= 4 && args[3] == "一次性";
-                    GD.Print($"[EffectEngine] Gain 费用减少 转交玩家{pid} 费用修正栈（{amt}，filter='{filter}'，{(consumeOnce ? "一次性" : "整回合")}，timed={timed}）");
-                    if (timed && pid >= 0) ApplyCostModification(pid, amt, CurrentTurn, filter, consumeOnce);
+                    // 【JC055②】args[4]（可选）＝该减免作用的**付费通道**：缺省 `"打出"`；
+                    // 写 `"打出,现身"` 表示**两个通道都能享受**（卡文"你打出的下一张灾难牌"＋用户口径：
+                    // 暗藏者付费翻面（现身）同样可享受该减免）。
+                    string gainScope = args.Count >= 5 && !string.IsNullOrWhiteSpace(args[4]) ? args[4].Trim() : "打出";
+                    GD.Print($"[EffectEngine] Gain 费用减少 转交玩家{pid} 费用修正栈（{amt}，filter='{filter}'，{(consumeOnce ? "一次性" : "整回合")}，通道={gainScope}，timed={timed}）");
+                    if (timed && pid >= 0)
+                        ApplyCostModification(pid, amt, CurrentTurn, filter, consumeOnce,
+                            renewable: false, sourceUid: null, costScope: gainScope);
                     else GD.Print($"[EffectEngine] ⚠ 费用减少未登记：timed={timed}, pid={pid}（需 Duration 含'回合结束'且控制者有效）");
                     break;
 
                 case var _ when attrName != null:
                     // 【P1】能力图标 → Attribute（真正改数值的路径；负数走 Revoke）
-                    if (amt < 0) subject.Revoke("Attribute", attrName, -amt);
-                    else subject.Grant("Attribute", attrName, amt);
-                    GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 获得图标[{what}]×{amt}（属性 '{attrName}'）");
-                    if (timed) RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Attribute", Value = attrName, Amount = amt, ExpireTurn = CurrentTurn });
+                    // 【P3·K4 修正】**两条通道都写**：图标**存在性**（`Icon`，供 `HasIcon`/展示/"有图标"类判定）
+                    // ＋ **数值**（`Attribute`，如黑刀=+1 战力）。此前只写 Attribute → 卡面"获得［黑刀］"
+                    // 在 UI 与 `HasIcon` 判定上落空（JC116 曾踩到同一坑，JC027 形态授予这次同样踩到）。
+                    if (amt < 0)
+                    {
+                        subject.Revoke("Attribute", attrName, -amt);
+                        subject.Revoke("Icon", what, -amt);
+                    }
+                    else
+                    {
+                        subject.Grant("Attribute", attrName, amt);
+                        subject.Grant("Icon", what, amt);
+                    }
+                    GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 获得图标[{what}]×{amt}（属性 '{attrName}'，图标+属性双通道）");
+                    if (timed)
+                    {
+                        RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Attribute", Value = attrName, Amount = amt, ExpireTurn = CurrentTurn });
+                        RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Icon", Value = what, Amount = amt, ExpireTurn = CurrentTurn });
+                    }
                     break;
 
                 default:
@@ -2775,6 +3391,26 @@ namespace Script.Manager
                         Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                     }
                 }
+                else if (m.Kind == "Form")
+                {
+                    // 【P3·K4】**实例级形态**到期（JC027"成为一个地精角色…直到回合结束"）：撤销形态覆盖
+                    // （类别/卡名/印刷效果失活/清零的图标与防御）＋移除此期间追加的子类别；
+                    // 若形态期间印刷效果被失活，则按印刷效果表重新注册持续效果。
+                    var fc = CM?.GetInstance(m.TargetUid);
+                    if (fc != null)
+                    {
+                        // 【顺序】先按形态效果表注销（形态效果随之失效），再撤形态，最后按印刷效果表重注册。
+                        if (fc.IsPrintedEffectsSuppressed) UnregisterPersistent(fc);
+                        foreach (var sub in (m.Value ?? "").Split(','))
+                            if (!string.IsNullOrWhiteSpace(sub)) fc.Revoke("SubCategory", sub.Trim(), 1);
+                        fc.ClearFormOverride();
+                        fc.ResetToBaseValues(false);
+                        if (fc.CurrentZone == CardZone.AreaZone || fc.CurrentZone == CardZone.AttachedZone)
+                            RegisterPersistent(fc);
+                        GD.Print($"[EffectEngine] ⌛ 时效还原：{fc.PlayerTemplate?.CardName} 的实例级形态到期（回合结束）");
+                        Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                    }
+                }
                 else
                 {
                     var c = CM?.GetInstance(m.TargetUid);
@@ -2858,9 +3494,8 @@ namespace Script.Manager
             {
                 var m = _timedModStack[i];
                 if (m.Kind != "CostMod" || m.PlayerId != playerId || !m.ConsumeOnce) continue;
-                // 【P3】付费通道隔离（打出费 / 现身费各查各的）
-                if (!string.Equals(m.CostScope, scope, System.StringComparison.Ordinal)) continue;
-                // 命中的条件：空串（全匹配）或与本次打出卡的过滤串一致/命中同一张卡
+                // 【P3】付费通道隔离（打出费 / 现身费各查各的）+ 【JC055②】组合通道（"打出,现身" 或 "全部"）
+                if (!ScopeMatchesChannel(m.CostScope, scope)) continue;
                 bool hit = string.IsNullOrEmpty(m.FilterText)
                            || m.FilterText == (fallbackFilterText ?? "")
                            || (card != null && CostModFilter.Matches(m.FilterText, card, card.PlayerTemplate?.CardName, card.PlayerTemplate?.Organization));
@@ -2899,13 +3534,28 @@ namespace Script.Manager
             {
                 if (m.Kind != "CostMod" || m.PlayerId != playerId) continue;
                 // 【P3】付费通道隔离：打出费 / 现身费两条通道各查各的（JC033 只减"付费翻面"的费用）
-                if (!string.Equals(m.CostScope, scope, System.StringComparison.Ordinal)) continue;
+                // 【JC055②】组合通道：登记 "打出,现身"（或 "全部"）时两个通道都能享受该减免。
+                if (!ScopeMatchesChannel(m.CostScope, scope)) continue;
                 // 【P3】可再生的费用修正：本回合已消费 → 本回合内不生效（下回合自动恢复）
                 if (m.Renewable && m.ConsumedTurn == NowTurn) continue;
                 if (CostModFilter.Matches(m.FilterText, card, cardName, organization))
                     total += m.Amount;
             }
             return total;
+        }
+
+        /// <summary>【JC055②】付费通道匹配：登记值可为单个通道（`"打出"` / `"现身"`）、
+        /// 逗号分隔的**组合**（`"打出,现身"`，表示两个通道都能享受）或通配 `"全部"`。</summary>
+        private static bool ScopeMatchesChannel(string registered, string query)
+        {
+            string reg = string.IsNullOrEmpty(registered) ? "打出" : registered;
+            string q = string.IsNullOrEmpty(query) ? "打出" : query;
+            if (string.Equals(reg, q, System.StringComparison.Ordinal)) return true;
+            if (string.Equals(reg, "全部", System.StringComparison.Ordinal)) return true;
+            if (reg.IndexOf(',') < 0) return false;
+            foreach (var seg in reg.Split(','))
+                if (string.Equals(seg.Trim(), q, System.StringComparison.Ordinal)) return true;
+            return false;
         }
 
         /// <summary>导出当前生效中的玩家级费用修正（只读，供快照下行给客户端做减费展示）。
@@ -2960,6 +3610,8 @@ namespace Script.Manager
             _noUntapWithSealedCardsBy.Clear();
             _extraPowerContestBy.Clear();
             _damageRedirects.Clear();
+            _controlGains.Clear();   // 【P3·K4】持续夺控表（JC036）
+            _nonOrgEntryBlockers.Clear();   // 【P3·K21】JC064 戒严：非指定组织不可进入
             _iconSuppressors.Clear();
             _iconSuppressionApplied.Clear();
             _domainSuppressors.Clear();
@@ -2969,7 +3621,7 @@ namespace Script.Manager
             _grantedAbilities.Clear();
             _pendingEffects.Clear();
             CurrentTurn = 1;
-            GD.Print("[EffectEngine] ResetAll: 20 个静态注册表已清空, CurrentTurn=1");
+            GD.Print("[EffectEngine] ResetAll: 21 个静态注册表已清空, CurrentTurn=1");
         }
 
         // ==================== 【P3】一次性待触发承诺（PendingEffect） ====================
@@ -3060,7 +3712,7 @@ namespace Script.Manager
             return host == null ? TargetKind.None : CardManager.MapInstanceToTargetKind(host);
         }
 
-        public bool EvaluateCondition(string predicate, CardInstance source, CardInstance target, CardInstance contextCard = null, int triggeringPlayerId = -1, string triggeringAreaId = null)
+        public bool EvaluateCondition(string predicate, CardInstance source, CardInstance target, CardInstance contextCard = null, int triggeringPlayerId = -1, string triggeringAreaId = null, string param = null)
         {
             // 最小实现：支持几种已明确谓词；其余默认视为满足，避免卡死
             switch (predicate)
@@ -3074,12 +3726,34 @@ namespace Script.Manager
                 case "HostIsCharacter":
                     return HostKindOf(source ?? target) == TargetKind.Character;
                 case "成功封印":
-                    // 封印系统未实现，暂视为满足（后续接 D15 后改为真实判定）
-                    return true;
+                {
+                    // 【P2·修复】"封印成功"的真实判定：**本卡（来源）此刻封印着事件主体卡**。
+                    // 原先恒 `true`（"封印系统未实现"的旧注释已过期：`TurnManager.SealCard` / `CardInstance.SealedBy` /
+                    // `SealedCards` / `CardZone.SealedZone` 均已落地）——恒真会让依赖它的"若你如此做…"链
+                    // 在**封印失败**时照样往下走。
+                    var sealedCard = contextCard ?? target;
+                    if (sealedCard == null) { GD.Print("[EffectEngine] 条件「成功封印」：无被封印卡上下文 → 不满足"); return false; }
+                    bool sealing = ReferenceEquals(sealedCard.SealedBy, source)
+                                   && sealedCard.CurrentZone == CardZone.SealedZone;
+                    GD.Print($"[EffectEngine] 条件「成功封印」：{sealedCard.PlayerTemplate?.CardName} " +
+                             $"封印宿主={sealedCard.SealedBy?.PlayerTemplate?.CardName ?? "无"} 区域={sealedCard.CurrentZone} → {(sealing ? "满足" : "不满足")}");
+                    return sealing;
+                }
                 case "心灵领域忠诚≥2（资产区心心）":
-                    // 资产区忠诚统计：PlayerManager 已有 GetDomainLoyalty，待接入
-                    GD.Print("[EffectEngine] 条件「心灵领域忠诚≥2」暂默认满足（资产区忠诚统计待接入）");
-                    return true;
+                {
+                    // 【P2·修复】真实读**本卡控制者**资产区的【心】（心灵领域）忠诚点数（`PlayerManager.GetDomainLoyalty`，
+                    // 与 `PrereqKind.DomainLoyalty` 同一数据源）；原先恒 `true`（"待接入"的旧注释已过期）。
+                    var pm2 = TurnManagerRef?.PlayerManagerRef;
+                    if (source == null || pm2 == null)
+                    {
+                        GD.Print("[EffectEngine] 条件「心灵领域忠诚≥2」：来源/PlayerManager 缺失 → 不满足（fail-closed）");
+                        return false;
+                    }
+                    var loy = pm2.GetDomainLoyalty(source.ControllerId);
+                    loy.TryGetValue(MagicDomain.Mind, out int mind);
+                    GD.Print($"[EffectEngine] 条件「心灵领域忠诚≥2」：玩家{source.ControllerId} 的【心】={mind} → {(mind >= 2 ? "满足" : "不满足")}");
+                    return mind >= 2;
+                }
                 case "PlayedSorcery":
                     // 反应触发条件：刚被打出的卡是事务卡（法术类），且当前实际子类型含"法术"。
                     // 子类型判定用 HasSubCategory（合并静态模板 + 运行时授予）；打出阶段无运行时授予，等价于静态 SubCategories 含"法术"。
@@ -3176,6 +3850,65 @@ namespace Script.Manager
                              $"控制者=P{contextCard.ControllerId} 来源控制者=P{source.ControllerId} → {(allyChar ? "满足" : "不满足")}");
                     return allyChar;
                 }
+                // 【P3·K5】"本方赢得该次战斗对抗 **且** 本地区有本方指定子类别的角色"（JC034「当你赢得一次战斗对抗时，
+                // 若有**本方吸血鬼角色**参与了这次战斗对抗，你可以令目标对手弃一张手牌」）。
+                // 判定＝A14 的近似口径（用户 2026-09）：**位于战斗地区且属于获胜方**——
+                //   ① 本卡控制者 ＝ 对抗获胜方（`triggeringPlayerId`）；
+                //   ② 战斗地区内存在**同控制者**、带 `param` 子类别（缺省不限）、**在争夺区**的角色。
+                case "WinnerIsSelfWithAllySubCategoryInCombatArea":
+                {
+                    if (source == null || CM == null) return false;
+                    if (string.IsNullOrEmpty(triggeringAreaId)) return false;
+                    if (source.ControllerId != triggeringPlayerId)
+                    {
+                        GD.Print($"[EffectEngine] 条件「WinnerIsSelfWithAllySubCategoryInCombatArea」：本方未获胜（P{source.ControllerId} vs 胜者 P{triggeringPlayerId}）→ 不满足");
+                        return false;
+                    }
+                    string wantSub = (param ?? "").Trim();
+                    foreach (var c in CM.GetAllInstances())
+                    {
+                        if (c == null || c.IsDying || c == source) continue;
+                        if (c.ControllerId != source.ControllerId) continue;                  // 只数"本方"
+                        if (c.CurrentZone != CardZone.AreaZone) continue;                     // 场上角色
+                        if (!string.Equals(c.ZoneDetailId ?? "", triggeringAreaId, System.StringComparison.Ordinal)) continue;   // 位于战斗地区
+                        if ((c.PlayerTemplate?.CategoryFlag & CardCategory.Character) == 0) continue;
+                        if (!string.IsNullOrEmpty(wantSub) && !c.HasSubCategory(wantSub)) continue;
+                        GD.Print($"[EffectEngine] 条件「WinnerIsSelfWithAllySubCategoryInCombatArea({wantSub})」：找到 {c.PlayerTemplate?.CardName} 位于战斗地区 → 满足");
+                        return true;
+                    }
+                    GD.Print($"[EffectEngine] 条件「WinnerIsSelfWithAllySubCategoryInCombatArea({wantSub})」：战斗地区内无符合条件的本方角色 → 不满足");
+                    return false;
+                }
+
+                // 【P3·K5】参数化谓词：**指定地区内的卡上标志总数 ≥ N**（JC127「然后若该地区有三个或更多时间标志」）。
+                // `param` 形式：`"标志名,数量"`（如 `"时间标志,3"`；兼容 `"时间标志"`＝至少 1 个）。
+                // 地区＝`triggeringAreaId`（打出/激活类效果在结算时以"目标地区"下发，见 `ResolveEffect` 的 targetAreaId）。
+                // 统计口径：**该地区内所有卡**（争夺区角色 ＋ 结附该地区的附属，即 `ZoneDetailId == 地区`）上的该标志之和。
+                case "AreaMarkerAtLeast":
+                {
+                    // 地区来源：优先本次结算的"目标地区"，否则回落到**来源卡所在地区**
+                    // （如 JC048 诅咒沙漏结附于地区 → 来源卡 ZoneDetailId 即该地区；准备步骤触发不带地区上下文）。
+                    string areaUid = !string.IsNullOrEmpty(triggeringAreaId) ? triggeringAreaId : (source?.ZoneDetailId ?? "");
+                    if (string.IsNullOrEmpty(areaUid) || CM == null)
+                    {
+                        GD.Print("[EffectEngine] 条件「AreaMarkerAtLeast」：无目标地区且来源无地区 → 不满足");
+                        return false;
+                    }
+                    string markerName = "时间标志";
+                    int need = 1;
+                    if (!string.IsNullOrWhiteSpace(param))
+                    {
+                        var parts = param.Split(',');
+                        if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0])) markerName = parts[0].Trim();
+                        if (parts.Length > 1 && int.TryParse(parts[1].Trim(), out int parsedNeed)) need = parsedNeed;
+                    }
+                    // 统计走统一实现（与动态值 `计数:地区内卡上标志:…` 同源，避免两处口径分叉）
+                    int total = Script.Manager.EffectValueResolver.CountMarkersInArea(areaUid, markerName, CM);
+                    bool ok = total >= need;
+                    GD.Print($"[EffectEngine] 条件「AreaMarkerAtLeast({markerName} ≥ {need})」：地区 {areaUid} 实际 {total} → {(ok ? "满足" : "不满足")}");
+                    return ok;
+                }
+
                 // 语义：死亡的卡是**本方灵体角色**（JC105"当另一个本方灵体角色死亡时"）。
                 // 判据与 `DiedAllyCharacter` 同源（角色 + 同控制者 + **排除来源自身**），外加关键词「灵体」
                 // （与光环筛选同一口径：运行期关键字 ∪ 卡面固有）。
@@ -3204,6 +3937,24 @@ namespace Script.Manager
                     GD.Print($"[EffectEngine] 条件「DiedVampireCharacter」：死亡卡={contextCard.PlayerTemplate?.CardName} " +
                              $"是否角色={isChar} 是否吸血鬼={vampire} → {(vampire ? "满足" : "不满足")}");
                     return vampire;
+                }
+                // 【JC124】语义：**刚死亡的那张卡在死亡瞬间具有指定"卡上标志/指示物"**
+                // （卡文"当**具有哲人石标志的**角色死亡时"）。`Param` ＝标志名（如 `哲人石标志`）。
+                // 判据读**死亡瞬间的计数器快照**（`CardInstance.CountersAtDeath`，由 `CardManager.ResolveDeath`
+                // 在广播死亡事件**之前**抓取）——因为死亡触发的**结算**晚于"进墓地"，而进墓地会清空计数器；
+                // 无快照时回落到当前计数器（同步路径/未走死亡流程的手工结算场景）。
+                case "DiedWithCounter":
+                {
+                    var died = contextCard ?? target;
+                    if (died == null)
+                    {
+                        GD.Print("[EffectEngine] 条件「DiedWithCounter」：无死亡上下文卡 → 不满足");
+                        return false;
+                    }
+                    bool ok = died.HadCounterAtDeath(param);
+                    GD.Print($"[EffectEngine] 条件「DiedWithCounter({param})」：死亡卡={died.PlayerTemplate?.CardName} " +
+                             $"→ {(ok ? "满足" : "不满足")}");
+                    return ok;
                 }
                 // ==================== 【P3】回合内事件记忆位谓词 ====================
                 // 语义："本回合中，**敌方**势力标志曾被移除"（JC053 鸣钟教派徽记的激活前提）。
@@ -3397,8 +4148,8 @@ namespace Script.Manager
         /// 判定与触发路径共用 `EvaluateCondition`（单一谓词实现）。</summary>
         public string ResolveWinAreaDestination(CardInstance card, string areaUid, int winnerId)
         {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return "";
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return "";
+            foreach (var e in EffectsOf(card))
             {
                 if (e == null || string.IsNullOrEmpty(e.WinAreaDestination)) continue;
                 string predicate = string.IsNullOrEmpty(e.Condition?.Predicate)
@@ -3406,7 +4157,7 @@ namespace Script.Manager
                     : e.Condition.Predicate;
                 if (EvaluateCondition(predicate, card, card, card, winnerId, areaUid))
                 {
-                    GD.Print($"[EffectEngine] ⇄ 赢取地区去处替代：{tmpl.CardName} → {e.WinAreaDestination}" +
+                    GD.Print($"[EffectEngine] ⇄ 赢取地区去处替代：{card.PlayerTemplate?.CardName} → {e.WinAreaDestination}" +
                              $"（地区 {areaUid}，赢取者 P{winnerId}）");
                     return e.WinAreaDestination;
                 }
@@ -3459,6 +4210,361 @@ namespace Script.Manager
                 }
                 if (!hit) return false;
             }
+            return true;
+        }
+
+        /// <summary>【P3·K4】该卡**模板上印刷**了指定静止种类（不看运行期登记）。
+        /// 用途：像"不能移动"（JC121）这类**前缀印刷规则**——它在卡片**未结附**（位于争夺区）时就该生效，
+        /// 但附属卡的持久效果注册有 Z1 早退（"附属不在附属区 → 跳过持久效果注册"），
+        /// 运行期旗标在该状态下拿不到，故此类规则按**模板印刷**判定。</summary>
+        public bool HasPrintedStaticKind(CardInstance card, StaticKind kind)
+        {
+            var list = card?.PlayerTemplate?.EffectDataList;
+            if (list == null) return false;
+            foreach (var e in list)
+            {
+                if (e?.StaticEffects == null) continue;
+                foreach (var s in e.StaticEffects)
+                    if (s != null && s.Kind == kind) return true;
+            }
+            return false;
+        }
+
+        /// <summary>【P3·K22】"由指定玩家自己选择牺牲"（多玩家/对手侧；用户口径 A11/A12）：
+        ///  · **每位玩家**＝按**先手优先**顺序逐个询问（先选者先记录、后选者可见；View 侧高亮由 View 负责），
+        ///    全部选定后**一起牺牲**（同一批次，不分死亡先后）；
+        ///  · **目标玩家/对手**＝只询问该玩家（K24 玩家目标，`_currentTargetPlayerId`）；
+        ///  · **无合法候选的玩家跳过、什么都不付出**；牺牲＝死亡 → 照常广播死亡时机。
+        /// 候选：种类（角色＝场上正面角色 / 暗藏者＝场上背面暗藏者 / 附属＝该玩家场上附属 / 资产＝其资产区卡），
+        /// 地区限定（`本地区`＝来源卡所在地区；`目标地区`＝本次结算目标地区）。</summary>
+        private void ResolveSacrificeChoice(EffectAction action, CardInstance source, string targetAreaId)
+        {
+            if (CM == null) { GD.Print("[EffectEngine] ⚠ SacrificeChoice 跳过：CardManager 未注入"); return; }
+            string kind = ArgAt(action, 0, "角色");
+            string who = ArgAt(action, 1, "每位玩家");
+            string areaScope = ArgAt(action, 2, "任意");
+            string areaUid = areaScope == "目标地区" ? (targetAreaId ?? "") : (source?.ZoneDetailId ?? "");
+
+            // 需要做选择的玩家（顺序：先手优先 → 后手；单玩家情形只有该玩家）
+            var choosers = new System.Collections.Generic.List<int>();
+            if (who == "每位玩家")
+            {
+                int first = TurnManagerRef?.FirstPlayerId ?? 1;
+                choosers.Add(first);
+                choosers.Add(first == 1 ? 2 : 1);
+            }
+            else if (who == "自己") { if (source != null) choosers.Add(source.ControllerId); }
+            else
+            {
+                int target = _currentTargetPlayerId > 0 ? _currentTargetPlayerId
+                    : (source != null ? (source.ControllerId == 1 ? 2 : 1) : -1);
+                if (target > 0) choosers.Add(target);
+            }
+
+            var picked = new System.Collections.Generic.List<CardInstance>();
+            // 【P0·异步窗口修复】选卡窗是**回调式异步**窗口（`Arena.PromptPickCard` 打开窗口后立即返回，
+            // 玩家点击时才回调）。原实现在发起询问后**同一帧内**就执行 `chosen ??= candidates[0]` 并立刻
+            // `ResolveDeath` ⇒ 单机下选择窗刚弹出、第一候选就已经被牺牲，玩家的点击完全无效
+            // （现有单测用**同步桩**，因此长期掩盖了该缺陷）。
+            // 修法：改为"逐位收集 + 全部收齐后才落地牺牲"的回调递归；若第一次询问确实是异步的
+            // （回调未同步触发），则**挂起动作链** `SuspendChainForInput()`，在最终回调里
+            // `ContinuePendingChain()` 续算后续动作（与 PayOptional/封印/检索同一套机制）。
+            var state = new SacrificePickState();
+            CollectSacrificePicks(choosers, 0, kind, areaScope, areaUid, picked, state, () =>
+            {
+                if (picked.Count == 0) { GD.Print("[EffectEngine] SacrificeChoice：无人可选 → 无效果"); }
+                else
+                {
+                    // 全部选定后**一起牺牲**（原子锁期间不区分先后）
+                    foreach (var card in picked)
+                        CM.ResolveDeath(card, CardManager.DeathCause.Sacrifice);
+                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                }
+                if (state.ChainSuspended) ContinuePendingChain();   // 只在此处续算一次（见上方说明）
+            });
+        }
+
+        /// <summary>【P0】牺牲选择收集期的状态（引用持有，供闭包读写）。</summary>
+        private sealed class SacrificePickState
+        {
+            public bool ChainSuspended;
+        }
+
+        /// <summary>
+        /// 【P0】逐位收集"由该玩家自己选择牺牲的对象"（回调递归）：
+        ///  · 有 UI → `PromptPickCard`（不可取消）；**回调同步触发**（测试桩/无窗口兜底）→ 在回调内继续递归；
+        ///    **回调异步**（真实窗口）→ 挂起动作链并返回，等玩家点击后从回调继续；
+        ///  · 无 UI（headless/测试）→ 确定性兜底取第一个候选；
+        ///  · 无合法候选的玩家直接跳过（什么都不付出，口径 A11）；
+        ///  · 全部收齐后调用 `onAllDone`（落地牺牲 + 续算动作链）。
+        /// </summary>
+        private void CollectSacrificePicks(System.Collections.Generic.List<int> choosers, int index,
+            string kind, string areaScope, string areaUid,
+            System.Collections.Generic.List<CardInstance> picked, SacrificePickState state,
+            System.Action onAllDone)
+        {
+            for (int i = index; i < choosers.Count; i++)
+            {
+                int playerId = choosers[i];
+                var candidates = CollectSacrificeChoiceCandidates(playerId, kind, areaScope, areaUid);
+                if (candidates.Count == 0)
+                {
+                    GD.Print($"[EffectEngine] SacrificeChoice：玩家{playerId} 无合法候选 → 跳过（什么都不付出）");
+                    continue;
+                }
+                if (UIHooks != null)
+                {
+                    bool firedSynchronously = false;
+                    UIHooks.PromptPickCard(playerId,
+                        $"{KindName(kind)}：请选择你要牺牲的{KindName(kind)}（{candidates.Count} 个候选）",
+                        candidates, allowCancel: false,
+                        p =>
+                        {
+                            firedSynchronously = true;
+                            var chosen = p ?? candidates[0];
+                            picked.Add(chosen);
+                            GD.Print($"[EffectEngine] SacrificeChoice：玩家{playerId} 选定牺牲 {chosen.PlayerTemplate?.CardName}");
+                            // 继续收集下一位（可能再开一个窗口）；全部收齐后 onAllDone 落地
+                            CollectSacrificePicks(choosers, i + 1, kind, areaScope, areaUid, picked, state, onAllDone);
+                        });
+                    // 同步回调（桩/兜底）：上面的递归已把剩下的人全部处理完（含 onAllDone）→ 直接返回
+                    if (firedSynchronously) return;
+                    // 异步回调（真实窗口）：挂起动作链，等玩家点击；后续由回调链续跑
+                    if (!state.ChainSuspended)
+                    {
+                        GD.Print($"[EffectEngine] SacrificeChoice：等待玩家{playerId} 在窗口中选择（动作链挂起）");
+                        SuspendChainForInput();
+                        state.ChainSuspended = true;
+                    }
+                    return;
+                }
+                var fallback = candidates[0];   // 无 UI（headless/测试）：确定性兜底
+                picked.Add(fallback);
+                GD.Print($"[EffectEngine] SacrificeChoice：无 UI → 玩家{playerId} 确定性兜底选择 {fallback.PlayerTemplate?.CardName}");
+            }
+            onAllDone();
+        }
+
+        private static string KindName(string kind) => kind switch
+        {
+            "附属" => "附属",
+            "资产" => "资产",
+            "暗藏者" => "暗藏者",
+            _ => "角色",
+        };
+
+        private System.Collections.Generic.List<CardInstance> CollectSacrificeChoiceCandidates(
+            int playerId, string kind, string areaScope, string areaUid)
+        {
+            var result = new System.Collections.Generic.List<CardInstance>();
+            if (CM == null || playerId <= 0) return result;
+            bool limitArea = areaScope != "任意";
+            foreach (var c in CM.GetAllInstances())
+            {
+                if (c == null || c.IsDying) continue;
+                if (c.ControllerId != playerId) continue;
+                bool ok = kind switch
+                {
+                    "资产" => c.CurrentZone == CardZone.AssetZone,
+                    "附属" => c.CurrentZone == CardZone.AttachedZone || (c.CurrentZone == CardZone.AreaZone && c.IsAttached),
+                    "暗藏者" => c.CurrentZone == CardZone.AreaZone && c.IsCovert,
+                    _ => c.CurrentZone == CardZone.AreaZone && !c.IsCovert
+                         && (c.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0,
+                };
+                if (!ok) continue;
+                if (limitArea && !string.Equals(c.ZoneDetailId ?? "", areaUid ?? "", System.StringComparison.Ordinal)) continue;
+                result.Add(c);
+            }
+            return result;
+        }
+
+        /// <summary>【P3·K22】"自本方卡牌上移除 N 个（时间）标志"作**发动代价**的**候选**（JC044）。
+        /// 候选＝**该发动者控制**、**在场上**（争夺区 ∪ 附属区）、带指定标志（白名单任一写法，合计 ≥ `Amount`）的卡；
+        /// 顺序确定性＝`GetAllInstances()` 顺序（与其它候选枚举一致）。见 `CounterCostSpec`。</summary>
+        public System.Collections.Generic.List<CardInstance> GetCounterCostCandidates(CardInstance source, CounterCostSpec spec)
+        {
+            var result = new System.Collections.Generic.List<CardInstance>();
+            if (source == null || spec == null || CM == null) return result;
+            // 【JC055②】"移除 X 个"（X 由玩家选择）→ 候选＝带该标志 ≥1 的卡（上限另由总量约束）
+            int need = spec.AmountByPlayerChoice ? 1 : (spec.Amount > 0 ? spec.Amount : 1);
+            foreach (var c in CM.GetAllInstances())
+            {
+                if (c == null || c.IsDying) continue;
+                if (c.ControllerId != source.ControllerId) continue;                 // 只数"本方卡牌"
+                if (c.CurrentZone != CardZone.AreaZone && c.CurrentZone != CardZone.AttachedZone) continue;   // 场上
+                if (CountMarkers(c, spec.Markers) < need) continue;
+                result.Add(c);
+            }
+            return result;
+        }
+
+        /// <summary>【P3·K4】`FormCategory` → 实例类别位（`None`＝不改类别）。</summary>
+        private static CardCategory ToCardCategory(FormCategory form) => form switch
+        {
+            FormCategory.Character => CardCategory.Character,
+            FormCategory.Attachment => CardCategory.Attachment,
+            FormCategory.CharacterOrAttachment => CardCategory.Character | CardCategory.Attachment,
+            _ => CardCategory.None,
+        };
+
+        /// <summary>
+        /// 【P3·K4】**该卡当前实际使用的效果表**：实例形态声明了"损失原有效果"（JC028「鲜血」）时用**形态效果表**，
+        /// 否则用模板印刷效果表。所有"按卡取效果"的地方都应经此方法（注册/可发动/触发收集/注销），
+        /// 否则形态卡会继续使用印刷效果（"损失了原有的效果"落不了地）。
+        /// </summary>
+        public static System.Collections.Generic.List<EffectData> EffectsOf(CardInstance card)
+            => card?.EffectiveEffects ?? new System.Collections.Generic.List<EffectData>();
+
+        /// <summary>该卡上"白名单里任一写法"的标志总数（用于代价候选判定与支付）。</summary>
+        private static int CountMarkers(CardInstance card, Array<string> markers)
+        {
+            if (card == null || markers == null) return 0;
+            int total = 0;
+            foreach (var name in markers)
+            {
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                if (card.Counters != null && card.Counters.TryGetValue(name.Trim(), out int n) && n > 0) total += n;
+            }
+            return total;
+        }
+
+        /// <summary>【JC055②】该卡上可作代价的标志数（View 显示"可移除 k"用；与支付实现同源）。</summary>
+        public int GetMarkerCountOnCard(CardInstance card, CounterCostSpec spec)
+            => CountMarkers(card, spec?.Markers);
+
+        /// <summary>【JC055②】本方场上该标志的**总数**（＝玩家可选择的数量上限）。</summary>
+        public int GetCounterCostAvailableTotal(CardInstance source, CounterCostSpec spec)
+        {
+            int total = 0;
+            if (source == null || spec == null) return 0;
+            foreach (var c in GetCounterCostCandidates(source, spec)) total += CountMarkers(c, spec.Markers);
+            return total;
+        }
+
+        /// <summary>
+        /// 【P3·K5·JC055②】支付"**移除 X 个标志**"代价（X 由玩家逐卡分配；用户口径 A30）：
+        /// `allocation` ＝ 卡 UID → 从该卡移除的数量；校验（fail-closed，任一不过即**拒绝且无副作用**）：
+        ///  · 每张卡都必须是**合法候选**（本方场上、带该标志）、数量 ≥ 0 且 ≤ 该卡实际持有量；
+        ///  · 总和 **≥ 1**（"不允许为 0"＝至少移除一个）、≤ 本方总数；
+        ///  · 未提供/空分配 → 视为不支付 → 拒绝（本能力必须以"移除至少 1 个"发动）。
+        /// 成功时返回 true 并给出 `paidX`（＝总和，供 `ValueExpr="代价数量"` 读取）。
+        /// </summary>
+        public bool PayCounterCostAllocation(CardInstance source, EffectData data,
+            System.Collections.Generic.Dictionary<string, int> allocation, out int paidX)
+        {
+            paidX = 0;
+            var spec = data?.CounterCost;
+            if (spec == null) return true;                 // 无此代价
+            if (source == null || CM == null) return false;
+            var candidates = GetCounterCostCandidates(source, spec);
+            if (candidates.Count == 0)
+            {
+                GD.Print($"[EffectEngine] ⛔ 标志代价无候选（{data.EffectId}：本方场上无带该标志的卡）→ 拒绝发动");
+                return false;
+            }
+            if (allocation == null || allocation.Count == 0)
+            {
+                GD.Print($"[EffectEngine] ⛔ 标志代价未分配（{data.EffectId}：X 至少为 1，不允许为 0）→ 拒绝发动");
+                return false;
+            }
+            // 先全部复检（不产生任何副作用），再统一下扣
+            var planned = new System.Collections.Generic.List<(CardInstance card, string marker, int count)>();
+            int total = 0;
+            foreach (var kv in allocation)
+            {
+                if (kv.Value <= 0) continue;
+                var card = candidates.Find(c => string.Equals(c.UID, kv.Key, System.StringComparison.Ordinal));
+                if (card == null)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 标志代价候选 {kv.Key} 不合法（{data.EffectId}）→ 拒绝发动（fail-closed）");
+                    return false;
+                }
+                // 按白名单顺序找"卡上实际持有的写法"，逐点分配（与单卡支付同款语义）
+                int remaining = kv.Value;
+                foreach (var name in spec.Markers)
+                {
+                    if (remaining <= 0) break;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    string marker = name.Trim();
+                    if (card.Counters == null || !card.Counters.TryGetValue(marker, out int have) || have <= 0) continue;
+                    int use = System.Math.Min(have, remaining);
+                    planned.Add((card, marker, use));
+                    remaining -= use;
+                }
+                if (remaining > 0)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 标志代价分配超出 {card.PlayerTemplate?.CardName} 实际持有量（{data.EffectId}）→ 拒绝发动（fail-closed）");
+                    return false;
+                }
+                total += kv.Value;
+            }
+            if (total <= 0)
+            {
+                GD.Print($"[EffectEngine] ⛔ 标志代价分配总和为 0（{data.EffectId}）→ 拒绝发动");
+                return false;
+            }
+            foreach (var (card, marker, count) in planned)
+            {
+                CM.RemoveCounter(card, marker, count);
+                GD.Print($"[EffectEngine] ⊖ 标志代价：{card.PlayerTemplate?.CardName} 移除 {count} 个「{marker}」（发动者 P{source.ControllerId} 选择）");
+            }
+            paidX = total;
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+            return true;
+        }
+
+        /// <summary>【P3·K5】支付"移除 N 个（时间）标志"代价：选定卡（`chosenUid` 为空 → 确定性兜底取第一个合法候选）
+        /// → 复检（fail-closed）→ 从该卡上移除标志（按白名单里**卡上实际持有的那个写法**扣）。
+        /// 返回 false ＝代价无法支付（调用方应拒绝本次发动，且**不产生任何副作用**）。</summary>
+        private bool PayCounterCost(CardInstance source, EffectData data, string chosenUid, out CardInstance paid)
+        {
+            paid = null;
+            var spec = data?.CounterCost;
+            if (spec == null) return true;                    // 无此代价
+            if (source == null || CM == null) return false;
+            int need = spec.Amount > 0 ? spec.Amount : 1;
+            var candidates = GetCounterCostCandidates(source, spec);
+            if (candidates.Count == 0)
+            {
+                GD.Print($"[EffectEngine] ⛔ 标志代价无候选（{data.EffectId}：本方场上无带该标志的卡）→ 拒绝发动");
+                return false;
+            }
+            CardInstance pick = null;
+            if (!string.IsNullOrEmpty(chosenUid))
+            {
+                pick = candidates.Find(c => string.Equals(c.UID, chosenUid, System.StringComparison.Ordinal));
+                if (pick == null)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 指定的标志代价候选 {chosenUid} 不合法（{data.EffectId}）→ 拒绝发动（fail-closed）");
+                    return false;
+                }
+            }
+            else
+            {
+                pick = candidates[0];   // 无 UI/未指定：确定性兜底（与其它"无 UI 兜底"同款纪律）
+                GD.Print($"[EffectEngine] ⚠ 未指定标志代价候选 → 确定性兜底取第一个合法候选（{pick.PlayerTemplate?.CardName}）");
+            }
+
+            // 扣标志：按白名单顺序找"卡上实际持有的写法"逐点移除
+            int remaining = need;
+            foreach (var name in spec.Markers)
+            {
+                if (remaining <= 0) break;
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                string marker = name.Trim();
+                if (pick.Counters == null || !pick.Counters.TryGetValue(marker, out int have) || have <= 0) continue;
+                int use = System.Math.Min(have, remaining);
+                CM.RemoveCounter(pick, marker, use);
+                remaining -= use;
+                GD.Print($"[EffectEngine] ⊖ 标志代价：{pick.PlayerTemplate?.CardName} 移除 {use} 个「{marker}」（发动者 P{source.ControllerId} 选择）");
+            }
+            if (remaining > 0)
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 标志代价扣减不足（{data.EffectId}：仍缺 {remaining}）→ 拒绝发动（fail-closed）");
+                return false;
+            }
+            paid = pick;
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
             return true;
         }
 
@@ -3542,8 +4648,8 @@ namespace Script.Manager
         /// <summary>取某卡声明的伤害重定向声明（扫描其模板的持续效果）。</summary>
         private static DamageRedirectSpec FindDamageRedirectSpec(CardInstance card)
         {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return null;
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return null;
+            foreach (var e in EffectsOf(card))
                 if (e?.DamageRedirect != null && e.DamageRedirect.Victim != DamageRedirectVictim.None)
                     return e.DamageRedirect;
             return null;
@@ -3562,6 +4668,110 @@ namespace Script.Manager
         // ==================== "伤害改由本卡承受"表（JC077 / JC121） ====================
         private readonly System.Collections.Generic.List<string> _damageRedirects
             = new System.Collections.Generic.List<string>();
+
+        // ==================== 持续夺控表（JC036 初拥） ====================
+        /// <summary>
+        /// 一条已生效的**持续夺控**记录：来源卡（初拥）→ 被夺控的宿主卡。
+        /// `AppliedControllerId` 记录**我们写进去的那一份控制者**，归还前比对，
+        /// 以防期间该卡被别的夺控改过（那时不越权改写他人结果）。
+        /// </summary>
+        public sealed class ControlGainRecord
+        {
+            public string SourceUid;
+            public string HostUid;
+            public int AppliedControllerId;
+        }
+
+        private readonly System.Collections.Generic.List<ControlGainRecord> _controlGains
+            = new System.Collections.Generic.List<ControlGainRecord>();
+
+        /// <summary>防重入：夺控会驱动 `ChangeController` → `FireMoved` → 各类持续重算，重算期不得再次进入夺控。</summary>
+        private bool _controlGainBusy;
+
+        /// <summary>当前在册的持续夺控条数（测试/取证用）。</summary>
+        public int ControlGainCount => _controlGains.Count;
+
+        /// <summary>取某卡声明的持续夺控声明（扫描其模板的持续效果）。</summary>
+        private static ControlGainSpec FindControlGainSpec(CardInstance card)
+        {
+            if (card == null) return null;
+            foreach (var e in EffectsOf(card))
+                if (e?.ControlGain != null && e.ControlGain.Victim != ControlGainVictim.None)
+                    return e.ControlGain;
+            return null;
+        }
+
+        /// <summary>
+        /// 【P3·K4】登记/注销**持续夺控**（JC036 初拥「持续：你获得受此结附角色的控制权」）。
+        ///  · `active=true`：解析受害者（`AttachedHost`＝本卡所结附的宿主；无宿主 → 不夺控）→
+        ///    经 `ZoneManager.ChangeController` 统一出口把宿主交给**本卡控制者**（只改 `ControllerId`、
+        ///    `OwnerId` 不变、**卡不移动地区**——"受控角色所在地区不变"）；
+        ///    **不刷版本号**（`bumpVersion:false`）：与既有口径"争夺区内的夺控换边不刷新版本号"一致，
+        ///    D16 目标丢失改由结算时的 `TargetValidity.CheckRestrictions`（按入栈来源控制者快照）承担；
+        ///    并登记一条记录；
+        ///  · `active=false`（来源离场/解除结附/前提丧失/卡失效）：按记录**归还给拥有者**
+        ///    （卡面 FAQ 原文"该角色的操控权交还给其拥有者"），幂等。
+        /// 用户 2026-09 口径（A16）：**不另设"版本号"判据**——版本号变化一般伴随初拥离场（持续效果自然注销），
+        /// 被初拥角色离场时作为附属的初拥也一同进墓地，两条路径都落在本方法的注销分支上。
+        /// </summary>
+        private void SetControlGain(CardInstance card, bool active)
+        {
+            if (card == null) return;
+            if (!active) { ReleaseControlGainsFor(card.UID); return; }
+            if (_controlGainBusy) return;                                // 重入保护（见字段说明）
+            var spec = FindControlGainSpec(card);
+            if (spec == null) return;
+            var host = spec.Victim == ControlGainVictim.AttachedHost ? card.AttachedTo : null;
+            if (host == null)
+            {
+                GD.Print($"[EffectEngine] ⚠ 持续夺控 {card.PlayerTemplate?.CardName}：无结附宿主 → 不夺控");
+                return;
+            }
+            foreach (var r in _controlGains)
+                if (string.Equals(r.SourceUid, card.UID, System.StringComparison.Ordinal)) return;   // 已登记（幂等）
+            int newController = card.ControllerId;
+            if (newController <= 0) return;
+            var rec = new ControlGainRecord { SourceUid = card.UID, HostUid = host.UID, AppliedControllerId = newController };
+            _controlGains.Add(rec);
+            if (host.ControllerId == newController)
+            {
+                GD.Print($"[EffectEngine] 👑 持续夺控登记：{host.PlayerTemplate?.CardName} 已在玩家{newController} 手中（{card.PlayerTemplate?.CardName}）");
+                return;
+            }
+            _controlGainBusy = true;
+            try { ZoneManagerRef?.ChangeController(host, newController, bumpVersion: false); }
+            finally { _controlGainBusy = false; }
+            GD.Print($"[EffectEngine] 👑 持续夺控：{host.PlayerTemplate?.CardName} → 玩家{newController}"
+                   + $"（来源 {card.PlayerTemplate?.CardName}，所在地区不变）");
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+        }
+
+        /// <summary>归还并移除**某来源卡**的全部持续夺控（幂等；`ClearAllStaticRulesFor`/离场注销共用）。</summary>
+        private void ReleaseControlGainsFor(string sourceUid)
+        {
+            if (string.IsNullOrEmpty(sourceUid)) return;
+            for (int i = _controlGains.Count - 1; i >= 0; i--)
+            {
+                var rec = _controlGains[i];
+                if (!string.Equals(rec.SourceUid, sourceUid, System.StringComparison.Ordinal)) continue;
+                _controlGains.RemoveAt(i);
+                if (_controlGainBusy) continue;
+                var host = CM?.GetInstance(rec.HostUid);
+                if (host == null) continue;
+                // 只归还"仍是我们写进去的那一份"：期间若被别的夺控改过，不越权改写
+                if (host.ControllerId != rec.AppliedControllerId)
+                {
+                    GD.Print($"[EffectEngine] 👑 持续夺控归还跳过：{host.PlayerTemplate?.CardName} 现由玩家{host.ControllerId} 控制（非本效果施加）");
+                    continue;
+                }
+                if (host.ControllerId == host.OwnerId) continue;         // 已是拥有者 → 无需动作
+                _controlGainBusy = true;
+                try { ZoneManagerRef?.ChangeController(host, host.OwnerId, bumpVersion: false); }
+                finally { _controlGainBusy = false; }
+                GD.Print($"[EffectEngine] 👑 持续夺控结束：{host.PlayerTemplate?.CardName} 控制权归还拥有者 玩家{host.OwnerId}");
+                Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+            }
+        }
 
         // ==================== 持续型"失去图标"表（JC123 饮魂者朱迪） ====================
         private readonly System.Collections.Generic.List<string> _iconSuppressors
@@ -3679,8 +4889,8 @@ namespace Script.Manager
         /// <summary>取某卡"文本空白"声明所在的效果（用于取它的 `DomainSuppression.Victim` 作匹配口径）。</summary>
         private static EffectData FindTextBlankSpec(CardInstance card)
         {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return null;
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return null;
+            foreach (var e in EffectsOf(card))
                 if (e != null && e.TextBlank) return e;
             return null;
         }
@@ -3696,8 +4906,8 @@ namespace Script.Manager
         /// <summary>取某卡声明的"失去魔法领域图标"规格（扫描其模板的持续效果）。</summary>
         private static DomainSuppressionSpec FindDomainSuppressionSpec(CardInstance card)
         {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return null;
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return null;
+            foreach (var e in EffectsOf(card))
                 if (e?.DomainSuppression != null && e.DomainSuppression.Victim != DomainSuppressionVictim.None)
                     return e.DomainSuppression;
             return null;
@@ -3786,9 +4996,9 @@ namespace Script.Manager
             foreach (var src in sources)
             {
                 if (src == null || src.IsDying) continue;
-                if (src.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) continue;
+                if (src.PlayerTemplate is null) continue;
                 if (IsTextBlank(src)) continue;                       // 文本视作空白 → 失去效果（不再授予能力）
-                foreach (var e in tmpl.EffectDataList)
+                foreach (var e in EffectsOf(src))
                 {
                     if (e?.GrantedAbility == null) continue;
                     if (!IsEffectActiveInZone(e, src)) continue;
@@ -3877,8 +5087,8 @@ namespace Script.Manager
         /// <summary>取某卡声明的"持续失去图标"规格（扫描其模板的持续效果）。</summary>
         private static IconSuppressionSpec FindIconSuppressionSpec(CardInstance card)
         {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl || tmpl.EffectDataList == null) return null;
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return null;
+            foreach (var e in EffectsOf(card))
                 if (e?.IconSuppression != null && e.IconSuppression.Icons != null && e.IconSuppression.Icons.Count > 0)
                     return e.IconSuppression;
             return null;
@@ -4011,6 +5221,77 @@ namespace Script.Manager
             return false;
         }
 
+        // ==================== 地区级"非某组织角色不可进入"表（JC064 戒严） ====================
+        // 卡文「所有非【国家机构】的角色牌不可正面打出在本地区，也不能移动进入本地区」；
+        // 来源＝"结附于该地区"的附属（也可扩展为位于该地区的卡）。查询按来源**当前**所在/所结附地区实时匹配。
+        private readonly System.Collections.Generic.List<string> _nonOrgEntryBlockers
+            = new System.Collections.Generic.List<string>();
+
+        /// <summary>登记/注销"本地区非某组织角色不可进入"（`active=false` 时按卡 UID 清除）。</summary>
+        private void SetNonOrgEntryBlock(CardInstance card, bool active)
+        {
+            if (card == null) return;
+            _nonOrgEntryBlockers.RemoveAll(u => string.Equals(u, card.UID, System.StringComparison.Ordinal));
+            if (!active) return;
+            _nonOrgEntryBlockers.Add(card.UID);
+            GD.Print($"[EffectEngine] ⊘ 地区静止规则登记：{card.PlayerTemplate?.CardName} → 非指定组织角色不可进入本地区");
+        }
+
+        /// <summary>取该持续效果声明的"允许进入的组织名"（未声明返回 null）。</summary>
+        private static string GetNonOrgEntryAllowedOrg(EffectData e)
+        {
+            if (e?.StaticEffects == null) return null;
+            foreach (var s in e.StaticEffects)
+                if (s != null && s.Kind == StaticKind.BlockNonOrgEntryInArea)
+                    return s.Param ?? "";
+            return null;
+        }
+
+        /// <summary>该持续效果是否携带"非某组织角色不可进入本地区"静止标记。</summary>
+        private static bool HasNonOrgEntryBlock(EffectData e) => GetNonOrgEntryAllowedOrg(e) != null;
+
+        /// <summary>
+        /// 【P3·K21·JC064】某卡**能否进入**指定地区：返回 true＝被"戒严"类静止规则**拦下**。
+        /// 判定：区内存在登记来源（结附于该地区 或 位于该地区，且非死亡）→ 该卡的**组织名**与
+        /// 规则声明的**允许组织**不同 → 拦下（卡文"所有非【国家机构】的角色牌…"）。
+        /// 注：调用方决定适用范围（仅**角色牌**、且仅"**移动进入**"；秘密派遣与"放置进场"放行——见 `StaticKind` 注释）。
+        /// </summary>
+        public bool IsEntryBlockedByOrgRule(CardInstance card, string areaUid)
+        {
+            if (card == null || string.IsNullOrEmpty(areaUid) || _nonOrgEntryBlockers.Count == 0) return false;
+            string org = card.PlayerTemplate?.Organization ?? "";
+            foreach (var uid in _nonOrgEntryBlockers)
+            {
+                var src = CM?.GetInstance(uid);
+                if (src == null || src.IsDying) continue;
+                if (!IsSourceGoverningArea(src, areaUid)) continue;
+                foreach (var e in EffectsOf(src))
+                {
+                    string allowed = GetNonOrgEntryAllowedOrg(e);
+                    if (allowed == null) continue;
+                    if (string.IsNullOrEmpty(allowed)) continue;                       // 未写组织名 → 不拦（fail-open 防拼错静默生效）
+                    if (!string.Equals(org, allowed, System.StringComparison.Ordinal))
+                    {
+                        GD.Print($"[EffectEngine] ⛔ 戒严类静止规则：{card.PlayerTemplate?.CardName}（组织='{org}'）"
+                               + $"不可进入地区 {areaUid}（需 '{allowed}'，来源 {src.PlayerTemplate?.CardName}）");
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>该来源卡是否"管辖"指定地区：结附于该地区（无宿主的附属）或位于该地区（争夺区卡）。</summary>
+        private static bool IsSourceGoverningArea(CardInstance src, string areaUid)
+        {
+            if (src == null) return false;
+            if (src.CurrentZone == CardZone.AreaZone)
+                return string.Equals(src.ZoneDetailId ?? "", areaUid, System.StringComparison.Ordinal);
+            if (src.CurrentZone == CardZone.AttachedZone && src.AttachedTo == null)
+                return string.Equals(src.ZoneDetailId ?? "", areaUid, System.StringComparison.Ordinal);   // 结附于地区
+            return false;
+        }
+
         // ==================== "带锁定标记的暗藏者不能现身"表（JC122 哈克·亚当斯） ====================
         // 卡文无"本地区"限定 → **不按地区匹配**（来源在场即全局生效）。
         // 用户 2026-09 口径：只封"现身"这一个动作，且只对**带锁定标记的暗藏者**生效。
@@ -4069,9 +5350,13 @@ namespace Script.Manager
             if (HasNoUntapWithSealedCards(e)) SetNoUntapWithSealedCards(card, active);
             if (HasNoRevealWithLockCounter(e)) SetNoRevealWithLockCounter(card, active);   // 【P3·K21】JC122
             if (HasExtraPowerContest(e)) SetExtraPowerContest(card, active);
+            if (HasNonOrgEntryBlock(e)) SetNonOrgEntryBlock(card, active);   // 【P3·K21】JC064 戒严
             // 【P3·K3】伤害改由本卡承受（JC077/JC121，持续效果）
             if (e.DamageRedirect != null && e.DamageRedirect.Victim != DamageRedirectVictim.None)
                 SetDamageRedirect(card, active);
+            // 【P3·K4】持续夺控（JC036 初拥）：登记时夺控宿主、注销时归还拥有者
+            if (e.ControlGain != null && e.ControlGain.Victim != ControlGainVictim.None)
+                SetControlGain(card, active);
             // 【P3·K20】持续型"失去图标"（JC123）：登记/注销来源后**立即重算**（先还原再施加，幂等）
             if (e.IconSuppression != null && e.IconSuppression.Icons != null && e.IconSuppression.Icons.Count > 0)
             {
@@ -4092,7 +5377,9 @@ namespace Script.Manager
             => GetAreaCombatSkips(e) != null || HasCovertPowerExclusion(e)
             || HasNoUntapWithSealedCards(e) || HasExtraPowerContest(e)
             || HasNoRevealWithLockCounter(e)          // 【P3·K21】JC122：带锁定标记的暗藏者不能现身
+            || HasNonOrgEntryBlock(e)                 // 【P3·K21】JC064：非指定组织角色不可进入本地区
             || (e?.DamageRedirect != null && e.DamageRedirect.Victim != DamageRedirectVictim.None)
+            || (e?.ControlGain != null && e.ControlGain.Victim != ControlGainVictim.None)   // 【P3·K4】JC036 持续夺控
             || (e?.IconSuppression != null && e.IconSuppression.Icons != null && e.IconSuppression.Icons.Count > 0)
             || (e?.DomainSuppression != null && e.DomainSuppression.Victim != DomainSuppressionVictim.None);
 
@@ -4106,8 +5393,10 @@ namespace Script.Manager
             _covertPowerExcludedBy.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));
             _noUntapWithSealedCardsBy.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));
             _extraPowerContestBy.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));
+            _nonOrgEntryBlockers.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));   // 【P3·K21】JC064
             _noRevealWithLockCounterBy.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));
             _damageRedirects.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal));
+            ReleaseControlGainsFor(cardUid);   // 【P3·K4】持续夺控一并归还并清除（JC036）
             bool wasSuppressor = _iconSuppressors.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal)) > 0;
             if (wasSuppressor) ReapplyIconSuppressions();
             bool wasDomainSuppressor = _domainSuppressors.RemoveAll(u => string.Equals(u, cardUid, System.StringComparison.Ordinal)) > 0;
@@ -4141,10 +5430,23 @@ namespace Script.Manager
                 GD.Print($"[EffectEngine][Z1] 附属卡 {tmpl.CardName}(UID={card.UID}) 不在附属区(Zone={card.CurrentZone})，跳过持久效果注册");
                 return;
             }
+            // 【用户口径·2026-09】"**暗藏者（背面朝上）的持续/静止效果也不生效**"——与既有的
+            // 触发（`TriggerCovertMode` 默认 FaceUp）、激活（`ActivateEligibility` 硬门禁 G0 拒暗藏）、
+            // 光环（本文件 `ReevaluateAuras` 里 `if (src.IsCovert) srcOnField = false`）**对齐**：
+            // 背面朝上的卡**不提供任何持续/静止规则**（既不授予图标/属性/关键字，也不登记地区级静止规则、
+            // 不封锁秘密派遣……）。现身（SetCovert(false)）时由装配层钩子重新注册即恢复；
+            // 潜伏（SetCovert(true)）时注销（见 `GameInitializer` 的 CovertChanged 钩子）。
+            // 说明：这样"卡面印刷规则"类查询（如 JC081 的结附白名单、JC057 的检视授权）也一并失效——
+            // 那两处读的是印刷规则，故各自额外做了 `IsCovert` 判定（同口径，两端同解）。
+            if (card.IsCovert)
+            {
+                GD.Print($"[EffectEngine] ◑ {tmpl.CardName}(UID={card.UID}) 处于**暗藏**状态 → 跳过持续/静止效果注册（背面朝上的卡不提供持续/静止规则）");
+                return;
+            }
             if (HasAnyContinuousFor(card.UID)) return; // 防重复注册（键＝卡 UID+效果 Id，用前缀判定）
             bool anyApplied = false;
 
-            foreach (var e in tmpl.EffectDataList)
+            foreach (var e in EffectsOf(card))
             {
                 if (e.Timing == EffectTiming.Static)
                 {
@@ -4380,10 +5682,14 @@ namespace Script.Manager
         /// <summary>卡类型默认生效区（方案C 声明式 Scope 的默认推导）。
         /// 未声明 Scope（Specified）的效果回退到此处：附属→AttachTarget（严格=仅 AttachedZone）；角色→AreaZone（仅 AreaZone）。
         /// 未来扩展（墓地/手牌生效等）在此加判断，或让具体效果声明 Scope 覆盖。</summary>
-        /// <summary>纯函数：卡类型默认生效区（附属→AttachTarget，角色→AreaZone）。
+        /// <summary>纯函数：卡类型默认生效区（**秘社→秘社区**，附属→AttachTarget，其余玩家卡→AreaZone）。
         /// 静态化目的：客户端（无 EffectEngine 实例）复用同一判定，避免复制规则分叉。</summary>
         public static ZoneScope GetDefaultScope(CardInstance card)
         {
+            // 【P0·修复】秘社卡：`CouncilCardData` 不是 `PlayerCardData` ⇒ `PlayerTemplate == null`。
+            // 原先直接返回 `Specified`，而 `ScopeMatchesZone(Specified, …)` 恒 false ⇒ 秘社激活在
+            // `ActivateAbility` 的生效区门禁处被**无条件拒绝**（"能点、点完没反应"）。
+            if (card?.CouncilTemplate is CouncilCardData) return ZoneScope.CouncilZone;
             if (card?.PlayerTemplate is not PlayerCardData tmpl) return ZoneScope.Specified;
             bool isAttachment = (tmpl.CategoryFlag & CardCategory.Attachment) != 0;
             return isAttachment ? ZoneScope.AttachTarget : ZoneScope.AreaZone;
@@ -4427,6 +5733,8 @@ namespace Script.Manager
                 // 此前**无此分支** → 该类效果的来源卡此刻在封印区、默认区（角色=争夺区）不匹配，
                 // 于是"被封印时"触发在生产路径上**永远收集不到**（只有手工结算效果的单测能过）。
                 case ZoneScope.SealedZone:   return zone == CardZone.SealedZone;
+                // 【P0·修复】秘社卡默认生效区（`GetDefaultScope` 对 `CouncilCardData` 返回本值）
+                case ZoneScope.CouncilZone:  return zone == CardZone.CouncilZone;
                 default:                     return false;
             }
         }
@@ -4566,7 +5874,7 @@ namespace Script.Manager
                 if (tmpl == null) { _pendingPrereqCards.Remove(card); RemoveAllContinuousFor(card.UID); continue; }
 
                 bool anyNowMet = false;
-                foreach (var e in tmpl.EffectDataList)
+                foreach (var e in EffectsOf(card))
                 {
                     if (e.Timing != EffectTiming.Continuous) continue;
                     if (!HasPrereqSpec(e)) continue;
@@ -4727,7 +6035,7 @@ namespace Script.Manager
             // 清除静止标记（D19-⑦）
             if (card.PlayerTemplate is PlayerCardData tmpl)
             {
-                foreach (var e in tmpl.EffectDataList)
+                foreach (var e in EffectsOf(card))
                 {
                     if (e.Timing == EffectTiming.Static)
                         foreach (var s in e.StaticEffects ?? new Array<StaticEffect>())
@@ -4828,6 +6136,9 @@ namespace Script.Manager
                     return g.Amount < 0 ? cur < 0 : cur > 0;
                 }
                 case "SubCategory": return t.HasSubCategory(g.Value);
+                // 【P3·K4】"被改写掉的子类别"（JC036 初拥）：生效＝该类别当前**不在**实例集合里；
+                // 若被 `ResetToBaseState`（离场复位）恢复了，则视为缺失 → 自愈路径重新抹掉。
+                case "SubCategoryRemove": return !t.HasSubCategory(g.Value);
                 case "MagicDomain":
                     return System.Enum.TryParse<MagicDomain>(g.Value, out var d) && t.MagicDomains.Contains(d);
                 default: return true;   // 未知种类不介入（保持旧行为）
@@ -4938,6 +6249,47 @@ namespace Script.Manager
         public bool HasContinuous(CardInstance card)
             => card != null && HasAnyContinuousFor(card.UID);
 
+        /// <summary>
+        /// 【JC081】取该卡声明的"**可结附子类别白名单**"（`StaticKind.OnlyAttachWithSubCategories.Param`，
+        /// 本卡＝`装备,祝福`）。**未声明该规则** → 返回 null（调用方不施加任何限制）。
+        /// 读的是**卡面印刷静止规则**（两端都持有卡脚本数据，故客户端也能判定，不依赖 EffectEngine 实例）。
+        /// </summary>
+        public static string GetAttachSubCategoryWhitelist(CardInstance target)
+        {
+            if (target == null) return null;
+            // 【用户口径·2026-09】背面朝上的卡（暗藏者）**不提供**持续/静止规则 ⇒ 其"只受装备与祝福结附"
+            // 也随之失效（与 `RegisterPersistent` 的暗藏门禁同口径；本判定读印刷规则，故必须在此单独判一次）。
+            if (target.IsCovert) return null;
+            foreach (var e in target.EffectiveEffects)
+            {
+                if (e?.StaticEffects == null) continue;
+                foreach (var s in e.StaticEffects)
+                    if (s != null && s.Kind == StaticKind.OnlyAttachWithSubCategories) return s.Param ?? "";
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 【JC081】"**除装备与祝福外不受附属**"判定：`attaching`（要结附上去的附属卡）的**当前子类别**
+        /// 是否命中白名单之一。白名单为空 → **放行**（fail-open：防"Param 拼错导致整卡被封死"）。
+        /// </summary>
+        public static bool PassesAttachWhitelist(CardInstance attaching, string whitelistParam)
+        {
+            if (attaching == null) return false;
+            if (string.IsNullOrWhiteSpace(whitelistParam)) return true;
+            bool anyValidEntry = false;
+            foreach (var raw in whitelistParam.Split(','))
+            {
+                string sub = raw.Trim();
+                if (sub.Length == 0) continue;
+                anyValidEntry = true;
+                if (attaching.CurrentSubCategories.Contains(sub)) return true;
+            }
+            // 整串只有分隔符/空白（如 `","` / `" , "`）→ 视作"未给出有效白名单"，同样 fail-open，
+            // 与 `Param=""` 同一口径：拼错的 Param 不应把整张卡封死（宁可放宽，也不静默锁死规则）。
+            return !anyValidEntry;
+        }
+
         /// <summary>查询某卡是否带某静止/禁止标记（D19-⑤ 消费入口，如 CannotBeAttached）。</summary>
         public bool HasStaticFlag(CardInstance card, StaticKind flag)
             => card != null && card.HasStaticFlag(flag);
@@ -4951,8 +6303,8 @@ namespace Script.Manager
         public System.Collections.Generic.List<EffectData> CollectTriggers(CardInstance card, EffectTiming timing)
         {
             var result = new System.Collections.Generic.List<EffectData>();
-            if (card?.PlayerTemplate is not PlayerCardData tmpl) return result;
-            foreach (var e in tmpl.EffectDataList)
+            if (card == null) return result;
+            foreach (var e in EffectsOf(card))
             {
                 if (e.Timing == timing) result.Add(e);
             }
@@ -4967,7 +6319,7 @@ namespace Script.Manager
         /// </summary>
         public void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null,
             string sourceZoneDetailSnapshot = null, int sourceControllerSnapshot = -1, int targetPlayerId = -1,
-            string targetAreaId = null)
+            string targetAreaId = null, int eventAmount = -1)
         {
             if (sm == null || card == null || ability == null) return;
             var entry = new StackEntry(card.OwnerId, $"[激活]{ability.EffectId}")
@@ -4979,6 +6331,9 @@ namespace Script.Manager
                 TargetCardUid = target?.UID ?? "",
                 TargetPlayerId = targetPlayerId,     // 【K24】目标玩家（入堆叠时锁定）
                 TargetAreaId = targetAreaId ?? "",   // 【K15】目标地区（入堆叠时锁定；结算时作为 targetAreaId 下发）
+                // 【JC055②】激活代价已支付的数量（如"移除 X 个时间标志"的 X）→ 结算时作为 `事件数量` 下发，
+                // 供 `ValueExpr="代价数量"` 读取（与触发事件的"事件数量"共用同一条透传通路）。
+                EventAmount = eventAmount,
                 EffectDataEffect = ability,
                 EffectText = ability.EffectId,
                 // 参照 TurnManager.PushTriggerToStack：填充 TriggerInstance，
@@ -5054,7 +6409,7 @@ namespace Script.Manager
         {
             if (sorcery?.PlayerTemplate is not PlayerCardData tmpl) return;
             var spells = new System.Collections.Generic.List<EffectData>();
-            foreach (var e in tmpl.EffectDataList)
+            foreach (var e in EffectsOf(sorcery))
             {
                 if (e.Timing == EffectTiming.OnSorceryCast) spells.Add(e);
             }
@@ -5110,6 +6465,23 @@ namespace Script.Manager
         /// 空值 → 走确定性兜底（第一个合法地区）。目标地区在**入堆叠时锁定**（`StackEntry.TargetAreaId`）。</summary>
         public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId,
             string sacrificeUid, string targetAreaId)
+            => ActivateAbility(source, data, target, targetPlayerId, sacrificeUid, targetAreaId, null);
+
+        /// <summary>【P3·K5】激活入口（带**标志代价的选定候选**）：`counterCostUid` ＝发动者选择的"移除标志"的那张卡
+        /// UID（空＝无此代价，或走确定性兜底）。与牺牲代价同款：**入堆叠前支付**、不合法/无候选 → 整次发动被拒且无副作用。</summary>
+        public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId,
+            string sacrificeUid, string targetAreaId, string counterCostUid)
+            => ActivateAbility(source, data, target, targetPlayerId, sacrificeUid, targetAreaId, counterCostUid, null);
+
+        /// <summary>
+        /// 【JC055②】激活入口（带**标志代价的逐卡分配**）：`counterCostAllocation` ＝ 卡 UID → 移除数量
+        /// （"自本方卡牌上移除 **X** 个时间标志"；X 由玩家选择、**至少 1**）。
+        /// 与 `counterCostUid`（单卡固定数量）互斥；本参数非空时按分配支付，并把**支付的数量**作为
+        /// 本次结算的 X（`ValueExpr="代价数量"`）。
+        /// </summary>
+        public void ActivateAbility(CardInstance source, EffectData data, CardInstance target, int targetPlayerId,
+            string sacrificeUid, string targetAreaId, string counterCostUid,
+            System.Collections.Generic.Dictionary<string, int> counterCostAllocation)
         {
             if (data.Timing is not (EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated or EffectTiming.ManeuverTrigger or EffectTiming.CouncilActivated))
             {
@@ -5120,6 +6492,7 @@ namespace Script.Manager
             // 与 PlayCard/AmbushReveal/ResolveEntry/DoCleanup 一致；激活结算路径此前漏设，
             // 导致 CurrentTurn 残留脏值 → expireTurn 偏大 → 费用修正项跨回合不清除（UI 残留绿色、真实费用被错误减免）。
             if (TurnManagerRef != null) CurrentTurn = TurnManagerRef.TurnCount;
+            _pendingPaidCounterX = -1;   // 【JC055②】每次激活重置"已付标志代价数量"
             // D-1 熔断：堆叠累计压入达上限时禁止激活新效果
             if (IsStackCircuitBroken != null && IsStackCircuitBroken())
             {
@@ -5164,7 +6537,8 @@ namespace Script.Manager
 
             // 0.5)【K1】动态值 X：激活类效果没有事件数量上下文（事件数量来源只对触发类有意义）；
             //   若该效果声明了 `计数:…` 且求值为 0（或表达式未登记）→ **不可发动**（用户口径：X=0 不算发动）。
-            if (!string.IsNullOrWhiteSpace(data.ValueExpr))
+            //   【JC055②】例外：`代价数量` 的 X 来自**本次激活已支付的代价**（入堆叠前才产生）→ 不做前置求值判定。
+            if (!string.IsNullOrWhiteSpace(data.ValueExpr) && !IsCostPaidValue(data))
             {
                 var vst = EvaluateDynamicValue(data, source, target, null, -1, out _, out string vReason);
                 if (vst == DynamicValueState.Blocked)
@@ -5182,8 +6556,15 @@ namespace Script.Manager
                 return;
             }
 
-            // 1.5) 窗口门禁（D9）：区分"快速行动"与"行动"            //   - 快速行动（ActivateWindow 含"快速"，如 JC003）：拥有优先权即可发动，堆叠开放时作为响应插队。
-            //   - 行动（ActivateWindow 含"行动"）：仅限【该玩家自己的行动步骤 + 堆叠为空 + 有行动权】。
+            // 1.5)【P3·K21·JC041】发动**来源前提**（权威门禁，与 `ActivateEligibility` 候选侧**同一实现**）：
+            //   `RequireSourceCovert`（只能作为暗藏者时发动）＋ `RequireSourceAreaSubCategory`（如"水域"地区）。
+            if (!ActivateEligibility.MeetsSourcePrereqs(source, data, TurnManagerRef?.AreaManagerRef, out string srcReason))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 拒绝激活 {data.EffectId}：{srcReason}");
+                return;
+            }
+
+            // 1.5) 窗口门禁（D9）：区分"快速行动"与"行动"            //   - 快速行动（ActivateWindow 含"快速"，如 JC003）：拥有优先权即可发动，堆叠开放时作为响应插队。            //   - 行动（ActivateWindow 含"行动"）：仅限【该玩家自己的行动步骤 + 堆叠为空 + 有行动权】。
             //     先手玩家→ActionFirst，后手玩家→ActionSecond（复用 CanEnterBasicActionMask 的精确判定）。
             //   - 【K26】阶段排除（ExcludedPhases）：声明了"不可发动的阶段"的效果在对应阶段一律拒绝
             //     （服务端权威门禁；与 ActivateEligibility 的高亮/候选判定共用 PhaseGateRule）。
@@ -5302,6 +6683,20 @@ namespace Script.Manager
                 GD.PrintErr($"[EffectEngine] ⛔ 激活 {data.EffectId} 缺少目标");
                 return;
             }
+            else if (target != null && data.Target != null && data.Target.NeedsSelection)
+            {
+                // 【补齐·目标精筛】激活路径原先只校验"有没有给目标"，**不校验精筛条件**（
+                // `Restrictions` 如 `CurrentSubCategory=吸血鬼`）→ 非法目标也会照付代价（用户 2026-09 口径：
+                // "场上没有符合条件的角色时这个效果不能发动"，JC028）。现按**与打出/结算同一实现**
+                // `TargetValidity.Check` 复检；不合法 → 拒绝发动且**代价未付出**。
+                var tv2 = TargetValidity.Check(source, target, data.Target, null, TurnManagerRef?.PlayerManagerRef);
+                if (!tv2.valid)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 激活 {data.EffectId} 目标不合法"
+                             + $"（{target.PlayerTemplate?.CardName}：{tv2.reason}）→ 拒绝发动（代价未付出）");
+                    return;
+                }
+            }
 
             // 3) 费用校验与扣除（控制权语义 / D29：由控制者付费，与 CanActivate 高亮判定对齐）
             int cost = data.Cost;
@@ -5364,6 +6759,22 @@ namespace Script.Manager
                 if (!PaySacrificeCost(source, data, sacrificeUid, out _)) return;
             }
 
+            // 3.7)【K5】激活代价：**自本方卡牌上移除 N 个（时间）标志**（JC044；用户 2026-09 口径 A17/A27）：
+            //    · "移除一个时间标志"就是**发动代价**；由**发动者自主选择**移除哪张卡上的标志
+            //      （`counterCostUid`＝UI 选择结果；空 → 确定性兜底第一个合法候选）；
+            //    · 同样在**入堆叠之前**支付；无合法候选 / 指定候选非法 → 拒绝发动且无副作用。
+            if (data.CounterCost != null)
+            {
+                // 【JC055②】"移除 X 个"（X 由玩家逐卡分配）→ 按分配支付，并记下 X 供结算读取；
+                // 否则走既有的"单卡固定数量"支付（JC044②）。
+                if (data.CounterCost.AmountByPlayerChoice)
+                {
+                    if (!PayCounterCostAllocation(source, data, counterCostAllocation, out int paidX)) return;
+                    _pendingPaidCounterX = paidX;
+                }
+                else if (!PayCounterCost(source, data, counterCostUid, out _)) return;
+            }
+
             // 4) 目标合法性校验：已在**第 2.5 步**完成（付费 / 横置 / 牺牲代价之前）——此处不重复。
 
             // ===== 入堆叠（由堆叠统一结算，含优先权让过） =====
@@ -5372,7 +6783,8 @@ namespace Script.Manager
             var sm = TurnManagerRef?.StackManagerRef;
             if (sm != null)
             {
-                PushActivationToStack(sm, source, data, target, srcZoneSnap, srcCtrlSnap, targetPlayerId, targetAreaId);
+                PushActivationToStack(sm, source, data, target, srcZoneSnap, srcCtrlSnap, targetPlayerId, targetAreaId,
+                    eventAmount: _pendingPaidCounterX);
             }
             else
             {

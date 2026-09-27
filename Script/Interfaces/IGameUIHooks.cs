@@ -137,6 +137,30 @@ namespace Script.Interfaces
         /// <param name="onChosen">选中的玩家号；-1＝取消。</param>
         void PromptPlayerTarget(int chooserPlayerId, string prompt, List<int> candidates,
             System.Action<int> onChosen);
+
+        /// <summary>
+        /// 【JC119·K28】请求 UI 为"**由效果免费打出的牌**"选择目标（这类牌的打出**不是玩家拖拽发起的**，
+        /// 因此没有"拖到目标上"这一交互可用，必须由 UI 弹一次**目标选择窗**）。
+        /// 口径与"激活效果选目标"一致：**卡目标**＝场上合法目标卡高亮 + 点击；**地区目标**＝地区槽高亮 + 点击；
+        /// 窗口只负责收集选择，**合法性复检/付费/入堆叠一律由 Controller（`TurnManager.PlayCard`）执行**（View 不写 Model）。
+        /// 取消/关闭窗口 → `onPicked(null)`（该牌**留在手牌**，绝不静默代打）。
+        ///
+        /// 说明（为什么本方法带**默认实现**）：`IGameUIHooks` 的既有 8 个方法都是纯抽象，本方法增加时
+        /// 已有 20+ 处测试桩（`TestRunner` 内的 `Stub` 类）会因"未实现接口成员"而全量编译失败；
+        /// 而本方法的"无实现"语义是明确的**fail-closed**（回调 null＝不打这张牌），故给一个**显式兜底默认体**
+        /// （打日志 + 回调 null），既不改动测试桩、也不会静默打出。生产实现见 `Arena.PromptPlayTarget`。
+        /// </summary>
+        /// <param name="chooserPlayerId">做选择的玩家（＝该免费打出牌的控制者）。</param>
+        /// <param name="prompt">窗口提示文本（如"请为 火球术 选择目标"）。</param>
+        /// <param name="isArea">true＝地区目标（高亮地区槽）；false＝卡目标（高亮场上卡）。</param>
+        /// <param name="candidateUids">候选 UID（由 Controller 枚举，UI 不得自行扩缩）。</param>
+        /// <param name="onPicked">选中的目标 UID；null＝取消（该牌留在手牌）。</param>
+        void PromptPlayTarget(int chooserPlayerId, string prompt, bool isArea, List<string> candidateUids,
+            System.Action<string> onPicked)
+        {
+            Godot.GD.PrintErr("[IGameUIHooks] ⚠ PromptPlayTarget 未实现（该 View 未提供目标选择窗）→ 按取消处理（不打出该牌）");
+            onPicked?.Invoke(null);
+        }
     }
 
     /// <summary>【P4·遏制】一个"可移除地区"选项：地区 UID + 序号（1-based，显示用）+ 当前可移除数。</summary>

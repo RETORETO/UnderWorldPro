@@ -242,6 +242,24 @@ namespace Script.UI.Interaction
                 GD.Print("[DragController.DragEnd] 无目标卡，直接进堆叠");
             }
 
+            // 【K10·额外费用】该卡打出前需要**玩家做选择**（JC049「牺牲一个角色」）：
+            // 先弹选择窗（取消＝不打出、不扣任何费用），选完由 Arena 带选择入堆叠并完成手牌/UI 整理；
+            // 无合法牺牲对象 ⇒ 该卡**不能打出**（A21），Arena 会直接退回手牌。
+            if (_actionService.NeedsExtraCostPlayerChoice(instance.PlayerTemplate))
+            {
+                ClearDragTargetHighlights();
+                _arena.BeginPlayWithExtraCostChoice(instance, cardUI, playerId, hand, targetAreaName, targetCardUid);
+                return;
+            }
+
+            // 【K10·额外费用】"展示任意数量手牌减费"（JC081）：手牌多选 → 确认/取消（取消＝不打出、不扣费）。
+            if (_actionService.NeedsExtraCostRevealChoice(instance.PlayerTemplate))
+            {
+                ClearDragTargetHighlights();
+                _arena.BeginPlayWithRevealExtraCostChoice(instance, cardUI, playerId, hand, targetAreaName, targetCardUid);
+                return;
+            }
+
             bool success = _actionService.PlayCard(playerId, instance.UID, targetAreaName, targetCardUid);
             ClearDragTargetHighlights();
 

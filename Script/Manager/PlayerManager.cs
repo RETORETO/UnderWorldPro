@@ -222,17 +222,53 @@ public partial class PlayerManager : Node
     // 费用系统（6.2）：横置资产区卡牌产生无色费用，每张 1 点
     // 忠诚值不因资产横置而减少（统计时不区分横置状态）
     // ============================================================
-    /// <summary>可用无色费用 = 未横置的资产卡数量</summary>
+    /// <summary>可用无色费用 = 未横置的资产卡数量 + **临时费用**（K19：JC115「你获得1」）</summary>
     public int GetAvailableMana(int playerId)
     {
-        if (_zoneManager == null) return 0;
-        int count = 0;
+        if (_zoneManager == null) return GetTemporaryMana(playerId);
+        int count = GetTemporaryMana(playerId);
         foreach (var card in _zoneManager.GetZoneCards(CardZone.AssetZone, playerId))
             if (!card.IsTapped) count++;
         return count;
     }
 
-    /// <summary>支付费用：横置 playerId 的 amount 张未横置资产卡；不足返回 false</summary>
+    // ============================================================
+    // 【P3·K19】临时费用池（JC115 备用资金「快速行动，横置：你获得1」）
+    // 口径（用户 2026-09，§7.4b A26）：本作**没有"有色费用"**，所有费用都是**无色费用**；
+    // 临时费用在**任意步骤结束时清除**（六个步骤：先手/后手/预对抗/调查对抗/战斗对抗/势力对抗，
+    // 实现上＝`TurnManager.EnterPhase` 每次阶段流转时清空——每个步骤的结束都恰好是一次流转）。
+    // 支付顺序：**优先花费临时费用**，不足的部分再横置资产卡（用户 2026-09 确认）。
+    // ============================================================
+    private readonly Dictionary<int, int> _temporaryMana = new Dictionary<int, int>();
+
+    /// <summary>该玩家当前剩余临时费用。</summary>
+    public int GetTemporaryMana(int playerId)
+        => _temporaryMana.TryGetValue(playerId, out int v) ? v : 0;
+
+    /// <summary>获得 N 点临时费用（可叠加；步骤结束时清除）。</summary>
+    public void GrantTemporaryMana(int playerId, int amount)
+    {
+        if (playerId <= 0 || amount <= 0) return;
+        _temporaryMana[playerId] = GetTemporaryMana(playerId) + amount;
+        GD.Print($"⚡ [PlayerManager] 玩家{playerId} 获得 {amount} 点临时费用（当前 {_temporaryMana[playerId]}）");
+    }
+
+    /// <summary>清除某玩家的临时费用（步骤结束／重置时）。</summary>
+    public void ClearTemporaryMana(int playerId)
+    {
+        if (_temporaryMana.TryGetValue(playerId, out int v) && v > 0)
+            GD.Print($"⚡ [PlayerManager] 玩家{playerId} 步骤结束 → 清除临时费用 {v} 点");
+        _temporaryMana.Remove(playerId);
+    }
+
+    /// <summary>清除双方的临时费用（`TurnManager.EnterPhase` 每次阶段流转时调用）。</summary>
+    public void ClearAllTemporaryMana()
+    {
+        ClearTemporaryMana(1);
+        ClearTemporaryMana(2);
+    }
+
+    /// <summary>支付费用：**先花临时费用**，不足部分横置 playerId 的未横置资产卡；不足返回 false</summary>
     public bool SpendMana(int playerId, int amount)
     {
         if (amount <= 0) return true;
@@ -242,15 +278,28 @@ public partial class PlayerManager : Node
             return false;
         }
         int remaining = amount;
-        var tappedNames = new List<string>();
-        foreach (var card in _zoneManager.GetZoneCards(CardZone.AssetZone, playerId))
+        // ① 优先花费临时费用（K19，用户 2026-09 口径）
+        int temp = GetTemporaryMana(playerId);
+        if (temp > 0)
         {
-            if (remaining <= 0) break;
-            if (!card.IsTapped)
+            int used = System.Math.Min(temp, remaining);
+            _temporaryMana[playerId] = temp - used;
+            remaining -= used;
+            GD.Print($"⚡ 玩家{playerId} 支付：先花临时费用 {used} 点（剩余临时费用 {_temporaryMana[playerId]}）");
+        }
+        // ② 不足部分横置资产卡
+        var tappedNames = new List<string>();
+        if (remaining > 0 && _zoneManager != null)
+        {
+            foreach (var card in _zoneManager.GetZoneCards(CardZone.AssetZone, playerId))
             {
-                card.SetTapped(true);   // 实例层面完成横置（SetTapped 发 TappedChanged）
-                tappedNames.Add(card.PlayerTemplate?.CardName ?? card.UID);
-                remaining--;
+                if (remaining <= 0) break;
+                if (!card.IsTapped)
+                {
+                    card.SetTapped(true);   // 实例层面完成横置（SetTapped 发 TappedChanged）
+                    tappedNames.Add(card.PlayerTemplate?.CardName ?? card.UID);
+                    remaining--;
+                }
             }
         }
         GD.Print($"⚡ 玩家{playerId} 支付 {amount} 费用：横置资产卡 [{string.Join(", ", tappedNames)}]，实例 IsTapped 已置 true");

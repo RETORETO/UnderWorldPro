@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -141,6 +141,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private PackedScene _activationChoiceWindowScene;
     private TriggerOrderWindow _triggerOrderWindow;
     private TargetSelectionWindow _targetSelectionWindow;
+    /// <summary>【鼠标悬浮预览】整张卡图的悬浮浮层（见 `CardHoverPreview` / `CardPreviewBus`）。</summary>
+    private CardHoverPreview _hoverPreview;
 
     // ============================================================
     // 基础行动蒙版（派遣暗藏 / 建立资产）
@@ -305,6 +307,17 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             // 层级（ZIndex/TopLevel）由 TriggerOrderWindow._Ready 自行设置，这里不再覆盖
             AddChild(_triggerOrderWindow);
         }
+
+        // ---- 4.2【鼠标悬浮预览】整张卡图的悬浮浮层（用户 2026-09 口径）----
+        // 单机战场是**本地同桌**视图（双方手牌/场上都在同一屏），故查看者固定为本机人类座位（玩家1）：
+        //  · 自己的卡（含手牌与暗藏者）→ 弹；
+        //  · 公开卡（场上正面/附属/秘社/资产/墓地/地区）→ 弹；
+        //  · **对手手牌 / 对手暗藏者** → 不弹，**除非**查看者有一张**未横置**且**与该暗藏者同地区**的
+        //    JC057 类卡（"随时检视本地区任一暗藏者"，判定＝`CovertInspectRule` 单一真相源）。
+        _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = 4096 };
+        AddChild(_hoverPreview);
+        CardPreviewBus.Attach(card => CovertInspectRule.CanViewerSeeCardFace(card, 1, _cardManager),
+            _hoverPreview, viewerPlayerId: 1);
         if (_targetSelectionWindow == null && _targetSelectionScene != null)
         {
             _targetSelectionWindow = _targetSelectionScene.Instantiate<TargetSelectionWindow>();
@@ -425,6 +438,43 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         {
             // 双击暗藏者：由当前有行动权的玩家发动（门禁在 TurnManager 内校验 controller==playerId）
             if (c?.Instance == null) return;
+            // 【P3·K21·JC041·A29】暗藏者状态下若**位于水域地区**（或该卡另有"暗藏者专用激活能力"）：
+            // **双击不直接现身**，而是弹出**选择框**（"正常现身" / "激活暗藏者效果"，**可取消**）。
+            // 判据＝`ActivateEligibility` 里**当前可发动**、且声明 `RequireSourceCovert` 的能力（候选侧与权威同源：
+            // 地区子类别前提也在其中判定），因此非水域 / 非暗藏者时不会出现该选择框。
+            var covertAbilities = new System.Collections.Generic.List<Script.Data.Effects.EffectData>();
+            if (c.Instance.IsCovert && _turnManager != null && _playerManager != null && _cardManager != null)
+            {
+                var eligible = Script.Manager.ActivateEligibility.GetEligibleAbilities(
+                    c.Instance.ControllerId, _turnManager, _playerManager, _cardManager);
+                if (eligible != null)
+                    foreach (var (abCard, ab) in eligible)
+                        if (abCard == c.Instance && ab != null && ab.RequireSourceCovert) covertAbilities.Add(ab);
+            }
+            if (covertAbilities.Count > 0)
+            {
+                var inst = c.Instance;
+                var items = new System.Collections.Generic.List<ActivationChoiceItem>
+                {
+                    new ActivationChoiceItem
+                    {
+                        Label = "正常现身",
+                        OnChosen = () => _actionService.RevealCovert(_turnManager.PriorityPlayerId, inst.UID),
+                    },
+                };
+                foreach (var ab in covertAbilities)
+                {
+                    var captured = ab;
+                    items.Add(new ActivationChoiceItem
+                    {
+                        Label = "激活暗藏者效果：" + GetActivationAbilityLabel(inst, captured),
+                        OnChosen = () => BeginActivate(inst, captured, null, -1),
+                    });
+                }
+                items.Add(new ActivationChoiceItem { Label = "取消", OnChosen = () => { } });
+                OpenChoiceWindow($"{inst.PlayerTemplate?.CardName}：选择行动", items, force: true);
+                return;
+            }
             _actionService.RevealCovert(_turnManager.PriorityPlayerId, c.Instance.UID);
         };
         // 附属卡双击激活：与秘社双击一致，单击不再弹窗（JC012 交互修正）。
@@ -625,6 +675,27 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             EffectEngine.Instance.ResolvePrepareUpkeep(source, payAmount, pay: canPay);
             Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
         }
+    }
+
+    /// <summary>
+    /// 【JC119·K28】目标选择窗：为"**由效果免费打出的牌**"取目标（这类牌的打出不是玩家拖拽发起的，
+    /// 没有"拖到目标上"的交互）。**完全复用**激活效果的目标选择通道
+    /// （`TriggerInteractionCoordinator.RequestActivateTargetSelection`：卡目标＝场上高亮 + 点击；
+    /// 地区目标＝地区槽高亮 + 点击；同一份 `TargetSelectionWindow`、同一份卡高光总线），
+    /// 不新增第二套选目标 UI。View 只收集选择 → 经回调交回 Controller（`TurnManager` 随后走正常打出流程）。
+    /// 窗口/协调器缺失（编辑器未挂场景等）→ 回调 null（该牌留在手牌，绝不静默代打）。
+    /// </summary>
+    public void PromptPlayTarget(int chooserPlayerId, string prompt, bool isArea,
+        System.Collections.Generic.List<string> candidateUids, System.Action<string> onPicked)
+    {
+        if (_triggerCoordinator == null || _targetSelectionWindow == null)
+        {
+            GD.PrintErr("[Arena] PromptPlayTarget：目标选择窗不可用（协调器/窗口缺失）→ 按取消处理（不打出该牌）");
+            onPicked?.Invoke(null);
+            return;
+        }
+        GD.Print($"[Arena] 🎯 PromptPlayTarget：玩家{chooserPlayerId} 为「{prompt}」选目标（候选 {candidateUids?.Count ?? 0} 个，isArea={isArea}）");
+        _triggerCoordinator.RequestActivateTargetSelection(prompt, isArea, candidateUids, onPicked);
     }
 
     /// <summary>
@@ -902,6 +973,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     public override void _ExitTree()
     {
         UnsubscribeFromManagerEvents();
+        // 【鼠标悬浮预览】反注册总线（避免旧 Arena 的浮层引用残留到下一局/联机视图）
+        CardPreviewBus.Detach(_hoverPreview);
         base._ExitTree();
     }
 
@@ -1748,8 +1821,110 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 BeginActivateWithSacrifice(inst, ability, target, targetPlayerId);
                 return;
             }
+            // 【K5】标志代价（"自本方卡牌上移除…标志"）：X 由玩家选择 → 先收集代价，再发动。
+            //  · JC055② `AmountByPlayerChoice`：**逐卡分配**（点一张卡记录用 1 点 → 确认；A30，总和 ≥ 1）；
+            //  · JC044② 固定数量：从候选里**选一张卡**（原本无 UI、引擎直接兜底取第一张 → 现补齐）。
+            if (ability.CounterCost != null)
+            {
+                if (ability.CounterCost.AmountByPlayerChoice)
+                    BeginActivateWithCounterCostAllocation(inst, ability, target, targetPlayerId);
+                else
+                    BeginActivateWithCounterCostChoice(inst, ability, target, targetPlayerId);
+                return;
+            }
             _actionService.ActivateAbility(inst, ability, target, targetPlayerId);
             RefreshActivateHighlights();
+        }
+
+        /// <summary>【K5·JC044②】固定数量的标志代价：从候选里选一张卡（该卡上标志数 ≥ 数量）。</summary>
+        private void BeginActivateWithCounterCostChoice(CardInstance inst, EffectData ability,
+            CardInstance target, int targetPlayerId)
+        {
+            var candidates = _actionService.GetCounterCostChoiceCandidates(inst, ability);
+            if (candidates.Count == 0) { GD.PrintErr($"[Arena] 标志代价无候选：{ability.EffectId}"); return; }
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (var c in candidates)
+            {
+                var picked = c;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"从 {picked.PlayerTemplate?.CardName} 上移除 {ability.CounterCost.Amount} 个标志",
+                    OnChosen = () =>
+                    {
+                        _actionService.ActivateAbility(inst, ability, target, targetPlayerId, null, null, picked.UID);
+                        RefreshActivateHighlights();
+                    },
+                });
+            }
+            items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = () => { } });
+            OpenChoiceWindow("选择要移除标志的卡", items, force: true);
+        }
+
+        /// <summary>
+        /// 【K5·JC055②】"移除 **X** 个标志"代价的**逐卡分配**窗（用户口径 A30：点一次某张卡即记录用 1 点，
+        /// 确认后移除对应标志；**X ≥ 1**）。实现＝复用通用选择窗做"逐卡增点 + 重置 + 确认/取消"循环。
+        /// </summary>
+        private void BeginActivateWithCounterCostAllocation(CardInstance inst, EffectData ability,
+            CardInstance target, int targetPlayerId)
+        {
+            var candidates = _actionService.GetCounterCostChoiceCandidates(inst, ability);
+            if (candidates.Count == 0) { GD.PrintErr($"[Arena] 标志代价无候选：{ability.EffectId}"); return; }
+            var allocation = new System.Collections.Generic.Dictionary<string, int>();
+            ShowCounterAllocationStep(inst, ability, target, targetPlayerId, candidates, allocation);
+        }
+
+        private void ShowCounterAllocationStep(CardInstance inst, EffectData ability, CardInstance target,
+            int targetPlayerId, System.Collections.Generic.List<CardInstance> candidates,
+            System.Collections.Generic.Dictionary<string, int> allocation)
+        {
+            int total = 0;
+            foreach (var kv in allocation) total += kv.Value;
+
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (var c in candidates)
+            {
+                var card = c;
+                if (card == null) continue;
+                int have = _actionService.GetMarkerCountOnCard(card, ability);
+                allocation.TryGetValue(card.UID, out int used);
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"{card.PlayerTemplate?.CardName}：移除 1 个（已选 {used} / 共 {have}）",
+                    OnChosen = () =>
+                    {
+                        if (used < have) allocation[card.UID] = used + 1;
+                        ShowCounterAllocationStep(inst, ability, target, targetPlayerId, candidates, allocation);
+                    },
+                });
+            }
+            if (total >= 1)
+            {
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"确认（共移除 {total} 个 → 本回合下一张灾难牌费用 -{total}）",
+                    OnChosen = () =>
+                    {
+                        _actionService.ActivateAbility(inst, ability, target, targetPlayerId, null, null, allocation);
+                        RefreshActivateHighlights();
+                    },
+                });
+            }
+            else
+            {
+                items.Add(new ActivationChoiceItem { Label = "（请至少选择 1 个标志才能确认）", OnChosen = () => { } });
+            }
+            if (total > 0)
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = "重置选择",
+                    OnChosen = () =>
+                    {
+                        allocation.Clear();
+                        ShowCounterAllocationStep(inst, ability, target, targetPlayerId, candidates, allocation);
+                    },
+                });
+            items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = () => { } });
+            OpenChoiceWindow($"移除时间标志（已选 {total}，至少 1）", items, force: true);
         }
 
         /// <summary>【K15】为需要"目标地区"的激活能力弹地区选择窗（候选＝`ActivateEligibility.GetAreaTargetCandidates`，
@@ -1818,6 +1993,133 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = () => onChosen?.Invoke(-1) });
             OpenChoiceWindow(string.IsNullOrEmpty(prompt) ? "选择目标玩家" : prompt, items, force: true);
+        }
+
+        /// <summary>
+        /// 【K10·额外费用】打出前需要**玩家做选择**的额外费用（JC049「额外费用：牺牲一个角色」）：
+        /// 弹选择窗（**由打出者自己选**牺牲谁；取消＝不打出、**不扣任何费用**）→ 选完带选择调用 `PlayCard`
+        /// （额外费用在**付费阶段、入堆叠之前**付清，**不可被响应**）→ 完成手牌/UI 整理。
+        /// **无合法牺牲对象 ⇒ 该卡不能打出**（用户口径 A21），直接退回手牌。
+        /// </summary>
+        internal void BeginPlayWithExtraCostChoice(CardInstance card, CardUI cardUI, int playerId,
+            List<CardUI> hand, string targetAreaName, string targetCardUid)
+        {
+            if (card == null) return;
+            var candidates = _actionService.GetExtraCostSacrificeCandidates(card);
+            if (candidates.Count == 0)
+            {
+                GD.Print($"❌ [Arena] 【K10 额外费用】{card.PlayerTemplate?.CardName} 无合法牺牲对象 → 不能打出，退回手牌");
+                _actionService.ReturnCardToHand(playerId, card.UID);
+                ArrangeAllCardsInternal();
+                return;
+            }
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (var c in candidates)
+            {
+                var picked = c;
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"牺牲 {picked.PlayerTemplate?.CardName}（额外费用）",
+                    OnChosen = () => FinishPlayWithExtraCost(card, cardUI, playerId, hand,
+                        targetAreaName, targetCardUid, picked.UID),
+                });
+            }
+            items.Add(new ActivationChoiceItem { Label = "取消（不打出）", OnChosen = () => { } });
+            OpenChoiceWindow("额外费用：选择要牺牲的角色", items, force: true);
+        }
+
+        /// <summary>
+        /// 【K10·额外费用·JC081】"**展示任意数量手牌**减费"的打出前交互（用户口径 A22/A23）：
+        /// 手牌**多选**（点一次选入/再点取消，窗内逐张列出当前选择）→ **确认**＝给对手展示所有已选牌 →
+        /// 按合格张数减免 → 入堆叠；**取消**＝不打出、卡不入堆叠、**不扣任何费用**。
+        /// 交互实现说明：复用既有 `ActivationChoiceWindow` 做"逐张增删 + 确认/取消"的循环（不新造窗口）。
+        /// </summary>
+        internal void BeginPlayWithRevealExtraCostChoice(CardInstance card, CardUI cardUI, int playerId,
+            List<CardUI> hand, string targetAreaName, string targetCardUid)
+        {
+            if (card == null) return;
+            var candidates = _actionService.GetExtraCostRevealCandidates(playerId, card);
+            var selected = new System.Collections.Generic.List<CardInstance>();
+            ShowRevealChoiceStep(card, cardUI, playerId, hand, targetAreaName, targetCardUid, candidates, selected);
+        }
+
+        /// <summary>【K10·JC081】展示手牌选择的一步（可反复调用：每次点击后重开窗口刷新选择态）。</summary>
+        private void ShowRevealChoiceStep(CardInstance card, CardUI cardUI, int playerId, List<CardUI> hand,
+            string targetAreaName, string targetCardUid,
+            System.Collections.Generic.List<CardInstance> candidates,
+            System.Collections.Generic.List<CardInstance> selected)
+        {
+            var tmpl = card.PlayerTemplate;
+            int qualified = 0;
+            foreach (var s in selected)
+                if (_actionService.IsQualifiedRevealCard(tmpl, s)) qualified++;
+
+            var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+            foreach (var c in candidates)
+            {
+                var captured = c;
+                if (captured == null) continue;
+                bool on = selected.Contains(captured);
+                string name = captured.PlayerTemplate?.CardName ?? captured.UID;
+                string mark = _actionService.IsQualifiedRevealCard(tmpl, captured) ? "（合格 -1）" : "（不合格）";
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = (on ? "✔ 已选：展示 " : "展示 ") + name + mark,
+                    OnChosen = () =>
+                    {
+                        if (on) selected.Remove(captured); else selected.Add(captured);
+                        ShowRevealChoiceStep(card, cardUI, playerId, hand, targetAreaName, targetCardUid, candidates, selected);
+                    },
+                });
+            }
+            items.Add(new ActivationChoiceItem
+            {
+                Label = $"确认（展示 {selected.Count} 张，其中合格 {qualified} 张 → 费用 -{qualified}）",
+                OnChosen = () => FinishPlayWithRevealExtraCost(card, cardUI, playerId, hand,
+                    targetAreaName, targetCardUid, selected),
+            });
+            items.Add(new ActivationChoiceItem { Label = "取消（不打出）", OnChosen = () => { } });
+            OpenChoiceWindow($"额外费用：选择要展示给对手的手牌（当前减免 {qualified}）", items, force: true);
+        }
+
+        /// <summary>【K10·JC081】带"已选展示手牌"完成打出 + 手牌/UI 整理。</summary>
+        private void FinishPlayWithRevealExtraCost(CardInstance card, CardUI cardUI, int playerId, List<CardUI> hand,
+            string targetAreaName, string targetCardUid, System.Collections.Generic.List<CardInstance> selected)
+        {
+            var uids = new System.Collections.Generic.List<string>();
+            foreach (var s in selected)
+                if (s != null) uids.Add(s.UID);
+
+            bool success = _actionService.PlayCard(playerId, card.UID, targetAreaName, targetCardUid, null, uids);
+            if (!success)
+            {
+                _actionService.ReturnCardToHand(playerId, card.UID);
+                ArrangeAllCardsInternal();
+                return;
+            }
+            hand.Remove(cardUI);
+            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
+            cardUI.CanDrag = false;
+            ArrangeAllCardsInternal();
+            UpdateTurnUIInternal();
+        }
+
+        /// <summary>【K10】带"已选定的额外费用牺牲者"完成打出 + 手牌/UI 整理（与拖拽路径的收尾一致）。</summary>
+        private void FinishPlayWithExtraCost(CardInstance card, CardUI cardUI, int playerId, List<CardUI> hand,
+            string targetAreaName, string targetCardUid, string sacrificeUid)
+        {
+            bool success = _actionService.PlayCard(playerId, card.UID, targetAreaName, targetCardUid, sacrificeUid);
+            if (!success)
+            {
+                _actionService.ReturnCardToHand(playerId, card.UID);
+                ArrangeAllCardsInternal();
+                return;
+            }
+            hand.Remove(cardUI);
+            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
+            cardUI.CanDrag = false;   // 进入堆叠后不可拖拽
+            ArrangeAllCardsInternal();
+            UpdateTurnUIInternal();
         }
 
         /// <summary>为"以玩家为目标"的激活效果弹独立选择窗（如 JC111 混沌蝴蝶，来源多为角色卡）。</summary>

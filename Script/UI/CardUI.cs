@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using Script.Enums;
@@ -96,7 +96,17 @@ namespace Script.UI
             _targetPosition = Position;
 
             GuiInput += OnGuiInput;
+
+            // 【鼠标悬浮预览】鼠标进入/离开卡面 → 经 `CardPreviewBus` 请求"整张卡图"浮层。
+            // 是否允许显示由视图注入的判定决定（`CovertInspectRule`：对手手牌/对手暗藏者默认不弹，
+            // JC057 未横置且同地区时授权弹出）；未接管（无战场视图）→ 静默忽略。
+            MouseEntered += OnMouseEnteredPreview;
+            MouseExited += OnMouseExitedPreview;
         }
+
+        private void OnMouseEnteredPreview() => CardPreviewBus.RequestHover(this);
+
+        private void OnMouseExitedPreview() => CardPreviewBus.EndHover(this);
 
         public override void _Process(double delta)
         {
@@ -587,14 +597,17 @@ namespace Script.UI
         // 辅助
         // ============================================================
         /// <summary>刷新子类型标签，格式如"子类型：鸟/魔宠"。
-        /// 静态模板子类型按原顺序在前，运行时授予的子类型（如 JC030 的"吸血鬼"）追加在末尾去重显示。</summary>
+        /// 静态模板子类型按原顺序在前，运行时授予的子类型（如 JC030 的"吸血鬼"）追加在末尾去重显示。
+        /// 【P3·K4】被"改写掉"的子类别（JC036 初拥把人类改成吸血鬼）**不显示**——与 `HasSubCategory` 同解。</summary>
         private void RefreshSubCategoriesLabel()
         {
             if (_subCategoriesLabel == null || _instance == null) return;
             var template = _instance.PlayerTemplate;
             if (template == null) { _subCategoriesLabel.Text = ""; return; }
             // 静态顺序优先，运行时授予追加在末尾（去重），保证展示稳定且与模板顺序一致
-            var ordered = new List<string>(template.SubCategories);
+            var ordered = new List<string>();
+            foreach (var s in template.SubCategories)
+                if (_instance.HasSubCategory(s)) ordered.Add(s);       // 跳过被"改写掉"的模板固有类别
             foreach (var s in _instance.CurrentSubCategories)
                 if (!ordered.Contains(s)) ordered.Add(s);
             _subCategoriesLabel.Text = ordered.Count > 0 ? $"子类型：{string.Join("/", ordered)}" : "";

@@ -172,6 +172,19 @@ namespace Script.Net
         /// <summary>当前实际子类别（模板固有 + 运行时授予，如 JC030 授予"吸血鬼"）。
         /// 消费点：`CardInstance.HasSubCategory` / `TargetRestriction.CurrentSubCategory` / 卡面子类别显示。</summary>
         public List<string> SubCategories = new List<string>();
+        /// <summary>【P3·K4】被"改写掉"的子类别（JC036 初拥把宿主的人类类别改为吸血鬼）。
+        /// 客户端 `RestoreProjectedState` 重建当前集合时按"（模板固有 ∪ SubCategories）− 本表"计算——
+        /// **不能**只靠"模板固有即成立"的并集，否则客户端会多出服务端已失去的类别，导致两端判定分叉。
+        /// 注：**印刷类别**（`HasStaticSubCategory`，读模型数据）不受本表影响。</summary>
+        public List<string> RemovedSubCategories = new List<string>();
+        /// <summary>【P3·K4】**实例级形态覆盖**的类别位（`CardCategory` 整数值；0＝未覆盖；JC027"成为一个地精角色"）。
+        /// 消费点：客户端 `CardInstance.EffectiveCategoryFlag` / 本地目标合法性判定，保证与服务端同解。</summary>
+        public int CategoryFlagOverride;
+        /// <summary>【P3·K4】实例级形态覆盖的**卡名**（JC028「鲜血」；空＝未覆盖）。
+        /// 消费点：`CardInstance.EffectiveCardName` / `TargetRestriction.CardName` 等卡名判定。</summary>
+        public string CardNameOverride = "";
+        /// <summary>【P3·K4】形态是否**失活了印刷效果**（JC028"损失了原有的效果"）。</summary>
+        public bool PrintedEffectsSuppressed;
         /// <summary>运行时授予的关键字（如持续效果授予的【公开】）。消费点：`HasKeyword` / `HasPublicKeyword`。</summary>
         public List<string> GrantedKeywords = new List<string>();
         /// <summary>运行时授予的图标。消费点：`HasIcon` 与卡面图标显示。</summary>

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -117,7 +117,8 @@ namespace Script.Tests
             Assert.IsNotNull(tmpl, "JC061 模板应可加载");
             var e = FindEffect(tmpl, "JC061_1_PayToDestroyCovertInArea");
             Assert.IsNotNull(e, "JC061 应有『支付1 → 消灭目标暗藏者』效果");
-            Assert.AreEqual(EffectTiming.ManeuverTrigger, e.Timing, "时机＝机动（进入一个地区时）");
+            Assert.AreEqual(EffectTiming.OnMove, e.Timing,
+                "时机＝『进入一个地区』（OnMove：机动/跨地区移动**之后**；原挂 ManeuverTrigger 实为『对抗前窗口打开时』，移动尚未发生）");
             Assert.AreEqual(TargetKind.Covert, e.Target.Kind, "目标＝暗藏者");
             Assert.IsTrue(e.Target.IsLocalZone, "限该地区");
             Assert.AreEqual(2, e.Actions.Count, "两个动作：可选支付 + 消灭");
@@ -242,6 +243,48 @@ namespace Script.Tests
 
             Assert.AreEqual(manaBefore, game.PlayerManager.GetAvailableMana(1), "N=0 → 视为未支付，不扣费");
             Assert.AreEqual(CardZone.AreaZone, covert.CurrentZone, "N=0 → 后续动作跳过");
+        }
+
+        // ==================== ②b JC061：**移动到另一地区**时触发，且目标是**新地区**的暗藏者 ====================
+        // 回归（P1 缺陷）：原挂 `ManeuverTrigger`（＝对抗前窗口打开时、移动尚未发生）且被判成"取目标地区"，
+        // 效果实际变成"消灭**移动前**地区（＝离开的地区）的暗藏者"，与卡文"进入一个地区…消灭位于**该地区**的
+        // 目标暗藏者"不符。现挂 `OnMove`（位置变更**之后**广播，带 `SourceAreaAtTrigger`＝新地区）。
+
+        public void TestOptionalPay_JC061移动后针对新地区触发()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            GiveAssets(game, 1, 3, (CardColor)4);          // JC061 颜色忠诚 4:2
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC061_weijichulitepaixiaozu"), 1);
+            game.ZoneManager.MoveToArea(unit, areas[0], 1);   // 先进场（此时 OnMove 也会发，但旧/新地区都还没有暗藏者）
+
+            // 旧地区（出发地）与新地区（目的地）各放一个暗藏者
+            var oldCovert = game.CardManager.CreateCardInstance(Probe("TS_op_jc061_old", CardCategory.Character), 2);
+            game.ZoneManager.MoveToArea(oldCovert, areas[0], 2);
+            oldCovert.SetCovert(true);
+            var newCovert = game.CardManager.CreateCardInstance(Probe("TS_op_jc061_new", CardCategory.Character), 2);
+            game.ZoneManager.MoveToArea(newCovert, areas[1], 2);
+            newCovert.SetCovert(true);
+
+            var stub = new NumberStub { Answer = 1 };      // 支付 1
+            EffectEngine.Instance.UIHooks = stub;
+            game.SetInputGateway(new EnterAllGateway());   // 触发阶段走网关（全部入堆叠 + 自动取首个候选）
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            int callsBefore = stub.Calls;
+
+            game.CardManager.MoveCardToArea(unit, areas[1]);   // 移动到新地区 → 广播 OnMove
+
+            Assert.IsFalse(game.StackManager.IsEmpty, "『进入一个地区』应已收集触发并入堆叠");
+            for (int i = 0; i < 8 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+
+            Assert.AreEqual(1, stub.Calls - callsBefore, "询问了一次是否支付 1");
+            Assert.AreEqual(manaBefore - 1, game.PlayerManager.GetAvailableMana(1), "支付 1 费");
+            Assert.AreEqual(CardZone.Graveyard, newCovert.CurrentZone,
+                "消灭的是**新进入地区**的暗藏者（回归：旧实现会打到出发地）");
+            Assert.AreEqual(CardZone.AreaZone, oldCovert.CurrentZone,
+                "出发地（移动前所在地区）的暗藏者不受影响");
         }
 
         // ==================== ③ JC100：被封印时支付 → 封印宿主 -1 防御（直到回合结束） ====================

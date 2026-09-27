@@ -63,6 +63,17 @@ namespace Script.Data.Effects
         /// 注：卡上标志的增减**不**触发 `BumpVersion`，故"结算前标志被移除"由结算复检（同一 `CheckRestrictions`）兜住。
         /// </summary>
         HasCounter,
+        /// <summary>
+        /// 【P3·K4】**目标【当前实际】SubCategories 不含 Param**（"非某类别"的**实例口径**）。
+        /// 与 `NotStaticSubCategory` 的区别＝**读当前集合还是印刷模板**：
+        /// 用户 2026-09 口径（JC036 初拥"将该角色的人类类别改为吸血鬼类别"）——
+        /// 「**印刷类别**为人类」读**模型数据**（`StaticSubCategory`）；卡文只写"人类 / 非人类"的
+        /// 一律读**实例当前类别**（`CurrentSubCategory` / 本枚举），故被初拥改写的角色对
+        /// "非人类"类效果**合法**、对"人类角色"类效果**不再合法**。
+        /// 用途：JC015 驱魔人「消灭目标非人类且印刷费用≥3的敌方角色」/ JC019 弥尔顿的镇魔枪「对位于本地区的目标非人类角色…」。
+        /// 与 `CostAtLeast` 共用 `Param` 时按 '|' 分段（第 0 段＝本限制的子类别名）。
+        /// </summary>
+        NotCurrentSubCategory,
         // 未来扩展位（按需添加 case）：Tapped, Untapped, HasKeyword, HasAttribute, LoyaltyColor, Domain, StrengthAtLeast...
     }
 

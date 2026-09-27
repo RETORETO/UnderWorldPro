@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -130,7 +130,8 @@ namespace Script.Tests
             Assert.AreEqual("横置本角色", e.GrantedAbility.ActivateCondition, "代价＝横置本角色（宿主，见 FAQ）");
             Assert.AreEqual("快速", e.GrantedAbility.ActivateWindow, "快速行动");
             Assert.IsTrue(e.GrantedAbility.Target.IsLocalZone, "目标限本地区");
-            Assert.AreEqual(TargetRestriction.NotStaticSubCategory, e.GrantedAbility.Target.Restrictions[0], "目标须『非人类』");
+            Assert.AreEqual(TargetRestriction.NotCurrentSubCategory, e.GrantedAbility.Target.Restrictions[0],
+                "目标须『非人类』（读实例当前类别；用户 2026-09 口径）");
             Assert.AreEqual("人类", e.GrantedAbility.Target.Param, "非人类＝排除『人类』");
             Assert.AreEqual("不可防止", e.GrantedAbility.Actions[0].Args[1], "该伤害不能被防止");
             // 黑刀要"两条通道都写"：Icon（存在性/展示）+ Attribute:战斗（数值）

@@ -33,9 +33,13 @@ namespace Script.Net.Godot
         /// 打出卡牌意图。**【K15·多目标】**先看该卡是否声明了多目标槽位：
         /// 是且已注入输入网关 → 服务端接管（逐槽下发 `MultiTargetSlot` → `ConfirmTargets` → 入堆叠，异步）；
         /// 否则走原有同步 `PlayCard`（单目标/无目标卡行为不变）。
+        /// **【K10·额外费用】**同理：需要玩家本人选择的额外费用（JC049 牺牲对象 / JC081 展示手牌）
+        /// 在联机侧由服务端把选择回环给该玩家后再续算（异步，见 `PlayWithExtraCostAsync`）。
         /// </summary>
         public void PlayCard(int playerId, string cardUid, string targetUid, string targetCardUid)
         {
+            // 【K10·额外费用】"需要玩家选择"的额外费用：服务端接管（选择请求 → 续算 → 入堆叠）
+            if (_service.TryBeginExtraCostPlayOnline(playerId, cardUid, targetUid, targetCardUid)) return;
             // 【K16·模式分支】"选择一项"类卡：服务端接管（先下发选模式 → 再取该模式目标 → 入堆叠）
             if (_service.TryBeginModeCardPlayOnline(playerId, cardUid)) return;
             if (_service.TryBeginMultiTargetPlayOnline(playerId, cardUid)) return;
@@ -69,9 +73,16 @@ namespace Script.Net.Godot
             var data = _cardManager.GetEffectData(sourceUid, effectId);
             if (src == null || data == null) throw new System.InvalidOperationException("发动能力参数无效");
 
+            // 【P2·联机】带"选择类入参"的激活（目标地区 / 牺牲代价 / 标志代价 / 目标玩家）：
+            // 由**服务端接管**逐项下发选择请求（与单机那几套窗 1:1），收集完再激活。
+            // 若客户端已把选择结果随意图一并上行（`ActivateAbilityFull`），本接管不会再触发
+            // （因为那时 `TryBegin...` 由 Full 版本跳过——见下方重载）。
+            int controller = src.ControllerId;
+            if (_service.TryBeginActivationChoiceOnline(controller, sourceUid, effectId, targetUid, -1)) return;
+
             // 服务端权威复查激活目标合法性：客户端的目标过滤只是展示层防呆，禁止非法 targetUid 直接进入结算。
             // 复用核心 ActivateEligibility.IsLegalActivateTarget（本地区/类别/目标规则/暗藏者豁免）。
-            if (data.Target != null && data.Target.NeedsSelection)
+            if (data.Target != null && data.Target.NeedsSelection && !Script.Manager.PlayerTargetPool.IsPlayerSpec(data.Target))
             {
                 if (tgt == null)
                     throw new System.InvalidOperationException($"激活 {effectId} 需要指定目标（targetUid 为空）");

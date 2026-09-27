@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Godot.Collections;
 
 namespace Script.Data.Effects
@@ -25,6 +25,13 @@ namespace Script.Data.Effects
         ///
         /// 留空（缺省）时行为与既有实现**完全一致**（只按 `Predicate` 判定）。
         /// </summary>
+        /// <summary>
+        /// 【P3·K5】**参数化谓词的参数**（缺省空）。用于需要"带一个数字/标志名"的条件，如
+        /// `Predicate = "AreaMarkerAtLeast"` + `Param = "时间标志,3"`（JC127「若该地区有三个或更多时间标志」）。
+        /// 由 `EffectEngine.EvaluateCondition(..., param)` 透传给谓词实现；既有谓词忽略它。
+        /// </summary>
+        [Export] public string Param { get; set; } = "";
+
         [Export] public string BranchPredicate { get; set; } = "";
 
         /// <summary>条件不满足时执行的动作序列（"否则改为…"）。</summary>

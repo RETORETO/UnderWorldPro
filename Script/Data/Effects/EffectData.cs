@@ -181,6 +181,11 @@ namespace Script.Data.Effects
         DeckZone,      // 卡组（未来扩展：卡组生效效果）
         SealedZone,    // 【P3·K16 触发版】封印区：`TurnManager.SealCard` 先把被封印卡移入封印区再广播 OnSealed，
                        // 故"被封印在一个角色上时…"类自身触发的**触发时来源区＝封印区**（JC110/JC100）。
+        CouncilZone,   // 【P0·修复】秘社区的**秘社卡默认生效区**：`CouncilCardData` 的实例 `PlayerTemplate == null`
+                       // （模板类型是 `CouncilCardData` 而非 `PlayerCardData`），`GetDefaultScope` 原先落到
+                       // `Specified` → `ScopeMatchesZone` 的 `default: false` ⇒ **秘社激活被权威门禁无条件拒绝**
+                       // （`EffectEngine.ActivateAbility` 的生效区校验），表现为"秘社能点、点完没反应"。
+                       // 现在：秘社卡默认生效区＝本值，`ScopeMatchesZone` 命中 `CardZone.CouncilZone`。
         Specified,     // 由卡文指定区域（未声明→回退卡类型默认）
     }
 
@@ -248,6 +253,48 @@ namespace Script.Data.Effects
         /// **用户 2026-09 口径**：与【领袖】同一套处理（存在多个道途时**玩家选择一个牺牲**）。
         /// </summary>
         UniquePathAtMostOne,
+        /// <summary>
+        /// 【P3·K4】来源卡**未结附于角色**时**不能移动**（JC121 空鸣御守的「不能移动」前缀）。
+        /// **用户 2026-09 口径（§7.4b A18/A19）**：
+        ///  · 这是**独立效果行**，**只有未结附于角色时才生效**；结附于角色时本卡随角色一起移动（不适用本条）；
+        ///  · "移动"**涵盖机动 / 效果移动 / 置换**（实现上收口在 `CardManager.MoveCardToArea` 唯一入口）。
+        /// 声明方式：`Timing = Static` + 本标记 + `Scope = AreaZone`
+        /// （未结附时本卡位于争夺区，区域化注册天然只在该状态成立——结附后进入附属区即自动注销）。
+        /// 消费点＝`CardManager.MoveCardToArea`（`EffectEngine.HasStaticFlag(card, …)` 判定 + `AttachedTo == null` 复核）。
+        /// </summary>
+        CannotMoveWhileUnattached,
+        /// <summary>
+        /// 【P3·K21·JC064 戒严】来源卡**所在/所结附的地区**：**非指定组织的角色牌不可正面打出在该地区，
+        /// 也不能移动进入该地区**（卡文「所有非【国家机构】的角色牌不可正面打出在本地区，也不能移动进入本地区」）。
+        /// `StaticEffect.Param` ＝组织名（本卡＝`国家机构`）。
+        /// **用户 2026-09 口径（§7.4b A19）**："不能移动进入"**涵盖机动 / 效果移动 / 置换**；
+        /// 卡文 FAQ 明确**允许**的两条路径不受本规则限制：① **秘密派遣**（背面进场，走 `ZoneManager.MoveToArea`）；
+        /// ② **其他方式放置进场**（如"操控死尸"从墓地放进场）——实现上以"**该卡此刻是否已在场上**"区分
+        /// "**移动进入**"（在场卡的位置变更 → 拦）与"**放置进场**"（从墓地/手牌/牌库进场 → 放行）。
+        /// 消费点：`TurnManager.PlayCard`（正面打出到该地区）＋ `CardManager.MoveCardToArea`（移动唯一收口）
+        /// 经 `EffectEngine.IsEntryBlockedByOrgRule(card, areaUid)` 判定。
+        /// </summary>
+        BlockNonOrgEntryInArea,
+        /// <summary>
+        /// 【JC081 亚洛尔·前缀】"**除装备与祝福外不受附属**"：本卡**只能被指定子类别的附属结附**。
+        /// `StaticEffect.Param` ＝**子类别白名单**（`,` 分隔，本卡＝`装备,祝福`）——结附它的附属必须命中其中之一，
+        /// 否则**打出阶段即拦截**（`CardManager.IsLegalPlayTarget`）、结算阶段再兜底
+        /// （`TurnManager` 的结附分支）。与 `CannotBeAttached`（JC001："任何装备都不能结附"）同类实现，
+        /// 只是把"一律禁止"放宽成"白名单允许"；未写白名单（Param 空）→ 放行（fail-open，防拼错静默封死）。
+        /// 判定单一实现＝`EffectEngine.GetAttachSubCategoryWhitelist` / `PassesAttachWhitelist`（两端共用，不依赖引擎实例）。
+        /// </summary>
+        OnlyAttachWithSubCategories,
+        /// <summary>
+        /// 【JC057 监控员·持续】"**只要监控员未横置，你可以随时检视本地区的任一暗藏者**"：
+        /// 来源卡在场上且**未横置**时，其控制者获得一条**持续可见性授权**——可以查看
+        /// **与来源卡同一地区**的**暗藏者**（含对手的）的卡面。
+        /// 声明方式：`Timing = Static` ＋ `Scope = AreaZone` ＋ `PrereqSpec{Kind=SelfUntapped}`
+        /// （横置即失效、重置即恢复：前提由持续注册表实时重判）。
+        /// 消费点＝**UI 悬浮预览的可见性判定**（`Script/Manager/CovertInspectRule.CanViewerSeeCardFace`）——
+        /// 这是一条**不经过效果结算的查看通道**（"随时检视"），故判定实现为**静态纯函数**
+        /// （读卡面印刷规则 + 实例态），客户端/服务端同解、不依赖 EffectEngine 实例。
+        /// </summary>
+        AllowInspectLocalCovert,
         // CannotBeTarget,  // 未来：不能成为目标
         // CannotBeTapped,  // 未来：不能被横置
     }
@@ -303,6 +350,34 @@ namespace Script.Data.Effects
         [Export] public bool MirrorSealedIcons { get; set; } = false;
     }
 
+    /// <summary>【P3·K5】"**自本方卡牌上移除一个（时间）标志**"作**发动代价**的声明（JC044 灾难使者
+    /// 「行动，自本方卡牌上移除一个时间标志：遏制1」）。
+    /// 口径（用户 2026-09，§7.4b A17/A27）：
+    ///  · "移除一个时间标志"**就是发动代价**（不当作效果步骤）；
+    ///  · 由**发动者自主选择**移除**哪张卡**上的标志（有 UI → 选择窗口；无 UI → 确定性兜底取第一个合法候选）；
+    ///  · 代价在**入堆叠之前**支付（与"横置本角色/牺牲本角色"同一代价阶段）；**无合法候选 → 拒绝发动、无副作用**。
+    /// 候选口径：**该发动者控制**、**在场上**（争夺区 ∪ 附属区）、带指定标志（合计 ≥ `Amount`）的卡。
+    /// 判定单一实现＝`EffectEngine.GetCounterCostCandidates`（候选侧与权威侧共用，不会分叉）。
+    /// </summary>
+    [GlobalClass]
+    public partial class CounterCostSpec : RefCounted
+    {
+        /// <summary>标志名白名单（卡库对同一概念存在多种写法，如 `"时间标志"` / `"时间标记"`）；命中任一即算。</summary>
+        [Export] public Array<string> Markers { get; set; } = new Array<string>();
+
+        /// <summary>需要移除的数量（缺省 1）。`AmountByPlayerChoice=true` 时本字段被忽略（按玩家选择的数量）。</summary>
+        [Export] public int Amount { get; set; } = 1;
+
+        /// <summary>
+        /// 【P3·K5·JC055②】**移除数量由玩家选择**（"自本方卡牌上移除 **X** 个时间标志"）：
+        /// 候选＝本方场上带该标志（≥1）的卡；**X ≥ 1**（用户口径 A30 补充：**不允许为 0**＝至少移除一个），
+        /// 上限＝本方场上该标志总数；交互＝"点一张卡即记录用 1 点 → 确认后移除"（A30）。
+        /// 支付在**入堆叠之前**；无候选 / 分配总和为 0 / 指定卡不合法 → 拒绝发动且无副作用。
+        /// 支付的数量作为本次结算的 X（`ValueExpr="代价数量"` 读取，见 `EffectValueResolver`）。
+        /// </summary>
+        [Export] public bool AmountByPlayerChoice { get; set; } = false;
+    }
+
     /// <summary>
     /// 【P3·K22】"**牺牲一个角色**"作为**发动/打出的代价**（用户 2026-09 口径）：
     ///  · **由效果发动者自己选择**被牺牲的角色（UI 弹选择窗；无 UI/headless 走确定性兜底＝第一个合法候选）；
@@ -327,6 +402,51 @@ namespace Script.Data.Effects
     }
 
     /// <summary>
+    /// 【P3·K10】**额外费用**的种类（**用户 2026-09 口径 A21–A24 / A32 批**，见 `ExtraCostSpec`）。
+    /// 额外费用是**打出这张牌本身的费用之一**：在"打出付费阶段"支付、**卡入堆叠之前**付清、
+    /// **不在堆叠里结算、不可被响应**（用户口径，类比万智牌的额外费用）。
+    /// </summary>
+    public enum ExtraCostKind
+    {
+        None,                // 未声明（不启用）
+        /// <summary>JC049 深渊细语「额外费用：牺牲一个角色」——**必须支付**；**无合法牺牲对象则不能打出**。
+        /// 牺牲者由**打出者自己选择**（A1：未写"暗藏者"→ 不可牺牲暗藏者；牺牲＝死亡，照常触发死亡时机）。</summary>
+        SacrificeCharacter,
+        /// <summary>JC081 亚洛尔「额外费用：展示任意数量手牌，每展示一张【圣贤】牌或具【圣】图标的牌，费用 -1」
+        /// ——**可以不展示**（＝没有减免，全额支付照样能打出）；取消＝不打出、卡不入堆叠、**不扣任何费用**；
+        /// 减免**一次性**（只作用于这一张）。</summary>
+        RevealHandCards,
+        /// <summary>JC135 余震「额外费用：支付 X 费」——X ＝**先选定的目标**的**印刷费用**
+        /// （用户口径：先选目标再定 X；选 0 费附属则**不支付额外费用**、直接结算后续效果；
+        /// 若合法目标的费用均大于可用费用则该卡不能打出）。</summary>
+        PayTargetCost,
+    }
+
+    /// <summary>
+    /// 【P3·K10】**额外费用声明**（卡级，挂在 `PlayerCardData.ExtraCost` 上）。
+    /// 与 `EffectData.SacrificeCost`（**发动代价**）的区别：本项是**打出这张牌的费用**，
+    /// 由 `TurnManager.PlayCard` 在付费阶段处理（不是效果结算的一部分）。
+    /// </summary>
+    [GlobalClass]
+    public partial class ExtraCostSpec : RefCounted
+    {
+        /// <summary>额外费用种类；`None` ＝ 不启用。</summary>
+        [Export] public ExtraCostKind Kind { get; set; } = ExtraCostKind.None;
+
+        /// <summary>是否**必须**支付：JC049＝true（不满足则整张**不能打出**）；
+        /// JC081＝false（不展示＝不减免，仍可全额打出）。</summary>
+        [Export] public bool Mandatory { get; set; } = true;
+
+        /// <summary>`RevealHandCards`：**合格牌**的筛选串（`CostModFilter` 语法）——每展示一张合格牌费用 -1。
+        /// 例（JC081）：`组织:圣贤|域:神圣`（【圣贤】牌＝组织:圣贤；【圣】图标＝神圣领域图标）。</summary>
+        [Export] public string RevealFilter { get; set; } = "";
+
+        /// <summary>`SacrificeCharacter`：牺牲代价细则（候选＝本方场上正面角色；口径与 P3·K22 同一实现
+        /// `EffectEngine.GetSacrificeCandidates`）。空＝按缺省（不可暗藏者、不限地区、可含自身）。</summary>
+        [Export] public SacrificeCostSpec Sacrifice { get; set; } = null;
+    }
+
+    /// <summary>
     /// 【P3·K3】持续型"**伤害改由本卡承受**"的受保护对象（**用户 2026-09 口径：JC077/JC121 这类卡是持续效果**，
     /// 不是入堆叠的触发、也不是"替代式效应"框架）。
     /// </summary>
@@ -347,6 +467,66 @@ namespace Script.Data.Effects
     {
         /// <summary>受保护对象；`None` ＝ 不启用（fail-closed：不认识就不生效）。</summary>
         [Export] public DamageRedirectVictim Victim { get; set; } = DamageRedirectVictim.None;
+    }
+
+    /// <summary>
+    /// 【P3·K4】**持续夺控**的受影响对象（JC036 初拥「持续：**你获得受此结附角色的控制权**」）。
+    /// 与一次性 `ActionVerb.GainControl`（JC129「直到回合结束」）的区别：本项是**持续效果**——
+    /// 来源卡在场且结附期间一直生效，来源离场/解除结附即**归还**。
+    /// </summary>
+    public enum ControlGainVictim
+    {
+        None,          // 未声明（不启用；fail-closed：不认识就不生效）
+        /// <summary>本卡**所结附的宿主**（JC036：把受结附角色的控制权交给本卡控制者）。</summary>
+        AttachedHost,
+    }
+
+    /// <summary>【P3·K4】持续控权声明（见 <see cref="ControlGainVictim"/>）。</summary>
+    [GlobalClass]
+    public partial class ControlGainSpec : RefCounted
+    {
+        /// <summary>受影响对象；`None` ＝ 不启用。</summary>
+        [Export] public ControlGainVictim Victim { get; set; } = ControlGainVictim.None;
+    }
+
+    /// <summary>
+    /// 【P3·K4】**实例级形态**的目标类别（JC027 花园地精像"成为一个地精角色"、JC028 鲜血奴仆"成为一个…附属"）。
+    /// 用户口径 **A32**：形态**只改实例**（`CardCategory` 覆盖），**没有任何效果改变卡的印刷类别**。
+    /// </summary>
+    public enum FormCategory
+    {
+        None,                     // 不改类别
+        Character,                // 实例类别＝角色（会参与"目标角色"类判定与角色统计）
+        Attachment,               // 实例类别＝附属（JC028：**不保留角色类别**）
+        CharacterOrAttachment,    // 实例类别＝角色/附属组合（JC027："它仍然是附属"）
+    }
+
+    /// <summary>
+    /// 【P3·K4】**实例级形态转换声明**（挂在执行转换的那条效果上，由 `ActionVerb.TransformForm` 施加）。
+    /// 覆盖项各自可选：类别覆盖 / 卡名覆盖 / 印刷效果失活（改用 `Effects`）/ 印刷图标与防御清零 / 追加子类别。
+    /// </summary>
+    [GlobalClass]
+    public partial class FormChangeSpec : RefCounted
+    {
+        /// <summary>实例类别覆盖（`None`＝不改；JC027＝`CharacterOrAttachment`，JC028＝`Attachment`）。</summary>
+        [Export] public FormCategory Category { get; set; } = FormCategory.None;
+
+        /// <summary>实例卡名覆盖（JC028＝「鲜血」；空＝不改名）。用户口径：目前不影响显示，但**影响卡名判定**。</summary>
+        [Export] public string Name { get; set; } = "";
+
+        /// <summary>"**损失了原有的效果**"（JC028）：该卡不再使用模板印刷效果，改用 `Effects` 作为其效果表。</summary>
+        [Export] public bool SuppressPrintedEffects { get; set; } = false;
+
+        /// <summary>"**不具有能力图标和防御力**"（JC028）：实例的印刷能力值（含先手值）与防御清零，
+        /// 且**属性重算也不会复活**（`ResetToBaseValues` 共同尊重）。</summary>
+        [Export] public bool ZeroPrintedStatistics { get; set; } = false;
+
+        /// <summary>形态生效期间**追加**的子类别（JC027＝「地精」）；撤销形态时移除。</summary>
+        [Export] public Array<string> AddSubCategories { get; set; } = new Array<string>();
+
+        /// <summary>形态自己的效果表（`SuppressPrintedEffects=true` 时取代模板效果表）。
+        /// JC028：「受此结附的角色获得1防御力 和［黑刀］」＝一条 `GrantToHost` 的持续效果。</summary>
+        [Export] public Array<EffectData> Effects { get; set; } = new Array<EffectData>();
     }
 
     /// <summary>
@@ -712,6 +892,20 @@ namespace Script.Data.Effects
         /// </summary>
         [Export] public SacrificeCostSpec SacrificeCost { get; set; } = null;
 
+        /// <summary>【P3·K5】激活代价：自本方卡牌上移除 N 个（时间）标志（JC044；见 `CounterCostSpec`）。</summary>
+        [Export] public CounterCostSpec CounterCost { get; set; } = null;
+
+        /// <summary>
+        /// 【P3·K1】`ValueExpr="玩家选择"` 时**玩家可输入的数字范围**（含端点；缺省 1～9）。
+        /// 用途：JC083「选择一个数字」（用户口径 **A31**：范围 **0～20**）。
+        /// 语义要点：`ValueMin=0` 时 **X=0 是合法选择**（该卡文里 X 是"猜测值"而非"数量"，
+        /// 故不适用 K1 的"X=0 ⇒ 效果不发动"那条规则——否则无法猜"印刷费用为 0"）。
+        /// </summary>
+        [Export] public int ValueMin { get; set; } = 1;
+
+        /// <summary>【P3·K1】`ValueExpr="玩家选择"` 的数字上限（含；缺省 9）。</summary>
+        [Export] public int ValueMax { get; set; } = 9;
+
         /// <summary>
         /// 【P3·K3】**持续型伤害重定向**：本卡在场期间，把符合条件的目标"将要受到的伤害"**改为由本卡承受**
         /// （JC077 庇佑圣灵 / JC121 空鸣御守；用户 2026-09 口径：这两张卡是**持续效果**）。
@@ -719,6 +913,26 @@ namespace Script.Data.Effects
         /// 查询；被重定向后**不再二次重定向**（防乒乓），但承受方自身的"防止"（灵体/护盾）照常生效。
         /// </summary>
         [Export] public DamageRedirectSpec DamageRedirect { get; set; } = null;
+
+        /// <summary>
+        /// 【P3·K4】**持续夺控**（JC036 初拥「持续：你获得受此结附角色的控制权，将该角色的人类类别改为
+        /// 吸血鬼类别」）：本卡在场且结附期间，**宿主**的控制者变为本卡控制者（`ZoneManager.ChangeController`
+        /// 统一出口，只改 `ControllerId`、拥有者不变、卡不移动地区）。
+        /// 生命周期：登记时夺控、注销（来源离场/解除结附/前提丧失）时**归还给拥有者**（卡面 FAQ 原文
+        /// "该角色的操控权交还给其拥有者"）。
+        /// 用户 2026-09 口径（A16）：**没有写"直到回合结束"的持续效果就持续尽可能久**；
+        /// 版本号变化一般伴随初拥离场、被初拥角色离场会让附属的初拥一同进墓地，故**不另设版本号判据**，
+        /// 一律由持续效果自身的登记/注销生命周期承担。
+        /// </summary>
+        [Export] public ControlGainSpec ControlGain { get; set; } = null;
+
+        /// <summary>
+        /// 【P3·K4】**实例级形态转换**（JC027 花园地精像"成为一个地精角色" + 白眼/黑刀/黑星/1防御直到回合结束；
+        /// JC028 鲜血奴仆"成为一个名为**鲜血**的附属并结附于目标吸血鬼角色"）。
+        /// 由 `ActionVerb.TransformForm` 施加到 `CardInstance`（**只改实例**，见 `FormChangeSpec` / 口径 A32）；
+        /// 期限含"回合结束"时登记时效项，到期由 `ExpireTurnEndEffects` 撤销形态并还原。
+        /// </summary>
+        [Export] public FormChangeSpec FormChange { get; set; } = null;
 
         /// <summary>
         /// 【P3·K20】**持续型"失去图标"**：本卡在场期间，符合条件的卡失去指定能力图标（JC123）。
@@ -767,6 +981,21 @@ namespace Script.Data.Effects
 
         /// <summary>【P3·K15 扩展】目标地区**必须不同于卡目标所在地区**（JC117 FAQ："不能原地移动"）。</summary>
         [Export] public bool AreaTargetExcludesCardArea { get; set; } = false;
+
+        /// <summary>
+        /// 【P3·K21·JC041】**发动前提：来源卡必须处于"暗藏者"状态（背面朝上）**。
+        /// 卡文「**快速暗藏者行动2**：令禁婆由暗藏者状态现身。你只能在其位于水域地区时发动此能力。」
+        /// 用户口径（A29 追问答复）：这是**暗藏者专用**的激活能力——"**区别于其他效果大多正面在场才能生效，
+        /// 这个效果只有作为暗藏者时可以激活**"。消费点＝`ActivateEligibility`（候选/可发动）＋
+        /// `EffectEngine.ActivateAbility`（权威门禁）。
+        /// </summary>
+        [Export] public bool RequireSourceCovert { get; set; } = false;
+
+        /// <summary>
+        /// 【P3·K21·JC041】**发动前提：来源卡所在地区须具有指定地区子类别**（空＝不限；本卡＝`水域`）。
+        /// 判定经 `AreaManager.AreaHasSubCategory`（读地区卡模板 `AreaCardData.SubCategories`）。
+        /// </summary>
+        [Export] public string RequireSourceAreaSubCategory { get; set; } = "";
 
         /// <summary>
         /// 【P3·E】光环的**关键词筛选**（空＝不限）：非空时只影响具有该关键字（运行期授予 ∪ 卡面固有）的卡。
@@ -851,6 +1080,20 @@ namespace Script.Data.Effects
 
         /// <summary>【K13】袭击的数值（`IsStrike=true` 时有效；＝该来源提供的袭击点数）。</summary>
         [Export] public int StrikeAmount { get; set; } = 0;
+
+        // ---- 【JC124·构筑级全局触发】（"只要这张牌**一开始加入玩家卡组**就能触发"） ----
+        /// <summary>
+        /// 【JC124】本效果是**构筑级（卡组级）全局触发**：**只要该卡在开局时位于某玩家的卡组内**，
+        /// 该玩家就登记一次本效果，此后**无论这张牌本身身处何处（牌库/手牌/场上/墓地）都照样生效**
+        /// （卡文"该能力在尼古拉斯·勒梅离场后仍然生效"）。
+        ///
+        /// 与普通触发的两点区别（也是本字段存在的理由）：
+        ///  · **收集方式**：不走"扫描场上卡实例"的常规触发收集（否则本卡在场时会与构筑级登记**重复收集**），
+        ///    改由 `Script/Manager/DeckLevelTriggerRule` 在事件发生时按"已登记玩家"合成触发
+        ///    （登记点＝`DeckManager` 装载卡组时；**同一玩家加入多张同名牌也只登记一次**）；
+        ///  · **来源卡**：堆叠条目的来源＝该玩家卡组里的那张实例（因此**堆叠上显示的是本卡的卡图**）。
+        /// </summary>
+        [Export] public bool DeckLevelRegistration { get; set; } = false;
 
         /// <summary>取第 i 个模式（越界/无模式返回 null）。</summary>
         public EffectMode ModeAt(int index)

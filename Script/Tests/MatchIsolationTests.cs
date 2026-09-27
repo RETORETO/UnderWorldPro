@@ -186,6 +186,33 @@ namespace Script.Tests
             Assert.IsTrue(gameB.TurnManager.InputGateway == null, "B 房停服后同样清除注入");
         }
 
+        // ==================== 3b) 【P0 回归】联机必须把网关注入 **EffectEngine** ====================
+
+        /// <summary>
+        /// 效果层的大量"玩家选择"（检索牌库 / 弃牌 / 封印取手牌 / 检视 / 可选支付 / 预测 X …）走的是
+        /// **引擎自己的** `EffectEngine.InputGateway` 分支。此前 `MatchHost` 只注入了
+        /// `TurnManager`/`CombatManager`，引擎侧恒为 null ⇒ 联机时那些效果全部落到"服务端无 UI"的
+        /// 确定性兜底（检索取第一张、弃牌弃第一张…），玩家根本没得选。本用例锁死"三处都要注入"。
+        /// </summary>
+        public void TestMatchHostInjectsGatewayIntoEffectEngine()
+        {
+            var loop = new LoopbackTransport();
+            loop.Start();
+            var game = NewGame(33);
+            var host = new MatchHost("room_gw", game, loop);
+
+            Assert.IsTrue(game.EffectEngine.InputGateway == null, "前置：开局未注入网关");
+
+            host.StartServing();
+            Assert.IsTrue(game.TurnManager.InputGateway != null, "TurnManager 应已注入网关");
+            Assert.IsTrue(game.CombatManager.InputGateway != null, "CombatManager 应已注入网关");
+            Assert.IsTrue(game.EffectEngine.InputGateway != null,
+                "**EffectEngine 也必须注入**（否则联机检索/弃牌/封印/检视/支付全部退化为自动代选）");
+
+            host.StopServing();
+            Assert.IsTrue(game.EffectEngine.InputGateway == null, "停服应清除引擎侧网关注入（避免跨局串扰）");
+        }
+
         /// <summary>从一条 SNAP 报文中数出争夺区卡数（用于区分两场快照）。</summary>
         private static int CountAreaCards(string message)
         {

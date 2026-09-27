@@ -212,16 +212,136 @@ namespace Script.Game.Entities
         private Dictionary<string, int> _counters = new Dictionary<string, int>();
         public IReadOnlyDictionary<string, int> Counters => _counters;
 
+        /// <summary>
+        /// 【JC124·死亡瞬间的计数器快照】死亡触发在"卡仍在场上"时广播，但**结算发生在卡已进墓地之后**，
+        /// 而进墓地会 `ResetToBaseState()` 清空计数器 —— 于是"**具有哲人石标志的角色**死亡时…"这类
+        /// 以"标志"为条件的死亡触发，在结算阶段复检条件时标志已经消失（条件必然不成立）。
+        /// 故由 `CardManager.ResolveDeath` 在**广播死亡事件之前**抓取一份快照；谓词 `DiedWithCounter` 读它。
+        /// （快照在**每一次**死亡时重写，因此不会因上一次死亡而残留误判。）
+        /// </summary>
+        private Dictionary<string, int> _countersAtDeath = new Dictionary<string, int>();
+
+        /// <summary>【JC124】死亡瞬间的计数器快照（只读；未死亡过为空）。</summary>
+        public IReadOnlyDictionary<string, int> CountersAtDeath => _countersAtDeath;
+
+        /// <summary>【JC124】在**广播死亡事件之前**抓取计数器快照（由 `CardManager.ResolveDeath` 调用）。</summary>
+        public void SnapshotCountersAtDeath()
+        {
+            _countersAtDeath.Clear();
+            foreach (var kv in _counters) _countersAtDeath[kv.Key] = kv.Value;
+        }
+
+        /// <summary>【JC124】死亡瞬间是否具有某计数器（快照优先；无快照则看当前计数器）。</summary>
+        public bool HadCounterAtDeath(string type)
+        {
+            if (string.IsNullOrEmpty(type)) return false;
+            if (_countersAtDeath.Count > 0)
+                return _countersAtDeath.TryGetValue(type, out var n) && n > 0;
+            return _counters.TryGetValue(type, out var cur) && cur > 0;
+        }
+
         // ---------- 持续/修正效果动态授予（由 EffectEngine 持续注册表增删，离场/封印时还原） ----------
         // 与基础能力值(Current*)分离：此处记录"由效果赋予的"关键字/图标/标志属性，便于精确还原。
         private HashSet<string> _grantedKeywords = new HashSet<string>();   // 关键字：公开、先手、调查…
         private HashSet<string> _grantedIcons = new HashSet<string>();      // 图标：领域图标（心心/白眼/黑刀…）
         private Dictionary<string, int> _grantedAttributes = new Dictionary<string, int>(); // 标志属性增益计数
         private HashSet<MagicDomain> _grantedDomains = new HashSet<MagicDomain>(); // 运行时授予的魔法领域（JC060 光环等），对称 _grantedAttributes
+        /// <summary>【P3·K4】被"改写掉"的子类别（按来源计数）：JC036 初拥把受结附角色的**人类**类别改为**吸血鬼**。
+        /// 只影响**当前实际**集合（`CurrentSubCategories`）；`HasStaticSubCategory`（印刷类别）读模板数据，**不受影响**
+        /// （用户 2026-09 口径："印刷类别为人类"指模型数据；卡片实例失去该类别不改变模型数据）。</summary>
+        private Dictionary<string, int> _suppressedSubCategories = new Dictionary<string, int>();
 
         public IReadOnlyCollection<string> GrantedKeywords => _grantedKeywords;
         public IReadOnlyCollection<string> GrantedIcons => _grantedIcons;
         public IReadOnlyDictionary<string, int> GrantedAttributes => _grantedAttributes;
+        /// <summary>【P3·K4】当前被"改写掉"的子类别（快照投影用，客户端据此重建同一份当前子类别集合）。</summary>
+        public IEnumerable<string> SuppressedSubCategories => _suppressedSubCategories.Keys;
+
+        // ==================== 【P3·K4】实例级"形态"（JC027 / JC028） ====================
+        // 用户 2026-09 口径 **A32**：形态转换**只改实例**，**没有任何效果会改变卡的印刷类别**
+        //（故不需要"印刷类别改写 CategoryOverride"）。本组字段即"实例级形态覆盖"：
+        //  · 类别覆盖（附属↔角色，可组合）→ 影响**目标合法性**与"是不是角色"类判定；
+        //  · 卡名覆盖（JC028「鲜血」）→ 影响**卡名判定**（`TargetRestriction.CardName` 等）；
+        //  · 印刷效果失活（JC028"损失了原有的效果"）→ 该卡改用**形态效果表**（`FormEffects`）；
+        //  · 印刷图标/防御清零（JC028"不具有能力图标和防御力"）。
+        private CardCategory _categoryOverride = CardCategory.None;
+        private string _nameOverride;
+        private bool _printedEffectsSuppressed;
+        private bool _zeroPrintedStatistics;
+        private List<EffectData> _formEffects;
+
+        /// <summary>实例级类别覆盖（`None`＝未覆盖，用模板印刷类别）。</summary>
+        public CardCategory CategoryFlagOverride => _categoryOverride;
+        /// <summary>实例级卡名覆盖（空＝用模板卡名）。</summary>
+        public string CardNameOverride => _nameOverride ?? "";
+        /// <summary>印刷效果是否已失活（形态生效且该形态声明"损失原有效果"）。</summary>
+        public bool IsPrintedEffectsSuppressed => _printedEffectsSuppressed;
+        /// <summary>形态的**有效类别**：有覆盖用覆盖，否则用模板印刷类别。</summary>
+        public CardCategory EffectiveCategoryFlag
+            => _categoryOverride != CardCategory.None
+                ? _categoryOverride
+                : (PlayerTemplate?.CategoryFlag ?? CardCategory.None);
+        /// <summary>形态的**有效卡名**：有覆盖用覆盖，否则用模板卡名。</summary>
+        public string EffectiveCardName
+            => string.IsNullOrEmpty(_nameOverride) ? (PlayerTemplate?.CardName ?? "") : _nameOverride;
+        /// <summary>形态效果表（`IsPrintedEffectsSuppressed` 时取代模板效果表；空＝无效果）。</summary>
+        public List<EffectData> FormEffects => _formEffects;
+        /// <summary>是否存在实例级形态覆盖（用于投影/判定短路）。</summary>
+        public bool HasFormOverride
+            => _categoryOverride != CardCategory.None || !string.IsNullOrEmpty(_nameOverride)
+               || _printedEffectsSuppressed;
+
+        /// <summary>
+        /// 【P3·K4】施加**实例级形态**（JC027 附属→地精角色 / JC028 角色→"鲜血"附属）。
+        /// `zeroPrintedStatistics`：清空实例的印刷能力值与防御（"不具有能力图标和防御力"）——
+        /// 由 `ResetToBaseValues` 共同尊重，避免任何一次属性重算把图标/防御"复活"。
+        /// </summary>
+        public void ApplyFormOverride(CardCategory category, string name, bool suppressPrintedEffects,
+            bool zeroPrintedStatistics, IEnumerable<EffectData> formEffects)
+        {
+            _categoryOverride = category;
+            _nameOverride = string.IsNullOrEmpty(name) ? null : name;
+            _printedEffectsSuppressed = suppressPrintedEffects;
+            _zeroPrintedStatistics = zeroPrintedStatistics;
+            _formEffects = formEffects == null ? null : new List<EffectData>(formEffects);
+            if (_zeroPrintedStatistics)
+            {
+                CurrentInvestigation = 0;
+                CurrentStrength = 0;
+                CurrentFirstStrikeInvestigation = 0;
+                CurrentFirstStrikeStrength = 0;
+                CurrentDefense = -1;      // "-1"＝无防御（与模板哨兵一致）
+            }
+        }
+
+        /// <summary>清除实例级形态（到期/离场复位）：恢复模板类别/卡名/效果表，并按模板重建能力值。</summary>
+        public void ClearFormOverride()
+        {
+            if (!HasFormOverride && _formEffects == null) return;
+            _categoryOverride = CardCategory.None;
+            _nameOverride = null;
+            _printedEffectsSuppressed = false;
+            _formEffects = null;
+            if (_zeroPrintedStatistics)
+            {
+                _zeroPrintedStatistics = false;
+                ResetToBaseValues(false);   // 恢复印刷能力值/防御（先手加成的重算由调用方负责）
+            }
+        }
+
+        /// <summary>该卡当前应使用的**效果表**：形态失活印刷效果时用形态效果表，否则用模板效果表。</summary>
+        public List<EffectData> EffectiveEffects
+        {
+            get
+            {
+                if (_printedEffectsSuppressed) return _formEffects ?? new List<EffectData>();
+                var list = new List<EffectData>();
+                var tmpl = PlayerTemplate as PlayerCardData;
+                if (tmpl?.EffectDataList != null)
+                    foreach (var e in tmpl.EffectDataList) list.Add(e);
+                return list;
+            }
+        }
 
         /// <summary>
         /// 当前实际子类型集合（可变，实例唯一真相源）。
@@ -300,6 +420,16 @@ namespace Script.Game.Entities
                     // 不再依赖版本号（原 Bump 为旧"总线通知"遗留，总线已移除）。见 2026-08-15 JC030 修复。
                     CurrentSubCategories.Add(value);
                     break;
+                case "SubCategoryRemove":
+                    // 【P3·K4】"类别改写"的**移除侧**（JC036 初拥"将该角色的人类类别改为吸血鬼类别"）：
+                    // 与 `SubCategory` 的"追加"相反——把该子类别从**当前实际**集合里抹掉（即使它是**模板固有**的，
+                    // 这正是"改写"与"额外具有"的区别），并按来源**计数**登记，撤销时计数归零才还原。
+                    // 注：`HasStaticSubCategory`（印刷类别）**不受影响**（读模板数据；用户 2026-09 口径）。
+                    if (!_suppressedSubCategories.ContainsKey(value)) _suppressedSubCategories[value] = 0;
+                    _suppressedSubCategories[value] += amount;
+                    if (_suppressedSubCategories[value] > 0) CurrentSubCategories.Remove(value);
+                    else _suppressedSubCategories.Remove(value);
+                    break;
             }
         }
 
@@ -351,6 +481,18 @@ namespace Script.Game.Entities
                     // 不 BumpVersion：同 Grant("SubCategory")，子类别合法性由结算复检覆盖，不依赖版本号（2026-08-15 JC030 修复）。
                     if (!HasStaticSubCategory(value)) CurrentSubCategories.Remove(value);
                     break;
+                case "SubCategoryRemove":
+                    // 【P3·K4】复原"被改写掉的子类别"：计数归零才还原；模板固有者补回当前集合
+                    // （运行时授予的那一份由它自己的 `SubCategory` 授予/撤销负责，此处不越权）。
+                    // 条目不存在＝已被 `ResetToBaseState`（离场复位）连同集合一起清掉 → 无需还原（幂等）。
+                    if (!_suppressedSubCategories.ContainsKey(value)) break;
+                    _suppressedSubCategories[value] -= amount;
+                    if (_suppressedSubCategories[value] <= 0)
+                    {
+                        _suppressedSubCategories.Remove(value);
+                        if (HasStaticSubCategory(value)) CurrentSubCategories.Add(value);
+                    }
+                    break;
             }
         }
 
@@ -371,6 +513,7 @@ namespace Script.Game.Entities
         public void RestoreProjectedState(
             IEnumerable<StaticKind> staticFlags,
             IEnumerable<string> currentSubCategories,
+            IEnumerable<string> removedSubCategories,
             IEnumerable<string> grantedKeywords,
             IEnumerable<string> grantedIcons,
             IDictionary<string, int> grantedAttributes,
@@ -381,13 +524,22 @@ namespace Script.Game.Entities
             if (staticFlags != null)
                 foreach (var f in staticFlags) _staticFlags.Add(f);
 
-            // 当前子类别 = 模板固有 ∪ 快照运行时值（并集而非覆盖：模板固有项在服务端恒成立，漏掉只会造成假阴性）
+            // 【P3·K4】"被改写掉的子类别"（JC036 初拥）必须先于并集重建登记：
+            // 服务端"印刷类别"仍在（模板数据不变），故客户端重建时**不能**只靠"模板固有"就把它加回来。
+            _suppressedSubCategories.Clear();
+            if (removedSubCategories != null)
+                foreach (var s in removedSubCategories)
+                    if (!string.IsNullOrEmpty(s)) _suppressedSubCategories[s] = 1;
+
+            // 当前子类别 = （模板固有 ∪ 快照运行时值）− 被改写掉的（并集而非覆盖：模板固有项在服务端恒成立，
+            // 漏掉只会造成假阴性；被"改写"掉的则必须减掉，否则客户端会多出服务端已失去的类别）
             CurrentSubCategories.Clear();
             if (PlayerTemplate?.SubCategories != null)
-                foreach (var s in PlayerTemplate.SubCategories) CurrentSubCategories.Add(s);
+                foreach (var s in PlayerTemplate.SubCategories)
+                    if (!_suppressedSubCategories.ContainsKey(s)) CurrentSubCategories.Add(s);
             if (currentSubCategories != null)
                 foreach (var s in currentSubCategories)
-                    if (!string.IsNullOrEmpty(s)) CurrentSubCategories.Add(s);
+                    if (!string.IsNullOrEmpty(s) && !_suppressedSubCategories.ContainsKey(s)) CurrentSubCategories.Add(s);
 
             _grantedKeywords.Clear();
             if (grantedKeywords != null)
@@ -426,6 +578,13 @@ namespace Script.Game.Entities
         public CardInstance SealedBy { get; set; }
         public List<CardInstance> SealedCards { get; set; } = new List<CardInstance>();
 
+        /// <summary>
+        /// 【JC119 守秘人】本卡**因宿主离场而从封印回手**时记录**封印它的那张宿主卡 UID**
+        /// （"刚刚由于封印效果回到手牌的牌"）——死亡触发的"展示并免费打出其中一张"据此识别候选。
+        /// 生命周期：宿主离场连带回手时置位；该卡**离开手牌**（打出/弃掉/移动）时清除。
+        /// </summary>
+        public string ReturnedFromSealHostUid { get; set; }
+
         // ---------- 死亡事件（纯数据事件字段，由 Controller 在规则判定后触发，Model 不自触发）----------
         // 注：使用普通委托字段（非 event）以便 Controller 层在死亡判定后显式触发；
         //     订阅方仍通过 += 订阅，但触发权收口于 Controller。
@@ -460,6 +619,17 @@ namespace Script.Game.Entities
         public void ResetToBaseValues(bool isFirstPlayer)
         {
             if (PlayerTemplate == null) return;
+            // 【P3·K4】形态声明"不具有能力图标和防御力"（JC028「鲜血」）→ 复位也保持清零
+            if (_zeroPrintedStatistics)
+            {
+                CurrentInvestigation = 0;
+                CurrentStrength = 0;
+                CurrentPower = 0;
+                CurrentFirstStrikeInvestigation = 0;
+                CurrentFirstStrikeStrength = 0;
+                CurrentDefense = -1;
+                return;
+            }
             CurrentInvestigation = PlayerTemplate.GetTotalInvestigation(isFirstPlayer);
             CurrentStrength = PlayerTemplate.GetTotalStrength(isFirstPlayer);
             CurrentPower = PlayerTemplate.GetTotalPower(isFirstPlayer);
@@ -637,6 +807,14 @@ namespace Script.Game.Entities
             _grantedIcons.Clear();
             _grantedAttributes.Clear();
             _grantedDomains.Clear();
+            // 【P3·K4】"被改写掉的子类别"同属运行期状态：离场一并清零（下方按模板重建当前集合）
+            _suppressedSubCategories.Clear();
+            // 【P3·K4】实例级形态（JC027/JC028）同属运行期状态：离场复位即还原为印刷形态
+            _categoryOverride = CardCategory.None;
+            _nameOverride = null;
+            _printedEffectsSuppressed = false;
+            _zeroPrintedStatistics = false;
+            _formEffects = null;
 
             // 重置当前子类型集合：清空后恢复为模板静态 SubCategories（移除运行时授予的如"吸血鬼"）
             CurrentSubCategories.Clear();

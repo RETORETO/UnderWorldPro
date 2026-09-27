@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -62,6 +62,9 @@ namespace Script.Manager
                             && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
                                == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
 
+                        // 【P3·K21·JC041】来源前提（暗藏者限定 / 地区子类别）
+                        if (!MeetsSourcePrereqs(card, e, AreaManagerRef, out _)) continue;
+
                         // 门禁 3：费用足够
                         if (e.Cost > mana) continue;
 
@@ -73,6 +76,8 @@ namespace Script.Manager
 
                         // 【P3·K22】牺牲代价：没有可牺牲的角色 → 不可发动（与 EffectEngine 的"代价前置门禁"同解）
                         if (e.SacrificeCost != null && GetSacrificeCandidates(card, e).Count == 0) continue;
+                // 【P3·K5】标志代价（JC044）：本方场上没有带指定标志的卡 → 该能力不可发动（与牺牲代价同款门禁）
+                if (e.CounterCost != null && GetCounterCostCandidates(card, e).Count == 0) continue;
                         // 【P3·K15】需要"目标地区"的激活能力：没有可选地区 → 不可发动；
                         // 声明"不能原地移动"（FAQ）时**至少要存在另一个地区**（卡目标尚未选定，只能做必要条件判断）
                         if (e.NeedsAreaTarget)
@@ -167,6 +172,8 @@ namespace Script.Manager
                 if (Script.Manager.EffectEngine.Instance != null
                     && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
                        == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
+                // 【P3·K21·JC041】来源前提（暗藏者限定 / 地区子类别）
+                if (!MeetsSourcePrereqs(card, e, AreaManagerRef, out _)) continue;
                 if (e.Cost > mana) continue;
                 // 窗口门禁（D9）：行动类激活仅限【自己行动步骤 + 堆叠为空 + 有行动权】
                 // （先手→ActionFirst，后手→ActionSecond，复用 CanEnterBasicActionMask）。
@@ -181,6 +188,8 @@ namespace Script.Manager
                     card.IsTapped) continue;
                 // 【P3·K22】牺牲代价：没有可牺牲的角色 → 不可发动（与 EffectEngine 的"代价前置门禁"同解，UI 据此置灰）
                 if (e.SacrificeCost != null && GetSacrificeCandidates(card, e).Count == 0) continue;
+                // 【P3·K5】标志代价（JC044）：本方场上没有带指定标志的卡 → 该能力不可发动（与牺牲代价同款门禁）
+                if (e.CounterCost != null && GetCounterCostCandidates(card, e).Count == 0) continue;
                 // 【P3·K15】需要"目标地区"的激活能力：没有可选地区 → 不可发动；
                 // 声明"不能原地移动"时**至少要存在另一个地区**（卡目标尚未选定 → 必要条件判断）
                 if (e.NeedsAreaTarget)
@@ -208,6 +217,15 @@ namespace Script.Manager
 
         /// <summary>【P3·K22】某激活能力"牺牲一个角色"代价的**合法候选**（无此代价 → 空表）。
         /// 单一实现委托 `EffectEngine.GetSacrificeCandidates`（与权威侧复检同源，不会分叉）。</summary>
+        /// <summary>【P3·K5】标志代价的候选（供 View 弹选择窗）：单一实现委托
+        /// `EffectEngine.GetCounterCostCandidates`（与权威侧复检同源，不会分叉）。</summary>
+        public static List<CardInstance> GetCounterCostCandidates(CardInstance source, EffectData ability)
+        {
+            if (ability?.CounterCost == null || source == null) return new List<CardInstance>();
+            return Script.Manager.EffectEngine.Instance?.GetCounterCostCandidates(source, ability.CounterCost)
+                   ?? new List<CardInstance>();
+        }
+
         public static List<CardInstance> GetSacrificeCandidates(CardInstance source, EffectData ability)
         {
             if (ability?.SacrificeCost == null || source == null) return new List<CardInstance>();
@@ -215,6 +233,39 @@ namespace Script.Manager
                 ?? new List<CardInstance>();
         }
 
+        /// <summary>
+        /// 【P3·K21·JC041】**发动来源前提**（候选侧与权威侧**共用同一实现**，避免两处口径分叉）：
+        ///  · `RequireSourceCovert`：来源卡必须处于**暗藏者**状态（用户口径 A29 追问答复："这个效果只有作为暗藏者时可以激活"）；
+        ///  · `RequireSourceAreaSubCategory`：来源卡**所在地区**须具有该**地区子类别**（本卡＝`水域`）。
+        /// 无法判定（AreaManager 未注入/来源不在地区）→ 不满足（fail-closed：宁可不可发动，也不放行越权发动）。
+        /// </summary>
+        public static bool MeetsSourcePrereqs(CardInstance source, EffectData ability,
+            AreaManager areaManager, out string reason)
+        {
+            reason = null;
+            if (source == null || ability == null) { reason = "来源或效果为空"; return false; }
+            if (ability.RequireSourceCovert && !source.IsCovert)
+            {
+                reason = "该能力只能作为**暗藏者**时发动";
+                return false;
+            }
+            if (!string.IsNullOrWhiteSpace(ability.RequireSourceAreaSubCategory))
+            {
+                string area = source.ZoneDetailId;
+                if (string.IsNullOrEmpty(area)) { reason = "来源卡不在任何地区上"; return false; }
+                if (areaManager == null) { reason = "AreaManager 未注入，无法判定地区子类别"; return false; }
+                if (!areaManager.AreaHasSubCategory(area, ability.RequireSourceAreaSubCategory))
+                {
+                    reason = $"该能力只能在『{ability.RequireSourceAreaSubCategory}』地区发动（当前地区 {area}）";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>本次对局的 AreaManager（候选侧统一从 `EffectEngine.Instance` 取，与权威侧同源）。</summary>
+        private static AreaManager AreaManagerRef
+            => Script.Manager.EffectEngine.Instance?.TurnManagerRef?.AreaManagerRef;
         /// <summary>【P3·K13】某卡当前可发动的激活能力＝**卡面固有**（`EffectDataList`）∪ **运行期授予**
         /// （JC019 镇魔枪授予宿主的能力）。View 的"多激活效果选择窗口"与候选枚举共用本方法
         /// ——用户 2026-09 口径：宿主原本就有激活效果时，**在既有选择窗口里额外增列 1 项**。</summary>

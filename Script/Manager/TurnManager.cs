@@ -608,7 +608,442 @@ public partial class TurnManager : Node
 
         // 同步段结束：若无模态窗口保持打开，则原子操作已完整结束，解除规则层锁
         ExitAtomicWhenIdle();
+
+        // 【JC119】效果请求的**免费打出**（"视作快速、不需付费"）在**本次结算完全结束、原子锁解除之后**
+        // 才走**正常打出流程**（入堆叠/优先级窗口照常）——避免在结算期内嵌套打出。
+        ProcessQueuedFreePlays();
     }
+
+    /// <summary>
+    /// 【JC119】免费打出队列：效果（守秘人的死亡触发"展示其上封印的牌并打出其中一张"）在结算期只能**登记**；
+    /// 由 `ResolveStackTop` 在**原子锁解除后**逐条走 `PlayCard(freePlay:true, asIfQuick:true)`（＝正常打出流程）。
+    /// 每次只处理一条（打出后入堆叠，其结算结束时再继续）。
+    /// </summary>
+    private readonly System.Collections.Generic.List<(int PlayerId, string CardUid)> _queuedFreePlays
+        = new System.Collections.Generic.List<(int, string)>();
+
+    /// <summary>【JC119】该卡是否已登记"免费打出"（防重复登记）。</summary>
+    public bool HasQueuedFreePlay(string cardUid)
+    {
+        foreach (var (_, uid) in _queuedFreePlays)
+            if (string.Equals(uid, cardUid, System.StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>【JC119】登记一次"免费打出"（由效果在结算期调用；实际打出在原子锁解除后）。</summary>
+    public void EnqueueFreePlay(int playerId, string cardUid)
+    {
+        if (playerId <= 0 || string.IsNullOrEmpty(cardUid)) return;
+        _queuedFreePlays.Add((playerId, cardUid));
+        GD.Print($"[TurnManager] 🆓 登记免费打出：玩家{playerId} 的 {cardUid}（原子锁解除后按正常打出流程执行）");
+    }
+
+    /// <summary>处理免费打出队列（每次处理队首一条；打出与否都会出队，避免死循环）。
+    /// 由 `ResolveStackTop` 在原子锁解除后调用；**亦为测试/调试的驱动入口**（队列本身只在结算期登记，无法从外部触发）。</summary>
+    public void ProcessQueuedFreePlays()
+    {
+        while (_queuedFreePlays.Count > 0)
+        {
+            var (pid, uid) = _queuedFreePlays[0];
+            _queuedFreePlays.RemoveAt(0);
+            var inst = _cardManager?.GetInstance(uid);
+            if (inst == null) { GD.Print($"[TurnManager] ⚠ 免费打出跳过：找不到卡 {uid}"); continue; }
+            if (inst.CurrentZone != CardZone.Hand)
+            {
+                GD.Print($"[TurnManager] ⚠ 免费打出跳过：{inst.PlayerTemplate?.CardName} 已不在手牌（{inst.CurrentZone}）");
+                continue;
+            }
+            // 【JC119·目标选择窗】需要选目标的牌：这类牌的打出**不是玩家拖拽发起的**，没有"拖到目标上"的交互，
+            // 故由本方法弹一次目标选择窗（`IGameUIHooks.PromptPlayTarget`）取目标后再走正常打出流程。
+            if (inst.PlayerTemplate?.GetRequiresTarget() == true)
+            {
+                BeginFreePlayTargetChoice(pid, uid, inst);
+                return;   // 选择是异步的（等待玩家点选/取消）；取消或选定后在回调里继续处理队列
+            }
+            PlayCard(pid, uid, null, null, null, -1, null, null, freePlay: true, asIfQuick: true);
+            return;   // 单条打出即可（打出后入堆叠，其结算结束时再进入本方法继续处理）
+        }
+    }
+
+    /// <summary>
+    /// 【JC119·K28·目标选择窗】为"效果免费打出、但需要选目标"的牌取目标，然后按正常打出流程打出。
+    ///
+    /// 决策路径（与引擎既有口径完全一致）：
+    ///  · **单机**（`EE.UIHooks != null`）→ `IGameUIHooks.PromptPlayTarget` 弹**目标选择窗**
+    ///    （卡目标＝场上高亮 + 点击；地区目标＝地区槽高亮 + 点击；实现见 `Arena.PromptPlayTarget`）；
+    ///  · **联机**（`InputGateway != null`，服务端无 View）→ **本批不代打**：留在手牌并告警
+    ///    （联机要走 `ChoiceRequest.Kind.SelectTarget` 回环，属既有联机缺口，不在本批范围）；
+    ///  · **两者皆无**（纯 headless 规则内核/测试）→ **确定性兜底取第一个候选**（与触发路径"无 UI 取首候选"同口径）；
+    ///  · **无任何候选** → 留在手牌并告警（fail-closed，绝不静默代打）。
+    ///
+    /// 候选枚举：卡目标复用 `GetLegalPlayTargetUids`（与 `LegalityProjection` 同一候选池 + 同一判定函数
+    /// `CardManager.IsLegalPlayTarget`，不新增第二套判定）；地区目标＝卡声明的可打出目标含 `Area` 时的全部地区
+    /// （与 `PlayCard` 对地区目标自身的权威校验"地区存在"同口径）。
+    /// </summary>
+    private void BeginFreePlayTargetChoice(int playerId, string cardUid, CardInstance inst)
+    {
+        var tmpl = inst.PlayerTemplate;
+        string cardName = tmpl?.CardName ?? cardUid;
+
+        var cardCands = GetLegalPlayTargetUids(inst);
+        bool areaAllowed = tmpl?.GetAllowedTargets()?.Contains(TargetKind.Area) == true;
+        bool isArea = cardCands.Count == 0 && areaAllowed;
+        var cands = isArea ? GetOrderedAreaUidsForPlay() : cardCands;
+
+        if (cands.Count == 0)
+        {
+            GD.PrintErr($"[TurnManager] ⚠ 免费打出跳过：{cardName} 需要选目标但**无任何合法目标** → 留在手牌");
+            ProcessQueuedFreePlays();   // 继续处理队列里的下一条
+            return;
+        }
+
+        // 成功打出后不再继续处理队列：新条目已入堆叠，其结算结束时（ResolveStackTop 末尾）会再次进入本方法。
+        System.Action<string> finish = pickedUid =>
+        {
+            bool played = false;
+            if (!string.IsNullOrEmpty(pickedUid))
+            {
+                string targetUid = isArea ? pickedUid : null;
+                string targetCardUid = isArea ? null : pickedUid;
+                played = PlayCard(playerId, cardUid, targetUid, targetCardUid, null, -1, null, null,
+                    freePlay: true, asIfQuick: true);
+                if (!played)
+                    GD.PrintErr($"[TurnManager] ⚠ 免费打出失败（目标已失效或被门禁拒绝）：{cardName} → 留在手牌");
+            }
+            else
+            {
+                GD.Print($"[TurnManager] 免费打出：玩家{playerId} 未选择目标（取消）→ {cardName} 留在手牌");
+            }
+            if (!played) ProcessQueuedFreePlays();   // 没打成 → 继续处理队列里的下一条
+        };
+
+        if (EE?.InputGateway != null)
+        {
+            // 【P2·联机断链修复·JC119】联机：把"免费打出的目标"**回环给该玩家**（`SelectTarget`，
+            // 卡目标/地区目标同一请求类型——地区 uid 也可以作为候选下发；客户端走既有选目标窗口）。
+            // 回包**权威复检**必须命中服务端下发的候选；取消/超时 → 不打（留在手牌）。
+            string prompt = $"请为「{cardName}」选择{(isArea ? "目标地区" : "目标")}（由效果免费打出）";
+            GD.Print($"[TurnManager] 🆓 免费打出需选目标（联机）：{cardName}（候选 {cands.Count} 个，isArea={isArea}）→ 经网关请求");
+            _ = RequestFreePlayTargetAsync(playerId, cardName, isArea, cands, prompt, cardUid, finish);
+            return;
+        }
+        if (EE?.UIHooks != null)
+        {
+            string prompt = $"请为「{cardName}」选择{(isArea ? "目标地区" : "目标")}（由效果免费打出）";
+            GD.Print($"[TurnManager] 🆓 免费打出需选目标：{cardName}（候选 {cands.Count} 个，isArea={isArea}）→ 弹目标选择窗");
+            EE.UIHooks.PromptPlayTarget(playerId, prompt, isArea, cands, finish);
+            return;
+        }
+        // 无 UI（headless 测试 / 纯规则内核）：确定性兜底取第一个候选（与触发路径同一兜底口径）
+        GD.Print($"[TurnManager] 🆓 免费打出需选目标：{cardName} → 无 UI，确定性兜底取首个候选 {cands[0]}");
+        finish(cands[0]);
+    }
+
+    /// <summary>
+    /// 【P2·联机】激活的"选择类"入参**由服务端驱动收集**（与单机 View 侧那几套窗 **1:1**）：
+    /// 顺序与单机 `Arena.BeginActivate` 完全一致 —— **目标地区 → 牺牲代价 → 标志代价 → 目标玩家**，
+    /// 每步候选都由**服务端**用与权威侧同源的规则函数算出（`EffectEngine.GetLegalAreaTargets` /
+    /// `GetSacrificeCandidates` / `GetCounterCostCandidates` / `PlayerTargetPool.Collect`），随
+    /// `ChoiceRequest` 下发；回包一律**权威复检**（必须命中候选），取消/超时/非法 → **整次激活不发动**
+    /// （不付任何代价）。收集完毕后在**释放原子锁之后**调 `EE.ActivateAbility`（其自身会 EnterAtomic）。
+    /// </summary>
+    public async System.Threading.Tasks.Task<bool> ActivateAbilityWithChoicesAsync(int playerId, string sourceUid,
+        string effectId, string targetUid, int targetPlayerId)
+    {
+        if (InputGateway == null || EE == null || _cardManager == null) return false;
+        var source = _cardManager.GetInstance(sourceUid);
+        var ability = FindActivationAbilityFor(source, effectId);
+        if (source == null || ability == null) return false;
+        var target = string.IsNullOrEmpty(targetUid) ? null : _cardManager.GetInstance(targetUid);
+
+        string sacrificeUid = null;
+        string targetAreaId = null;
+        string counterCostUid = null;
+        System.Collections.Generic.Dictionary<string, int> allocation = null;
+        int stackCountBefore = _stackManager?.Entries?.Count ?? -1;   // 用于判定"本次激活是否真的入堆叠"
+
+        EnterAtomic();
+        try
+        {
+            // ---------- ① 目标地区（单机 `Arena.BeginActivateAreaSelection`）----------
+            if (ability.NeedsAreaTarget)
+            {
+                var areas = EE.GetLegalAreaTargets(source, ability, target);
+                if (areas.Count == 0)
+                {
+                    GD.PrintErr($"[K15·联机] {ability.EffectId} 无合法目标地区 → 不发动");
+                    return false;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                    SourceUid = source.UID,
+                    Prompt = $"请为「{source.PlayerTemplate?.CardName ?? "激活效果"}」选择目标地区",
+                    ForceChoice = true,
+                    OptionUids = areas,
+                };
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled || string.IsNullOrEmpty(res.SelectedUid) || !areas.Contains(res.SelectedUid))
+                {
+                    GD.Print($"[K15·联机] {ability.EffectId} 未选定/非法目标地区 → 不发动（fail-closed）");
+                    return false;
+                }
+                targetAreaId = res.SelectedUid;
+            }
+
+            // ---------- ② 牺牲代价（单机 `Arena.BeginActivateWithSacrifice`：按钮列表选一个）----------
+            if (ability.SacrificeCost != null)
+            {
+                var cands = EE.GetSacrificeCandidates(source, ability.SacrificeCost)
+                            ?? new System.Collections.Generic.List<CardInstance>();
+                if (cands.Count == 0)
+                {
+                    GD.PrintErr($"[K22·联机] {ability.EffectId} 牺牲代价无候选 → 不发动");
+                    return false;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectActivationCost,
+                    SourceUid = source.UID,
+                    Prompt = "选择要牺牲的角色",
+                    ForceChoice = true,
+                    Amount = 1,   // 语义：从候选里选 1 张（**单张模式**；逐卡分配模式以 `OptionMaxAmounts` 非空区分）
+                };
+                foreach (var c in cands)
+                {
+                    if (c == null) continue;
+                    req.OptionUids.Add(c.UID);
+                    req.OptionLabels.Add($"牺牲 {c.PlayerTemplate?.CardName ?? c.UID}");
+                }
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled || string.IsNullOrEmpty(res.SelectedUid)
+                    || !req.OptionUids.Contains(res.SelectedUid))
+                {
+                    GD.Print($"[K22·联机] {ability.EffectId} 未选定/非法牺牲候选 → 不发动（fail-closed）");
+                    return false;
+                }
+                sacrificeUid = res.SelectedUid;
+            }
+
+            // ---------- ③ 标志代价（单机 `BeginActivateWithCounterCostChoice` / `...Allocation`）----------
+            if (ability.CounterCost != null)
+            {
+                var cands = EE.GetCounterCostCandidates(source, ability.CounterCost)
+                            ?? new System.Collections.Generic.List<CardInstance>();
+                if (cands.Count == 0)
+                {
+                    GD.PrintErr($"[K5·联机] {ability.EffectId} 标志代价无候选 → 不发动");
+                    return false;
+                }
+                bool byChoice = ability.CounterCost.AmountByPlayerChoice;
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectActivationCost,
+                    SourceUid = source.UID,
+                    Prompt = byChoice ? "选择要移除标志的卡（每张可多次点击累加，至少 1 个）" : "选择要移除标志的卡",
+                    ForceChoice = true,
+                    Amount = byChoice ? 1 : ability.CounterCost.Amount,   // 逐卡分配时仅作"至少 1"提示（模式以 OptionMaxAmounts 非空区分）
+                };
+                foreach (var c in cands)
+                {
+                    if (c == null) continue;
+                    int have = EE.GetMarkerCountOnCard(c, ability.CounterCost);
+                    req.OptionUids.Add(c.UID);
+                    req.OptionMaxAmounts.Add(have);   // 逐卡分配模式：客户端据此显示"已选 X / 共 N"
+                    req.OptionLabels.Add(byChoice
+                        ? $"{c.PlayerTemplate?.CardName ?? c.UID}：移除 1 个（共 {have}）"
+                        : $"从 {c.PlayerTemplate?.CardName ?? c.UID} 上移除 {ability.CounterCost.Amount} 个标志");
+                }
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled)
+                {
+                    GD.Print($"[K5·联机] {ability.EffectId} 未选定标志代价 → 不发动");
+                    return false;
+                }
+                if (byChoice)
+                {
+                    var alloc = new System.Collections.Generic.Dictionary<string, int>();
+                    int total = 0;
+                    if (res.SelectedUids != null && res.SelectedAmounts != null)
+                    {
+                        for (int i = 0; i < res.SelectedUids.Count && i < res.SelectedAmounts.Count; i++)
+                        {
+                            string uid = res.SelectedUids[i];
+                            int amt = res.SelectedAmounts[i];
+                            if (string.IsNullOrEmpty(uid) || amt <= 0) continue;
+                            if (!req.OptionUids.Contains(uid)) { GD.PrintErr($"[K5·联机] 回包卡 {uid} 不在候选内，忽略该项"); continue; }
+                            var card = _cardManager.GetInstance(uid);
+                            int have = card == null ? 0 : EE.GetMarkerCountOnCard(card, ability.CounterCost);
+                            amt = System.Math.Min(amt, have);            // 权威钳制：不得超过该卡现有标志数
+                            if (amt <= 0) continue;
+                            alloc[uid] = amt;
+                            total += amt;
+                        }
+                    }
+                    if (total <= 0)
+                    {
+                        GD.Print($"[K5·联机] {ability.EffectId} 分配为空（至少需 1 个标志）→ 不发动");
+                        return false;
+                    }
+                    allocation = alloc;
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(res.SelectedUid) || !req.OptionUids.Contains(res.SelectedUid))
+                    {
+                        GD.Print($"[K5·联机] {ability.EffectId} 未选定/非法标志候选 → 不发动（fail-closed）");
+                        return false;
+                    }
+                    counterCostUid = res.SelectedUid;
+                }
+            }
+
+            // ---------- ④ 目标玩家（单机 `Arena.BeginActivateWithPlayerTarget`）----------
+            if (Script.Manager.PlayerTargetPool.IsPlayerSpec(ability.Target))
+            {
+                var cands = Script.Manager.PlayerTargetPool.Collect(ability.Target, source.ControllerId, PlayerManagerRef);
+                if (cands.Count == 0)
+                {
+                    GD.PrintErr($"[K24·联机] {ability.EffectId} 玩家目标无候选 → 不发动");
+                    return false;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectPlayer,
+                    SourceUid = source.UID,
+                    Prompt = $"请为 {ability.EffectId} 选择目标玩家",
+                    ForceChoice = true,
+                    OptionPlayerIds = new System.Collections.Generic.List<int>(cands),
+                };
+                foreach (int pid in cands)
+                    req.OptionLabels.Add(Script.Manager.PlayerTargetPool.Describe(PlayerManagerRef, pid));
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled || !cands.Contains(res.SelectedPlayerId))
+                {
+                    GD.Print($"[K24·联机] {ability.EffectId} 未选定/非法目标玩家 → 不发动（fail-closed）");
+                    return false;
+                }
+                targetPlayerId = res.SelectedPlayerId;
+            }
+        }
+        finally
+        {
+            // 与 K15/K16 同款：选择期间持原子锁，但**必须在 ActivateAbility 之前释放**（其自身会 EnterAtomic）
+            ExitAtomicWhenIdle();
+        }
+
+        EE.ActivateAbility(source, ability, target, targetPlayerId, sacrificeUid, targetAreaId, counterCostUid, allocation);
+        // 成功＝确实入堆叠（`ActivateAbility` 的门禁/代价校验失败时不入栈）——据此如实回传是否发动，
+        // 避免"服务端已拒绝但调用方以为成功"。
+        bool pushed = _stackManager != null && !_stackManager.IsEmpty && stackCountBefore >= 0
+                      && _stackManager.Entries.Count > stackCountBefore;
+        GD.Print($"[联机激活] {ability.EffectId} 选择类入参已收集：目标地区={targetAreaId ?? "无"} 牺牲={sacrificeUid ?? "无"} " +
+                 $"标志卡={counterCostUid ?? (allocation != null ? $"分配 {allocation.Count} 张" : "无")} 目标玩家={targetPlayerId} → 入堆叠={pushed}");
+        OnAsyncSettlementCompleted?.Invoke();
+        return pushed;
+    }
+
+    /// <summary>按 EffectId 在实例的印刷效果表里找激活类效果（角色/附属/秘社；找不到 → null）。</summary>
+    private static Script.Data.Effects.EffectData FindActivationAbilityFor(CardInstance inst, string effectId)
+    {
+        if (inst == null || string.IsNullOrEmpty(effectId)) return null;
+        if (inst.PlayerTemplate?.EffectDataList != null)
+        {
+            foreach (var e in inst.PlayerTemplate.EffectDataList)
+                if (e != null && e.EffectId == effectId
+                    && (e.Timing == EffectTiming.CharacterActivated || e.Timing == EffectTiming.AttachmentActivated))
+                    return e;
+        }
+        if (inst.CouncilTemplate?.ActivationOptions != null)
+        {
+            foreach (var opt in inst.CouncilTemplate.ActivationOptions)
+            {
+                if (opt?.EffectDataList == null) continue;
+                foreach (var e in opt.EffectDataList)
+                    if (e != null && e.EffectId == effectId && e.Timing == EffectTiming.CouncilActivated) return e;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 【P2·联机】JC119 免费打出的**目标请求回环**：向该玩家下发 `SelectTarget`（候选＝服务端权威枚举的
+    /// 卡目标或地区目标），回包命中候选才继续（否则按取消处理）；随后调 `finish` 完成"按正常打出流程打出"。
+    /// </summary>
+    private async System.Threading.Tasks.Task RequestFreePlayTargetAsync(int playerId, string cardName, bool isArea,
+        List<string> candidates, string prompt, string cardUid, System.Action<string> finish)
+    {
+        var gateway = EE?.InputGateway;
+        if (gateway == null) { finish(null); return; }
+
+        var req = new Script.Net.ChoiceRequest
+        {
+            PlayerId = playerId,
+            RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+            SourceUid = cardUid,
+            Prompt = prompt,
+            ForceChoice = true,
+            OptionUids = new List<string>(candidates),
+        };
+        if (!isArea)
+        {
+            foreach (var uid in candidates)
+            {
+                var inst = _cardManager?.GetInstance(uid);
+                if (inst == null) continue;
+                req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(inst, inst.CurrentZone, inst.OwnerId));
+                req.OptionLabels.Add(inst.PlayerTemplate?.CardName ?? uid);
+            }
+        }
+
+        var res = await gateway.RequestChoice(playerId, req);
+        if (res == null || res.Cancelled || string.IsNullOrEmpty(res.SelectedUid))
+        {
+            GD.Print($"[TurnManager] 免费打出（联机）：玩家{playerId} 未选目标/超时 → {cardName} 留在手牌");
+            finish(null);
+            return;
+        }
+        if (!candidates.Contains(res.SelectedUid))
+        {
+            GD.PrintErr($"[TurnManager] ⛔ 免费打出目标回包 {res.SelectedUid} 不在候选内 → 拒绝（fail-closed）");
+            finish(null);
+            return;
+        }
+        finish(res.SelectedUid);
+    }
+
+    /// <summary>
+    /// 【JC119】"效果免费打出的牌"的**合法卡目标**枚举——候选池与判定函数**复用** `LegalityProjection`
+    /// 的口径（争夺区 + 附属区 + 秘社 + 双方资产区 + 双方墓地；判定＝`CardManager.IsLegalPlayTarget`），
+    /// 只多一条"排除来源自身"（来源正在被打出，不能以自己为目标）。
+    /// </summary>
+    public List<string> GetLegalPlayTargetUids(CardInstance handCard)
+    {
+        var result = new List<string>();
+        if (handCard == null || _cardManager == null || _zoneManager == null) return result;
+        var pool = new List<CardInstance>();
+        pool.AddRange(_cardManager.GetAreaCards() ?? new List<CardInstance>());
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.AttachedZone, 0));
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.CouncilZone, 0));
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.AssetZone, 1));
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.AssetZone, 2));
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.Graveyard, 1));
+        pool.AddRange(_zoneManager.GetZoneCards(CardZone.Graveyard, 2));
+        foreach (var t in pool)
+        {
+            if (t == null || t == handCard || t.IsDying) continue;
+            if (_cardManager.IsLegalPlayTarget(handCard, t)) result.Add(t.UID);
+        }
+        return result;
+    }
+
+    /// <summary>【JC119】免费打出"地区目标"的候选＝全部地区 UID（打出的地区目标权威校验＝地区存在，同一口径）。</summary>
+    private List<string> GetOrderedAreaUidsForPlay()
+        => _areaManager?.GetOrderedAreaUids() ?? new List<string>();
 
     /// <summary>
     /// 原子操作后检查并运行触发效果收集流程（D4 触发规则接驳点）。
@@ -961,12 +1396,21 @@ public partial class TurnManager : Node
                     var inst = _cardManager?.GetInstance(uid);
                     if (inst != null)
                         req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(inst, inst.CurrentZone, inst.OwnerId));
+                    // 【P2·联机可读性】显示名随请求下发（墓地/手牌等区域牌堆在客户端是隐藏占位）
+                    req.OptionLabels.Add(inst?.PlayerTemplate?.CardName ?? uid);
                 }
             }
             var result = await InputGateway.RequestChoice(controller, req);
             if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
             {
                 GD.Print($"[Trigger] {t.DisplayName} 玩家取消/未选目标，跳过入栈");
+                return;
+            }
+            // 【P2·联机权威复检】回包必须是"服务端本次下发的候选之一"（`valid` 由 `GetValidTargetUidsForTrigger`
+            // 权威计算）。原先直接采信回包 UID ⇒ 客户端可指定任意卡作为触发目标（越权）。
+            if (!valid.Contains(result.SelectedUid))
+            {
+                GD.PrintErr($"[Trigger] ⛔ {t.DisplayName} 目标回包 {result.SelectedUid} 不在候选内 → 该触发不入栈（fail-closed）");
                 return;
             }
             t.SelectedTargetUid = result.SelectedUid;
@@ -1074,6 +1518,13 @@ public partial class TurnManager : Node
                 if (picked <= 0)
                 {
                     GD.Print($"[Trigger] {t.DisplayName} 玩家取消/未选目标玩家，跳过入栈");
+                    onPushed?.Invoke();
+                    return;
+                }
+                // 【P2·联机权威复检】回包的玩家号必须是"服务端下发的候选"之一（`PlayerTargetPool` 权威枚举）。
+                if (!candidates.Contains(picked))
+                {
+                    GD.PrintErr($"[Trigger] ⛔ {t.DisplayName} 目标玩家回包 P{picked} 不在候选内 → 该触发不入栈（fail-closed）");
                     onPushed?.Invoke();
                     return;
                 }
@@ -1272,6 +1723,16 @@ public partial class TurnManager : Node
         else
         {
             GD.Print($"[Trigger] 入栈: {t.DisplayName}（无目标箭头）");
+        }
+
+        // 【触发时所在地区】把"触发时所在地区"（死亡＝死亡时所处地区 / 进场＝进入的地区 / 赢取＝被赢取地区）
+        // 写入条目：结算时作为 `ResolveEffect(targetAreaId)` 下发 —— 供 `MoveToZone{…,"争夺区"}`（JC124
+        // "从墓地移回**场上**（它死亡时所在地区）"）与"本地区"判定使用，避免拿已离场来源的 null ZoneDetailId 当基准。
+        // 仅在条目尚无目标地区时补写（机动等显式地区目标不受影响）。
+        if (string.IsNullOrEmpty(entry.TargetAreaId) && !string.IsNullOrEmpty(t.SourceAreaAtTrigger))
+        {
+            entry.TargetAreaId = t.SourceAreaAtTrigger;
+            GD.Print($"[Trigger] 入栈: 写入**触发时所在地区**={t.SourceAreaAtTrigger}（供结算取『本地区』/回场落点）");
         }
 
         // 记录目标入栈快照（控制者+子类别），供"结算前变化"类丢失判定比对待入栈时状态（过程记忆）
@@ -1743,6 +2204,17 @@ public partial class TurnManager : Node
                         _cardManager?.MoveCardToGraveyard(card);
                         return;
                     }
+                    // 【JC081】"除装备与祝福外不受附属"（结算兜底，与打出阶段共用同一判定实现）
+                    {
+                        string whitelist = EffectEngine.GetAttachSubCategoryWhitelist(target);
+                        if (whitelist != null && !EffectEngine.PassesAttachWhitelist(card, whitelist))
+                        {
+                            GD.Print($"❌ [Resolve] 目标 {target.PlayerTemplate?.CardName} 只受『{whitelist}』类附属结附，"
+                                   + $"{card.PlayerTemplate?.CardName} 进墓地");
+                            _cardManager?.MoveCardToGraveyard(card);
+                            return;
+                        }
+                    }
                     card.IsAttached = true;
                     card.AttachedTo = target;
                     target.AttachedCards.Add(card);
@@ -1990,6 +2462,145 @@ public partial class TurnManager : Node
     /// <summary>【K15】多目标选择上下文序号（客户端据此复用同一面板）。</summary>
     private int _multiTargetContextSeq;
 
+    /// <summary>
+    /// 【K10·额外费用·联机】服务端驱动的"带额外费用选择"的打出流程（用户口径 **A23/A33**）：
+    /// 两类需要**玩家本人选择**的额外费用在联机侧原先无路可走（客户端只发裸 `PlayCard` 意图，
+    /// 额外费用参数无处携带），本方法把选择**回环给该玩家**后再续算：
+    ///  · **JC049「额外费用：牺牲一个角色」**：候选由服务端权威枚举（`GetExtraCostSacrificeCandidates`）→
+    ///    下发 **`ChoiceRequest.Kind.SelectTarget`**（A33 指定**复用**该请求类型，非新窗口类型；场上卡高亮点选）→
+    ///    回包 `SelectedUid` 必须命中候选（服务端**权威复检**，不在候选内 → 整次中止）；
+    ///  · **JC081「额外费用：展示任意数量的手牌」**：候选＝打出者当前手牌 → 下发
+    ///    **`Kind.SelectHandCards`**（**多选**，`SelectedUids` 有序、**可空**＝不展示）→
+    ///    `Confirmed=true` 才继续；`Cancelled=true` ＝取消整次打出（A23：取消＝不打出、卡不入堆叠、不扣费）。
+    ///
+    /// 期间持原子锁（与单机模态窗口语义一致），**必须在 `PlayCard` 之前释放**（`PlayCard` 自己会 `EnterAtomic`）。
+    /// 无合法牺牲对象 ⇒ **该卡不能打出**（A21）；完成后触发 `OnAsyncSettlementCompleted`（联机据此下发快照）。
+    /// 返回 true＝已完成一次打出（成功入堆叠）；false＝被取消/校验失败/无合法候选。
+    /// </summary>
+    public async System.Threading.Tasks.Task<bool> PlayWithExtraCostAsync(int playerId, string cardUid,
+        string targetUid, string targetCardUid)
+    {
+        var instance = _cardManager?.GetInstance(cardUid);
+        var tmpl = instance?.PlayerTemplate;
+        if (tmpl == null || tmpl.ExtraCost == null || InputGateway == null)
+            return PlayCard(playerId, cardUid, targetUid, targetCardUid);   // 无额外费用 / 无网关：退回既有路径
+
+        string extraSacrificeUid = null;
+        var extraRevealUids = new System.Collections.Generic.List<string>();
+        bool cancelled = false;
+
+        EnterAtomic();
+        try
+        {
+            // ---------- ① JC049：牺牲一个角色（必须支付；无合法对象 ⇒ 不能打出）----------
+            if (NeedsExtraCostPlayerChoice(tmpl))
+            {
+                var cands = GetExtraCostSacrificeCandidates(instance);
+                if (cands.Count == 0)
+                {
+                    GD.Print($"❌ [K10 额外费用·联机] {tmpl.CardName} 无合法牺牲对象 → 不能打出（A21）");
+                    return false;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                    SourceUid = instance.UID,
+                    Prompt = $"额外费用：请选择要为「{tmpl.CardName}」牺牲的角色",
+                    ForceChoice = true,   // 必须支付：客户端不提供"跳过"（仍可整次取消）
+                    OptionUids = UidList(cands),
+                    OptionLabels = CardLabels(cands),
+                };
+                foreach (var c in cands)
+                    if (c != null) req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled)
+                {
+                    GD.Print($"[K10 额外费用·联机] 玩家{playerId} 取消/超时（选择牺牲对象）→ 不打出 {tmpl.CardName}");
+                    cancelled = true;
+                }
+                else if (string.IsNullOrEmpty(res.SelectedUid) || cands.Find(c => c != null && c.UID == res.SelectedUid) == null)
+                {
+                    // 服务端权威复检：回包必须命中服务端给出的候选（防越权/失效选择）
+                    GD.PrintErr($"[K10 额外费用·联机] 回包 {res.SelectedUid} 不在合法候选内 → 整次打出中止（fail-closed）");
+                    cancelled = true;
+                }
+                else
+                {
+                    extraSacrificeUid = res.SelectedUid;
+                    GD.Print($"[K10 额外费用·联机] 玩家{playerId} 选择牺牲 {extraSacrificeUid}");
+                }
+            }
+
+            // ---------- ② JC081：展示任意数量的手牌（可不展示＝全额支付；取消＝不打出）----------
+            if (!cancelled && NeedsExtraCostRevealChoice(tmpl))
+            {
+                var cands = GetExtraCostRevealCandidates(playerId, instance);
+                if (cands.Count > 0)
+                {
+                    var req = new Script.Net.ChoiceRequest
+                    {
+                        PlayerId = playerId,
+                        RequestKind = Script.Net.ChoiceRequest.Kind.SelectHandCards,
+                        SourceUid = instance.UID,
+                        Prompt = $"额外费用：选择要为「{tmpl.CardName}」展示给对手的手牌",
+                        ForceChoice = false,   // 允许"一张都不展示"（＝无减免，照样能打出）
+                        NumberMax = cands.Count,
+                        OptionUids = UidList(cands),
+                    };
+                    foreach (var c in cands)
+                    {
+                        if (c == null) continue;
+                        req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+                        // 显示名带"合格 -1 / 不合格"标记（**判定由服务端给出**，客户端不重算规则）
+                        req.OptionLabels.Add((c.PlayerTemplate?.CardName ?? c.UID)
+                            + (IsQualifiedRevealCard(tmpl, c) ? "（合格 -1）" : "（不合格）"));
+                    }
+
+                    var res = await InputGateway.RequestChoice(playerId, req);
+                    if (res == null || res.Cancelled)
+                    {
+                        GD.Print($"[K10 额外费用·联机] 玩家{playerId} 取消/超时（展示手牌）→ 不打出 {tmpl.CardName}");
+                        cancelled = true;
+                    }
+                    else
+                    {
+                        // 服务端权威复检：只接受候选内、且不重复的 UID（不合法项直接丢弃，不因此中止整次打出）
+                        var legal = new System.Collections.Generic.HashSet<string>(UidList(cands));
+                        if (res.SelectedUids != null)
+                            foreach (var uid in res.SelectedUids)
+                            {
+                                if (string.IsNullOrEmpty(uid) || !legal.Contains(uid) || extraRevealUids.Contains(uid)) continue;
+                                extraRevealUids.Add(uid);
+                            }
+                        GD.Print($"[K10 额外费用·联机] 玩家{playerId} 展示 {extraRevealUids.Count} 张（候选 {cands.Count} 张）");
+                    }
+                }
+                else
+                {
+                    GD.Print($"[K10 额外费用·联机] {tmpl.CardName} 无手牌可展示 → 按不展示处理（全额支付）");
+                }
+            }
+        }
+        finally
+        {
+            ExitAtomicWhenIdle();
+        }
+
+        if (cancelled)
+        {
+            OnAsyncSettlementCompleted?.Invoke();   // 联机：取消也要下发一次最新快照（恢复 UI 可操作状态）
+            return false;
+        }
+
+        bool ok = PlayCard(playerId, cardUid, targetUid, targetCardUid, null, -1,
+            extraSacrificeUid, extraRevealUids.Count > 0 ? extraRevealUids : null);
+        GD.Print($"[K10 额外费用·联机] 选择完成 → PlayCard={ok}（牺牲={extraSacrificeUid ?? "无"}，展示={extraRevealUids.Count} 张）");
+        OnAsyncSettlementCompleted?.Invoke();
+        return ok;
+    }
+
     /// <summary>【K15】卡候选 → UID 列表。</summary>
     private static System.Collections.Generic.List<string> UidList(System.Collections.Generic.List<CardInstance> cards)
     {
@@ -2233,8 +2844,63 @@ public partial class TurnManager : Node
             });
     }
 
+    /// <summary>
+    /// 【K10·额外费用】该卡打出前需要**玩家做选择**（目前只有"牺牲一个角色"这一类，JC049）：
+    /// View 据此决定"先弹选择窗、再把选择交给 `PlayCard`"。其余额外费用（JC135 的 X 由目标费用决定、
+    /// JC081 的可选展示）不需要这个前置选择。
+    /// </summary>
+    public bool NeedsExtraCostPlayerChoice(PlayerCardData tmpl)
+        => tmpl?.ExtraCost != null && tmpl.ExtraCost.Kind == ExtraCostKind.SacrificeCharacter;
+
+    /// <summary>
+    /// 【K10·额外费用】该卡是否有"**展示手牌减费**"这一类可选额外费用（JC081）：
+    /// View 据此弹"手牌多选 → 确认/取消"窗（取消＝不打出、不扣任何费用）。
+    /// </summary>
+    public bool NeedsExtraCostRevealChoice(PlayerCardData tmpl)
+        => tmpl?.ExtraCost != null && tmpl.ExtraCost.Kind == ExtraCostKind.RevealHandCards;
+
+    /// <summary>【K10·额外费用】展示手牌的候选（＝打出者当前手牌，按手牌顺序）。
+    /// **排除 `source`（正在打出的这张牌本身）**：卡文"展示任意数量的**手牌**"指手牌中**其它**的牌——
+    /// 正在打出的牌此刻虽然还在手牌区（付费发生在入堆叠之前），但它已经"被展示/被打出"，
+    /// 不能拿自己给自己减费（否则每打一张 JC081 都白减 1：JC081 自身组织就是【圣贤】）。</summary>
+    public System.Collections.Generic.List<CardInstance> GetExtraCostRevealCandidates(int playerId,
+        CardInstance source = null)
+    {
+        var all = _zoneManager?.GetZoneCards(CardZone.Hand, playerId)
+                  ?? new System.Collections.Generic.List<CardInstance>();
+        if (source == null) return all;
+        var list = new System.Collections.Generic.List<CardInstance>();
+        foreach (var c in all)
+            if (c != null && !ReferenceEquals(c, source)) list.Add(c);
+        return list;
+    }
+
+    /// <summary>【K10·额外费用】某张手牌是否算"合格展示牌"（命中 `RevealFilter`，如 JC081 的
+    /// `组织:圣贤|域:神圣`）——与付费阶段**同一实现** `CostModFilter.Matches`，View 展示减免数用它。</summary>
+    public bool IsQualifiedRevealCard(PlayerCardData tmpl, CardInstance handCard)
+    {
+        if (tmpl?.ExtraCost == null || handCard == null) return false;
+        return CostModFilter.Matches(tmpl.ExtraCost.RevealFilter, handCard,
+            handCard.PlayerTemplate?.CardName, handCard.PlayerTemplate?.Organization);
+    }
+
+    /// <summary>
+    /// 【K10·额外费用】"牺牲一个角色"作**打出费用**的候选（＝本方场上正面角色；口径与 P3·K22 牺牲代价
+    /// **同一实现** `EffectEngine.GetSacrificeCandidates`，不会分叉）。空集 ⇒ 该卡**不能打出**（A21）。
+    /// </summary>
+    public System.Collections.Generic.List<CardInstance> GetExtraCostSacrificeCandidates(CardInstance card)
+    {
+        var empty = new System.Collections.Generic.List<CardInstance>();
+        var tmpl = card?.PlayerTemplate;
+        if (!NeedsExtraCostPlayerChoice(tmpl) || EE == null) return empty;
+        var spec = tmpl.ExtraCost.Sacrifice ?? new SacrificeCostSpec();
+        return EE.GetSacrificeCandidates(card, spec) ?? empty;
+    }
+
     public bool PlayCard(int playerId, string cardUid, string targetUid = null, string targetCardUid = null,
-        System.Collections.Generic.IList<TargetChoice> multiChoices = null, int modeIndex = -1)
+        System.Collections.Generic.IList<TargetChoice> multiChoices = null, int modeIndex = -1,
+        string extraSacrificeUid = null, System.Collections.Generic.IList<string> extraRevealUids = null,
+        bool freePlay = false, bool asIfQuick = false)
     {
         // 游戏已结束：拒绝一切新出牌（胜利/失败已结算，未结算堆叠已丢弃）
         if (_playerManager != null && _playerManager.IsGameOver)
@@ -2299,7 +2965,14 @@ public partial class TurnManager : Node
         //  C档（取消门禁）：任意有优先权时（含响应窗口、堆叠非空）均可打出
         //                —— 事务卡含 PlayTiming.Response 效果时进入；角色/附属永不进入。
         bool isSorceryCard = (tmpl.CategoryFlag & CardCategory.Sorcery) != 0;
-        if (!isSorceryCard)
+        // 【K28·JC119】"**视作具有【快速】且不需要支付其费用**"（由效果授予的免费打出）：
+        //  · `asIfQuick` → **跳过阶段门禁**（不受行动阶段限制；"快速"＝不受行动步骤约束）；
+        //  · `freePlay` → **费用置 0**（跳过付费，含额外费用），但**忠诚照常校验**（卡文"但仍需满足忠诚需求"）。
+        if (asIfQuick)
+        {
+            GD.Print($"[TurnManager] ⚡ 视作【快速】打出：{tmpl.CardName}（由效果授予，跳过行动阶段门禁）");
+        }
+        else if (!isSorceryCard)
         {
             // 角色/附属 → A档：复用基础行动门禁（堆叠空 + 自有优先权 + 自己专属行动步骤）
             if (!CanEnterBasicActionMask(playerId))
@@ -2349,6 +3022,16 @@ public partial class TurnManager : Node
         if ((tmpl.CategoryFlag & CardCategory.Character) != 0 && HasCardKeyword(instance, tmpl, "隐匿"))
         {
             GD.Print($"❌ [TurnManager] {tmpl.CardName} 具有【隐匿】，不能从手牌付费正面打出到争夺区（只能以秘密派遣等其它方式进场）");
+            return false;
+        }
+
+        // 4.2【P3·K21·JC064 戒严】"**所有非【国家机构】的角色牌不可正面打出在本地区**"：
+        // 只限制"**正面付费打出到该地区**"这一种进场方式（FAQ：秘密派遣与"其他方式放置进场"不受限——
+        // 这两条路径不经本方法）。落点地区＝本次打出的目标地区（`targetUid`）。
+        if ((tmpl.CategoryFlag & CardCategory.Character) != 0 && !string.IsNullOrEmpty(targetUid)
+            && EE?.IsEntryBlockedByOrgRule(instance, targetUid) == true)
+        {
+            GD.Print($"❌ [TurnManager] {tmpl.CardName} 受『戒严』类静止规则限制：非指定组织角色不可正面打出在该地区");
             return false;
         }
 
@@ -2406,6 +3089,95 @@ public partial class TurnManager : Node
             }
         }
 
+        // 5.z【K10·额外费用】"**这张牌打出费用的一部分**"（用户 2026-09 口径 A21–A24）：
+        //   · 时机：**付费阶段**支付、**卡入堆叠之前**付清；**不在堆叠里结算、不可被响应**（类比万智牌的额外费用）；
+        //   · 三种形态：① `SacrificeCharacter`（JC049：**必须支付**，**无合法牺牲对象则整张不能打出**，
+        //     牺牲者由**打出者自己选择**）；② `PayTargetCost`（JC135：X＝**先选定的目标**的印刷费用，
+        //     0 费目标 → **不支付**；合法目标费用均大于可用费用 → 不能打出）；
+        //     ③ `RevealHandCards`（JC081：**可选**、一次性减免，不展示＝全额支付）。
+        //   · 选择输入：单机由 Arena 预选后随参数传入（`extraSacrificeUid`/`extraRevealUids`）；
+        //     未指定时牺牲走**确定性兜底**（第一个合法候选，与既有"牺牲代价"同款纪律）、展示视为"不展示"。
+        var extraSpec = tmpl.ExtraCost;
+        CardInstance extraSacrifice = null;
+        var extraRevealCards = new System.Collections.Generic.List<CardInstance>();
+        int extraMana = 0;         // JC135：额外支付的无色费用（＝目标印刷费用）
+        int extraDiscount = 0;     // JC081：因展示而减掉的费用（一次性，只作用于本张）
+        if (extraSpec != null && extraSpec.Kind != ExtraCostKind.None)
+        {
+            switch (extraSpec.Kind)
+            {
+                case ExtraCostKind.SacrificeCharacter:
+                {
+                    var sacSpec = extraSpec.Sacrifice ?? new SacrificeCostSpec();
+                    var candidates = EE.GetSacrificeCandidates(instance, sacSpec);
+                    if (candidates.Count == 0)
+                    {
+                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 无合法牺牲对象 → 不能打出");
+                        return false;
+                    }
+                    if (!string.IsNullOrEmpty(extraSacrificeUid))
+                    {
+                        extraSacrifice = candidates.Find(c => string.Equals(c.UID, extraSacrificeUid, System.StringComparison.Ordinal));
+                        if (extraSacrifice == null)
+                        {
+                            GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】指定的牺牲候选 {extraSacrificeUid} 不合法 → 拒绝打出（fail-closed）");
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        extraSacrifice = candidates[0];
+                        GD.Print($"[TurnManager] ⚠ 【K10 额外费用】未指定牺牲候选 → 确定性兜底取第一个合法候选（{extraSacrifice.PlayerTemplate?.CardName}）");
+                    }
+                    break;
+                }
+                case ExtraCostKind.PayTargetCost:
+                {
+                    var payTarget = string.IsNullOrEmpty(targetCardUid) ? null : _cardManager?.GetInstance(targetCardUid);
+                    if (payTarget == null)
+                    {
+                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 需先选定目标（X＝目标印刷费用）→ 拒绝打出");
+                        return false;
+                    }
+                    extraMana = Math.Max(0, payTarget.PlayerTemplate?.Cost ?? 0);
+                    GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：X＝目标 {payTarget.PlayerTemplate?.CardName} 的印刷费用 {extraMana}");
+                    break;
+                }
+                case ExtraCostKind.RevealHandCards:
+                {
+                    if (extraRevealUids != null && extraRevealUids.Count > 0)
+                    {
+                        int qualified = 0;
+                        foreach (var uid in extraRevealUids)
+                        {
+                            var c = _cardManager?.GetInstance(uid);
+                            if (c == null || c.CurrentZone != CardZone.Hand || c.ControllerId != playerId)
+                            {
+                                GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】展示候选 {uid} 不在你的手牌 → 拒绝打出（fail-closed）");
+                                return false;
+                            }
+                            // 正在打出的本卡自身不计入"展示的手牌"（防自我减费，与候选枚举同一口径）
+                            if (ReferenceEquals(c, instance)) continue;
+                            extraRevealCards.Add(c);
+                            if (CostModFilter.Matches(extraSpec.RevealFilter, c, c.PlayerTemplate?.CardName, c.PlayerTemplate?.Organization))
+                                qualified++;
+                        }
+                        extraDiscount = qualified;
+                        GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：展示 {extraRevealCards.Count} 张，其中合格 {qualified} 张 → 减免 {extraDiscount}");
+                    }
+                    else if (extraSpec.Mandatory)
+                    {
+                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 需展示任意数量手牌（未提供）→ 拒绝打出");
+                        return false;
+                    }
+                    break;
+                }
+                default:
+                    GD.PrintErr($"[TurnManager] ⚠ 【K10 额外费用】未登记的种类「{extraSpec.Kind}」→ 拒绝打出（fail-closed）");
+                    return false;
+            }
+        }
+
         // 6. 费用支付（6.2）：横置资产区卡牌产生无色费用
         // 进入原子操作：从实际开始改变游戏状态（费用支付/入堆叠）起加锁；
         // 之前的阶段/行动权/费用校验等失败均不占用原子锁（修复：StartReset 拖拽误锁导致双方无法让过）。
@@ -2413,23 +3185,45 @@ public partial class TurnManager : Node
         // P2：先减玩家级时效费用修正（如 JC012 的"下一张帷幕守望牌费用-1"）
         // 【P1】改传实例：使"子类别:/域:/有域图标"类过滤串（如 JC042/JC112）能正确命中。
         EE.CurrentTurn = TurnCount;
-        int cost = tmpl.Cost - EE.GetCostModification(playerId, instance, tmpl.CardName, tmpl.Organization);
+        // 【K10】额外费用并入本次费用：总费用 ＝（基础费用 − 时效减免 − 展示减免）+ 额外支付的 X
+        // 【K28·JC119】免费打出：费用与额外费用一律为 0（**忠诚已在上方校验、照常生效**）
+        int cost = freePlay
+            ? 0
+            : tmpl.Cost - EE.GetCostModification(playerId, instance, tmpl.CardName, tmpl.Organization) - extraDiscount;
         if (cost < 0) cost = 0;
-        if (cost > 0)
+        int totalCost = freePlay ? 0 : cost + extraMana;
+        if (freePlay) GD.Print($"[TurnManager] 🆓 免费打出：{tmpl.CardName}（不需支付费用，忠诚已校验）");
+
+        // 【K10】额外费用①（牺牲）：**牺牲＝死亡**（照常广播死亡时机），在**入堆叠之前**、原子锁内支付。
+        // 放在费用校验之后：确保"费用不足"这类失败**不会白牺牲**（校验段已保证 totalCost 可支付）。
+        if (totalCost > 0 && _playerManager.GetAvailableMana(playerId) < totalCost)
         {
-            if (_playerManager.GetAvailableMana(playerId) < cost)
-            {
-                GD.Print($"❌ [TurnManager] 可用费用不足！需要 {cost}，当前 {_playerManager.GetAvailableMana(playerId)}");
-                ExitAtomicWhenIdle();   // 修复：解锁，避免原子锁卡死
-                return false;
-            }
-            if (!_playerManager.SpendMana(playerId, cost))
+            GD.Print($"❌ [TurnManager] 可用费用不足！需要 {totalCost}（含额外费用 {extraMana}），当前 {_playerManager.GetAvailableMana(playerId)}");
+            ExitAtomicWhenIdle();   // 修复：解锁，避免原子锁卡死
+            return false;
+        }
+        // 【K10】额外费用②（展示手牌）：给**对手**公开展示（`UiNotificationBus.CardRevealed`），
+        // 一次性减免已在 totalCost 里扣掉；展示不改变任何规则状态。
+        foreach (var rev in extraRevealCards)
+        {
+            GD.Print($"[TurnManager] 🔎 【K10 额外费用】玩家{playerId} 展示 {rev.PlayerTemplate?.CardName}");
+            Script.Manager.UiNotificationBus.Instance?.NotifyCardRevealed(rev, playerId);
+        }
+        if (extraSacrifice != null)
+        {
+            GD.Print($"[TurnManager] ✝ 【K10 额外费用】{tmpl.CardName}：牺牲 {extraSacrifice.PlayerTemplate?.CardName}（打出者选择，不可被响应）");
+            _cardManager?.ResolveDeath(extraSacrifice, CardManager.DeathCause.Sacrifice);
+        }
+
+        if (totalCost > 0)
+        {
+            if (!_playerManager.SpendMana(playerId, totalCost))
             {
                 GD.Print($"❌ [TurnManager] 费用支付失败");
                 ExitAtomicWhenIdle();
                 return false;
             }
-            GD.Print($"[TurnManager] 玩家{playerId} 支付 {cost} 费用，剩余可用 {_playerManager.GetAvailableMana(playerId)}");
+            GD.Print($"[TurnManager] 玩家{playerId} 支付 {totalCost} 费用（含额外费用 {extraMana}），剩余可用 {_playerManager.GetAvailableMana(playerId)}");
             // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项（整回合项不移除）
             EE.ConsumeCostModification(playerId, instance, tmpl.Organization);
         }
@@ -2440,6 +3234,8 @@ public partial class TurnManager : Node
         // 7. 入堆叠（费用/执行分离）：按卡类别构造结构化结算数据，等待响应窗口结算
         if (_stackManager != null)
         {
+            // 【JC119】成功打出即清除"刚由封印回手"标记（该标记只用于识别"本卡死亡时刚回手的那批封印牌"）
+            instance.ReturnedFromSealHostUid = null;
             var entry = new StackEntry(playerId, instance);
             entry.ControllerId = instance.ControllerId;   // 箭头按控制者着色（D31）
             entry.TargetAreaId = targetUid ?? "";
@@ -3112,6 +3908,10 @@ public partial class TurnManager : Node
 
     private void EnterPhase(TurnPhase phase)
     {
+        // 【P3·K19】临时费用（JC115）：**任意步骤结束时消失**——实现上＝每次阶段流转（＝上一步骤结束）时清空双方临时费用。
+        // 口径见 §7.4b A26（六个步骤：先手/后手/预对抗/调查对抗/战斗对抗/势力对抗）。
+        PlayerManagerRef?.ClearAllTemporaryMana();
+
         CurrentPhase = phase;
         if (VerboseSteps) GD.Print($"--- [TurnManager] 进入阶段: {phase} ---");
         OnPhaseChanged?.Invoke(phase);

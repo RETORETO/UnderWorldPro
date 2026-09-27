@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot;
 
 namespace Script.Tests
@@ -125,6 +125,28 @@ namespace Script.Tests
                 new P3DrawFromBottomTests(),           // P3·非抓牌式取牌（不广播 OnDraw）：JC049 深渊细语②
                 new P3RulingBatchTests(),              // 用户口径批：JC022 战斗获胜近似判定 / JC074 快速行动授予 / JC122 锁定者禁现身
                 new P3PathUniquenessTests(),           // P3·K25「道途」唯一性（与领袖同款：玩家选一个牺牲）：JC034①
+                new P3TemporaryManaTests(),            // P3·K19 临时费用池（优先花费 + 步骤结束清除）：JC115
+                new P3CounterCostTests(),              // P3·K5 计数器作发动代价（发动者选择）：JC044②
+                new P3MarkerAreaTests(),               // 准备步骤放标志（JC055①）/ 地区标志数条件与清标志（JC127）
+                new P3CombatWonAllyTests(),            // A14 近似：赢下战斗对抗 + 本方吸血鬼参与 → 目标对手弃牌：JC034③
+                new P3HourglassTests(),                // 准备步骤放标志 + 按地区标志数群体伤害 + ≥3 牺牲自身：JC048
+                new P3AttachSelfTests(),               // P3·K12 附属进场自选结附目标（Attach 执行器）：JC121①
+                new P3MultiSacrificeTests(),           // K22 多玩家/对手侧自选牺牲（先手先选→一起牺牲）：JC046/113/134/065
+                new P3EmbraceTests(),                  // P3·K4 持续夺控 + 子类别改写 + 「宿主翻面⇒附属被消灭」：JC036 初拥
+                new P4ExtraCostTests(),                // P3·K10 额外费用（牺牲/支付X费）：JC049① / JC135① ②
+                new P4ChooseNumberTests(),             // K1「玩家选择」型动态值 + JC083 睿智的斯芬克司
+                new P4CounterCostXTEsts(),             // K5·JC055② 移除 X 个时间标志作代价 → 下一张灾难牌减费 X
+                new P4HackerTests(),                   // JC114 查看目标玩家手牌 → 可选牺牲自身 → 由施术者指定弃牌
+                new P4FormChangeTests(),               // P3·K4 实例级形态转换：JC027 成地精角色 / JC028 成「鲜血」附属
+                new P4MartialLawTests(),               // P3·K21·JC064 戒严：非国家机构角色不可进入本地区 + 支付1否则牺牲
+                new P4WaterRevealTests(),              // P3·K21·JC041 禁婆①：暗藏者专用激活 + 水域地区前提 + 现身
+                new P4KeeperTests(),                   // JC119 守秘人②：展示封印牌 → 免费打出其中一张（视作快速、忠诚照常）
+                new P4AttachWhitelistTests(),          // JC081 [前缀] 除装备与祝福外不受附属（子类别白名单静止规则）
+                new P4PhilosopherStoneTests(),         // JC124 哲人石：构筑级（卡组级）全局触发（死亡 → 回场，由拥有者操控）
+                new P4CovertInspectTests(),            // JC057 监控员②：持续"随时检视本地区任一暗藏者" + 悬浮预览可见性
+                new P4CovertContinuousTests(),         // 暗藏者（背面朝上）的持续/静止效果失效（与触发/激活/光环对齐）
+                new P4OnlineGuardTests(),              // 联机回包权威复检（检索/弃牌越权回包被拒）+ 候选显示名随请求下发
+                new P4OnlineActivationTests(),         // 联机激活接管：目标地区（JC117）/ 牺牲代价 / 标志代价逐卡分配（1:1 单机窗）
             };
 
             var redlines = new List<string>();

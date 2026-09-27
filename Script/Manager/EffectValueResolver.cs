@@ -35,6 +35,12 @@ namespace Script.Manager
             public CardInstance Target;        // 本次结算的目标卡（"目标"）
             public string TargetAreaId;        // 本次结算的目标地区（"目标地区"）
             public int EventAmount;            // 本次事件携带的数量（-1 = 无）
+            /// <summary>【K1】**玩家已选择的数值**（`玩家选择` 型）。由 `EffectEngine` 在数值输入窗回调后写入并重入结算
+            /// （见 `ResolveEffect` 的前置取值步骤）。**必须同时置 `HasPlayerChosenValue=true`**：
+            /// 本结构是 struct，默认值 0 无法与"玩家选择 0"区分（JC083 允许选 0）。</summary>
+            public int PlayerChosenValue;
+            /// <summary>【K1】是否已取得玩家的选择（false＝未取值 → `玩家选择` fail-closed）。</summary>
+            public bool HasPlayerChosenValue;
             public ZoneManager ZoneManager;
             public CardManager CardManager;
             public PlayerManager PlayerManager;
@@ -63,10 +69,28 @@ namespace Script.Manager
                 value = ctx.EventAmount;
                 return ValueEvalResult.Ok;
             }
+            // 【JC055②】`代价数量`：X ＝ 本次激活**已支付的"移除标志"数量**（由 `CashCounterCost`/分配支付写入
+            // `StackEntry.EventAmount` 后经结算下发，与 `事件数量` 共用同一条透传通路）。
+            // 用途：JC055 安妮斯朵拉「行动：自本方卡牌上移除 **X** 个时间标志：本回合中，你打出的下一张
+            // 灾难牌的所需费用减少 **X**」。
+            if (e == "代价数量" || e == "已付代价数量")
+            {
+                if (ctx.EventAmount < 0) { reason = "本次未携带『代价数量』（该效果需先支付按数量计费的代价）"; return ValueEvalResult.Fail; }
+                value = ctx.EventAmount;
+                return ValueEvalResult.Ok;
+            }
             if (e == "玩家选择")
             {
-                reason = "『玩家选择』需要数值输入 UI（尚未实现）";
-                return ValueEvalResult.Fail;
+                // 【K1】玩家在**数值输入窗**里给出的数字（JC083「选择一个数字」；用户口径 A31：0～20）。
+                // 由 `EffectEngine` 弹窗前置于待续结算上下文、回调后写回本字段并重入结算；
+                // 未提供（无 UI / 未走前置取值）→ fail-closed：该效果不发动。
+                if (!ctx.HasPlayerChosenValue)
+                {
+                    reason = "『玩家选择』尚未取值（无 UI 或未经数值输入窗）";
+                    return ValueEvalResult.Fail;
+                }
+                value = ctx.PlayerChosenValue;
+                return ValueEvalResult.Ok;
             }
             if (e.StartsWith("计数:", System.StringComparison.Ordinal))
                 return EvaluateCount(e, in ctx, out value, out reason);
@@ -83,6 +107,11 @@ namespace Script.Manager
             // 计数:区域:墓地:角色:自己
             if (parts.Length >= 5 && parts[1] == "区域")
                 return CountZone(parts[2], parts[3], parts[4], in ctx, out value, out reason);
+            // 【P3·K5】计数:地区内卡上标志:时间标志:本地区 —— 某**地区内所有卡**上的该标志之和
+            // （JC048 诅咒沙漏「然后该地区每有一个时间标志，就对位于该地区的所有角色造成1点伤害」；
+            //  与条件谓词 `AreaMarkerAtLeast` 共用同一统计实现，避免两处口径分叉）
+            if (parts.Length >= 4 && parts[1] == "地区内卡上标志")
+                return CountCardCountersInArea(parts[2], parts[3], in ctx, out value, out reason);
             // 计数:卡上标志:时间标志:自身
             if (parts.Length >= 4 && parts[1] == "卡上标志")
                 return CountCardCounter(parts[2], parts[3], in ctx, out value, out reason);
@@ -95,6 +124,40 @@ namespace Script.Manager
 
             reason = $"无法解析的计数表达式「{e}」";
             return ValueEvalResult.Fail;
+        }
+
+        /// <summary>【P3·K5】**地区内所有卡上某标志之和**（`计数:地区内卡上标志:标志名:地区`）：
+        /// 统计 `ZoneDetailId == 该地区` 的全部卡上的该标志（涵盖地区内角色、结附该地区的附属）。
+        /// 单一实现（连同 `EffectEngine` 的条件谓词 `AreaMarkerAtLeast` 一起复用）。
+        /// 地区写法：`本地区`（来源卡所在地区）/`目标地区`（本次结算的目标地区）。</summary>
+        public static int CountMarkersInArea(string areaUid, string marker, CardManager cm)
+        {
+            if (string.IsNullOrEmpty(areaUid) || string.IsNullOrWhiteSpace(marker) || cm == null) return 0;
+            int total = 0;
+            foreach (var c in cm.GetAllInstances())
+            {
+                if (c == null || c.IsDying) continue;
+                if (!string.Equals(c.ZoneDetailId ?? "", areaUid, System.StringComparison.Ordinal)) continue;
+                if (c.Counters != null && c.Counters.TryGetValue(marker, out int n) && n > 0) total += n;
+            }
+            return total;
+        }
+
+        private static ValueEvalResult CountCardCountersInArea(string marker, string area, in ValueContext ctx,
+            out int value, out string reason)
+        {
+            value = 0;
+            reason = null;
+            if (ctx.CardManager == null) { reason = "CardManager 未注入，无法做地区内卡上标志计数"; return ValueEvalResult.Fail; }
+            string areaUid = area switch
+            {
+                "目标地区" => ctx.TargetAreaId,
+                "本地区" => ctx.Source?.ZoneDetailId ?? ctx.TargetAreaId,
+                _ => null,
+            };
+            if (string.IsNullOrEmpty(areaUid)) { reason = $"无法确定地区（写法「{area}」）"; return ValueEvalResult.Fail; }
+            value = CountMarkersInArea(areaUid, marker, ctx.CardManager);
+            return ValueEvalResult.Ok;
         }
 
         private static ValueEvalResult CountZone(string zoneName, string category, string side, in ValueContext ctx,
@@ -145,13 +208,13 @@ namespace Script.Manager
         {
             if (category == "任意" || string.IsNullOrEmpty(category)) return true;
             if (category == "暗藏者") return c.IsCovert;
-            var flag = c.PlayerTemplate?.CategoryFlag;
-            if (flag == null) return false;
+            // 【P3·K4】用**有效类别**（含实例级形态覆盖：JC027 成为"地精角色"后按角色计数）
+            var flag = c.EffectiveCategoryFlag;
             return category switch
             {
-                "角色" => (flag.Value & CardCategory.Character) != 0,
-                "附属" => (flag.Value & CardCategory.Attachment) != 0,
-                "法术" or "事务" => (flag.Value & CardCategory.Sorcery) != 0,
+                "角色" => (flag & CardCategory.Character) != 0,
+                "附属" => (flag & CardCategory.Attachment) != 0,
+                "法术" or "事务" => (flag & CardCategory.Sorcery) != 0,
                 _ => false,
             };
         }

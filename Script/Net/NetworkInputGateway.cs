@@ -100,6 +100,8 @@ namespace Script.Net
                 case ChoiceRequest.Kind.NumberInput: return 60;       // 【K11】数值输入框（支付 N / 选数字）
                 case ChoiceRequest.Kind.InspectCards: return 30;     // 【P3·H】检视（私密查看，纯确认）
                 case ChoiceRequest.Kind.SelectPlayer: return 45;     // 【K24】玩家目标（选项少，短于选卡）
+                case ChoiceRequest.Kind.SelectHandCards: return 60;  // 【K10】展示任意数量手牌（多选，与选卡同档）
+                case ChoiceRequest.Kind.SelectActivationCost: return 60;   // 【P2】激活代价选择（牺牲/标志，与选卡同档）
                 case ChoiceRequest.Kind.ForceChoice: return 45;
                 case ChoiceRequest.Kind.PayOrTap: return 45;
                 case ChoiceRequest.Kind.TieBreak: return 30;

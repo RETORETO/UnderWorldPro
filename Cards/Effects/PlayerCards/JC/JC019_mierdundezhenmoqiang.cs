@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -63,8 +63,8 @@ namespace Cards.Effects.PlayerCards.JC
                         Kind = TargetKind.Character,
                         NeedsSelection = true,
                         IsLocalZone = true,               // "位于本地区"
-                        Restrictions = new Array<TargetRestriction> { TargetRestriction.NotStaticSubCategory },
-                        Param = "人类",                    // "非人类角色"
+                        Restrictions = new Array<TargetRestriction> { TargetRestriction.NotCurrentSubCategory },
+                        Param = "人类",                    // "非人类角色"（实例当前类别；用户 2026-09 口径）
                     },
                     Actions = new Array<EffectAction>
                     {

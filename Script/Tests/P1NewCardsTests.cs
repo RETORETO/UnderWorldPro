@@ -195,7 +195,8 @@ namespace Script.Tests
             Assert.IsTrue(jc091.LimitToActionPhaseOnly, "JC091 只能在行动阶段打出");
             var e091 = Find(jc091, "JC091_1_DestroyHuman");
             Assert.IsNotNull(e091, "JC091 应有消灭效果");
-            Assert.IsTrue(HasRestriction(e091, TargetRestriction.StaticSubCategory), "JC091 目标按印刷子类别");
+            Assert.IsTrue(HasRestriction(e091, TargetRestriction.CurrentSubCategory),
+                "JC091 目标按**实例当前类别**（卡文只写\"人类角色\"；用户 2026-09 口径：写\"印刷类别为人类\"才读模型）");
             Assert.AreEqual("人类", e091.Target.Param, "JC091 目标为人类角色");
             Assert.IsTrue(HasVerb(e091, ActionVerb.Destroy), "JC091 动作为消灭");
 

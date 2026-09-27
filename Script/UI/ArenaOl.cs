@@ -175,6 +175,16 @@ namespace Script.UI
             _arrowLayer.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
             AddChild(_arrowLayer);
 
+            // 【鼠标悬浮预览】联机侧同样接管：查看者＝本机座位（`_localPlayerId`）。
+            // 判定＝同一份 `CovertInspectRule` 单一真相源：自己的卡（含暗藏者）与公开卡可弹；
+            // **对手手牌**在联机投影里本就是隐藏占位（`IsHidden`，无模板）→ 判定直接为假；
+            // **对手暗藏者**需 JC057（未横置 + 同地区）授权 —— 但联机客户端**不持有隐藏卡的模板/卡图**
+            // （服务端只下发占位），故即便授权成立也**没有卡面可显示**：该情形留作已知联机缺口（见清单 §7.9 K8）。
+            _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = 4096 };
+            AddChild(_hoverPreview);
+            CardPreviewBus.Attach(card => Script.Manager.CovertInspectRule.CanViewerSeeCardFace(
+                card, _localPlayerId, _matchClient?.ClientCardManager), _hoverPreview, viewerPlayerId: _localPlayerId);
+
             var passBtn = GetNodeOrNull<Button>("ActionPanel/PassButton");
             if (passBtn != null) passBtn.Pressed += () => DoPass(_localPlayerId);
             var endTurnBtn = GetNodeOrNull<Button>("ActionPanel/EndTurnButton");
@@ -248,6 +258,7 @@ namespace Script.UI
         /// </summary>
         public override void _ExitTree()
         {
+            CardPreviewBus.Detach(_hoverPreview);   // 【鼠标悬浮预览】反注册（避免悬挂引用）
             DetachLauncher();
             base._ExitTree();
         }
@@ -288,6 +299,8 @@ namespace Script.UI
         private PackedScene _investigationWindowScene;   // 复用单机 InvestigationWindow.tscn
         private PackedScene _tieBreakWindowScene;        // 复用单机 TieBreakWindow.tscn
         private OnlineStrengthWindow _onlineStrengthWindow;
+        /// <summary>【鼠标悬浮预览】整张卡图的悬浮浮层（见 `CardHoverPreview` / `CardPreviewBus`）。</summary>
+        private CardHoverPreview _hoverPreview;
         private InvestigationWindow _onlineInvestigationWindow;
         private bool _onlineCombatWindowOpen;
 
@@ -319,6 +332,11 @@ namespace Script.UI
                     return OpenOnlineTriggerOrderWindow(req);
                 case Script.Net.ChoiceRequest.Kind.SelectTarget:
                     return OpenOnlineTargetSelectionWindow(req);
+                case Script.Net.ChoiceRequest.Kind.SelectActivationCost:
+                    // 【P2·联机】激活代价选择：与单机 `Arena.BeginActivateWithSacrifice` /
+                    // `BeginActivateWithCounterCostChoice` / `BeginActivateWithCounterCostAllocation`
+                    // **1:1 同款按钮窗**（同一 `ActivationChoiceItem` 列表、同样文案与"至少 1 个/重置/取消"口径）。
+                    return OpenOnlineActivationCostWindow(req);
                 case Script.Net.ChoiceRequest.Kind.MultiTargetSlot:
                 case Script.Net.ChoiceRequest.Kind.ConfirmTargets:
                 case Script.Net.ChoiceRequest.Kind.SelectEffectMode:
@@ -336,6 +354,138 @@ namespace Script.UI
         {
             if (cache == null) cache = ResourceLoader.Load<PackedScene>(path);
             return cache?.Instantiate<T>();
+        }
+
+        /// <summary>
+        /// 【P2·联机】激活**代价选择窗**（与单机三套窗 1:1）：
+        ///  · **固定/单张模式**（`Amount > 0` 或牺牲代价）：一张卡一个按钮（文案由服务端组装：
+        ///    "牺牲 X" / "从 X 上移除 N 个标志"）＋"取消（不发动）" → 回包 `SelectedUid`；
+        ///  · **逐卡分配模式**（`Amount <= 0`，JC055②"移除 X 个标志、X 由玩家选、至少 1"）：
+        ///    **复刻单机 `ShowCounterAllocationStep`** —— 点一次某张卡即记录 1 点（显示"已选 X / 共 N"），
+        ///    满额后该卡不可再加，"确认（共移除 N 个）"仅在总量 ≥ 1 时出现，另有"重置选择"与"取消（不发动）"
+        ///    → 回包 `SelectedUids` + `SelectedAmounts`（与单机 `allocation` 字典同义）。
+        /// 候选与上限**全部由服务端下发**（`OptionUids`/`OptionLabels`/`OptionMaxAmounts`/`Amount`），
+        /// 客户端只收集、不重算规则。
+        /// </summary>
+        private bool OpenOnlineActivationCostWindow(Script.Net.ChoiceRequest req)
+        {
+            var uids = req.OptionUids ?? new List<string>();
+            var labels = req.OptionLabels ?? new List<string>();
+            var maxes = req.OptionMaxAmounts ?? new List<int>();
+            // **逐卡分配模式**的判据＝服务端下发了"每张卡的现有标志数上限"（`OptionMaxAmounts` 非空）；
+            // 其余（牺牲代价 / 固定数量标志代价）＝**单张模式**（一张卡一个按钮）。
+            bool allocationMode = maxes.Count > 0;
+
+            if (allocationMode)
+            {
+                var allocation = new Dictionary<string, int>();
+                // 取消/关窗 → 回包 Cancelled（否则服务端要等超时）；同时复位本地模态
+                System.Action cancel = () =>
+                {
+                    _activationSelectionBusy = false;
+                    _matchClient?.SendChoiceResult(
+                        new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = true });
+                };
+                System.Action reopen = null;
+                reopen = () =>
+                {
+                    int total = 0;
+                    foreach (var kv in allocation) total += kv.Value;
+                    var items = new List<ActivationChoiceItem>();
+                    for (int i = 0; i < uids.Count; i++)
+                    {
+                        string uid = uids[i];
+                        int have = (i < maxes.Count) ? maxes[i] : 0;
+                        allocation.TryGetValue(uid, out int used);
+                        string name = (i < labels.Count && !string.IsNullOrEmpty(labels[i])) ? labels[i] : uid;
+                        bool full = used >= have;
+                        string capturedUid = uid;
+                        items.Add(new ActivationChoiceItem
+                        {
+                            Label = $"{name}：移除 1 个（已选 {used} / 共 {have}）",
+                            Disabled = full,
+                            OnChosen = () =>
+                            {
+                                if (!full) allocation[capturedUid] = used + 1;
+                                reopen();
+                            },
+                        });
+                    }
+                    if (total >= 1)
+                    {
+                        items.Add(new ActivationChoiceItem
+                        {
+                            Label = $"确认（共移除 {total} 个标志）",
+                            OnChosen = () =>
+                            {
+                                var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
+                                foreach (var kv in allocation)
+                                {
+                                    if (string.IsNullOrEmpty(kv.Key) || kv.Value <= 0) continue;
+                                    res.SelectedUids.Add(kv.Key);
+                                    res.SelectedAmounts.Add(kv.Value);
+                                }
+                                _activationSelectionBusy = false;
+                                _matchClient?.SendChoiceResult(res);
+                                GD.Print($"[ArenaOl] 激活标志代价已回包：{res.SelectedUids.Count} 张卡、共 {total} 个标志");
+                            },
+                        });
+                        items.Add(new ActivationChoiceItem
+                        {
+                            Label = "重置选择",
+                            OnChosen = () => { allocation.Clear(); reopen(); },
+                        });
+                    }
+                    else
+                    {
+                        items.Add(new ActivationChoiceItem
+                        {
+                            Label = "（请至少选择 1 个标志才能确认）",
+                            Disabled = true,
+                            OnChosen = () => { },
+                        });
+                    }
+                    items.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = cancel });
+                    OpenOnlineChoiceWindow(items, cancel);
+                };
+                reopen();
+                GD.Print($"[ArenaOl] 激活标志代价窗（逐卡分配）：候选 {uids.Count} 张");
+                return true;
+            }
+
+            // 固定/单张模式：一张卡一个按钮（文案由服务端给出）
+            System.Action cancelSingle = () =>
+            {
+                _activationSelectionBusy = false;
+                _matchClient?.SendChoiceResult(
+                    new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = true });
+            };
+            var single = new List<ActivationChoiceItem>();
+            for (int i = 0; i < uids.Count; i++)
+            {
+                string uid = uids[i];
+                if (string.IsNullOrEmpty(uid)) continue;
+                string label = (i < labels.Count && !string.IsNullOrEmpty(labels[i])) ? labels[i] : uid;
+                string capturedUid = uid;
+                single.Add(new ActivationChoiceItem
+                {
+                    Label = label,
+                    OnChosen = () =>
+                    {
+                        _activationSelectionBusy = false;
+                        _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                        {
+                            RequestId = req.RequestId,
+                            Cancelled = false,
+                            SelectedUid = capturedUid,
+                        });
+                    },
+                });
+            }
+            single.Add(new ActivationChoiceItem { Label = "取消（不发动）", OnChosen = cancelSingle });
+            OpenOnlineChoiceWindow(single, cancelSingle);
+            GD.Print($"[ArenaOl] 激活代价窗（单选）：候选 {uids.Count} 张");
+            return true;
         }
 
         /// <summary>战斗对抗：使用**联机专用** `OnlineStrengthWindow`（与单机视觉/操作一致，但不本地结算）；
@@ -1719,16 +1869,18 @@ namespace Script.UI
             OpenOnlineChoiceWindow(items);
         }
 
-        /// <summary>实例化联机效果选择窗口并弹出（点窗外不关闭；取消回调复位本地选择态）。</summary>
-        private void OpenOnlineChoiceWindow(List<ActivationChoiceItem> items)
+        /// <summary>实例化联机效果选择窗口并弹出（点窗外不关闭；取消回调复位本地选择态）。
+        /// `onCancelled` 非空时用调用方回调（如"激活代价窗"需要在取消时**回包 Cancelled**，否则服务端要等到超时）。</summary>
+        private void OpenOnlineChoiceWindow(List<ActivationChoiceItem> items, System.Action onCancelled = null)
         {
             if (_onlineChoiceWindow != null && GodotObject.IsInstanceValid(_onlineChoiceWindow))
                 _onlineChoiceWindow.QueueFree();
             _onlineChoiceWindow = new OnlineActivationChoiceWindow();
             AddChild(_onlineChoiceWindow);
-            _onlineChoiceWindow.OnCancelled = () => { _activationSelectionBusy = false; };
+            _onlineChoiceWindow.OnCancelled = onCancelled ?? (() => { _activationSelectionBusy = false; });
             _onlineChoiceWindow.Init(items);
             _onlineChoiceWindow.PopupCentered();
+            _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
         }
 
         /// <summary>单条激活效果在列表中的简短描述（优先 FaqNote，回退 EffectId；与单机 GetActivationAbilityLabel 一致）。</summary>
@@ -1746,7 +1898,10 @@ namespace Script.UI
             if (needsTap && inst.IsTapped) return true;
             if (e.Target != null && e.Target.NeedsSelection)
             {
-                if (e.Target.Kind == TargetKind.Area) return false;   // 地区目标本轮暂缓：无现有效果，视作可用（服务端仍权威）
+                // 【P2·联机】地区目标 / 玩家目标：候选由**服务端**下发（地区槽位高亮 / 独立选人窗），
+                // 客户端本地不判"有无合法目标"（判定权威在服务端，避免两套口径）。
+                if (e.Target.Kind == TargetKind.Area) return false;
+                if (Script.Manager.PlayerTargetPool.IsPlayerSpec(e.Target)) return false;
                 if (ComputeLegalCardTargetUids(inst, e).Count == 0) return true;
             }
             return false;
@@ -1760,16 +1915,30 @@ namespace Script.UI
             return "（无合法目标）";
         }
 
-        /// <summary>统一激活上行入口：无目标直接上行；需目标则进入"场上点击高亮"选目标，选中后上行带 targetUid。</summary>
+        /// <summary>统一激活上行入口：**选择类入参（目标地区/代价/玩家目标）由服务端接管逐项询问**（与单机那几套窗 1:1），
+        /// 客户端只在"需要**卡目标**"时本地走场上点选（与服务端同源的合法性投影）后带上 targetUid 上行。</summary>
         private void SendActivation(CardInstance inst, EffectData ability)
         {
             if (inst == null || ability == null || _matchClient == null) return;
             string name = inst.PlayerTemplate?.CardName ?? inst.CouncilTemplate?.CardName ?? "卡";
+
+            // 【K24】以**玩家**为目标的激活：候选是玩家号（非场上卡节点），由服务端经 `SelectPlayer` 下发候选
+            // ⇒ 客户端直接上行意图，服务端接管（本轮补齐联机激活路径）。
+            if (Script.Manager.PlayerTargetPool.IsPlayerSpec(ability.Target))
+            {
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, ability.EffectId, "");
+                GD.Print($"[ArenaOl] 上行 ActivateAbility(玩家目标，服务端选人): {name} effect={ability.EffectId}");
+                return;
+            }
+
             if (ability.Target != null && ability.Target.NeedsSelection)
             {
+                // 【K15】地区目标：**服务端接管**（下发 `SelectTarget`，客户端走与单机同款"地区槽位高亮 + 点击"窗）；
+                // 原先此处直接 `return`（"本轮暂缓"）⇒ JC117 的联机激活完全不可用。
                 if (ability.Target.Kind == TargetKind.Area)
                 {
-                    GD.Print($"[ArenaOl] {name} 地区目标激活暂不支持（TargetKind.Area，本轮暂缓），忽略：{ability.EffectId}");
+                    _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.ActivateAbility, inst.UID, ability.EffectId, "");
+                    GD.Print($"[ArenaOl] 上行 ActivateAbility(地区目标，服务端接管选地区): {name} effect={ability.EffectId}");
                     return;
                 }
                 BeginActivationTargetSelection(inst, ability);

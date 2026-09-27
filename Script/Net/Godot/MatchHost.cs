@@ -98,6 +98,13 @@ namespace Script.Net.Godot
 
             Game.TurnManager.InputGateway = _gateway;
             Game.CombatManager.InputGateway = _gateway;
+            // 【P0·联机决策接线修复】**必须同时注入 `EffectEngine`**：效果层的大量"玩家选择"
+            // （检索牌库 / 弃牌 / 封印取手牌 / 检视 / 可选支付 / 预测 X …）走的是**引擎自己的**
+            // `EffectEngine.InputGateway` 分支（`ExecuteVerbAsync` 等）。此前只注入了 TurnManager/CombatManager，
+            // 引擎侧永远为 null ⇒ 联机时那些效果全部落到"服务端无 UI"的**确定性兜底**
+            // （检索取第一张、弃牌弃第一张…），玩家根本没得选。
+            // 唯一会注入引擎的 `GameInitializer.SetInputGateway` 在生产路径上从未被调用（只在测试里用），故在此补齐。
+            if (Game.EffectEngine != null) Game.EffectEngine.InputGateway = _gateway;
 
             // 异步决策续算完成后主动广播快照（避免客户端完成选择后 UI 无反馈）
             _onAsyncSettlementCompletedHandler = () => PushSnapshot();
@@ -125,6 +132,8 @@ namespace Script.Net.Godot
 
             if (Game?.TurnManager != null) Game.TurnManager.InputGateway = null;
             if (Game?.CombatManager != null) Game.CombatManager.InputGateway = null;
+            // 与 StartServing 对称：解除引擎侧网关注入（避免跨局串扰 / 悬挂网关）
+            if (Game?.EffectEngine != null) Game.EffectEngine.InputGateway = null;
 
             _seatToSession.Clear();
             _sessionToSeat.Clear();

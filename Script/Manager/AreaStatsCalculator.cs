@@ -64,8 +64,9 @@ namespace Script.Manager
             // 暗藏者即使模板类别不含角色/附属，也参与（按规则暗藏者提供势力）
             if (card.IsCovert) return true;
             var tmpl = card.PlayerTemplate;
-            if (tmpl == null) return false;
-            var f = tmpl.CategoryFlag;
+            if (tmpl == null && card.EffectiveCategoryFlag == CardCategory.None) return false;
+            // 【P3·K4】用**有效类别**（含实例级形态覆盖）：JC027"成为一个地精角色"后按角色参与统计
+            var f = card.EffectiveCategoryFlag;
             // 角色(Character) 或 附属(Attachment)
             return (f & CardCategory.Character) != 0 || (f & CardCategory.Attachment) != 0;
         }

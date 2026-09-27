@@ -212,6 +212,9 @@ public partial class CardManager : Node
         instance.IsDying = true;
         try
         {
+            // 【JC124】死亡瞬间的计数器快照（必须在广播**之前**抓）：死亡触发的结算晚于"进墓地"，
+            // 而进墓地会 ResetToBaseState() 清空计数器 —— 没有快照则"具哲人石标志的角色死亡时…"类条件永不成立。
+            instance.SnapshotCountersAtDeath();
             instance.OnDeath?.Invoke(instance);   // Model 纯数据死亡事件（供其他订阅方）
             OnCardDied?.Invoke(instance);         // Controller 层既有 C# 事件（UI 订阅）
             // 触发总线：带上"死亡那一刻"的区域/地区（此即规则要求的"触发时所在地区"，与去向无关）
@@ -295,8 +298,33 @@ public partial class CardManager : Node
     }
 
     public void MoveCardToArea(CardInstance instance, string areaDetailId)
+    {
+        // 【P3·K4】"不能移动"静止规则（JC121 空鸣御守前缀；用户口径 A18/A19）：
+        //  · 仅**未结附于角色**时生效（结附后本卡随宿主一起移动，本条不适用）；
+        //  · 覆盖机动 / 效果移动 / 置换（它们全部经本方法这一个收口）。
+        if (instance != null
+            && EffectEngine.Instance?.HasPrintedStaticKind(instance, Script.Data.Effects.StaticKind.CannotMoveWhileUnattached) == true
+            && instance.AttachedTo == null)
+        {
+            GD.Print($"⛔ [CardManager] {instance.PlayerTemplate?.CardName} 未结附于角色 → 「不能移动」，拒绝移动到 {areaDetailId}");
+            return;
+        }
+        // 【P3·K21·JC064 戒严】"**所有非【国家机构】的角色牌…也不能移动进入本地区**"（用户口径 A19：
+        // "移动"**涵盖机动 / 效果移动 / 置换**）——本方法是三者**唯一收口**，故在此拦：
+        //  · 只拦**角色牌**（卡文"角色牌"）；
+        //  · 只拦"**移动进入**"＝该卡**此刻已在场上**（争夺区）的位置变更；从墓地/手牌/牌库的**放置进场**
+        //    （如"操控死尸"）按 FAQ **放行**；**秘密派遣**走 `TurnManager.DeployCovert`→`ZoneManager.MoveToArea`，
+        //    不经本方法，同样放行（FAQ 原文允许）。
+        if ((instance.EffectiveCategoryFlag & CardCategory.Character) != 0
+            && instance.CurrentZone == CardZone.AreaZone
+            && EffectEngine.Instance?.IsEntryBlockedByOrgRule(instance, areaDetailId) == true)
+        {
+            GD.Print($"⛔ [CardManager] {instance.PlayerTemplate?.CardName} 受『戒严』类静止规则限制，拒绝移动进入 {areaDetailId}");
+            return;
+        }
         // 机动移动按控制者归属（ControllerId），维持控制者不变。
-        => _zoneManager?.MoveToArea(instance, areaDetailId, instance.ControllerId);
+        _zoneManager?.MoveToArea(instance, areaDetailId, instance.ControllerId);
+    }
 
     /// <summary>
     /// 暗藏者现身入栈：将卡从当前区移入堆叠区（不重置状态，卡已在入栈前翻面为正面）。
@@ -420,8 +448,12 @@ public partial class CardManager : Node
         var staticFlags = new List<StaticKind>();
         if (r.StaticFlags != null)
             foreach (var f in r.StaticFlags) staticFlags.Add((StaticKind)f);
-        inst.RestoreProjectedState(staticFlags, r.SubCategories, r.GrantedKeywords, r.GrantedIcons,
+        inst.RestoreProjectedState(staticFlags, r.SubCategories, r.RemovedSubCategories, r.GrantedKeywords, r.GrantedIcons,
             r.GrantedAttributes, r.CurrentFirstStrikeInvestigation, r.CurrentFirstStrikeStrength);
+        // 【P3·K4】实例级形态覆盖（JC027/JC028）：类别位/卡名/印刷效果失活 随快照还原（客户端判定同解）
+        if (r.CategoryFlagOverride != 0 || !string.IsNullOrEmpty(r.CardNameOverride) || r.PrintedEffectsSuppressed)
+            inst.ApplyFormOverride((CardCategory)r.CategoryFlagOverride, r.CardNameOverride,
+                r.PrintedEffectsSuppressed, zeroPrintedStatistics: false, formEffects: null);
 
         return inst;
     }
@@ -660,11 +692,14 @@ public partial class CardManager : Node
         if (inst.CurrentZone == CardZone.Hand) return TargetKind.Hand;             // 【K14】手牌目标
         if (inst.CurrentZone == CardZone.AssetZone) return TargetKind.Asset;       // 【K14】资产目标
         if (inst.IsCovert) return TargetKind.Covert;          // 暗藏者
+        // 【P3·K4】实例级形态（JC027"成为一个地精角色"）优先于"附属区映射"：
+        // 类别覆盖里含角色 → 按**角色**参与目标合法性（用户口径：参与"目标角色"类判定）。
+        if ((inst.CategoryFlagOverride & CardCategory.Character) != 0) return TargetKind.Character;
         if (inst.IsAttached) return TargetKind.Attachment;     // 附属
         // 秘社（CouncilCardData，承载于 CouncilZone）：即便 PlayerTemplate 为 null 也要识别
         if (inst.CurrentZone == CardZone.CouncilZone || inst.CouncilTemplate != null) return TargetKind.Council;
-        if ((inst.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0) return TargetKind.Character;
-        if ((inst.PlayerTemplate?.CategoryFlag & CardCategory.Attachment) != 0) return TargetKind.Attachment;
+        if ((inst.EffectiveCategoryFlag & CardCategory.Character) != 0) return TargetKind.Character;
+        if ((inst.EffectiveCategoryFlag & CardCategory.Attachment) != 0) return TargetKind.Attachment;
         // 资产/秘社等在场上以其他区域呈现，这里仅覆盖争夺区常见种类
         return TargetKind.None;
     }
@@ -687,6 +722,20 @@ public partial class CardManager : Node
         {
             GD.Print($"⛔ [目标拦截] 装备 {tmpl.CardName} 不能以 {target.PlayerTemplate?.CardName} 为目标（不能被装备结附）");
             return false;
+        }
+
+        // 【JC081】"**除装备与祝福外不受附属**"（与上条同类实现，把"一律禁止"放宽成"白名单允许"）：
+        // 目标声明了子类别白名单（`OnlyAttachWithSubCategories.Param`，本卡＝`装备,祝福`）→
+        // **打出阶段即拦截**：结附它的附属必须命中白名单之一，否则不能以它为目标。
+        // 判定用静态 helper（读卡面印刷规则，客户端/服务端同解，不依赖 EffectEngine 实例）。
+        {
+            string whitelist = EffectEngine.GetAttachSubCategoryWhitelist(target);
+            if (whitelist != null && !EffectEngine.PassesAttachWhitelist(dragging, whitelist))
+            {
+                GD.Print($"⛔ [目标拦截] {tmpl.CardName}（子类别 {string.Join("/", dragging.CurrentSubCategories)}）"
+                       + $" 不能以 {target.PlayerTemplate?.CardName} 为目标（只受『{whitelist}』类附属结附）");
+                return false;
+            }
         }
 
         // 方案 A：逐条 TargetRule 裁决。满足【任一】规则即合法（OR）。

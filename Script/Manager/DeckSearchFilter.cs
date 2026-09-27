@@ -63,7 +63,10 @@ namespace Script.Manager
                     {
                         string sub = v.Trim();
                         // 牌库中的实例可能尚未 Initialize（CurrentSubCategories 为空），故回落到模板静态子类别。
-                        if (card.HasSubCategory(sub) || card.HasStaticSubCategory(sub)) return true;
+                        // 【P3·K4】**实例已初始化**（当前集合非空）时**不再回落**：JC036 初拥会把"人类"从实例
+                        // 当前类别里改写掉，若仍按模板匹配，`子类别:人类` 类筛选/目标筛选会与 `HasSubCategory` 分叉。
+                        bool initialized = card.CurrentSubCategories != null && card.CurrentSubCategories.Count > 0;
+                        if (card.HasSubCategory(sub) || (!initialized && card.HasStaticSubCategory(sub))) return true;
                     }
                     return false;
                 case "类别":

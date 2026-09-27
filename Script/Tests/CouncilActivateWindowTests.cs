@@ -306,5 +306,67 @@ namespace Script.Tests
             bool actual = ActivateEligibility.CanActivate(NewCouncil(0, false), tm, pm, new CardManager());
             Assert.IsTrue(actual, "正常条件（P1 先手/优先权/空堆叠/ActionFirst）下应弹出");
         }
+
+        // ==================== 【P0 回归】秘社激活的**生产路径**必须真的能入堆叠 ====================
+        // 缺陷回顾：秘社卡 `PlayerTemplate == null`（模板是 `CouncilCardData`），`GetDefaultScope` 原先返回
+        // `Specified`，而 `ScopeMatchesZone(Specified, …)` 恒 false ⇒ `EffectEngine.ActivateAbility` 的
+        // **生效区门禁无条件拒绝**秘社激活。候选侧 `CanActivateCouncil` 又不查生效区，于是症状是
+        // "秘社能点、点完没反应"（既有测试只覆盖候选侧，从未走权威路径）。
+        // 修法：新增 `ZoneScope.CouncilZone`，`GetDefaultScope` 对秘社卡返回它、`ScopeMatchesZone` 命中秘社区域。
+
+        /// <summary>真实装配（GameInitializer）下的秘社激活端到端：生效区判定 → 权威激活 → 入堆叠 → 结算。</summary>
+        public void TestCouncilActivation_生产路径可激活并入堆叠()
+        {
+            var game = new GameInitializer { DebugSeed = 71 };
+            game.InitializeAll();
+            game.StartMatch();
+            game.PlayerActionService.SetupInitialAreas(1);
+
+            // 费用：给 P1 三张未横置资产（选项1 需 3 费）
+            for (int i = 0; i < 3; i++)
+            {
+                var assetTmpl = new PlayerCardData
+                {
+                    UID = $"TS_council_mana_{i}", CardName = $"探针资产{i}", Cost = 0,
+                    CategoryFlag = CardCategory.Attachment, Defense = -1, _effectsInjected = true,
+                };
+                game.ZoneManager.MoveToAsset(game.CardManager.CreateCardInstance(assetTmpl, 1), 1);
+            }
+
+            // 秘社实例（真实路径：进秘社区）
+            var councilTmpl = new MSJC001_weimushouwang();
+            var council = game.CardManager.CreateCardInstance(councilTmpl, 1);
+            game.ZoneManager.MoveToCouncil(council, 1);
+            var effect = councilTmpl.ActivationOptions[0].EffectDataList[0];
+            Assert.AreEqual(EffectTiming.CouncilActivated, effect.Timing, "前置：秘社激活效果");
+
+            // ① 生效区判定（缺陷根因）：秘社卡默认生效区＝秘社区，且该效果在其当前区生效
+            Assert.AreEqual(ZoneScope.CouncilZone, EffectEngine.GetDefaultScope(council),
+                "秘社卡默认生效区＝**秘社区**（原为 Specified ⇒ 任何区都不匹配）");
+            Assert.IsTrue(EffectEngine.IsEffectActiveInZone(effect, council),
+                "秘社在秘社区时其激活效果的生效区判定必须成立");
+
+            // ② 候选侧仍可发动
+            game.TurnManager.FirstPlayerId = 1;
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            Assert.IsTrue(ActivateEligibility.CanActivate(council, game.TurnManager, game.PlayerManager, game.CardManager),
+                "候选侧：条件齐备时应可发动");
+
+            // ③ 权威路径：经 PlayerActionService 激活 → 必须入堆叠（原先在这里被生效区门禁拒绝）
+            int handBefore = game.TurnManager.GetHandOf(1).Count;
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            game.PlayerActionService.ActivateAbility(council, effect, null);
+
+            Assert.IsFalse(game.StackManager.IsEmpty, "**激活成功并入堆叠**（回归：原先被拒绝、堆叠为空）");
+            Assert.AreEqual(effect.EffectId, game.StackManager.Top?.EffectDataEffect?.EffectId, "堆叠顶＝秘社激活效果");
+            Assert.IsTrue(council.IsTapped, "『横置本角色』作为发动代价已生效");
+            Assert.AreEqual(manaBefore - 3, game.PlayerManager.GetAvailableMana(1), "支付 3 费");
+
+            // ④ 结算：抓 1 张
+            for (int i = 0; i < 4 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+            Assert.AreEqual(handBefore + 1, game.TurnManager.GetHandOf(1).Count, "结算后抓了 1 张牌");
+        }
     }
 }

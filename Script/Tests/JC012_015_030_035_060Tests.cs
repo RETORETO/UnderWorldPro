@@ -175,8 +175,9 @@ namespace Script.Tests
                 CardName = "驱魔人",
                 CategoryFlag = CardCategory.Character,
             };
-            // 与真实 JC015 一致：配 TargetRules 使 IsLegalActivateTarget 走精筛分支（Enemy/人类/费用），
+            // 与真实 JC015 一致：配 TargetRules 使 IsLegalActivateTarget 走精筛分支（Enemy/非人类/费用），
             // 否则无 TargetRules 时只做大类粗筛，人类/己方/费<3 不会被拦截（测试与游戏行为不一致）。
+            // 注（2026-09 用户口径）：卡文只写"非人类"→ 子类别判定走**实例当前类别**（NotCurrentSubCategory）。
             tmpl.TargetRules = new Array<TargetRule>
             {
                 new TargetRule
@@ -185,7 +186,7 @@ namespace Script.Tests
                     Restrictions = new Array<TargetRestriction>
                     {
                         TargetRestriction.Enemy,
-                        TargetRestriction.NotStaticSubCategory,
+                        TargetRestriction.NotCurrentSubCategory,
                         TargetRestriction.CostAtLeast,
                     },
                     Param = "人类|3",
@@ -205,7 +206,7 @@ namespace Script.Tests
                     Restrictions = new Array<TargetRestriction>
                     {
                         TargetRestriction.Enemy,
-                        TargetRestriction.NotStaticSubCategory,
+                        TargetRestriction.NotCurrentSubCategory,
                         TargetRestriction.CostAtLeast,
                     },
                     Param = "人类|3",
@@ -256,10 +257,10 @@ namespace Script.Tests
             Assert.IsFalse(ActivateEligibility.IsLegalActivateTarget(src, ability, selfSide, null),
                 "己方目标应非法（Enemy）");
 
-            // 人类（NotStaticSubCategory 不匹配）→ 非法
+            // 人类（NotCurrentSubCategory 不匹配）→ 非法
             var human = NewInstance("人类角色", 2, cost: 4, "人类");
             Assert.IsFalse(ActivateEligibility.IsLegalActivateTarget(src, ability, human, null),
-                "人类目标应非法（NotStaticSubCategory）");
+                "人类目标应非法（NotCurrentSubCategory：卡文『非人类』读实例当前类别）");
 
             // 费<3（CostAtLeast 不匹配）→ 非法
             var cheap = NewInstance("弱小角色", 2, cost: 2, "非人类");

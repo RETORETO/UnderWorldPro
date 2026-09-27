@@ -146,6 +146,9 @@ public partial class ZoneManager : Node
     private void RemoveFromAllZones(CardInstance card, CardZone targetZone)
     {
         bool leavingArea = card.CurrentZone == CardZone.AreaZone && targetZone != CardZone.AreaZone;
+        // 【JC119】该卡离开**手牌**（打出/弃掉/移动）→ 清除"刚由封印回手"标记（候选只认"刚回手的那批"）
+        if (card.CurrentZone == CardZone.Hand && targetZone != CardZone.Hand)
+            card.ReturnedFromSealHostUid = null;
         if (card.CurrentZone == CardZone.Deck)
             _deckManager?.RemoveFromDeck(card);   // 按旧 OwnerId 定位玩家牌库并移除（_deckManager 未注入时安全跳过）
         // 按 UID 移除所有匹配实例（而非 list.Remove(card) 只移一个引用）。
@@ -258,6 +261,8 @@ public partial class ZoneManager : Node
         {
             seal.SealedBy = null;                 // 断开双向引用（宿主列表稍后 Clear）
             seal.IsSeal = false;                  // 清除封印卡标记
+            // 【JC119】记录"因宿主离场而刚由封印回手"（死亡触发的"展示并免费打出其中一张"据此识别）
+            seal.ReturnedFromSealHostUid = host.UID;
             MoveToHand(seal, seal.OwnerId);        // 封印卡回 OWNER 手牌（不区分 AreaWon/Normal）
         }
         host.SealedCards.Clear();
@@ -878,6 +883,14 @@ public partial class ZoneManager : Node
         foreach (var f in c.StaticFlags) r.StaticFlags.Add((int)f);
         if (c.CurrentSubCategories != null)
             foreach (var s in c.CurrentSubCategories) r.SubCategories.Add(s);
+        // 【P3·K4】"被改写掉的子类别"（JC036 初拥）：必须随快照下行，否则客户端按"模板固有 ∪ 已下发集合"重建时
+        // 会把服务端已失去的类别加回来（两端 `HasSubCategory` 分叉）。
+        if (c.SuppressedSubCategories != null)
+            foreach (var s in c.SuppressedSubCategories) r.RemovedSubCategories.Add(s);
+        // 【P3·K4】实例级形态覆盖（JC027/JC028）：类别位/卡名/印刷效果失活 随快照下行（客户端判定与服务端同解）
+        r.CategoryFlagOverride = (int)c.CategoryFlagOverride;
+        r.CardNameOverride = c.CardNameOverride;
+        r.PrintedEffectsSuppressed = c.IsPrintedEffectsSuppressed;
         if (c.GrantedKeywords != null)
             foreach (var k in c.GrantedKeywords) r.GrantedKeywords.Add(k);
         if (c.GrantedIcons != null)

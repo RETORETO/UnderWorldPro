@@ -14,6 +14,7 @@ namespace Script.UI
     ///  - SelectTarget：把 OptionUids 渲染为可点选项，点选回 SelectedUid。
     ///  - SelectTriggerOrder：显示触发条目，提供"按默认顺序全部入栈"与"放弃剩余"（非强制）。
     ///  - ForceChoice：多选一（无取消）。
+    ///  - SelectHandCards【K10·JC081】：勾选任意数量手牌（可空）→ 确认 = 展示给对手；取消 = 不打出。
     ///
     /// 纪律：本类为纯 View，不写任何 Model；选项显示文字由外部注入 resolveLabel 解析，
     /// 选择结果经 onResult 回调交回 ArenaOl → NetworkMatchLauncher.SendChoiceResult 上行。
@@ -117,6 +118,9 @@ namespace Script.UI
                 case ChoiceRequest.Kind.SelectPlayer:
                     BuildPlayerTarget(request);
                     break;
+                case ChoiceRequest.Kind.SelectHandCards:
+                    BuildHandCards(request);
+                    break;
                 default:
                     BuildOptions(request);
                     break;
@@ -181,10 +185,17 @@ namespace Script.UI
         {
             if (request.OptionUids != null)
             {
-                foreach (var uid in request.OptionUids)
+                for (int i = 0; i < request.OptionUids.Count; i++)
                 {
+                    string uid = request.OptionUids[i];
                     if (string.IsNullOrEmpty(uid)) continue;
-                    string label = _resolveLabel(uid);
+                    // 【P2·联机可读性】优先用**服务端下发的显示名**（`OptionLabels`）：牌库/对手手牌/墓地等
+                    // 区域牌堆在客户端是**隐藏占位**（无模板、无卡面），本地 `_resolveLabel` 只能回退成原始 UID
+                    // ⇒ 玩家"看不到卡名却必须选"。服务端给出名字即单一真相源，客户端不重算。
+                    string label = (request.OptionLabels != null && i < request.OptionLabels.Count
+                                    && !string.IsNullOrEmpty(request.OptionLabels[i]))
+                        ? request.OptionLabels[i]
+                        : _resolveLabel(uid);
                     string capturedUid = uid;
                     var btn = new Button { Text = label };
                     btn.Pressed += () => Complete(new ChoiceResult { SelectedUid = capturedUid, Cancelled = false });
@@ -195,6 +206,49 @@ namespace Script.UI
             // SelectTarget 允许取消（放弃选择）；ForceChoice 不允许取消。
             if (request.RequestKind == ChoiceRequest.Kind.SelectTarget)
                 AddCancelIfAllowed(request);
+        }
+
+        /// <summary>
+        /// 【K10·额外费用·JC081】"**展示任意数量的手牌**"（多选）：
+        /// 勾选要展示给对手的手牌（可一张都不勾＝不展示、按全额费用照样打出）→ **确认** ＝给对手展示所有已勾选牌；
+        /// **取消**＝不打出、卡不入堆叠、不扣任何费用（对齐单机 `Arena.BeginPlayWithRevealExtraCostChoice`）。
+        /// 候选显示名由服务端随 `OptionLabels` 下发（含"（合格 -1）/（不合格）"标记）——**客户端不重算规则**。
+        /// 回包：`Confirmed=true` ＋ `SelectedUids`（已勾选，可空）；取消＝`Cancelled=true`。
+        /// </summary>
+        private void BuildHandCards(ChoiceRequest request)
+        {
+            var hint = new Label { Text = "额外费用：勾选要展示给对手的手牌（不选＝不展示，按全额费用打出）" };
+            hint.MouseFilter = Control.MouseFilterEnum.Ignore;
+            _buttonBox.AddChild(hint);
+
+            var checks = new List<(string uid, CheckBox box)>();
+            if (request.OptionUids != null)
+            {
+                for (int i = 0; i < request.OptionUids.Count; i++)
+                {
+                    string uid = request.OptionUids[i];
+                    if (string.IsNullOrEmpty(uid)) continue;
+                    string label = (request.OptionLabels != null && i < request.OptionLabels.Count
+                                    && !string.IsNullOrEmpty(request.OptionLabels[i]))
+                        ? request.OptionLabels[i]
+                        : _resolveLabel(uid);
+                    var cb = new CheckBox { Text = label };
+                    _buttonBox.AddChild(cb);
+                    checks.Add((uid, cb));
+                }
+            }
+
+            var confirm = new Button { Text = "确认（展示已勾选的手牌）" };
+            confirm.Pressed += () =>
+            {
+                var res = new ChoiceResult { Cancelled = false, Confirmed = true };
+                foreach (var (uid, cb) in checks)
+                    if (cb.ButtonPressed) res.SelectedUids.Add(uid);
+                Complete(res);
+            };
+            _buttonBox.AddChild(confirm);
+
+            AddCancelIfAllowed(request, "取消（不打出）");
         }
 
         private void BuildTriggerOrder(ChoiceRequest request)

@@ -112,7 +112,8 @@ namespace Script.Tests
             Assert.IsNotNull(tmpl, "JC087 模板应可加载");
             var e = FindEffect(tmpl, "JC087_1_LatentAllyThenPlaceMark");
             Assert.IsNotNull(e, "JC087 应有『潜伏目标 → 若你如此做放标志』");
-            Assert.AreEqual(EffectTiming.EnterTrigger, e.Timing, "时机＝进入一个地区（进场触发）");
+            Assert.AreEqual(EffectTiming.OnMove, e.Timing,
+                "时机＝『进入一个地区』（`OnMove`：位置变更**之后**；覆盖进场与跨地区移动；原挂 EnterTrigger 只覆盖进场）");
             Assert.IsFalse(e.Forced, "卡文『你可以』→ 非强制");
             Assert.AreEqual(TargetKind.Character, e.Target.Kind, "目标＝角色");
             Assert.IsTrue(e.Target.IsLocalZone, "限定本地区");

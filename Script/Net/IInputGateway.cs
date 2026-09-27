@@ -79,6 +79,23 @@ namespace Script.Net
                                //   OptionPlayerIds=候选玩家号（升序，如 [2]），Prompt=提示；
                                //   回包：SelectedPlayerId＝选中的玩家号；Cancelled=true＝取消（该触发不入堆叠）。
                                //   口径：玩家不是场上的卡节点 → 独立选择窗口；目标**入堆叠时锁定**。
+            SelectActivationCost, // 【P2·联机】**激活代价选择**（与单机 `Arena.BeginActivateWithSacrifice` /
+                               //   `BeginActivateWithCounterCostChoice` / `BeginActivateWithCounterCostAllocation`
+                               //   三套窗 **1:1** 对应；客户端用 `OnlineActivationChoiceWindow`＝单机 `ActivationChoiceWindow` 的联机孪生）：
+                               //   · OptionUids=候选卡 UID；OptionLabels=与候选同序的按钮文案（服务端组装，如"牺牲 X"/
+                               //     "从 X 上移除 1 个标志（已选 0 / 共 2）"）；
+                               //   · Amount = **固定数量模式**下需要移除的标志数（>0）；**逐卡分配模式**传 ≤0（总量由玩家自选、至少 1）；
+                               //   · OptionMaxAmounts = 逐卡分配模式：与候选同序的"该卡当前标志数"（客户端据此显示 `已选/共`）；
+                               //   · ForceChoice=true（必须选一个或取消整次激活）；
+                               //   回包：固定/单张模式 → SelectedUid；逐卡分配模式 → SelectedUids + SelectedAmounts（同序、>0 项）；
+                               //        Cancelled=true ＝取消（**不发动**，不付任何代价）。
+            SelectHandCards,   // 【K10·额外费用·JC081】"展示任意数量的手牌"（多选）：
+                               //   OptionUids=候选手牌 UID（＝打出者当前手牌），OptionCardRefs=展示引用，
+                               //   OptionLabels=与候选同序的显示名（含"（合格 -1）/（不合格）"标记），
+                               //   NumberMax=最多可选张数（＝候选数），ForceChoice=false（允许"一张都不展示"）；
+                               //   回包：Confirmed=true ＋ SelectedUids=**已选（有序）**的牌（**可空**＝不展示、全额支付）；
+                               //        Cancelled=true ＝取消整次打出（不扣任何费用）。
+                               //   口径（A22/A23）：不展示＝没有减免但照样能打出；取消＝不打出、卡不入堆叠、不扣费。
         }
 
         /// <summary>请求唯一标识，用于服务端将回包与挂起请求匹配（correlation id）。</summary>

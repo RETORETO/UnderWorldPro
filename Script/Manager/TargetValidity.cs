@@ -257,6 +257,12 @@ namespace Script.Manager
                         // 与 CostAtLeast 共用 param 时，按 '|' 分段：第0段为本限制的参数（如"人类"）。
                         if (t.HasStaticSubCategory(param.Split('|')[0])) return false;
                         break;
+                    case TargetRestriction.NotCurrentSubCategory:
+                        // 【P3·K4】"非某类别"的**实例口径**（当前实际子类别，含运行期授予与"被改写掉的类别"）。
+                        // 用户 2026-09 口径：卡文只写"人类/非人类"的读实例；写"**印刷类别**为人类"的才读模板。
+                        // 与 CostAtLeast 共用 param 时，按 '|' 分段：第0段为本限制的参数（如"人类"）。
+                        if (t.HasSubCategory(param.Split('|')[0])) return false;
+                        break;
                     case TargetRestriction.CostAtLeast:
                         // 目标静态印刷费用门槛：低于 Param（整数文本）即不通过（读 PlayerTemplate.Cost 静态数据）。
                         // 与 NotStaticSubCategory 共用 param 时，按 '|' 分段：第1段为本限制的参数（如"3"）。

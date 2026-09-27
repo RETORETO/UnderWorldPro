@@ -108,6 +108,9 @@ public partial class GameInitializer : Node
         var eventBus = new Script.Manager.GameEventBus();
         var triggerEmitPoints = new Script.Manager.TriggerEmitPoints(eventBus);
         var triggerRegistry = new Script.Manager.TriggerRegistry(eventBus);
+        // 【JC124·构筑级（卡组级）全局触发】收集器注入：与常规场上扫描并轨（同一批收集 → 同一套触发管线）。
+        // 语义＝"只要这张牌一开始加入玩家卡组就能触发、且离场后仍然生效"，登记见 `DeckLevelTriggerRule.RegisterFromDeck`。
+        triggerRegistry.DeckLevelCollector = Script.Manager.DeckLevelTriggerRule.Collect;
         if (VerboseSetup) GD.Print("  ✅ 触发系统三实例（GameEventBus / TriggerEmitPoints / TriggerRegistry）");
 
         // 0.9【MVC 收口】EffectEngine 实例（原 static class → 实例 + Instance 单例）。
@@ -134,6 +137,16 @@ public partial class GameInitializer : Node
             if (kind == CardChangeKind.TappedChanged) effectEngine.ReevaluatePrereqs(card.ControllerId);
             else if (kind == CardChangeKind.CovertChanged)
             {
+                // 【用户口径·2026-09】"暗藏者的持续/静止效果也不生效"→ 翻面时**重算持久效果注册**：
+                //  · 翻为暗藏者（潜伏）→ 注销（`UnregisterPersistent` 会清掉静止标记与地区级静止规则登记）；
+                //  · 翻为正面（现身）→ 重新注册（`RegisterPersistent` 会重新授予/登记）。
+                // 放在本分支**最前面**：先让规则集合与新朝向一致，再做后续的重判/触发广播
+                // （否则 OnLatent/Uncover 类触发会读到旧规则集合）。
+                if (card.CurrentZone == CardZone.AreaZone || card.CurrentZone == CardZone.AttachedZone)
+                {
+                    if (card.IsCovert) effectEngine.UnregisterPersistent(card);
+                    else effectEngine.RegisterPersistent(card);
+                }
                 effectEngine.ReevaluateAuras(card.ControllerId);
                 // 【P3·F】翻面也会改变"你操控的暗藏者数量"（JC037 每操控一个暗藏者 → 一个黑眼）→ 双方都重判
                 effectEngine.ReevaluatePrereqs(card.ControllerId);
@@ -141,6 +154,11 @@ public partial class GameInitializer : Node
                 // 【P3·"被潜伏/翻面时"】只在本卡**翻为暗藏者**时广播（反方向＝现身，走既有 UncoverTrigger）。
                 if (card.IsCovert)
                     triggerEmitPoints.OnLatent(card, card.ControllerId, card.ZoneDetailId ?? "");
+                // 【P3·K4】通用规则（用户 2026-09 口径，来源 JC036 初拥 FAQ 第二条）：
+                // **宿主翻面为暗藏者 ⇒ 其上「结附于角色」的附属被消灭**（消灭＝死亡，照常走墓地与死亡触发）。
+                // 放在本分支末尾：翻面自身的时机广播先完成，附属的死亡触发再进收集管线（同批由玩家排序）。
+                if (card.IsCovert)
+                    Script.Manager.AttachmentRule.EnforceOnCovertChange(card, CardManager);
             }
         };
         CardManager.OnCardStateChanged -= _cardStateContinuityHandler;
