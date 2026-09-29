@@ -14,11 +14,16 @@ namespace Script.Manager
     ///
     /// 职责：
     /// 1. 统一解析并结算 EffectData（B/C/F 三组共用结构）。
-    /// 2. 实现动作原语执行器（ActionVerb）：已落地 Tap/Untap/Destroy/Bounce/Move/Draw/Gain/Sacrifice，
-    ///    其余原语为占位（打印 TODO），不影响数据结构定稿与流程跑通。
+    /// 2. 实现动作原语执行器（ActionVerb）：**绝大多数原语已落地**（Tap/Untap/Latent/Uncover/Destroy/Bounce/Move/
+    ///    Sacrifice/Gain/Attach/Seal/Curb/Search/Reveal/Shuffle/Pay/Discard/PrepareUpkeep/DealDamage/PreventDamage/
+    ///    PlaceToken/RemoveToken/PlaceCounter/Draw/DrawFromBottom/Predict/PutToArea/PayOptional/MoveToZone/Inspect/
+    ///    GainControl/DestroyOnTarget/SkipAreaCombat/ReplaceIcon/RevealTopAndTakeIfCostIs/SacrificeSelfOptional/
+    ///    TransformForm/RevealSealedAndQueueFreePlay/PayOrSacrificeSelf/BribeOrSacrifice/SacrificeChoice…）。
+    ///    **仍未实现的只有 6 个**：`GenerateToken`/`Investigate`/`Strength`/`Power`（各自显式 PrintErr＋break，见 `ExecuteVerb`）
+    ///    与 `Win`/`Lose`（仅打 TODO）；**当前无任何卡声明这 6 个动词**（休眠项，不是现行缺陷）。
     /// 3. 持续效果注册表（ContinuousRegistry）：按 ZoneScope 注册/注销（手牌期靠 HasInherentKeyword 双层补判）。
     /// 4. 触发收集：从卡实例的 EffectDataList 收集进场/现身触发，供 TurnManager/TriggerRegistry 桥接。
-    /// 5. 激活能力入口：角色/附属激活（D9 激活框架未实现，这里提供执行体）。
+    /// 5. 激活能力入口：角色/附属/**秘社**激活（`ActivateAbility`，含代价/目标地区/玩家目标等入参）。
     /// 6. 时效修正栈（P2）："直到回合结束"类修正于 ExpireTurnEndEffects 自动还原。
     ///
     /// 触发驱动：反应/机动触发由监听总线（GameEventBus + TriggerRegistry）收集；
@@ -1055,7 +1060,8 @@ namespace Script.Manager
             ExecuteVerb(action, source, target, durationText, targetAreaId);
         }
 
-        /// <summary>执行单个动作原语。未实现者打印 TODO 占位。</summary>
+        /// <summary>执行单个动作原语。**未实现的原语 = `GenerateToken`/`Investigate`/`Strength`/`Power`（各自显式报错）
+        /// 与 `Win`/`Lose`（仅打 TODO）**——除这 6 个外其余动词均有执行体（详见类顶职责 2）。</summary>
         private void ExecuteVerb(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
         {
             switch (action.Verb)

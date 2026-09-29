@@ -110,6 +110,13 @@ namespace Script.Net.Godot
             _onAsyncSettlementCompletedHandler = () => PushSnapshot();
             Game.TurnManager.OnAsyncSettlementCompleted += _onAsyncSettlementCompletedHandler;
 
+            // 【联机开局·调度步骤】必须在**网关注入 + 绑座之后**才下发（调度请求是首个决策请求，
+            // 需要"座位→会话"解析才能送达到玩家）。此前在 GameInitializer.StartMatch 内触发时网关尚未注入，
+            // 导致 _inputGateway == null 而整段被跳过（调度提示框不弹出）。
+            // 此处改为：StartServing 完成后，先推一份初始快照让客户端进入对局界面，再进入调度。
+            PushSnapshot();
+            _ = Game.TurnManager.BeginMulliganAsync();
+
             // 结束信号（房间层据此宣布结果；批次 5 会在此广播 RoomState(Finished)）
             if (Game.PlayerManager != null)
                 Game.PlayerManager.OnGameOver += OnPlayerManagerGameOver;

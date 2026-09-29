@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -459,7 +459,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     new ActivationChoiceItem
                     {
                         Label = "正常现身",
-                        OnChosen = () => _actionService.RevealCovert(_turnManager.PriorityPlayerId, inst.UID),
+                        OnChosen = () => RevealCovertWithExtraCost(_turnManager.PriorityPlayerId, inst),
                     },
                 };
                 foreach (var ab in covertAbilities)
@@ -475,7 +475,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 OpenChoiceWindow($"{inst.PlayerTemplate?.CardName}：选择行动", items, force: true);
                 return;
             }
-            _actionService.RevealCovert(_turnManager.PriorityPlayerId, c.Instance.UID);
+            RevealCovertWithExtraCost(_turnManager.PriorityPlayerId, c.Instance);
         };
         // 附属卡双击激活：与秘社双击一致，单击不再弹窗（JC012 交互修正）。
         _onAttachmentDoubleClickedForward = (c) =>
@@ -2043,11 +2043,22 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             ShowRevealChoiceStep(card, cardUI, playerId, hand, targetAreaName, targetCardUid, candidates, selected);
         }
 
-        /// <summary>【K10·JC081】展示手牌选择的一步（可反复调用：每次点击后重开窗口刷新选择态）。</summary>
+        /// <summary>【K10·JC081】展示手牌选择的一步（可反复调用：每次点击后重开窗口刷新选择态）。
+        /// 【统一实现】完成回调参数化：**打出**（`FinishPlayWithRevealExtraCost`）与**暗藏者现身**
+        /// （`RevealCovertWithExtraCost`）共用同一套选择 UI（用户口径：现身同样要校验额外费用）。</summary>
         private void ShowRevealChoiceStep(CardInstance card, CardUI cardUI, int playerId, List<CardUI> hand,
             string targetAreaName, string targetCardUid,
             System.Collections.Generic.List<CardInstance> candidates,
             System.Collections.Generic.List<CardInstance> selected)
+            => ShowRevealChoiceStepGeneric(card, candidates, selected,
+                sel => FinishPlayWithRevealExtraCost(card, cardUI, playerId, hand, targetAreaName, targetCardUid, sel),
+                cancelLabel: "取消（不打出）");
+
+        /// <summary>【K10·统一实现】展示手牌多选窗（逐张增删 + 确认/取消）：`onConfirm(selected)` 由调用方落地。</summary>
+        private void ShowRevealChoiceStepGeneric(CardInstance card,
+            System.Collections.Generic.List<CardInstance> candidates,
+            System.Collections.Generic.List<CardInstance> selected,
+            System.Action<System.Collections.Generic.List<CardInstance>> onConfirm, string cancelLabel)
         {
             var tmpl = card.PlayerTemplate;
             int qualified = 0;
@@ -2068,18 +2079,91 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     OnChosen = () =>
                     {
                         if (on) selected.Remove(captured); else selected.Add(captured);
-                        ShowRevealChoiceStep(card, cardUI, playerId, hand, targetAreaName, targetCardUid, candidates, selected);
+                        ShowRevealChoiceStepGeneric(card, candidates, selected, onConfirm, cancelLabel);
                     },
                 });
             }
             items.Add(new ActivationChoiceItem
             {
                 Label = $"确认（展示 {selected.Count} 张，其中合格 {qualified} 张 → 费用 -{qualified}）",
-                OnChosen = () => FinishPlayWithRevealExtraCost(card, cardUI, playerId, hand,
-                    targetAreaName, targetCardUid, selected),
+                OnChosen = () => onConfirm?.Invoke(selected),
             });
-            items.Add(new ActivationChoiceItem { Label = "取消（不打出）", OnChosen = () => { } });
+            items.Add(new ActivationChoiceItem { Label = cancelLabel, OnChosen = () => { } });
             OpenChoiceWindow($"额外费用：选择要展示给对手的手牌（当前减免 {qualified}）", items, force: true);
+        }
+
+        /// <summary>
+        /// 【K10·现身】单机：暗藏者现身前的额外费用选择（与打出 **1:1** 同款窗口；用户口径：现身同样要校验额外费用）：
+        ///  · `RevealHandCards`（JC081，可选）→ 手牌多选窗（确认＝展示并减免；取消＝不现身）；
+        ///  · `SacrificeCharacter`（必须支付）→ 牺牲候选选择窗；
+        ///  · `PayTargetCost` / 无候选 → **不现身**（fail-closed；权威侧同样会拒绝）；
+        ///  · 无额外费用 → 直接现身。
+        /// </summary>
+        private void RevealCovertWithExtraCost(int playerId, CardInstance inst)
+        {
+            if (inst == null) return;
+            var tmpl = inst.PlayerTemplate;
+            var spec = tmpl?.ExtraCost;
+            if (spec == null || spec.Kind == ExtraCostKind.None)
+            {
+                _actionService.RevealCovert(playerId, inst.UID);
+                return;
+            }
+            System.Action<System.Collections.Generic.List<CardInstance>> revealFinish = sel =>
+            {
+                var uids = new System.Collections.Generic.List<string>();
+                foreach (var s in sel) if (s != null) uids.Add(s.UID);
+                _actionService.RevealCovert(playerId, inst.UID, null, uids);
+                RefreshActivateHighlights();
+            };
+
+            switch (spec.Kind)
+            {
+                case ExtraCostKind.RevealHandCards:
+                {
+                    var candidates = _actionService.GetExtraCostRevealCandidates(playerId, inst);
+                    if (candidates == null || candidates.Count == 0)
+                    {
+                        // 无可展示手牌：该形态为可选 ⇒ 直接全额现身（mandatory 时权威侧会拒绝）
+                        _actionService.RevealCovert(playerId, inst.UID);
+                        return;
+                    }
+                    ShowRevealChoiceStepGeneric(inst, candidates,
+                        new System.Collections.Generic.List<CardInstance>(), revealFinish, cancelLabel: "取消（不现身）");
+                    return;
+                }
+                case ExtraCostKind.SacrificeCharacter:
+                {
+                    var sacSpec = spec.Sacrifice ?? new SacrificeCostSpec();
+                    var cands = EffectEngine.Instance?.GetSacrificeCandidates(inst, sacSpec)
+                                ?? new System.Collections.Generic.List<CardInstance>();
+                    if (cands.Count == 0)
+                    {
+                        GD.PrintErr($"[Arena] 【K10 额外费用】{tmpl.CardName} 现身：无合法牺牲对象 → 不能现身");
+                        return;
+                    }
+                    var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+                    foreach (var c in cands)
+                    {
+                        var picked = c;
+                        items.Add(new ActivationChoiceItem
+                        {
+                            Label = $"牺牲 {picked.PlayerTemplate?.CardName}（现身额外费用）",
+                            OnChosen = () =>
+                            {
+                                _actionService.RevealCovert(playerId, inst.UID, picked.UID);
+                                RefreshActivateHighlights();
+                            },
+                        });
+                    }
+                    items.Add(new ActivationChoiceItem { Label = "取消（不现身）", OnChosen = () => { } });
+                    OpenChoiceWindow("额外费用：选择要牺牲的角色（现身）", items, force: true);
+                    return;
+                }
+                default:
+                    GD.PrintErr($"[Arena] 【K10 额外费用】{tmpl.CardName} 的额外费用（{spec.Kind}）在现身路径无法满足 → 不能现身");
+                    return;
+            }
         }
 
         /// <summary>【K10·JC081】带"已选展示手牌"完成打出 + 手牌/UI 整理。</summary>

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot;
 
 namespace Script.Tests
@@ -147,6 +147,9 @@ namespace Script.Tests
                 new P4CovertContinuousTests(),         // 暗藏者（背面朝上）的持续/静止效果失效（与触发/激活/光环对齐）
                 new P4OnlineGuardTests(),              // 联机回包权威复检（检索/弃牌越权回包被拒）+ 候选显示名随请求下发
                 new P4OnlineActivationTests(),         // 联机激活接管：目标地区（JC117）/ 牺牲代价 / 标志代价逐卡分配（1:1 单机窗）
+                new P4RevealExtraCostTests(),          // K10 现身校验额外费用（JC081 展示减免 / 必须支付类 fail-closed）+ 联机接管
+                new P5FlowOptimizationTests(),         // 流程优化：步骤中文名 / 免让过推进 / 优先权交换修复 / 秘社起手数 / 调度结算 / 卡组张数校验
+                new P5CouncilRestrictionTests(),       // 秘社构筑限制：CouncilRestriction.Describe / ValidateDeckDetailed / MSJC001 需 ≥25 张黄色牌
             };
 
             var redlines = new List<string>();

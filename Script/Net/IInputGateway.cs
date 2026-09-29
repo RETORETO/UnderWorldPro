@@ -96,6 +96,12 @@ namespace Script.Net
                                //   回包：Confirmed=true ＋ SelectedUids=**已选（有序）**的牌（**可空**＝不展示、全额支付）；
                                //        Cancelled=true ＝取消整次打出（不扣任何费用）。
                                //   口径（A22/A23）：不展示＝没有减免但照样能打出；取消＝不打出、卡不入堆叠、不扣费。
+            SelectMulligan,    // 【开局·调度步骤】发完起手手牌后、第一回合开始前，双方各选择**任意数量**手牌调度：
+                               //   OptionUids=该玩家当前全部手牌 UID，OptionCardRefs=展示引用，
+                               //   NumberMax=可选上限（＝候选手牌数），ForceChoice=false（允许"一张都不换"）；
+                               //   回包：Confirmed=true ＋ SelectedUids=**已选**的牌（可空）；
+                               //        Cancelled=true ＝视同未选（等价空选择，**不阻塞开局**）。
+                               //   服务端等**双方**都回包后统一结算：所选牌置牌库底 → 从牌库顶抽等量 → 洗牌。
         }
 
         /// <summary>请求唯一标识，用于服务端将回包与挂起请求匹配（correlation id）。</summary>

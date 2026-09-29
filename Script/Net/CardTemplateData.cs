@@ -72,6 +72,8 @@ namespace Script.Net
         // ---- Council（秘社卡）----
         public int StartingHandSize = 6;
         public List<string> CouncilEffects = new List<string>();
+        /// <summary>秘社构筑限制（可读文案；供客户端展示"构筑限制"提示，服务端权威校验仍以 tres 为准）。</summary>
+        public List<string> Restrictions = new List<string>();
         public string CardText;
         public string MainType = "秘社";
         public string SubType;

@@ -285,6 +285,17 @@ public partial class CardManager : Node
         => _zoneManager?.MoveToHand(instance, instance.OwnerId);
 
     /// <summary>
+    /// 【开局·调度步骤】把一张牌放回其所有者的牌库底（手牌 → 牌库底）。
+    /// 收口到 Controller，保证手牌列表/区域桶/牌库数据层一致（与 `MoveCardToHand` 对称）。
+    /// </summary>
+    public void MoveCardToDeckBottom(CardInstance instance, int playerId)
+    {
+        if (instance == null) return;
+        EE?.UnregisterContinuous(instance);
+        _zoneManager?.MoveToDeckBottom(instance, playerId, false);
+    }
+
+    /// <summary>
     /// 退回手牌（MVC 收口）：先由 Controller 重置实例基础状态，再委托 ZoneManager 移动。
     /// 原实现中 View（Arena.ReturnCardToHand）直接调用 instance.ResetToBaseState() 修改 Model，
     /// 现已收口至此，确保 Model 状态变更只经 Controller 发生。

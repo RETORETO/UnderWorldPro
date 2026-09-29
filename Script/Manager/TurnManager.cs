@@ -140,6 +140,55 @@ public partial class TurnManager : Node
     // ============================================================
     private int _passCount = 0;
 
+    // ============================================================
+    // 【规则简化】免让过步骤的自动推进
+    // ------------------------------------------------------------
+    // 重置步骤 / 恢复步骤 / 移交先手不再等待"双方连续让过"：
+    //   · 重置、恢复：各自 `DoXxx` 末尾调用 `TryAutoAdvance()`——**仅当堆叠为空**时直接推进
+    //     （堆叠非空＝有触发待响应，仍走既有让过窗口，保持"响应窗口隔离在阶段外"的语义）；
+    //   · 移交先手：原本就直接 `NextTurn()`，不经让过。
+    // 递归保护：`DoPassTurn → NextTurn → EnterPhase(StartReset) → DoReset → TryAutoAdvance` 会形成
+    // "重置→准备"的自动链（重置免让过后必然继续推进），再加用户效果触发可能出现更长的连续自动推进；
+    // 用 `_autoAdvanceDepth` 计数兜底，超过阈值即告警并停止自动推进（退回让过窗口），防止递归过深/死循环。
+    // ============================================================
+    private int _autoAdvanceDepth = 0;
+    private const int MaxAutoAdvanceDepth = 8;
+
+    /// <summary>
+    /// 【规则简化】免让过步骤的推进入口：**堆叠为空**时立即 `AdvancePhase()`，否则保持既有让过窗口不动。
+    /// 仅在 `IsAutoAdvanceStep` 覆盖的步骤（重置 / 恢复）末尾调用。
+    /// </summary>
+    private void TryAutoAdvance()
+    {
+        if (!IsAutoAdvanceStep(CurrentPhase)) return;
+
+        int stackCount = _stackManager?.Entries.Count ?? 0;
+        if (stackCount > 0)
+        {
+            // 堆叠非空：有触发/效果待结算 → 仍需在优先权窗口内让过（本步骤不再自动推进）
+            if (VerboseSteps)
+                GD.Print($"⏭ [TurnManager] 【{CurrentPhaseDisplayName}】免让过步骤但堆叠非空（{stackCount} 项），转为等待双方让过");
+            return;
+        }
+
+        if (_autoAdvanceDepth >= MaxAutoAdvanceDepth)
+        {
+            GD.PrintErr($"⚠ [TurnManager] 免让过自动推进深度达上限（{MaxAutoAdvanceDepth}），停止自动推进，退回让过窗口（阶段={CurrentPhase}）");
+            return;
+        }
+
+        _autoAdvanceDepth++;
+        try
+        {
+            GD.Print($"⏭ [TurnManager] 【{CurrentPhaseDisplayName}】免让过步骤：结算完毕且堆叠为空 → 直接推进下一阶段");
+            AdvancePhase();
+        }
+        finally
+        {
+            _autoAdvanceDepth--;
+        }
+    }
+
     /// <summary>对抗阶段的地区游标：本回合参与对抗的地区列表快照（按编号从小到大）。
     /// 进入 ActionSecond → CombatInvestigation 时建立，避免结算过程中地区增删导致索引错乱。</summary>
     private System.Collections.Generic.List<string> _combatAreaUids = new System.Collections.Generic.List<string>();
@@ -500,6 +549,148 @@ public partial class TurnManager : Node
         GD.Print($"=== 开始回合 {TurnCount}，先手玩家: {FirstPlayerId} ===");
         OnTurnStarted?.Invoke(TurnCount);
         EnterPhase(TurnPhase.StartReset);
+    }
+
+    // ============================================================
+    // 【开局·调度步骤】（联机）
+    // ------------------------------------------------------------
+    // 时序：双方起手手牌已发（GameInitializer.StartMatch）→ **本方法**（双方选择调度）→ StartGame（第一回合）。
+    // 结算口径（用户 2026-09）：双方都点确认后，把**高亮（所选）手牌**放到牌库底，
+    // 然后各从**牌库顶**抽回等量张，最后洗牌。
+    // 说明：仅联机（InputGateway 注入）启用；单机由 StartMatch 直接 StartGame，不走本步骤。
+    // ============================================================
+    private bool _isMulliganPhase;
+    /// <summary>是否处于开局调度步骤（供 UI 判断是否显示调度提示框 / 冻结常规交互）。</summary>
+    public bool IsMulliganPhase => _isMulliganPhase;
+
+    /// <summary>调度步骤完成事件（供服务端广播快照、UI 收起提示框）。</summary>
+    public event Action OnMulliganCompleted;
+
+    /// <summary>
+    /// 【开局·调度步骤】联机入口：并行向双方请求"选择要调度的手牌"，双方都回包后统一结算，
+    /// 然后调用 `StartGame()` 正式进入第一回合（重置步骤）。
+    /// 幂等保护：重复调用（如重连）若已在调度中则直接返回。
+    /// </summary>
+    public async System.Threading.Tasks.Task BeginMulliganAsync()
+    {
+        if (_isMulliganPhase)
+        {
+            GD.Print("[TurnManager] 调度步骤已在进行中，忽略重复调用");
+            return;
+        }
+        if (InputGateway == null || _cardManager == null)
+        {
+            GD.Print("[TurnManager] 调度步骤跳过（无 InputGateway / CardManager）：直接开始第一回合");
+            StartGame();
+            return;
+        }
+
+        _isMulliganPhase = true;
+        GD.Print("=== [TurnManager] 开局调度步骤开始（双方选择任意数量手牌调度）===");
+
+        try
+        {
+            // 并行请求双方（互不阻塞；各自超时/取消视同"不调度"）
+            var t1 = RequestMulliganAsync(1);
+            var t2 = RequestMulliganAsync(2);
+            var picks = await System.Threading.Tasks.Task.WhenAll(t1, t2);
+
+            // 双方都收齐后统一结算（注意：必须先取出全部所选 UID，再动牌库，避免边遍历边改动）
+            for (int i = 0; i < picks.Length; i++)
+                ApplyMulligan(i + 1, picks[i]);
+        }
+        catch (System.Exception ex)
+        {
+            GD.PrintErr($"[TurnManager] 调度步骤异常（按不调度处理）: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            _isMulliganPhase = false;
+        }
+
+        GD.Print("=== [TurnManager] 调度步骤完成，开始第一回合 ===");
+        OnMulliganCompleted?.Invoke();
+        OnAsyncSettlementCompleted?.Invoke();   // 服务端据此广播一次快照（调度后的手牌/牌库）
+        StartGame();
+    }
+
+    /// <summary>向单个玩家请求调度选择；返回所选（要换掉）的手牌 UID 列表（取消/超时 → 空列表）。</summary>
+    private async System.Threading.Tasks.Task<List<string>> RequestMulliganAsync(int playerId)
+    {
+        var hand = GetHandOf(playerId);
+        if (hand.Count == 0) return new List<string>();
+
+        var req = new Script.Net.ChoiceRequest
+        {
+            PlayerId = playerId,
+            RequestKind = Script.Net.ChoiceRequest.Kind.SelectMulligan,
+            Prompt = "选择要调度的手牌（点击手牌高亮，点确认锁定；再点一次可取消选中）",
+            ForceChoice = false,
+            NumberMax = hand.Count,
+        };
+        foreach (var c in hand)
+        {
+            if (c == null) continue;
+            req.OptionUids.Add(c.UID);
+            req.OptionCardRefs.Add(ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+            req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
+        }
+
+        var res = await InputGateway.RequestChoice(playerId, req);
+        var picked = new List<string>();
+        if (res == null || res.Cancelled) return picked;   // 取消/超时 → 视同不调度
+
+        // 权威复检：必须命中服务端下发的候选，且去重
+        var allowed = new System.Collections.Generic.HashSet<string>(req.OptionUids, System.StringComparer.Ordinal);
+        if (res.SelectedUids != null)
+        {
+            var seen = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var uid in res.SelectedUids)
+            {
+                if (string.IsNullOrEmpty(uid) || !allowed.Contains(uid)) continue;
+                if (!seen.Add(uid)) continue;
+                picked.Add(uid);
+            }
+        }
+        GD.Print($"[TurnManager] 玩家{playerId} 调度选择 {picked.Count} 张（手牌共 {hand.Count} 张）");
+        return picked;
+    }
+
+    /// <summary>
+    /// 结算某玩家的调度：所选手牌 → 牌库底；再从牌库顶抽等量张；最后洗牌。
+    /// 逐张经 `CardManager` 收口，保证手牌列表 / CurrentZone / 区域桶一致。
+    /// </summary>
+    private void ApplyMulligan(int playerId, List<string> pickedUids)
+    {
+        if (pickedUids == null || pickedUids.Count == 0)
+        {
+            GD.Print($"[TurnManager] 玩家{playerId} 未调度（0 张）");
+            return;
+        }
+
+        var picked = new List<CardInstance>();
+        foreach (var uid in pickedUids)
+        {
+            var inst = _cardManager.GetInstance(uid);
+            if (inst == null) continue;
+            if (inst.CurrentZone != CardZone.Hand) continue;   // 必须在手牌
+            if (inst.OwnerId != playerId) continue;            // 必须是自己的手牌
+            picked.Add(inst);
+        }
+        if (picked.Count == 0) return;
+
+        // ① 所选手牌 → 牌库底（逐张经 CardManager 收口）
+        foreach (var c in picked)
+            _cardManager.MoveCardToDeckBottom(c, playerId);
+
+        // ② 从牌库顶抽等量张（此时牌库顶＝未被换掉的原牌库顶）
+        for (int i = 0; i < picked.Count; i++)
+            DrawCardsForPlayer(playerId, 1);
+
+        // ③ 洗牌
+        ShuffleDeckOf(playerId);
+
+        GD.Print($"[TurnManager] 玩家{playerId} 调度结算完成：{picked.Count} 张置底 → 顶抽 {picked.Count} 张 → 洗牌");
     }
 
     // ============================================================
@@ -2897,6 +3088,105 @@ public partial class TurnManager : Node
         return EE.GetSacrificeCandidates(card, spec) ?? empty;
     }
 
+    /// <summary>
+    /// 【K10·额外费用·统一实现】**打出**与**暗藏者现身**共用的额外费用解析：
+    /// 把卡声明的 `PlayerCardData.ExtraCost` 解析成四个量（牺牲对象 / 展示的手牌 / 额外费用 / 一次性减免），
+    /// 并在解析期做完整校验（fail-closed）：
+    ///  · `SacrificeCharacter`（JC049，**必须支付**）：候选＝本方场上正面角色；指定 UID 必须命中候选，
+    ///    未指定 → 确定性兜底取第一个（与"牺牲代价"同款纪律）；**无候选 → 失败**；
+    ///  · `PayTargetCost`（JC135，**必须支付**）：X＝目标印刷费用；**无目标 → 失败**（故"现身"路径下
+    ///    该形态无法满足 ⇒ 拒绝现身，绝不放行未付额外费用的现身）；
+    ///  · `RevealHandCards`（JC081，**可选**）：展示的牌必须在**该玩家手牌**内且**不含本卡自身**（防自我减费）；
+    ///    命中 `RevealFilter` 的张数＝一次性减免；未提供且 `Mandatory` → 失败。
+    /// 返回 false 时 `failReason` 给出原因（调用方自行打日志/拒绝本次动作）。
+    /// </summary>
+    private bool TryResolveExtraCost(PlayerCardData tmpl, CardInstance instance, int playerId, string targetCardUid,
+        string extraSacrificeUid, System.Collections.Generic.IList<string> extraRevealUids,
+        out CardInstance extraSacrifice, out System.Collections.Generic.List<CardInstance> extraRevealCards,
+        out int extraMana, out int extraDiscount, out string failReason)
+    {
+        extraSacrifice = null;
+        extraRevealCards = new System.Collections.Generic.List<CardInstance>();
+        extraMana = 0;
+        extraDiscount = 0;
+        failReason = null;
+        var extraSpec = tmpl?.ExtraCost;
+        if (extraSpec == null || extraSpec.Kind == ExtraCostKind.None) return true;
+
+        switch (extraSpec.Kind)
+        {
+            case ExtraCostKind.SacrificeCharacter:
+            {
+                var sacSpec = extraSpec.Sacrifice ?? new SacrificeCostSpec();
+                var candidates = EE.GetSacrificeCandidates(instance, sacSpec);
+                if (candidates.Count == 0)
+                {
+                    failReason = "无合法牺牲对象（该额外费用必须支付）";
+                    return false;
+                }
+                if (!string.IsNullOrEmpty(extraSacrificeUid))
+                {
+                    extraSacrifice = candidates.Find(c => string.Equals(c.UID, extraSacrificeUid, System.StringComparison.Ordinal));
+                    if (extraSacrifice == null)
+                    {
+                        failReason = $"指定的牺牲候选 {extraSacrificeUid} 不合法";
+                        return false;
+                    }
+                }
+                else
+                {
+                    extraSacrifice = candidates[0];
+                    GD.Print($"[TurnManager] ⚠ 【K10 额外费用】未指定牺牲候选 → 确定性兜底取第一个合法候选（{extraSacrifice.PlayerTemplate?.CardName}）");
+                }
+                return true;
+            }
+            case ExtraCostKind.PayTargetCost:
+            {
+                var payTarget = string.IsNullOrEmpty(targetCardUid) ? null : _cardManager?.GetInstance(targetCardUid);
+                if (payTarget == null)
+                {
+                    failReason = "需先选定目标（X＝目标印刷费用），当前无目标";
+                    return false;
+                }
+                extraMana = Math.Max(0, payTarget.PlayerTemplate?.Cost ?? 0);
+                GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：X＝目标 {payTarget.PlayerTemplate?.CardName} 的印刷费用 {extraMana}");
+                return true;
+            }
+            case ExtraCostKind.RevealHandCards:
+            {
+                if (extraRevealUids != null && extraRevealUids.Count > 0)
+                {
+                    int qualified = 0;
+                    foreach (var uid in extraRevealUids)
+                    {
+                        var c = _cardManager?.GetInstance(uid);
+                        if (c == null || c.CurrentZone != CardZone.Hand || c.ControllerId != playerId)
+                        {
+                            failReason = $"展示候选 {uid} 不在你的手牌";
+                            return false;
+                        }
+                        // 正在打出的本卡自身不计入"展示的手牌"（防自我减费，与候选枚举同一口径）
+                        if (ReferenceEquals(c, instance)) continue;
+                        extraRevealCards.Add(c);
+                        if (CostModFilter.Matches(extraSpec.RevealFilter, c, c.PlayerTemplate?.CardName, c.PlayerTemplate?.Organization))
+                            qualified++;
+                    }
+                    extraDiscount = qualified;
+                    GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：展示 {extraRevealCards.Count} 张，其中合格 {qualified} 张 → 减免 {extraDiscount}");
+                    return true;
+                }
+                if (extraSpec.Mandatory)
+                {
+                    failReason = "需展示任意数量手牌（未提供）";
+                    return false;
+                }
+                return true;   // 可选：不展示＝全额支付
+            }
+            default:
+                failReason = $"未登记的额外费用种类「{extraSpec.Kind}」";
+                return false;
+        }
+    }
     public bool PlayCard(int playerId, string cardUid, string targetUid = null, string targetCardUid = null,
         System.Collections.Generic.IList<TargetChoice> multiChoices = null, int modeIndex = -1,
         string extraSacrificeUid = null, System.Collections.Generic.IList<string> extraRevealUids = null,
@@ -3097,88 +3387,21 @@ public partial class TurnManager : Node
         //     ③ `RevealHandCards`（JC081：**可选**、一次性减免，不展示＝全额支付）。
         //   · 选择输入：单机由 Arena 预选后随参数传入（`extraSacrificeUid`/`extraRevealUids`）；
         //     未指定时牺牲走**确定性兜底**（第一个合法候选，与既有"牺牲代价"同款纪律）、展示视为"不展示"。
-        var extraSpec = tmpl.ExtraCost;
         CardInstance extraSacrifice = null;
         var extraRevealCards = new System.Collections.Generic.List<CardInstance>();
         int extraMana = 0;         // JC135：额外支付的无色费用（＝目标印刷费用）
         int extraDiscount = 0;     // JC081：因展示而减掉的费用（一次性，只作用于本张）
-        if (extraSpec != null && extraSpec.Kind != ExtraCostKind.None)
+        // 【K10·统一实现】额外费用解析抽成 TryResolveExtraCost：**打出**（PlayCard）与**暗藏者现身**
+        // （RevealCovert）共用同一份校验/兜底/减免口径（用户口径：现身无特殊说明时同样需校验额外费用）。
+        if (!TryResolveExtraCost(tmpl, instance, playerId, targetCardUid, extraSacrificeUid, extraRevealUids,
+                out extraSacrifice, out extraRevealCards, out extraMana, out extraDiscount, out string extraFail))
         {
-            switch (extraSpec.Kind)
-            {
-                case ExtraCostKind.SacrificeCharacter:
-                {
-                    var sacSpec = extraSpec.Sacrifice ?? new SacrificeCostSpec();
-                    var candidates = EE.GetSacrificeCandidates(instance, sacSpec);
-                    if (candidates.Count == 0)
-                    {
-                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 无合法牺牲对象 → 不能打出");
-                        return false;
-                    }
-                    if (!string.IsNullOrEmpty(extraSacrificeUid))
-                    {
-                        extraSacrifice = candidates.Find(c => string.Equals(c.UID, extraSacrificeUid, System.StringComparison.Ordinal));
-                        if (extraSacrifice == null)
-                        {
-                            GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】指定的牺牲候选 {extraSacrificeUid} 不合法 → 拒绝打出（fail-closed）");
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        extraSacrifice = candidates[0];
-                        GD.Print($"[TurnManager] ⚠ 【K10 额外费用】未指定牺牲候选 → 确定性兜底取第一个合法候选（{extraSacrifice.PlayerTemplate?.CardName}）");
-                    }
-                    break;
-                }
-                case ExtraCostKind.PayTargetCost:
-                {
-                    var payTarget = string.IsNullOrEmpty(targetCardUid) ? null : _cardManager?.GetInstance(targetCardUid);
-                    if (payTarget == null)
-                    {
-                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 需先选定目标（X＝目标印刷费用）→ 拒绝打出");
-                        return false;
-                    }
-                    extraMana = Math.Max(0, payTarget.PlayerTemplate?.Cost ?? 0);
-                    GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：X＝目标 {payTarget.PlayerTemplate?.CardName} 的印刷费用 {extraMana}");
-                    break;
-                }
-                case ExtraCostKind.RevealHandCards:
-                {
-                    if (extraRevealUids != null && extraRevealUids.Count > 0)
-                    {
-                        int qualified = 0;
-                        foreach (var uid in extraRevealUids)
-                        {
-                            var c = _cardManager?.GetInstance(uid);
-                            if (c == null || c.CurrentZone != CardZone.Hand || c.ControllerId != playerId)
-                            {
-                                GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】展示候选 {uid} 不在你的手牌 → 拒绝打出（fail-closed）");
-                                return false;
-                            }
-                            // 正在打出的本卡自身不计入"展示的手牌"（防自我减费，与候选枚举同一口径）
-                            if (ReferenceEquals(c, instance)) continue;
-                            extraRevealCards.Add(c);
-                            if (CostModFilter.Matches(extraSpec.RevealFilter, c, c.PlayerTemplate?.CardName, c.PlayerTemplate?.Organization))
-                                qualified++;
-                        }
-                        extraDiscount = qualified;
-                        GD.Print($"[TurnManager] 【K10 额外费用】{tmpl.CardName}：展示 {extraRevealCards.Count} 张，其中合格 {qualified} 张 → 减免 {extraDiscount}");
-                    }
-                    else if (extraSpec.Mandatory)
-                    {
-                        GD.Print($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 需展示任意数量手牌（未提供）→ 拒绝打出");
-                        return false;
-                    }
-                    break;
-                }
-                default:
-                    GD.PrintErr($"[TurnManager] ⚠ 【K10 额外费用】未登记的种类「{extraSpec.Kind}」→ 拒绝打出（fail-closed）");
-                    return false;
-            }
+            GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName}：{extraFail} → 拒绝打出");
+            return false;
         }
 
-        // 6. 费用支付（6.2）：横置资产区卡牌产生无色费用
+
+    // 6. 费用支付（6.2）：横置资产区卡牌产生无色费用
         // 进入原子操作：从实际开始改变游戏状态（费用支付/入堆叠）起加锁；
         // 之前的阶段/行动权/费用校验等失败均不占用原子锁（修复：StartReset 拖拽误锁导致双方无法让过）。
         EnterAtomic();   // 标记本次打出为原子操作；若随后触发窗口打开，Arena 的 NotifyModalOpened 会维持锁
@@ -3342,12 +3565,8 @@ public partial class TurnManager : Node
         // 8. 重置让过计数（打出动作重置响应窗口）
         _passCount = 0;
 
-        // 9. 卡牌进入堆叠后，优先权归"当前步骤优先获得行动权的玩家"（与谁打出无关）。
-        //    规则：存在一个永远优先的玩家（先手，ActionSecond 内为后手）；只有该玩家让过，
-        //    另一人才可能获得行动权。因此出牌后优先权不转移给对手。
-        PriorityPlayerId = GetPriorityPlayer();
-        GD.Print($"⏳ [TurnManager] 玩家{playerId} 出牌入堆叠，优先权归优先玩家{PriorityPlayerId}（响应窗口）");
-        OnPriorityChanged?.Invoke(PriorityPlayerId);
+        // 9. 优先权分配（统一口径见 AssignPriorityAfterPlay）
+        AssignPriorityAfterPlay(playerId, "出牌入堆叠");
 
         GD.Print($"[TurnManager] ✅ 玩家{playerId} 成功打出卡牌 UID={cardUid}, 目标={(targetUid ?? "无")}");
         OnCardPlayed?.Invoke(playerId, cardUid, targetUid);
@@ -3375,7 +3594,10 @@ public partial class TurnManager : Node
     /// 暗藏者现身（Reveal）：玩家有行动权时双击己方争夺区内背面朝上的暗藏者发动。
     /// 规则要点（核心需求 6.3 / 你确认的设计）：
     ///   1) 视为"打出卡牌"行为，需满足该卡正常打出的所有条件（忠诚需求 + 原始费用）；
-    ///      本期不接额外费用（与打出牌系统一致，ExtraCost 暂未实现）。
+    ///      **额外费用同样校验**（用户 2026-09 口径：无特殊说明时现身也要校验，JC 卡包内全部需要）——
+    ///      与 `PlayCard` 共用 `TryResolveExtraCost`：`RevealHandCards`（JC081）展示手牌可**减免本次现身费用**；
+    ///      必须支付类若在现身路径无法满足（如 `PayTargetCost` 需要目标）则**拒绝现身**（fail-closed）。
+    ///      选择输入由 View 预选后经 `extraSacrificeUid`/`extraRevealUids` 传入（联机经网关回环）。
     ///   2) 不改变所在地区：现身地区默认 = 原本暗藏的地区（不弹地区选择）。
     ///   3) 进堆叠：与打出卡牌走相同入栈路径（响应窗口让过结算），箭头指向原地区。
     ///      进堆叠时即翻面（IsCovert=false），堆叠区内保持正面，结算回地区仍是正面。
@@ -3385,7 +3607,8 @@ public partial class TurnManager : Node
     ///      并校验发动者即控制者，防止第三方误触发。
     ///   7) 直接尝试发动，不满足则提示失败（不弹确认）。
     /// </summary>
-    public bool RevealCovert(int playerId, string cardUid)
+    public bool RevealCovert(int playerId, string cardUid,
+        string extraSacrificeUid = null, System.Collections.Generic.IList<string> extraRevealUids = null)
     {
         // 游戏已结束：拒绝一切快速能力发动
         if (_playerManager != null && _playerManager.IsGameOver) return false;
@@ -3459,27 +3682,55 @@ public partial class TurnManager : Node
         // 进入原子操作：从费用支付起加锁
         EnterAtomic();
 
-        // 费用校验与支付（按控制者，原始 Cost；额外费用本期不接）
+        // 【K10·额外费用】现身**同样要校验额外费用**（用户口径：无特殊说明时都需要校验；JC 卡包内全部需要）。
+        // 与 `PlayCard` 共用 `TryResolveExtraCost`（同一份校验/兜底/减免口径，不会分叉）。
+        //  · JC081（RevealHandCards，可选）：展示的手牌可减免**本次现身费用**（一次性）；
+        //  · 其它形态（如 JC049/JC135 的必须支付类）若在现身路径无法满足（无目标等）→ **拒绝现身**（fail-closed）。
+        if (!TryResolveExtraCost(tmpl, instance, controller, targetCardUid: null,
+                extraSacrificeUid, extraRevealUids,
+                out CardInstance extraSacrifice, out var extraRevealCards,
+                out int extraMana, out int extraDiscount, out string extraFail))
+        {
+            GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 现身：{extraFail} → 拒绝现身（fail-closed）");
+            ExitAtomicWhenIdle();
+            return false;
+        }
+
+        // 费用校验与支付（按控制者，原始 Cost − 时效减免 − 展示减免 + 额外支付的 X）
         EE.CurrentTurn = TurnCount;
         // 【P3】现身费用：用**实例重载**（子类别类过滤可用）并走**"现身"付费通道**
         // （JC033「所有本方暗藏者，付费翻面时其所需费用减少1」）。
-        int cost = tmpl.Cost - EE.GetCostModification(controller, instance, tmpl.CardName, tmpl.Organization, "现身");
+        int cost = tmpl.Cost - EE.GetCostModification(controller, instance, tmpl.CardName, tmpl.Organization, "现身")
+                   - extraDiscount;
         if (cost < 0) cost = 0;
-        if (cost > 0)
+        int totalCost = cost + extraMana;
+        // 【K10】先"展示手牌"（给对手公开；不改变规则状态）→ 再"牺牲"（＝死亡，照常广播死亡时机）
+        // → 最后付费；与 `PlayCard` 的先后口径一致（都发生在**入堆叠之前**、原子锁内）。
+        foreach (var rev in extraRevealCards)
         {
-            if (_playerManager.GetAvailableMana(controller) < cost)
+            GD.Print($"[TurnManager] 🔎 【K10 额外费用】玩家{controller} 现身时展示 {rev.PlayerTemplate?.CardName}");
+            Script.Manager.UiNotificationBus.Instance?.NotifyCardRevealed(rev, controller);
+        }
+        if (extraSacrifice != null)
+        {
+            GD.Print($"[TurnManager] ✝ 【K10 额外费用】{tmpl.CardName} 现身：牺牲 {extraSacrifice.PlayerTemplate?.CardName}（控制者选择，不可被响应）");
+            _cardManager?.ResolveDeath(extraSacrifice, CardManager.DeathCause.Sacrifice);
+        }
+        if (totalCost > 0)
+        {
+            if (_playerManager.GetAvailableMana(controller) < totalCost)
             {
-                GD.Print($"❌ [TurnManager] 暗藏者现身费用不足！需要 {cost}，当前 {_playerManager.GetAvailableMana(controller)}");
+                GD.Print($"❌ [TurnManager] 暗藏者现身费用不足！需要 {totalCost}（含额外费用 {extraMana}），当前 {_playerManager.GetAvailableMana(controller)}");
                 ExitAtomicWhenIdle();
                 return false;
             }
-            if (!_playerManager.SpendMana(controller, cost))
+            if (!_playerManager.SpendMana(controller, totalCost))
             {
                 GD.Print($"❌ [TurnManager] 暗藏者现身费用支付失败");
                 ExitAtomicWhenIdle();
                 return false;
             }
-            GD.Print($"[TurnManager] 玩家{controller} 支付暗藏者现身费用 {cost}，剩余可用 {_playerManager.GetAvailableMana(controller)}");
+            GD.Print($"[TurnManager] 玩家{controller} 支付暗藏者现身费用 {totalCost}（含额外费用 {extraMana}），剩余可用 {_playerManager.GetAvailableMana(controller)}");
             // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项
             EE.ConsumeCostModification(controller, instance, tmpl.Organization, "现身");
             // 资产卡因付费被横置，经事件总线通知 UI 刷新横置表现（与打牌/派遣暗藏一致，MVC：逻辑层只发事件）。
@@ -3520,11 +3771,9 @@ public partial class TurnManager : Node
             _triggerEmitPoints?.UncoverTrigger(instance, controller, originArea);
         }
 
-        // 重置让过计数 + 优先权归优先玩家（与打出卡牌一致）
+        // 重置让过计数 + 优先权分配（与打出卡牌同一口径）
         _passCount = 0;
-        PriorityPlayerId = GetPriorityPlayer();
-        GD.Print($"⏳ [TurnManager] 暗藏者现身入堆叠，优先权归优先玩家{PriorityPlayerId}（响应窗口）");
-        OnPriorityChanged?.Invoke(PriorityPlayerId);
+        AssignPriorityAfterPlay(playerId, "暗藏者现身入堆叠");
 
         GD.Print($"[TurnManager] ✅ 玩家{playerId} 成功发动暗藏者现身 UID={cardUid}, 地区={originArea}");
 
@@ -3541,6 +3790,109 @@ public partial class TurnManager : Node
         var parts = areaDetailId.Split('_');
         string num = parts.Length > 1 ? parts[^1] : areaDetailId;
         return int.TryParse(num, out var id) ? id : 0;
+    }
+
+    /// <summary>
+    /// 【K10·联机】**现身**时的额外费用选择由服务端驱动收集（与 `PlayWithExtraCostAsync` 同款机制）：
+    ///  · `RevealHandCards`（JC081，可选）→ 下发 `SelectHandCards`（候选＝控制者手牌**除本卡自身**，
+    ///    `ForceChoice=false` ⇒ 允许"一张都不展示"＝全额支付）；
+    ///  · `SacrificeCharacter`（必须支付）→ 下发 `SelectTarget`（候选＝`GetSacrificeCandidates`）；
+    ///  · `PayTargetCost` → 现身路径无目标交互 ⇒ **直接拒绝现身**（fail-closed，绝不放行未付额外费用的现身）。
+    /// 收集完毕后在**释放原子锁之后**调 `RevealCovert(...)`（其内部再走同一份 `TryResolveExtraCost` 校验）。
+    /// </summary>
+    public async System.Threading.Tasks.Task<bool> RevealCovertWithExtraCostAsync(int playerId, string cardUid)
+    {
+        var inst = _cardManager?.GetInstance(cardUid);
+        var tmpl = inst?.PlayerTemplate;
+        var spec = tmpl?.ExtraCost;
+        if (inst == null || spec == null || spec.Kind == ExtraCostKind.None || InputGateway == null)
+            return RevealCovert(playerId, cardUid);
+
+        if (spec.Kind == ExtraCostKind.PayTargetCost)
+        {
+            GD.PrintErr($"[K10 额外费用·联机] {tmpl.CardName} 的额外费用需先选定目标，**现身路径无目标交互** → 拒绝现身（fail-closed）");
+            return false;
+        }
+
+        string sacrificeUid = null;
+        var revealUids = new System.Collections.Generic.List<string>();
+
+        EnterAtomic();
+        try
+        {
+            if (spec.Kind == ExtraCostKind.SacrificeCharacter)
+            {
+                var cands = EE.GetSacrificeCandidates(inst, spec.Sacrifice ?? new SacrificeCostSpec())
+                            ?? new System.Collections.Generic.List<CardInstance>();
+                if (cands.Count == 0)
+                {
+                    GD.PrintErr($"[K10 额外费用·联机] {tmpl.CardName} 现身：无合法牺牲对象 → 拒绝现身");
+                    return false;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                    SourceUid = inst.UID,
+                    Prompt = $"额外费用：请选择要为「{tmpl.CardName}」现身而牺牲的角色",
+                    ForceChoice = true,
+                };
+                foreach (var c in cands)
+                {
+                    if (c == null) continue;
+                    req.OptionUids.Add(c.UID);
+                    req.OptionLabels.Add($"牺牲 {c.PlayerTemplate?.CardName ?? c.UID}");
+                }
+                var res = await InputGateway.RequestChoice(playerId, req);
+                if (res == null || res.Cancelled || string.IsNullOrEmpty(res.SelectedUid)
+                    || !req.OptionUids.Contains(res.SelectedUid))
+                {
+                    GD.Print($"[K10 额外费用·联机] {tmpl.CardName} 现身：未选定/非法牺牲候选 → 拒绝现身");
+                    return false;
+                }
+                sacrificeUid = res.SelectedUid;
+            }
+            else if (spec.Kind == ExtraCostKind.RevealHandCards)
+            {
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectHandCards,
+                    SourceUid = inst.UID,
+                    Prompt = $"额外费用：选择要为「{tmpl.CardName}」现身而展示给对手的手牌",
+                    ForceChoice = false,   // 可不展示（＝全额支付）
+                };
+                foreach (var c in GetHandOf(playerId))
+                {
+                    if (c == null || ReferenceEquals(c, inst)) continue;   // 候选不含本卡自身（防自我减费）
+                    req.OptionUids.Add(c.UID);
+                    var refr = global::ZoneManager.ProjectCard(c, CardZone.Hand, playerId);
+                    if (refr != null) req.OptionCardRefs.Add(refr);
+                    req.OptionLabels.Add((c.PlayerTemplate?.CardName ?? c.UID)
+                        + (IsQualifiedRevealCard(tmpl, c) ? "（合格 -1）" : "（不合格）"));
+                }
+                if (req.OptionUids.Count > 0)
+                {
+                    var res = await InputGateway.RequestChoice(playerId, req);
+                    if (res == null || res.Cancelled)
+                    {
+                        GD.Print($"[K10 额外费用·联机] {tmpl.CardName} 现身：取消展示手牌 → 拒绝现身");
+                        return false;
+                    }
+                    if (res.SelectedUids != null)
+                        foreach (var uid in res.SelectedUids)
+                            if (req.OptionUids.Contains(uid) && !revealUids.Contains(uid)) revealUids.Add(uid);
+                }
+            }
+        }
+        finally
+        {
+            ExitAtomicWhenIdle();
+        }
+
+        bool ok = RevealCovert(playerId, cardUid, sacrificeUid, revealUids.Count > 0 ? revealUids : null);
+        OnAsyncSettlementCompleted?.Invoke();
+        return ok;
     }
 
     /// <summary>
@@ -3906,7 +4258,10 @@ public partial class TurnManager : Node
     // 阶段流转（自动推进）
     // ============================================================
 
-    private void EnterPhase(TurnPhase phase)
+    /// <summary>
+    /// 进入指定阶段（内部阶段流转统一入口；亦供测试/联机快照恢复直接设置阶段）。
+    /// </summary>
+    public void EnterPhase(TurnPhase phase)
     {
         // 【P3·K19】临时费用（JC115）：**任意步骤结束时消失**——实现上＝每次阶段流转（＝上一步骤结束）时清空双方临时费用。
         // 口径见 §7.4b A26（六个步骤：先手/后手/预对抗/调查对抗/战斗对抗/势力对抗）。
@@ -4015,6 +4370,34 @@ public partial class TurnManager : Node
     // ============================================================
 
     /// <summary>
+    /// 【统一优先权分配·打出/现身后】打出卡牌或暗藏者现身**入堆叠后**的优先权归属（单一出口）。
+    ///
+    /// 规则（用户 2026-09 口径 · 修复"后手使用效果/打出卡后优先权交换错误"）：
+    ///  · 每个步骤存在一位**天生优先玩家**（先手；ActionSecond 内为后手）。响应窗口内应**先由天生优先
+    ///    玩家取得优先权**——即打出后不能无条件把优先权"拉回"天生优先玩家，否则当**非优先方**（如先手
+    ///    在 ActionSecond 期间）打出时，天生优先玩家本应失去"先手响应"机会却被错误地直接赋予优先权。
+    ///  · 因此：若**打出者本身就是天生优先玩家**，优先权保持在其手中（＝他先获得响应权，符合"天生优先"）；
+    ///    若**打出者是另一方**（非天生优先玩家），优先权应交给**天生优先玩家**（＝对方），
+    ///    从而"谁天生优先谁先响应"的语义在响应窗口内成立。
+    ///  · `_passCount` 已由调用方清零：响应窗口的让过节拍从"打出后"重新开始（两次让过才结算栈顶）。
+    ///
+    /// 说明：本方法收口原 `PlayCard`（出牌入堆叠）与 `RevealCovert`（暗藏者现身）两处重复赋值，
+    /// 避免两套口径漂移；与 `BeginStepPriority`（步骤入口复位）语义区分，互不覆盖。
+    /// </summary>
+    /// <param name="playerId">打出/现身者。</param>
+    /// <param name="reason">日志用描述（如"出牌入堆叠"）。</param>
+    private void AssignPriorityAfterPlay(int playerId, string reason)
+    {
+        int naturalPriority = GetPriorityPlayer();
+        // 打法A：打出者即天生优先玩家 → 保持其优先权（他先响应）；
+        // 打法B：打出者为另一方 → 归还天生优先玩家（对方先响应）。
+        PriorityPlayerId = naturalPriority;
+        GD.Print($"⏳ [TurnManager] 玩家{playerId} {reason}，优先权归天生优先玩家{PriorityPlayerId}"
+            + $"（打出者{(playerId == naturalPriority ? "＝天生优先，保持" : "≠天生优先，交还对方")}）");
+        OnPriorityChanged?.Invoke(PriorityPlayerId);
+    }
+
+    /// <summary>
     /// 【修复 A+B+C】步骤开始时分配优先权。
     /// 铁律（阶段推进的唯一条件）：仅当堆叠为空时，双方连续让过（Pass 空分支 _passCount>=2）才会
     /// AdvancePhase 推进阶段；堆叠非空时玩家让过一律走 Pass 非空分支只结算栈顶，绝不推进阶段
@@ -4061,8 +4444,9 @@ public partial class TurnManager : Node
         // （JC053 鸣钟教派徽记的激活前提"本回合中，若有敌方势力标志曾被移除"）。
         AreaManagerRef?.ResetPowerMarkRemovedThisTurn();
         OnAssetsChanged?.Invoke();
-        // 步骤开始：当前优先玩家获得优先权，等待双方连续让过推进
+        // 步骤开始：当前优先玩家获得优先权（免让过：若堆叠为空则立即推进，不等让过）
         BeginStepPriority("重置步骤");
+        TryAutoAdvance();
     }
 
     private void DoPrepare()
@@ -4170,6 +4554,48 @@ public partial class TurnManager : Node
     };
 
     /// <summary>
+    /// 阶段/步骤 → 中文显示名（单机 Arena 与联机 ArenaOl **共用唯一口径**，避免两处 switch 漂移）。
+    /// 12 个步骤全部中文；对抗三步骤带"地区N"前缀（areaNo &lt;= 0 时不带前缀）。
+    /// </summary>
+    public static string GetPhaseDisplayName(TurnPhase phase, int areaNo = 0)
+        => phase switch
+        {
+            TurnPhase.StartReset           => "重置步骤",
+            TurnPhase.StartPrepare         => "准备步骤",
+            TurnPhase.StartDraw            => "抓牌步骤",
+            TurnPhase.ActionFirst          => "先手行动步骤",
+            TurnPhase.ActionSecond         => "后手行动步骤",
+            TurnPhase.PreCombat            => "机动轮",
+            TurnPhase.CombatInvestigation  => areaNo > 0 ? $"地区{areaNo} 调查对抗步骤" : "调查对抗步骤",
+            TurnPhase.CombatStrength       => areaNo > 0 ? $"地区{areaNo} 战斗对抗步骤" : "战斗对抗步骤",
+            TurnPhase.CombatPower          => areaNo > 0 ? $"地区{areaNo} 势力对抗步骤" : "势力对抗步骤",
+            TurnPhase.EndCleanup           => "结束步骤",
+            TurnPhase.EndRecover           => "恢复步骤",
+            TurnPhase.EndPassTurn          => "移交先手",
+            _                              => phase.ToString()
+        };
+
+    /// <summary>
+    /// 【规则简化】免让过步骤：这些步骤结算完自身效果后**直接推进**到下一步骤，
+    /// 不等待双方连续让过（重置步骤 / 恢复步骤 / 移交先手）。
+    /// 移交先手（EndPassTurn）本就直接 NextTurn，无需让过；重置/恢复由 `DoReset`/`DoRecover` 末尾自动推进。
+    /// </summary>
+    public static bool IsAutoAdvanceStep(TurnPhase phase)
+        => phase == TurnPhase.StartReset
+        || phase == TurnPhase.EndRecover
+        || phase == TurnPhase.EndPassTurn;
+
+    /// <summary>供 UI 直接取"当前步骤中文名"（内部带上当前对抗地区序号）。</summary>
+    public string CurrentPhaseDisplayName =>
+        GetPhaseDisplayName(CurrentPhase, IsCombatPhase(CurrentPhase) ? CurrentCombatAreaNo : 0);
+
+    /// <summary>是否为按地区逐个结算的对抗步骤（需要带地区序号显示）。</summary>
+    public static bool IsCombatPhase(TurnPhase phase)
+        => phase == TurnPhase.CombatInvestigation
+        || phase == TurnPhase.CombatStrength
+        || phase == TurnPhase.CombatPower;
+
+    /// <summary>
     /// 结算"当前地区游标所指地区"的指定对抗，结算完毕后分配优先权、重置让过计数，
     /// 等待双方连续让过才由 AdvancePhase 推进到本地区的下一种对抗（或下一地区 / 结束阶段）。
     /// 若结算过程中有条目入栈（如地区赢取），同样在该优先权窗口内让过结算。
@@ -4274,8 +4700,9 @@ public partial class TurnManager : Node
     {
         if (VerboseSteps) GD.Print("【恢复步骤】清除所有伤害标记");
         _cardManager?.ResetAllDamage();
-        // 步骤开始：当前优先玩家获得优先权，等待双方连续让过推进
+        // 步骤开始：当前优先玩家获得优先权（免让过：若堆叠为空则立即推进，不等让过）
         BeginStepPriority("恢复步骤");
+        TryAutoAdvance();
     }
 
     private void DoPassTurn()

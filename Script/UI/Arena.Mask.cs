@@ -177,29 +177,14 @@ public partial class Arena : Control
     {
         if (_phaseStatusLabel == null || _turnManager == null) return;
 
-        string phaseName = _turnManager.CurrentPhase switch
-        {
-            TurnManager.TurnPhase.StartReset => "重置",
-            TurnManager.TurnPhase.StartPrepare => "准备",
-            TurnManager.TurnPhase.StartDraw => "抓牌",
-            TurnManager.TurnPhase.ActionFirst => "先手行动",
-            TurnManager.TurnPhase.ActionSecond => "后手行动",
-            // 对抗阶段按地区逐个进行（地区N 调查→战斗→势力），标注当前地区序号
-            TurnManager.TurnPhase.CombatInvestigation => $"地区{_turnManager.CurrentCombatAreaNo} 调查对抗",
-            TurnManager.TurnPhase.CombatStrength => $"地区{_turnManager.CurrentCombatAreaNo} 战斗对抗",
-            TurnManager.TurnPhase.CombatPower => $"地区{_turnManager.CurrentCombatAreaNo} 势力对抗",
-            TurnManager.TurnPhase.EndCleanup => "结束",
-            TurnManager.TurnPhase.EndRecover => "恢复",
-            TurnManager.TurnPhase.EndPassTurn => "移交先手",
-            _ => _turnManager.CurrentPhase.ToString()
-        };
-
-        string activeText = _turnManager.PriorityPlayerId > 0
-            ? $"行动权: P{_turnManager.PriorityPlayerId}"
-            : "无行动权";
-        int mana = _turnManager.GetAvailableMana(1);
-        string turnText = $"回合 {_turnManager.TurnCount} | 先手: P{_turnManager.FirstPlayerId} ";
-        _phaseStatusLabel.Text = $"{turnText}\n阶段: {phaseName}\n{activeText}";
+        // 四行显示：① 回合　② 优先权　③ 先手　④ 当前步骤中文名（中文步骤名统一由 TurnManager 提供）
+        string turnText = $"回合: {_turnManager.TurnCount}";
+        string priorityText = _turnManager.PriorityPlayerId > 0
+            ? $"优先权: P{_turnManager.PriorityPlayerId}"
+            : "优先权: 无";
+        string firstText = $"先手: P{_turnManager.FirstPlayerId}";
+        string phaseName = _turnManager.CurrentPhaseDisplayName;
+        _phaseStatusLabel.Text = $"{turnText}\n{priorityText}\n{firstText}\n{phaseName}";
     }
 
     private void UpdateDeckCount() { }

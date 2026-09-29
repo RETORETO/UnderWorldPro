@@ -336,7 +336,7 @@ mouse_filter = 1
 metadata/_edit_use_anchors_ = true
 
 [node name="PhaseLabel" type="Label" parent="ActionPanel" unique_id=408338303]
-custom_minimum_size = Vector2(100, 50)
+custom_minimum_size = Vector2(100, 92)
 custom_maximum_size = Vector2(100, -1)
 layout_mode = 1
 offset_left = 20.0
@@ -346,6 +346,7 @@ mouse_filter = 1
 text = "当前阶段"
 horizontal_alignment = 1
 vertical_alignment = 1
+autowrap_mode = 3
 
 [node name="PassButton" type="Button" parent="ActionPanel" unique_id=1521659062]
 light_mask = 524289

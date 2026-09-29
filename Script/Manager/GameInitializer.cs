@@ -477,12 +477,38 @@ public partial class GameInitializer : Node
         }
 
         GD.Print("=== GameInitializer: 开局编排 ===");
-        // 起手数：玩家携带秘社时覆盖默认 InitialHandSize（读 CouncilTemplate.StartingHandSize）
+        DealOpeningHands();
+
+        // 单机：直接开始第一回合（无联机调度步骤）。
+        PlayerActionService.StartGame();
+    }
+
+    /// <summary>
+    /// 按**当前**卡组就绪秘社并发放起始手牌（不发第一回合）。
+    ///
+    /// 【为什么在发牌前重放秘社】`InitializeAll()`/`ResetMatch()` 里已跑过 `SetupCouncils()`，但联机路径是
+    /// 「`InitializeAll()` → 设 `P1DeckOverride`（房间卡组） → 发牌」——秘社实例仍是**旧卡组**（默认秘社）的，
+    /// 导致 `GetCouncilHandSize()` 永远读到默认 6 张，房间卡组自带的秘社起始手牌数完全不生效。
+    /// 故此处按当前卡组**重放一次**秘社，保证"按秘社记录的起始手牌数发牌"。
+    /// </summary>
+    public void DealOpeningHands()
+    {
+        if (PlayerActionService == null)
+        {
+            GD.PushError("GameInitializer.DealOpeningHands: 尚未 InitializeAll，无法发牌。");
+            return;
+        }
+
+        // 起手数来源＝秘社；重放秘社确保读到的是**本局卡组**携带的秘社（而非 InitializeAll 时的旧卡组）。
+        ReloadDecks();
+        SetupCouncils();
+
+        GD.Print("=== GameInitializer: 发放起始手牌（发完后再开始第一回合）===");
         int hand1 = GetCouncilHandSize(1);
         int hand2 = GetCouncilHandSize(2);
         PlayerActionService.DrawCards(1, hand1);
         PlayerActionService.DrawCards(2, hand2);
-        PlayerActionService.StartGame();
+        GD.Print($"[GameInitializer] 起始手牌：座位1 = {hand1} 张 / 座位2 = {hand2} 张");
     }
 
     /// <summary>

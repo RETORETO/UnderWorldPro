@@ -39442,6 +39442,7 @@
       "CardImagePath": "res://Cards/Image/CouncilCards/JC/MSJC001_weimushouwang.jpg",
       "StartingHandSize": 6,
       "CouncilEffects": [],
+      "Restrictions": ["\u9700\u5305\u542B 25 \u5F20\u6216\u66F4\u591A\u9EC4\u8272\u724C"],
       "CardText": "\uFF08\u884C\u52A8\uFF0C\u6A2A\u7F6E\uFF0C3\u8D39\uFF09\uFF1A\u62BD\u4E00\u5F20\u724C\u3002\n\uFF08\u884C\u52A8\uFF0C\u6A2A\u7F6E\uFF0C4\u8D39\uFF09\uFF1A\u4ECE\u724C\u5E93\u5E95\u6293\u4E00\u5F20\u724C\u3002",
       "MainType": "\u79D8\u793E",
       "SubType": "\u79D8\u793E-\u6CD5\u5E08\u7ED3\u793E",

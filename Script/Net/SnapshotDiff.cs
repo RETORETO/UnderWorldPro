@@ -7,7 +7,10 @@ namespace Script.Net
     ///
     /// 这是"客户端消费快照而非本地 Model"的核心算法：
     /// 服务端权威模式下，服务端把全量快照经网络下发；客户端用本引擎对比"上次渲染的快照"与
-    /// "新到的快照"，得到最小增量指令集，再交给渲染层（SnapshotRenderDriver → ISnapshotView）
+    /// "新到的快照"，得到最小增量指令集，再交给渲染层
+    /// （**实际消费者**：`SnapshotApplicationQueue`（同帧合并/延后应用）＋
+    /// `ArenaOl.ApplySnapshot → SnapshotDiff.Diff → RouteRenderCommands`；早先注释里的
+    /// `SnapshotRenderDriver`/`ISnapshotView` 已随旧渲染管线删除）
     /// 增量刷新 UI，避免全量重建。
     ///
     /// 纯函数、纯托管、无状态：输入两个快照，输出指令列表。可序列化、可单测，Headless / 独立

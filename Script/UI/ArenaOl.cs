@@ -1010,7 +1010,16 @@ namespace Script.UI
 
             var turn = _matchClient.ClientTurnManager;
             if (_phaseLabel != null && turn != null)
-                _phaseLabel.Text = $"回合{turn.TurnCount} 阶段={turn.CurrentPhase} 优先权={turn.PriorityPlayerId}";
+            {
+                // 四行显示（与单机 Arena 同口径）：① 回合　② 优先权　③ 先手　④ 当前步骤中文名
+                string turnText = $"回合: {turn.TurnCount}";
+                string priorityText = turn.PriorityPlayerId > 0
+                    ? $"优先权: P{turn.PriorityPlayerId}"
+                    : "优先权: 无";
+                string firstText = $"先手: P{turn.FirstPlayerId}";
+                string phaseName = turn.CurrentPhaseDisplayName;
+                _phaseLabel.Text = $"{turnText}\n{priorityText}\n{firstText}\n{phaseName}";
+            }
 
             // 分数显示：优先用快照里的胜利分数；旧快照无该字段时回退到法力显示
             if (_p1ScoreLabel != null && snap.Players.Count > 0)

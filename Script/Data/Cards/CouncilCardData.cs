@@ -106,5 +106,24 @@ namespace Script.Data.Cards
                     return false;
             return true;
         }
+
+        /// <summary>
+        /// 【构筑校验·带明细】逐条检查构筑限制，返回**未满足**限制的可读文案列表（全部满足则空列表）。
+        /// 供房间"卡组违规"提示透出**具体是哪条限制不满足**（每个限制经 `CouncilRestriction.Describe` 生成文案）。
+        /// </summary>
+        public List<string> ValidateDeckDetailed(List<PlayerCardData> deck)
+        {
+            var failures = new List<string>();
+            foreach (var restriction in Restrictions)
+            {
+                if (restriction == null) continue;
+                if (restriction.IsSatisfiedBy(deck)) continue;
+                failures.Add(restriction.Describe(restriction.GetActualCount(deck)));
+            }
+            return failures;
+        }
+
+        /// <summary>本秘社是否声明了任何构筑限制（无限制则套牌"无限制"）。</summary>
+        public bool HasRestrictions => Restrictions != null && Restrictions.Count > 0;
     }
 }

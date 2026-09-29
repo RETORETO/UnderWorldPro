@@ -114,6 +114,8 @@ namespace Script.Tools
                     Cost = template.Cost,
                 };
                 foreach (var e in template.Effects ?? new Godot.Collections.Array<string>()) d.CouncilEffects.Add(e);
+                foreach (var r in template.Restrictions ?? new Godot.Collections.Array<CouncilRestriction>())
+                    if (r != null) d.Restrictions.Add(r.Describe());
                 foreach (var r in template.ColorLoyaltyRequirements ?? new Godot.Collections.Array<ColorLoyaltyRequirement>())
                     if (r != null) d.ColorLoyaltyRequirements.Add(new LoyaltyRequirementData { Name = r.Color.ToString(), Amount = r.Amount });
                 foreach (var r in template.DomainLoyaltyRequirements ?? new Godot.Collections.Array<DomainLoyaltyRequirement>())

@@ -844,6 +844,29 @@
     无网关或能力无选择类入参 → 不接管。
   账本：**效果行数不变**；全量 headless **133 套件 930 例 全绿 0 失败 0 错误**；Arena 场景 headless 冒烟 0 SCRIPT ERROR。
 
+  **【批次】现身必须校验额外费用 ＋ 延后项裁定 ＋ 过期注释/死代码清理（2026-09，用户裁定）**：
+  · **① 暗藏者现身校验额外费用**（用户裁定："没有特殊说明的情况下需要校验额外费用，**JC 卡包内是都需要校验**"）：
+    把 `PlayCard` 的额外费用解析抽成 **`TurnManager.TryResolveExtraCost`（单一实现）**，`RevealCovert` 复用同一份：
+    · **JC081（`RevealHandCards`，可选）**：现身时同样可**展示手牌减免本次现身费用**（不展示＝全额）；展示候选
+      必须在该玩家**手牌**内且**不含本卡自身**（防自我减费），非法候选 → 拒绝现身；
+    · **必须支付类**：`SacrificeCharacter` 指定候选须合法（无候选 → 拒绝现身）；`PayTargetCost` 需先选目标而
+      现身路径**无目标交互** → **拒绝现身**（fail-closed，绝不放行未付额外费用的现身）；
+    · **单机交互**＝与打出 **1:1** 同款窗口（`ShowRevealChoiceStep` 的完成回调参数化 ⇒ 展示多选窗共用；
+      牺牲代价用同款候选按钮窗；`Arena.RevealCovertWithExtraCost` 统一入口）；
+    · **联机**＝服务端接管 `RevealCovertWithExtraCostAsync`（`SelectHandCards` 多选 / `SelectTarget` 单选，
+      回包权威复检、取消即不现身）。
+  · **② 延后项裁定**（用户："我需要明确的 JC 卡包内是否用到这些效果，如果没用到可以延后"）——**实测证据**：
+    `GenerateToken`/`Investigate`/`Strength`/`Power`/`Win`/`Lose` 六个动词 → **JC 卡包 0 处、全卡池 0 处使用**；
+    `TargetRestriction.CombatCapable` → **全卡池 0 处使用**；`ResolveKind.NewArea`（"任务/地区卡"预留）→
+    JC 卡包类别只有 角色 81 / 事务 28 / 附属 25 / 角色+附属 1，**全卡池都没有 任务/地区/指示物 类别**（CategoryFlag 8/16/32 零命中）
+    ⇒ **三者全部延后**（保留现状：六动词显式报错、CombatCapable 落 default 判不通过、NewArea 仅打印）。
+  · **③ 顺手清理（零行为风险）**：删除 **6 个 0 字节 .cs**（`ICardTriggerBehavior`/`TriggerEffectData`/`TriggerEffectInstance`/
+    `TriggerEffectCollector`/`ICardUIView`/`WorldGraveyardZone`，全项目 0 引用）；修正过期注释 6 处
+    （`EffectEngine` 类头与 `ExecuteVerb` 说明改为"仅剩 6 个动词未实现且无卡使用"、`AreaManager` 的 WinTriggerEffect TODO
+    与"不实现地区赢取"、`EffectValueResolver` 的"玩家选择未实现"与"X 不允许选 0"、`SnapshotDiff`/`ReconnectManager` 的已删除类名）；
+    给 `联机对战完整实现最终缺口清单.md` §〇~§五 加**历史快照横幅**。
+  账本：**效果行数不变**；全量 headless **134 套件 939 例 全绿 0 失败 0 错误**；Arena 场景 headless 冒烟 0 SCRIPT ERROR。
+
   **顺带修**：`TriggerRegistry` 的**收集**路径原先未透传 `EffectCondition.Param`（只在结算侧透传）→ 参数化谓词在收集阶段会按"无参数"判定，现已统一）
 
   **JC081 [前缀]「除装备与祝福外不受附属」批次翻 1 行（⬜ 待人工归类清零）**：用户口径（本轮答复）——

@@ -47,7 +47,12 @@ namespace Script.Net.Godot
         }
         public void DeployCovert(int playerId, string cardUid, string areaUid)
             => _service.DeployCovert(playerId, cardUid, areaUid);
-        public void RevealCovert(int playerId, string cardUid) => _service.RevealCovert(playerId, cardUid);
+        public void RevealCovert(int playerId, string cardUid)
+        {
+            // 【K10·联机】现身时若有额外费用（JC081「展示手牌减费」等）→ 服务端接管：经网关收集选择后再现身。
+            if (_service.TryBeginRevealCovertExtraCostOnline(playerId, cardUid)) return;
+            _service.RevealCovert(playerId, cardUid);
+        }
         public void EstablishAsset(int playerId, string cardUid) => _service.EstablishAsset(playerId, cardUid);
         public void ReturnCardToDeck(int playerId, string cardUid, bool toTop)
             => _service.ReturnCardToDeck(playerId, cardUid, toTop);

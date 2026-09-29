@@ -46,8 +46,7 @@ namespace Script.Tests
         {
             public readonly List<Script.Net.ChoiceRequest> Requests = new List<Script.Net.ChoiceRequest>();
             public string AnswerUid;          // 指定回包 UID（null＝首个候选）
-            public bool Cancel;
-            public int ShuffleCount;
+            public bool Cancel = false;
 
             public System.Threading.Tasks.Task<Script.Net.ChoiceResult> RequestChoice(int playerId,
                 Script.Net.ChoiceRequest req)

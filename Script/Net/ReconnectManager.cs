@@ -80,7 +80,8 @@ namespace Script.Net
 
             // 1) 随机源复原：客户端后续随机与服务端精确对齐（此处由外部根据 payload.Random 重建其随机 Hub）
             //    —— RandomSourceHub.Restore 由调用方执行（本类不持有客户端随机 Hub，避免重复状态）。
-            // 2) 快照渲染：客户端按快照重建 UI（增量或全量由 SnapshotRenderDriver 决定）
+            // 2) 快照渲染：客户端按快照重建 UI（增量由 `SnapshotDiff` 产出指令、`ArenaOl.RouteRenderCommands` 消费；
+            //    重连场景下调用方也可直接全量重建。早先注释里的 `SnapshotRenderDriver` 已删除）
             _snapshotConsumer?.Invoke(payload.Snapshot);
 
             // 3) 挂起输入：若服务端正等某玩家决策，客户端据此恢复"等待响应"状态

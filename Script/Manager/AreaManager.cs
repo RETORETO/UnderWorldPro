@@ -429,8 +429,10 @@ public partial class AreaManager : Node
         }
         OnWorldDeckChanged?.Invoke();
 
-        // 步骤5：赢取触发能力（核心需求 2.2 标注延后，本期不实现，仅留钩子）
-        // TODO：WinTriggerEffect 执行（延后）。
+        // 步骤5：赢取触发能力——**已接线**：本方法上方（"步骤2 计分完成"之后、"步骤3 送牌库底"之前）
+        // 已 `_triggerEmitPoints?.OnAreaWon(areaUid, winnerId)` 广播；`TriggerEmitPoints.OnAreaWon` 为完整实现，
+        // `TriggerRegistry` 已把 `GameEvent.OnAreaWon` 映射到 `EffectTiming.OnAreaWon`。
+        //（此处原"本期不实现，仅留钩子 / TODO：WinTriggerEffect 执行"的说明已过期，保留位置备注。）
 
         // 通知 UI 刷新分数
         OnAreaWonResolved?.Invoke(areaUid, winnerId, scoreGained);
@@ -440,7 +442,7 @@ public partial class AreaManager : Node
     // ============================================================
     // 势力标记管理（6.4-c）
     // 添加本方标记时，优先移除等量对方标记（净差逻辑），剩余才累加本方。
-    // 当前阶段【不实现地区赢取】，仅用于测试标记产出与 UI 显示。
+    // （原注"当前阶段【不实现地区赢取】"已过期：`ResolveAreaWon` 已完整实现赢取结算——计分/触发/归位/清标记。）
     // ============================================================
     public void AddPowerMark(string areaUid, int playerId, int amount)
     {

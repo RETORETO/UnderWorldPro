@@ -47,7 +47,10 @@ namespace Script.Net.Godot
             try
             {
                 game.InitializeAll();
-                game.StartMatch();
+                // 【联机开局】只发起始手牌，**不开第一回合**：调度（Mulligan）是"首个决策请求"，
+                // 必须在 `MatchHost.StartServing()` 注入网关 + 绑座之后才能下发（由 LobbyServer.StartMatchInternal 的
+                // 时序：Create → BindSeat → StartServing → PushSnapshot 保证）。第一回合由调度结算后 StartGame 接手。
+                game.DealOpeningHands();
 
                 // 初始地区（唯一真相源＝房间设置）
                 int areaCount = room.Settings?.InitialAreaCount ?? 3;

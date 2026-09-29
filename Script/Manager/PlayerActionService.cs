@@ -138,8 +138,26 @@ public class PlayerActionService
         => _turnManager.DeployCovert(playerId, cardUid, areaUid);
 
     // ---------- 暗藏者现身意图（快速能力）----------
-    public bool RevealCovert(int playerId, string cardUid)
-        => _turnManager.RevealCovert(playerId, cardUid);
+    public bool RevealCovert(int playerId, string cardUid,
+        string extraSacrificeUid = null, System.Collections.Generic.IList<string> extraRevealUids = null)
+        => _turnManager.RevealCovert(playerId, cardUid, extraSacrificeUid, extraRevealUids);
+
+    /// <summary>
+    /// 【K10·联机】现身时的"额外费用选择"接管：该暗藏者声明了 `ExtraCost` 时，由服务端经网关收集选择
+    /// （`RevealHandCards`→`SelectHandCards` 多选可取消；`SacrificeCharacter`→`SelectTarget` 单选），
+    /// 收集完再调 `RevealCovert`（其内部共用同一份 `TryResolveExtraCost` 校验）。
+    /// 返回 true＝已接管（调用方不要再走同步 `RevealCovert`）；false＝无额外费用或未注入网关。
+    /// </summary>
+    public bool TryBeginRevealCovertExtraCostOnline(int playerId, string cardUid)
+    {
+        if (_turnManager.InputGateway == null) return false;
+        var inst = _cardManager.GetInstance(cardUid);
+        var tmpl = inst?.PlayerTemplate;
+        if (tmpl?.ExtraCost == null || tmpl.ExtraCost.Kind == ExtraCostKind.None) return false;
+        Godot.GD.Print($"[K10 额外费用·联机] 服务端接管 {tmpl.CardName} 的**现身**流程（额外费用选择回环给玩家{playerId}）");
+        _ = _turnManager.RevealCovertWithExtraCostAsync(playerId, cardUid);
+        return true;
+    }
 
     public bool EstablishAsset(int playerId, string cardUid)
         => _turnManager.EstablishAsset(playerId, cardUid);

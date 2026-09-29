@@ -121,6 +121,9 @@ namespace Script.UI
                 case ChoiceRequest.Kind.SelectHandCards:
                     BuildHandCards(request);
                     break;
+                case ChoiceRequest.Kind.SelectMulligan:
+                    BuildMulligan(request);
+                    break;
                 default:
                     BuildOptions(request);
                     break;
@@ -249,6 +252,50 @@ namespace Script.UI
             _buttonBox.AddChild(confirm);
 
             AddCancelIfAllowed(request, "取消（不打出）");
+        }
+
+        /// <summary>
+        /// 【开局·调度步骤】发完起手手牌后的调度：勾选要换掉（放到牌库底）的手牌，可一张都不勾。
+        /// 点"确认"锁定选择 → 回包 `Confirmed=true` ＋ `SelectedUids`（可空）；
+        /// 服务端等**双方**都确认后才统一结算（置底 → 顶抽等量 → 洗牌），再进入第一回合。
+        /// 说明：本步骤为开局固定流程，**不提供取消**（未选＝空确认，等价"不调度"）。
+        /// </summary>
+        private void BuildMulligan(ChoiceRequest request)
+        {
+            var hint = new Label
+            {
+                Text = "调度：勾选要换掉的手牌（可一张都不勾）。双方都确认后统一结算。",
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            };
+            _buttonBox.AddChild(hint);
+
+            var checks = new List<(string uid, CheckBox box)>();
+            if (request.OptionUids != null)
+            {
+                for (int i = 0; i < request.OptionUids.Count; i++)
+                {
+                    string uid = request.OptionUids[i];
+                    if (string.IsNullOrEmpty(uid)) continue;
+                    string label = (request.OptionLabels != null && i < request.OptionLabels.Count
+                                    && !string.IsNullOrEmpty(request.OptionLabels[i]))
+                        ? request.OptionLabels[i]
+                        : _resolveLabel(uid);
+                    var cb = new CheckBox { Text = label };
+                    _buttonBox.AddChild(cb);
+                    checks.Add((uid, cb));
+                }
+            }
+
+            var confirm = new Button { Text = "确认调度" };
+            confirm.Pressed += () =>
+            {
+                var res = new ChoiceResult { Cancelled = false, Confirmed = true };
+                foreach (var (uid, cb) in checks)
+                    if (cb.ButtonPressed) res.SelectedUids.Add(uid);
+                Complete(res);
+            };
+            _buttonBox.AddChild(confirm);
         }
 
         private void BuildTriggerOrder(ChoiceRequest request)
