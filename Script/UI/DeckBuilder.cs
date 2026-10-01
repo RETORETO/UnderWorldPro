@@ -26,7 +26,7 @@ public partial class DeckBuilder : Control
 
     // 编辑态
     private Dictionary<string, int> _workingCards = new Dictionary<string, int>();   // 模板路径 -> 份数
-    private string _workingCouncil = "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres";
+    private string _workingCouncil = "res://Cards/Data/CouncilCards/JC/MSJC009_mishe.tres";
 
     // 卡池（模板路径列表，用于渲染）
     private List<string> _poolPaths = new List<string>();          // 过滤后用于渲染

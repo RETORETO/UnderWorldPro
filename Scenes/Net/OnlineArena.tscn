@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://colonlinearena"]
+[gd_scene format=3 uid="uid://bf4d7cc3fi0p7"]
 
-[ext_resource type="Script" path="res://Script/UI/Online/OnlineArenaEntry.cs" id="1_oae"]
+[ext_resource type="Script" uid="uid://7xrcifke8jhp" path="res://Script/UI/Online/OnlineArenaEntry.cs" id="1_oae"]
 
-[node name="OnlineArena" type="Node"]
+[node name="OnlineArena" type="Node" unique_id=1164048528]
 script = ExtResource("1_oae")

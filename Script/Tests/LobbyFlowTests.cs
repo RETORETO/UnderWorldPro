@@ -477,6 +477,8 @@ namespace Script.Tests
         {
             public void StartServing() => throw new InvalidOperationException("流程自检：模拟建局装配异常");
             public void StopServing() { }
+            // 本桩在 StartServing 即抛异常，房间层会走 AbortStart 回退，永远不会走到第0回合调度
+            public void StartMulligan() => throw new InvalidOperationException("流程自检：模拟进入调度异常");
             public void BindSeat(int seat, string sessionId) { }
             public void UnbindSession(string sessionId) { }
             public int SeatOfSession(string sessionId) => 0;

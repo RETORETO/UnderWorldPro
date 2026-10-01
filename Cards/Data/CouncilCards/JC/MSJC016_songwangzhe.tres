@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="MSJC016_songwangzhe" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC016_songwangzhe.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中只能包含【黑】和【中立】派系的牌，以及其他派系【死】领域的牌。
+触发：在第一个回合的准备步骤开始时，将你牌库顶的三张牌置于你的墓地。
+行动，3，横置：将你牌库顶的一张牌置于你的墓地。
+行动，6，横置，将你墓地中的七张牌封印在颂亡者上：选择目标地区，令你墓地中的目标【死】领域的角色牌正面进场并置于该地区。
+初始手牌：5
+
+FAQ：
+◆颂亡者秘社的二能力发动后，需先将七张牌封印在颂亡者上，在结算时，如果此能力被响应导致目标地区被赢取（敌方还差一势力标记时赢取地区翻面夜总会看门人）翻开新的地区，则颂亡者的二能力因目标不合法而失效。"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC016_songwangzhe.jpg"
+StartingHandSize = 5
+SubType = "秘社-法师结社/分支"
+ColorText = "黑·方碑序列"
+PT = "5"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "颂亡者"
+Cost = 3
+
+UID = "MSJC016_songwangzhe"
+CardName = "颂亡者"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

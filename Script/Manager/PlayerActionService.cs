@@ -45,6 +45,11 @@ public class PlayerActionService
     // ---------- 回合意图 ----------
     public void Pass(int playerId) => _turnManager.Pass(playerId);
 
+    /// <summary>【第0回合·调度】客户端上报调度选择（要换掉的手牌 UID；可空）。</summary>
+    public void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids)
+        => _turnManager.ReportMulligan(playerId,
+            pickedUids == null ? null : new System.Collections.Generic.List<string>(pickedUids));
+
     // ---------- 出牌意图 ----------
     public bool PlayCard(int playerId, string cardUid, string targetUid = null, string targetCardUid = null,
         string extraSacrificeUid = null, System.Collections.Generic.IList<string> extraRevealUids = null)

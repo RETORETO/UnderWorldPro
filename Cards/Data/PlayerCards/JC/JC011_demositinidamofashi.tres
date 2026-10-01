@@ -1,21 +1,20 @@
-[gd_resource type="Resource" script_class="PlayerCardData" format=3]
+[gd_resource type="Resource" script_class="PlayerCardData" format=3 uid="uid://ufi8vsykdivw"]
 
-[ext_resource type="Script" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
-[ext_resource type="Script" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
-[ext_resource type="Script" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+[ext_resource type="Script" uid="uid://yuh1i66ywukl" path="res://Script/Data/Cards/PlayerCardData.cs" id="1"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="3_cexew"]
 
 [sub_resource type="Resource" id="Resource_color_0"]
 script = ExtResource("2")
 Color = 1
 Amount = 4
 
-
-
 [resource]
 script = ExtResource("1")
+UniqueField = "德莫斯提尼"
 Cost = 6
 ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
-DomainLoyaltyRequirements = Array[ExtResource("3")]([])
 CategoryFlag = 1
 SubCategories = Array[String](["人类", "法师", "学者"])
 Colors = Array[int]([1])
@@ -24,9 +23,6 @@ Organization = "帷幕守望"
 Investigation = 2
 Strength = 1
 Power = 1
-FirstStrikeInvestigation = 0
-FirstStrikeStrength = 0
-FirstStrikePower = 0
 Defense = 2
 Effects = Array[String](["领袖 声望 现身触发：横置所有位于本地区的敌方角色。"])
 UID = "JC011_demositinidamofashi"

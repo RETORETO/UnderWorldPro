@@ -827,6 +827,19 @@ namespace Script.Data.Effects
         /// 触发 = `TurnManager.ResolveEntry` 的 Trigger 分支（结算前检查并登记）。
         /// </summary>
         [Export] public int MaxUsesPerTurn { get; set; } = 0;
+        /// <summary>
+        /// 【A57·次数上限·每局游戏】本能力**每局游戏最多发动次数**（0 = 不限次；
+        /// 卡文"该能力**每局游戏只能发动一次**"，如秘社 MSJC001『帷幕守望』行动4）。
+        /// 与 K23 `MaxUsesPerTurn` 平行，差别只在**重置时机**：
+        ///  · 计数基准 = **每张卡 · 每局 · 每能力**（按 `EffectId` 分别计数，见 `CardInstance.GetAbilityUsesThisGame`）；
+        ///  · **不随回合重置**（重置步骤只清 `MaxUsesPerTurn` 的计数）；
+        ///  · **不因离场/换区/回手/版本号变动清零**（`ResetToBaseState`/`BumpVersion` 只清回合计数）——
+        ///    "每局一次"是整局维度的承诺，不能靠换区刷回来；
+        ///  · 只有**重开一局**才恢复（实例按局重建；另在开局处显式 `CardManager.ResetAllAbilityUsesThisGame()` 兜底）。
+        /// 消费点与 K23 完全一致（激活 = `ActivateEligibility` 门禁 + `EffectEngine.ActivateAbility` 登记；
+        /// 触发 = `TurnManager.ResolveEntry` 的 Trigger 分支），避免出现第二条判定。
+        /// </summary>
+        [Export] public int MaxUsesPerGame { get; set; } = 0;
         [Export] public bool Forced { get; set; } = false;          // 是否强制（不可跳过）
         /// <summary>
         /// 【K1·动态数值 X】本效果的动态值表达式（空 = 无动态值）。动作参数里用占位符 `$X` 引用（见 `EffectAction.Args`）。

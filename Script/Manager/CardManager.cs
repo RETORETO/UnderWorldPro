@@ -450,6 +450,14 @@ public partial class CardManager : Node
             for (int i = 0; i < n; i++) pairs.Add(new KeyValuePair<string, int>(r.UsedAbilityIds[i], r.UsedAbilityCounts[i]));
             inst.SetAbilityUsesThisTurn(pairs);
         }
+        // 【A57】每局游戏每能力使用次数随快照下行（同上：客户端"每局一次"的可用性判定要与服务端同解）
+        {
+            var pairsGame = new List<KeyValuePair<string, int>>();
+            int nGame = Math.Min(r.UsedAbilityIdsGame?.Count ?? 0, r.UsedAbilityCountsGame?.Count ?? 0);
+            for (int i = 0; i < nGame; i++)
+                pairsGame.Add(new KeyValuePair<string, int>(r.UsedAbilityIdsGame[i], r.UsedAbilityCountsGame[i]));
+            inst.SetAbilityUsesThisGame(pairsGame);
+        }
         inst.IsHidden = r.IsHidden;   // Phase B 信息隔离：占位实例标记（只画卡背，不参与规则/交互）
         inst.SyncVersion(r.VersionId);
 
@@ -686,6 +694,25 @@ public partial class CardManager : Node
             n++;
         }
         GD.Print($"♻️ 重置步骤：清空 {n} 张卡的『每回合每能力』使用次数");
+    }
+
+    /// <summary>
+    /// 【A57】**重开一局**时清空所有卡的"每局游戏"能力使用次数（`EffectData.MaxUsesPerGame`）。
+    /// 与 `ResetAllAbilityUsesThisTurn` 的区别：**只在开局/重开**调用，**不参与回合重置**——
+    /// "每局一次"是整局维度的承诺（离场/换区/回手/版本号变动都不清）。
+    /// 说明：实例本身按局重建，故本方法主要是"重开一局复用实例"时的兜底与显式口径。
+    /// </summary>
+    public void ResetAllAbilityUsesThisGame()
+    {
+        int n = 0;
+        foreach (var c in GetAllInstances())
+        {
+            if (c == null) continue;
+            if (c.AbilityUsesThisGame.Count == 0) continue;
+            c.ResetAbilityUsesThisGame();
+            n++;
+        }
+        GD.Print($"♻️ 开局：清空 {n} 张卡的『每局每能力』使用次数");
     }
 
     // ============================================================

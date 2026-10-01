@@ -40,7 +40,8 @@ public partial class TurnManager : Node
         CombatPower,        // 势力对抗
         EndCleanup,         // 结束步骤
         EndRecover,         // 恢复步骤
-        EndPassTurn         // 移交先手
+        EndPassTurn,        // 移交先手
+        Mulligan            // 【第0回合】开局调度步骤：发完起手手牌后、第一回合重置步骤前（联机）
     }
 
     // ============================================================
@@ -135,10 +136,63 @@ public partial class TurnManager : Node
         if (_openModalCount <= 0) _atomicLock = false;
     }
 
+    /// <summary>
+    /// 【A55】效果层"挂起-续算"跑完一轮后的**结算收尾**（与 `ResolveStackTop` 同步段末尾对称）：
+    /// 挂起时 `ResolveStackTop` 已提前 return ⇒ 地区赢取检查 / 解原子锁 / 免费打出队列 需要在这里补做，
+    /// 否则服务端会一直握着原子锁（死锁）且漏掉地区赢取与 JC119 的免费打出队列。
+    /// 由 `EffectEngine.ContinuePendingChain()` 在"链上不再等待输入"时调用。
+    /// </summary>
+    public void OnEngineChainSettled()
+    {
+        // 结算后若堆叠清空，立即检查是否有基础地区满足赢取条件（与 ResolveStackTop 同款）
+        if (_stackManager != null && _stackManager.IsEmpty && _areaManager != null)
+            _areaManager.TryStartAreaWin(_stackManager);
+
+        ExitAtomicWhenIdle();
+
+        // 【JC119】效果请求的免费打出：正常打出流程（入堆叠/优先级窗口照常）
+        ProcessQueuedFreePlays();
+
+        // 【A55·联机 UI 刷新】本次"挂起-续算"已全部落地 ⇒ 通知服务端**立即下发快照**。
+        // 缺陷实测（服务器日志 18:25）：JC007 检索经网关选牌后，"逆转异界之门 加入玩家1 手牌"发生在
+        // 客户端回包的**异步续算**里，而 `MatchHost` 只在"意图流程结束"时推快照 ⇒ 客户端要等到
+        // 下一次上行（让过）才看得到新手牌（"卡片加入手牌，玩家让过后才能看到手牌"）。
+        NotifyResolutionSettled();
+    }
+
+    /// <summary>
+    /// 【A55】"一次结算（含异步续算）已落地"的公开通知口：联机由 `MatchHost` 订阅
+    /// `OnAsyncSettlementCompleted` 后**立即下发快照**，保证服务端异步落地的状态变化（检索入手 /
+    /// 弃牌 / 封印 / 牺牲 / 可选支付…）在客户端即时可见。
+    /// 同步结算路径由 `ResolveStackTop` 末尾经 `OnAsyncSettlementCompleted` 之外的上行流程覆盖，
+    /// 引擎侧挂起-续算与规则类（领袖/道途/遏制/预测）的异步流程统一调本方法。
+    /// </summary>
+    public void NotifyResolutionSettled() => OnAsyncSettlementCompleted?.Invoke();
+
     // ============================================================
     // 内部状态
     // ============================================================
     private int _passCount = 0;
+
+    /// <summary>
+    /// 【显式让过状态机】本响应/步骤窗口内**已让过的玩家**集合（不再用"翻转 1/2"猜对手）。
+    /// 推进条件严格等价于「天生优先玩家 A 让过 + 另一方 B 让过」：
+    ///  · A 让过 → 行动权交给 B；
+    ///  · B 让过 → 双方都已让过 → 直接推进（结算栈顶 / 推进步骤）。
+    /// 与 `_passCount` 同步维护（后者仅供日志/旧口径读取）。
+    /// </summary>
+    private readonly System.Collections.Generic.HashSet<int> _passedPlayers
+        = new System.Collections.Generic.HashSet<int>();
+
+    /// <summary>复位"让过窗口"：新步骤开始 / 有东西入堆叠 / 堆叠结算后，双方的让过状态一并清空。</summary>
+    private void ResetPassWindow()
+    {
+        _passCount = 0;
+        _passedPlayers.Clear();
+    }
+
+    /// <summary>另一位玩家（2 人局）：1→2，2→1。让过后行动权**显式**交给另一方，不再盲目翻转。</summary>
+    public static int OtherPlayerId(int playerId) => playerId == 1 ? 2 : 1;
 
     // ============================================================
     // 【规则简化】免让过步骤的自动推进
@@ -506,7 +560,7 @@ public partial class TurnManager : Node
         CurrentPhase = TurnPhase.StartReset;
         FirstPlayerId = 1;
         PriorityPlayerId = 0;
-        _passCount = 0;
+        ResetPassWindow();
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
         _extraPowerDoneAreas.Clear();   // 【P3·K18】新回合：追加势力对抗的去重集合复位
@@ -519,7 +573,7 @@ public partial class TurnManager : Node
     {
         TurnCount = 1;
         FirstPlayerId = 1;
-        _passCount = 0;
+        ResetPassWindow();
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
         _extraPowerDoneAreas.Clear();   // 【P3·K18】新回合：追加势力对抗的去重集合复位
@@ -537,7 +591,7 @@ public partial class TurnManager : Node
     {
         TurnCount++;
         FirstPlayerId = FirstPlayerId == 1 ? 2 : 1;
-        _passCount = 0;
+        ResetPassWindow();
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
         _extraPowerDoneAreas.Clear();   // 【P3·K18】新回合：追加势力对抗的去重集合复位
@@ -552,30 +606,43 @@ public partial class TurnManager : Node
     }
 
     // ============================================================
-    // 【开局·调度步骤】（联机）
+    // 【开局·调度步骤 = 第 0 回合】（联机）
     // ------------------------------------------------------------
-    // 时序：双方起手手牌已发（GameInitializer.StartMatch）→ **本方法**（双方选择调度）→ StartGame（第一回合）。
-    // 结算口径（用户 2026-09）：双方都点确认后，把**高亮（所选）手牌**放到牌库底，
-    // 然后各从**牌库顶**抽回等量张，最后洗牌。
+    // 定位（用户 2026-10 口径 · 最终版）：调度是**回合流程的一个真实步骤**——
+    //   起手手牌已发 → **TurnPhase.Mulligan（第 0 回合，TurnCount=0）** → 双方上报选择 → StartGame(TurnCount=1, Reset)。
+    // 【为什么不主动下发决策请求】客户端收到 `room.Phase=InMatch` 后才 `GoToStateDeferred` **延迟一帧**切到战场页，
+    // 服务端若在该广播后立刻 `RequestChoice`，请求会落在"客户端尚未订阅决策请求"的空档里而被兜底取消
+    // （历史现象：不弹调度框、直接跳到第一回合）。
+    // 因此第 0 回合改为**客户端驱动（上行）**：客户端本地弹调度框，玩家点"确认调度"时**主动上报**选择，
+    // 上报那一刻客户端必然已就绪 ⇒ 无竞态，也不需要就绪信号 / 重发 / 超时兜底。
+    //   注：发起手牌本身不需要此机制——快照可随时补帧（`LastSnapshot`），故第 1 回合的启动时机原样不动。
+    // 结算口径：双方都上报后，把**高亮（所选）手牌**放到牌库底，再从**牌库顶**抽回等量张，最后洗牌。
     // 说明：仅联机（InputGateway 注入）启用；单机由 StartMatch 直接 StartGame，不走本步骤。
     // ============================================================
-    private bool _isMulliganPhase;
-    /// <summary>是否处于开局调度步骤（供 UI 判断是否显示调度提示框 / 冻结常规交互）。</summary>
-    public bool IsMulliganPhase => _isMulliganPhase;
+
+    /// <summary>是否处于第 0 回合（开局调度步骤）：供 UI 显示"调度步骤" / 冻结常规交互。</summary>
+    public bool IsMulliganPhase => CurrentPhase == TurnPhase.Mulligan;
 
     /// <summary>调度步骤完成事件（供服务端广播快照、UI 收起提示框）。</summary>
     public event Action OnMulliganCompleted;
 
+    /// <summary>已上报调度选择的玩家（1/2）；双方齐了才统一结算。</summary>
+    private readonly System.Collections.Generic.HashSet<int> _mulliganReported
+        = new System.Collections.Generic.HashSet<int>();
+    /// <summary>各玩家上报的"要换掉"的手牌 UID（已权威复检）。</summary>
+    private readonly System.Collections.Generic.Dictionary<int, List<string>> _mulliganPicks
+        = new System.Collections.Generic.Dictionary<int, List<string>>();
+
     /// <summary>
-    /// 【开局·调度步骤】联机入口：并行向双方请求"选择要调度的手牌"，双方都回包后统一结算，
-    /// 然后调用 `StartGame()` 正式进入第一回合（重置步骤）。
-    /// 幂等保护：重复调用（如重连）若已在调度中则直接返回。
+    /// 【第 0 回合·调度步骤】联机入口（客户端驱动）：先把阶段置为第 0 回合并下发一份快照，
+    /// 之后**只等客户端主动上报**（见 `ReportMulligan`），双方齐了才结算并 `StartGame()` 进入第一回合。
+    /// 幂等保护：重复调用（重连 / 多处触发）若已在第 0 回合则直接返回。
     /// </summary>
-    public async System.Threading.Tasks.Task BeginMulliganAsync()
+    public void BeginMulligan()
     {
-        if (_isMulliganPhase)
+        if (CurrentPhase == TurnPhase.Mulligan)
         {
-            GD.Print("[TurnManager] 调度步骤已在进行中，忽略重复调用");
+            GD.Print("[TurnManager] 第0回合·调度步骤已在进行中，忽略重复调用");
             return;
         }
         if (InputGateway == null || _cardManager == null)
@@ -585,75 +652,56 @@ public partial class TurnManager : Node
             return;
         }
 
-        _isMulliganPhase = true;
-        GD.Print("=== [TurnManager] 开局调度步骤开始（双方选择任意数量手牌调度）===");
-
-        try
-        {
-            // 并行请求双方（互不阻塞；各自超时/取消视同"不调度"）
-            var t1 = RequestMulliganAsync(1);
-            var t2 = RequestMulliganAsync(2);
-            var picks = await System.Threading.Tasks.Task.WhenAll(t1, t2);
-
-            // 双方都收齐后统一结算（注意：必须先取出全部所选 UID，再动牌库，避免边遍历边改动）
-            for (int i = 0; i < picks.Length; i++)
-                ApplyMulligan(i + 1, picks[i]);
-        }
-        catch (System.Exception ex)
-        {
-            GD.PrintErr($"[TurnManager] 调度步骤异常（按不调度处理）: {ex.GetType().Name}: {ex.Message}");
-        }
-        finally
-        {
-            _isMulliganPhase = false;
-        }
-
-        GD.Print("=== [TurnManager] 调度步骤完成，开始第一回合 ===");
-        OnMulliganCompleted?.Invoke();
-        OnAsyncSettlementCompleted?.Invoke();   // 服务端据此广播一次快照（调度后的手牌/牌库）
-        StartGame();
+        // 进入第 0 回合：仅此一步，**不涉及优先权转换**（无人持有行动权）
+        TurnCount = 0;
+        CurrentPhase = TurnPhase.Mulligan;
+        PriorityPlayerId = 0;
+        ResetPassWindow();
+        _mulliganReported.Clear();
+        _mulliganPicks.Clear();
+        OnPhaseChanged?.Invoke(CurrentPhase);
+        GD.Print("=== [TurnManager] 第0回合·调度步骤开始（等待双方主动上报调度选择）===");
+        OnAsyncSettlementCompleted?.Invoke();   // 服务端据此下发一份「第0回合」快照，客户端据此弹调度框
     }
 
-    /// <summary>向单个玩家请求调度选择；返回所选（要换掉）的手牌 UID 列表（取消/超时 → 空列表）。</summary>
-    private async System.Threading.Tasks.Task<List<string>> RequestMulliganAsync(int playerId)
+    /// <summary>
+    /// 【客户端驱动】接收某玩家的调度上报：`pickedUids` 为**要换掉**的手牌 UID（空 = 不调度）。
+    /// 服务端按该玩家**当前真实手牌**权威复检（不在手牌里的 UID 一律丢弃）。
+    /// 双方都上报后自动结算 + 进入第一回合；重复上报（重连重发）幂等忽略。
+    /// </summary>
+    public void ReportMulligan(int playerId, List<string> pickedUids)
     {
+        if (CurrentPhase != TurnPhase.Mulligan || playerId != 1 && playerId != 2) return;
+        if (!_mulliganReported.Add(playerId)) return;   // 幂等：已上报过则忽略
+
         var hand = GetHandOf(playerId);
-        if (hand.Count == 0) return new List<string>();
+        var allowed = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var c in hand) if (c != null) allowed.Add(c.UID);
 
-        var req = new Script.Net.ChoiceRequest
-        {
-            PlayerId = playerId,
-            RequestKind = Script.Net.ChoiceRequest.Kind.SelectMulligan,
-            Prompt = "选择要调度的手牌（点击手牌高亮，点确认锁定；再点一次可取消选中）",
-            ForceChoice = false,
-            NumberMax = hand.Count,
-        };
-        foreach (var c in hand)
-        {
-            if (c == null) continue;
-            req.OptionUids.Add(c.UID);
-            req.OptionCardRefs.Add(ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
-            req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
-        }
-
-        var res = await InputGateway.RequestChoice(playerId, req);
         var picked = new List<string>();
-        if (res == null || res.Cancelled) return picked;   // 取消/超时 → 视同不调度
-
-        // 权威复检：必须命中服务端下发的候选，且去重
-        var allowed = new System.Collections.Generic.HashSet<string>(req.OptionUids, System.StringComparer.Ordinal);
-        if (res.SelectedUids != null)
-        {
-            var seen = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
-            foreach (var uid in res.SelectedUids)
+        var seen = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+        if (pickedUids != null)
+            foreach (var uid in pickedUids)
             {
-                if (string.IsNullOrEmpty(uid) || !allowed.Contains(uid)) continue;
+                if (string.IsNullOrEmpty(uid) || !allowed.Contains(uid)) continue;   // 权威复检
                 if (!seen.Add(uid)) continue;
                 picked.Add(uid);
             }
-        }
-        GD.Print($"[TurnManager] 玩家{playerId} 调度选择 {picked.Count} 张（手牌共 {hand.Count} 张）");
-        return picked;
+
+        _mulliganPicks[playerId] = picked;
+        GD.Print($"[TurnManager] 玩家{playerId} 调度上报 {picked.Count} 张（手牌共 {hand.Count} 张），"
+            + $"已上报 {_mulliganReported.Count}/2");
+
+        if (_mulliganReported.Count < 2) return;   // 等另一位
+
+        // 双方齐 → 统一结算（先取出全部 UID 再动牌库，避免边遍历边改动）
+        foreach (var kv in _mulliganPicks) ApplyMulligan(kv.Key, kv.Value);
+
+        CurrentPhase = TurnPhase.StartReset;   // 离开第 0 回合（StartGame 会置 TurnCount=1 并进入重置步骤）
+        GD.Print("=== [TurnManager] 调度步骤完成，开始第一回合 ===");
+        OnMulliganCompleted?.Invoke();
+        OnAsyncSettlementCompleted?.Invoke();
+        StartGame();
     }
 
     /// <summary>
@@ -698,7 +746,13 @@ public partial class TurnManager : Node
     // ============================================================
 
     /// <summary>
-    /// 玩家让过。仅在行动阶段有效。双方连续让过则推进到下一阶段。
+    /// 玩家让过。
+    /// 【显式优先权状态机（用户 2026-09 口径）】
+    ///  · 每个步骤存在一位**天生优先玩家** A（＝`GetPriorityPlayer()`：先手；ActionSecond 内为后手）；
+    ///  · 步骤开始 / 有东西入堆叠 / 堆叠结算后，行动权一律归 A，并复位让过窗口；
+    ///  · A 让过 → 行动权**显式**交给另一方 B（不再盲目翻转 1/2）；
+    ///  · B 让过 → 双方都已让过 → 直接推进（堆叠非空：结算栈顶；堆叠为空：推进下一步骤）。
+    ///  · 第 0 回合（调度步骤）不涉及优先权转换：`PriorityPlayerId` 为 0，双方都无法让过。
     /// </summary>
     public void Pass(int playerId)
     {
@@ -718,12 +772,13 @@ public partial class TurnManager : Node
                 return;
             }
 
-            _passCount++;
-            GD.Print($"🟢 [TurnManager] 玩家{playerId} 让过 (连续让过计数: {_passCount}) [堆叠非空，阶段={CurrentPhase}]");
+            _passedPlayers.Add(playerId);
+            _passCount = _passedPlayers.Count;
+            GD.Print($"🟢 [TurnManager] 玩家{playerId} 让过 (本窗口已让过: {string.Join("/", _passedPlayers)}) [堆叠非空，阶段={CurrentPhase}]");
 
-            if (_passCount >= 2)
+            if (_passedPlayers.Count >= 2)
             {
-                _passCount = 0;
+                ResetPassWindow();
                 ResolveStackTop();   // 结算顶部条目（含结构化执行）
 
                 // 注：对抗三步骤（调查/战斗/势力）现在各自独立成阶段，结算完毕后统一进入
@@ -736,7 +791,8 @@ public partial class TurnManager : Node
             }
             else
             {
-                PriorityPlayerId = PriorityPlayerId == 1 ? 2 : 1;
+                // 让过者让出行动权 → 交给**另一位**玩家（A 让过 → B 获得行动权）
+                PriorityPlayerId = OtherPlayerId(playerId);
                 GD.Print($"⏳ [TurnManager] 行动权转移给玩家{PriorityPlayerId}（堆叠非空，待响应）");
                 OnPriorityChanged?.Invoke(PriorityPlayerId);
             }
@@ -750,24 +806,26 @@ public partial class TurnManager : Node
             return;
         }
 
-        _passCount++;
-        GD.Print($"🟢 [TurnManager] 玩家{playerId} 让过 (连续让过计数: {_passCount}) [阶段={CurrentPhase}]");
+        _passedPlayers.Add(playerId);
+        _passCount = _passedPlayers.Count;
+        GD.Print($"🟢 [TurnManager] 玩家{playerId} 让过 (本窗口已让过: {string.Join("/", _passedPlayers)}) [阶段={CurrentPhase}]");
 
-        // 堆叠为空：双方连续让过则推进阶段
-        if (_passCount >= 2)
+        // 堆叠为空：双方都让过则推进阶段
+        if (_passedPlayers.Count >= 2)
         {
-            _passCount = 0;
+            ResetPassWindow();
             // 注：不再对外广播"玩家0"作为阶段切换过渡态。原因：OnPriorityChanged 的订阅者（Arena UI）
             // 为同步回调，若先 Invoke(0) 再 AdvancePhase，订阅者会在 CurrentPhase 仍为旧阶段、
             // PriorityPlayerId=0 的窗口内同步尝试 Pass/行动，触发"行动权在玩家0"误报。
             // 直接 AdvancePhase → EnterPhase → DoXxx 内部以有效玩家(1/2) 复位并发出 OnPriorityChanged，
             // UI 不经历玩家0瞬间，彻底避免下游误触发。
-            GD.Print("⏩ [TurnManager] 双方连续让过，推进阶段");
+            GD.Print("⏩ [TurnManager] 双方都让过，推进阶段");
             AdvancePhase();
         }
         else
         {
-            PriorityPlayerId = PriorityPlayerId == 1 ? 2 : 1;
+            // 让过者让出行动权 → 交给**另一位**玩家（A 让过 → B 获得行动权）
+            PriorityPlayerId = OtherPlayerId(playerId);
             GD.Print($"⏳ [TurnManager] 行动权转移给玩家{PriorityPlayerId}");
             OnPriorityChanged?.Invoke(PriorityPlayerId);
         }
@@ -1294,7 +1352,7 @@ public partial class TurnManager : Node
             {
                 // 所有者的窗口都处理完毕，优先权归优先玩家
                 PriorityPlayerId = GetPriorityPlayer();
-                _passCount = 0;
+                ResetPassWindow();
                 GD.Print($"⏳ [Trigger] 触发阶段结束，优先权给优先玩家{PriorityPlayerId}");
                 OnPriorityChanged?.Invoke(PriorityPlayerId);
                 onAllCompleted?.Invoke();   // 全部所有者窗口结束后回调（如对抗前触发需立即结算）
@@ -1455,7 +1513,7 @@ public partial class TurnManager : Node
             }
 
             PriorityPlayerId = GetPriorityPlayer();
-            _passCount = 0;
+            ResetPassWindow();
             GD.Print($"⏳ [Trigger] 触发阶段结束（Async），优先权给优先玩家{PriorityPlayerId}");
             OnPriorityChanged?.Invoke(PriorityPlayerId);
             onAllCompleted?.Invoke();
@@ -2467,7 +2525,16 @@ public partial class TurnManager : Node
                                  $"{src.GetAbilityUsesThisTurn(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerTurn}）→ 跳过本次结算");
                         break;
                     }
+                    // 【A57】每局游戏次数上限（如 MSJC001 行动4"每局游戏只能发动一次"）：与每回合上限**同点先检查**
+                    // （必须在登记之前，否则"已达上限"仍会把本回合计数 +1）
+                    if (src != null && src.IsGameAbilityLimitReached(entry.EffectDataEffect.EffectId, entry.EffectDataEffect.MaxUsesPerGame))
+                    {
+                        GD.Print($"[Resolve] ⏹ 每局次数上限：{entry.EffectDataEffect.EffectId} 本局已发动 " +
+                                 $"{src.GetAbilityUsesThisGame(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerGame}）→ 跳过本次结算");
+                        break;
+                    }
                     if (src != null) src.MarkAbilityUsedThisTurn(entry.EffectDataEffect.EffectId);
+                    if (src != null) src.MarkAbilityUsedThisGame(entry.EffectDataEffect.EffectId);
                     // entry.WinnerId：对抗获胜方玩家 ID（威名等"X对抗获胜"触发由 TriggerRegistry 收集时经
                     // StackEffectInstance.WinnerId → PushTriggerToStack 写入），透传给 ResolveEffect 供 WinnerIsSelf 判定。
                     // 【K24】entry.TargetPlayerId：入堆叠时锁定的目标玩家号（激活类玩家目标效果用）。
@@ -3562,8 +3629,8 @@ public partial class TurnManager : Node
             _cardManager?.MoveCardToArea(instance, targetUid ?? "");
         }
 
-        // 8. 重置让过计数（打出动作重置响应窗口）
-        _passCount = 0;
+        // 8. 复位让过窗口（打出动作重置响应窗口：天生优先玩家重新取得行动权，需重新 A 让过 + B 让过）
+        ResetPassWindow();
 
         // 9. 优先权分配（统一口径见 AssignPriorityAfterPlay）
         AssignPriorityAfterPlay(playerId, "出牌入堆叠");
@@ -3771,8 +3838,8 @@ public partial class TurnManager : Node
             _triggerEmitPoints?.UncoverTrigger(instance, controller, originArea);
         }
 
-        // 重置让过计数 + 优先权分配（与打出卡牌同一口径）
-        _passCount = 0;
+        // 复位让过窗口 + 优先权分配（与打出卡牌同一口径）
+        ResetPassWindow();
         AssignPriorityAfterPlay(playerId, "暗藏者现身入堆叠");
 
         GD.Print($"[TurnManager] ✅ 玩家{playerId} 成功发动暗藏者现身 UID={cardUid}, 地区={originArea}");
@@ -4174,6 +4241,8 @@ public partial class TurnManager : Node
     /// </summary>
     public int GetPriorityPlayer()
     {
+        // 【第0回合】调度步骤不涉及优先权转换：无人持有行动权（PriorityPlayerId = 0）
+        if (CurrentPhase == TurnPhase.Mulligan) return 0;
         // ActionSecond 内优先玩家为"后手"（即非先手方）
         if (CurrentPhase == TurnPhase.ActionSecond)
             return FirstPlayerId == 1 ? 2 : 1;
@@ -4293,6 +4362,8 @@ public partial class TurnManager : Node
         TurnPhase nextPhase;
         switch (CurrentPhase)
         {
+            // 第0回合（调度）→ 第1回合重置步骤（兜底：正常路径由 BeginMulliganAsync 直接 StartGame）
+            case TurnPhase.Mulligan:     nextPhase = TurnPhase.StartReset; break;
             case TurnPhase.StartReset:   nextPhase = TurnPhase.StartPrepare; break;
             case TurnPhase.StartPrepare: nextPhase = TurnPhase.StartDraw; break;
             case TurnPhase.StartDraw:    nextPhase = TurnPhase.ActionFirst; break;
@@ -4421,7 +4492,7 @@ public partial class TurnManager : Node
         if (stackCount == 0)
         {
             // 堆叠空：本步骤节拍重新开始
-            _passCount = 0;
+            ResetPassWindow();
         }
         else
         {
@@ -4572,6 +4643,7 @@ public partial class TurnManager : Node
             TurnPhase.EndCleanup           => "结束步骤",
             TurnPhase.EndRecover           => "恢复步骤",
             TurnPhase.EndPassTurn          => "移交先手",
+            TurnPhase.Mulligan             => "调度步骤",
             _                              => phase.ToString()
         };
 
@@ -4665,7 +4737,7 @@ public partial class TurnManager : Node
     private void GrantPriorityAfterCombatStep(string stepName, int areaNo)
     {
         PriorityPlayerId = GetPriorityPlayer();
-        _passCount = 0;
+        ResetPassWindow();
         int stackCount = _stackManager?.Entries.Count ?? 0;
         if (VerboseSteps) GD.Print($"【{stepName}】地区{areaNo} 对抗结算完毕（堆叠 {stackCount} 项），行动权: 玩家{PriorityPlayerId}，等待双方连续让过");
 

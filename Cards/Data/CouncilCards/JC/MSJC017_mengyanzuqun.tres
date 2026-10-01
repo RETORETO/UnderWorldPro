@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="MSJC017_mengyanzuqun" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC017_mengyanzuqun.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中只能包含【紫】和【中立】派系的牌，以及其他派系的灵体角色或梦境牌。
+持续：你从牌库底抓牌，而非牌库顶。
+行动，3，横置：若你具有【先手标志】，则将你牌库顶的一张牌封印在目标角色上。
+行动，4，横置：将你墓地中的目标灵体角色置于你的牌库顶。
+初始手牌：6"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC017_mengyanzuqun.jpg"
+StartingHandSize = 6
+SubType = "秘社-群体/梦境"
+ColorText = "紫·梦境行者"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "梦魇族群"
+Cost = 3
+
+UID = "MSJC017_mengyanzuqun"
+CardName = "梦魇族群"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

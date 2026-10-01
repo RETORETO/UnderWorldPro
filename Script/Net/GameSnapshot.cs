@@ -215,6 +215,15 @@ namespace Script.Net
         public List<string> UsedAbilityIds = new List<string>();
         /// <summary>与 <see cref="UsedAbilityIds"/> 同序的已使用次数（&gt;0 才会下发）。</summary>
         public List<int> UsedAbilityCounts = new List<int>();
+
+        /// <summary>
+        /// 【A57】本局"每能力"使用次数的投影（与 <see cref="UsedAbilityCountsGame"/> **同序一一对应**）：
+        /// "该能力每局游戏只能发动一次"（秘社 MSJC001 行动4）——**不随回合重置**，
+        /// 客户端 `ActivateEligibility.CanActivate` 要读同一份真值，否则"本局已用过却仍高亮可发动"。
+        /// </summary>
+        public List<string> UsedAbilityIdsGame = new List<string>();
+        /// <summary>与 <see cref="UsedAbilityIdsGame"/> 同序的本局已使用次数（&gt;0 才会下发）。</summary>
+        public List<int> UsedAbilityCountsGame = new List<int>();
     }
 
     public class StackEntrySnap

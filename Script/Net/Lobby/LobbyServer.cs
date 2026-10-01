@@ -419,6 +419,18 @@ namespace Script.Net.Lobby
             room.LastActiveTick = Now();
             Log($"[Lobby] 房间 {room.RoomId} 对局开始（座位1={room.Seat(1).PlayerName} / 座位2={room.Seat(2).PlayerName}）");
             Broadcast(room);
+
+            // 【第0回合·调度步骤】广播之后再进第 0 回合：先把阶段置为 Mulligan 并下发一份快照，
+            // 客户端据此弹调度框；调度选择**由客户端主动上报**（不做服务端主动下发，避免请求早于订阅而丢失），
+            // 双方上报齐了自动结算并开始第 1 回合。
+            try
+            {
+                room.Match?.StartMulligan();
+            }
+            catch (Exception ex)
+            {
+                Log($"[Lobby] 房间 {room.RoomId} 进入第0回合调度步骤异常：{ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         /// <summary>【H1】建局失败回退：常见于对局装配抛异常。绝不把房间留在 `Starting`。</summary>

@@ -9,9 +9,10 @@ using Script.Manager;
 namespace Script.Tests
 {
     /// <summary>
-    /// 【P2·联机回包权威复检 + 选择窗可读性】回归：
+    ///  【P2·联机回包权威复检 + 选择窗可读性】回归：
     ///  ① **检索**（`SelectDeckCard`）：回包必须命中"服务端本次下发的候选"（在检索者牌库 ∧ 通过筛选）；
-    ///    回包越权（如对手手牌）→ 本次检索不生效、**不洗牌**（fail-closed）。
+    ///    回包越权（如对手手牌）→ **越权牌取不走**；【A53】检索为强制，故改为**兜底取第一张合法候选**
+    ///    （原"整次检索不生效、不洗牌"口径随 A53 作废——否则异常客户端可用一次越权回包规避强制检索）。
     ///    原实现只判"实例存在" ⇒ 客户端可回包任意 UID 把它当检索结果取走。
     ///  ② **弃牌**（`SelectHandCard`）：同理，回包必须是"该弃牌者手牌中、本批尚未选中的牌"。
     ///  ③ **选择窗可读性**：牌库/对手手牌在客户端是**隐藏占位**（无模板/无卡面），
@@ -113,9 +114,15 @@ namespace Script.Tests
             Assert.AreEqual(CardZone.Hand, match.CurrentZone, "合规回包 → 该牌被取到手牌");
         }
 
-        // ==================== ② 检索：越权回包 → 拒绝（不取牌、不洗牌） ====================
+        // ==================== ② 检索：越权回包 → 越权牌被拒；按强制检索兜底取第一张合法候选 ====================
 
-        public void TestOnlineGuard_检索越权回包被拒()
+        /// <summary>
+        /// 【A53·2026-09 用户拍板】检索改为**强制**后，越权回包的处理口径：
+        ///  · **越权的那张牌仍然取不走**（安全属性不变：候选永远只来自检索者牌库 ∧ 通过筛选）；
+        ///  · 但**不再**"整次检索不生效"（那会让异常客户端用一次越权回包规避强制检索）→
+        ///    按确定性兜底取**第一张合法候选**，随后照常洗牌。
+        /// </summary>
+        public void TestOnlineGuard_检索越权回包被拒并兜底取第一张()
         {
             var game = NewGame();
             var gw = new ScriptedGateway();
@@ -136,10 +143,19 @@ namespace Script.Tests
             gw.AnswerUid = enemyHand.UID;   // 越权回包
             game.EffectEngine.ResolveEffectAsync(e, src, null, "").GetAwaiter().GetResult();
 
-            Assert.AreEqual(CardZone.Hand, enemyHand.CurrentZone, "越权回包的牌**没有被取走**");
+            Assert.AreEqual(1, gw.Requests.Count, "发了一次检索请求");
+            string firstCandidateUid = gw.Requests[0].OptionUids[0];
+            Assert.IsFalse(gw.Requests[0].OptionUids.Contains(enemyHand.UID), "越权牌从未进入候选");
+
+            Assert.AreEqual(CardZone.Hand, enemyHand.CurrentZone, "越权回包的牌**没有被取走**（安全属性不变）");
             Assert.AreEqual(2, enemyHand.ControllerId, "归属未被改动");
-            Assert.AreEqual(deckBefore, game.TurnManager.GetDeckOf(1).Count, "检索者的牌库未被取走任何牌");
-            Assert.AreEqual(CardZone.Deck, match.CurrentZone, "合法候选仍在牌库（本次检索整体不生效）");
+            Assert.AreEqual(deckBefore - 1, game.TurnManager.GetDeckOf(1).Count,
+                "兜底取走一张**合法候选**（强制检索不可被越权回包规避）");
+
+            bool fallbackInHand = false;
+            foreach (var c in game.TurnManager.GetHandOf(1))
+                if (c != null && c.UID == firstCandidateUid) fallbackInHand = true;
+            Assert.IsTrue(fallbackInHand, "兜底取走的正是**第一张合法候选**（已进检索者手牌）");
         }
 
         // ==================== ③ 弃牌：越权回包 → 拒绝 ====================

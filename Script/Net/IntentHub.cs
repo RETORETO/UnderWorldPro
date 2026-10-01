@@ -158,6 +158,11 @@ namespace Script.Net
                     _router.DebugCommand(intent.PlayerId, At(a, 0) ?? "");
                     break;
 
+                case PlayerIntent.Kind.MulliganReport:
+                    // Args: 要换掉的手牌 UID（0..N 个）
+                    _router.MulliganReport(intent.PlayerId, a);
+                    break;
+
                 default:
                     throw new InvalidOperationException($"未支持的意图种类: {intent.IntentKind}");
             }

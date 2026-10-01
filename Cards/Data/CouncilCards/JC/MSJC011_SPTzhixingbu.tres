@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="MSJC011_SPTzhixingbu" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC011_SPTzhixingbu.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中只能包含【绿】和【中立】派系的牌，以及其他派系带有［黑刀］能力图标的人类角色牌。
+行动，3，横置：目标角色获得杀伤1直到回合结束。
+行动，3，横置：选择目标地区，所有位于该地区，且带有［黑刀］能力图标的本方角色获得撤回直到回合结束。
+初始手牌：6
+
+FAQ：
+◆若 S．P．T执行部秘社的二能力已经发动且目标地区牌被赢取时，玩家通过其他能力使位于其他地区的角色移动进入被赢取地区，这些角色不会获得撤回。"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC011_SPTzhixingbu.jpg"
+StartingHandSize = 6
+SubType = "秘社-企业/部门"
+ColorText = "绿·猎魔人"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "S．P．T执行部"
+Cost = 3
+
+UID = "MSJC011_SPTzhixingbu"
+CardName = "S．P．T执行部"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

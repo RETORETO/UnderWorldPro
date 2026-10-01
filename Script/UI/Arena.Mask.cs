@@ -178,7 +178,8 @@ public partial class Arena : Control
         if (_phaseStatusLabel == null || _turnManager == null) return;
 
         // 四行显示：① 回合　② 优先权　③ 先手　④ 当前步骤中文名（中文步骤名统一由 TurnManager 提供）
-        string turnText = $"回合: {_turnManager.TurnCount}";
+        // 第0回合＝开局调度步骤（TurnCount==0 → "第0回合"）
+        string turnText = $"第{_turnManager.TurnCount}回合";
         string priorityText = _turnManager.PriorityPlayerId > 0
             ? $"优先权: P{_turnManager.PriorityPlayerId}"
             : "优先权: 无";

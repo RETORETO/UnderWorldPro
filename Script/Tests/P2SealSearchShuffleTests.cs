@@ -16,10 +16,12 @@ namespace Script.Tests
     /// · **封印（Seal）**：被封印者来源（自身/目标/牌库顶/手牌）× 宿主（目标/自身）矩阵；
     ///   唯一出口 `TurnManager.SealCard`（双向引用 + 进 SealedZone + 广播 `OnSealed`）；"背面朝上"= 信息隔离。
     /// · **检索（Search）**：筛选语法、范围（整库 / 牌库顶 N）、四条去向（手牌/进场/暗藏进场/结附/封印）、
-    ///   **找到 / 没找到 / 放弃 都洗牌**（用户确认）、联机 `SelectDeckCard` 候选携带展示引用。
+    ///   **找到 / 没找到 都洗牌**（用户确认）、联机 `SelectDeckCard` 候选携带展示引用。
     /// · **洗牌（Shuffle）**：走可复现随机源（同种子同结果），不乱动牌数。
     ///
-    /// 规则口径（用户确认）：检索后必定洗牌；"你可以寻找"允许放弃；检索入牌库→手牌**不是抓牌**（不广播 OnDraw）。
+    /// 规则口径（用户确认）：检索后必定洗牌；检索入牌库→手牌**不是抓牌**（不广播 OnDraw）。
+    /// 【A53·2026-09 用户拍板】检索**一律强制、不可取消**（8 张 JC 检索卡卡文都没有"你可以寻找"）：
+    /// 单机 `allowCancel: false`；联机回包取消/非法时**兜底取第一张匹配**（不能靠取消规避强制检索）。
     /// </summary>
     public class P2SealSearchShuffleTests : TestRunner
     {
@@ -531,28 +533,29 @@ namespace Script.Tests
         }
 
         /// <summary>
-        /// 【用户拍板 2026-09】"你可以寻找…"选择**放弃**时：检索行为**根本没发生** → **不洗牌**
-        /// （牌库不能因一次未发生的检索被打乱）。对照：没找到仍洗牌（见 `TestP2Search_未找到_仍然洗牌且不改变牌数`）。
+        /// 【A53·2026-09 用户拍板】检索**强制**：即使回包是"取消"（异常客户端）也不能规避检索
+        /// → 按"无有效回包"的确定性兜底口径**取第一张匹配** + 落地 + 洗牌。
+        /// （原口径"玩家放弃 = 检索未发生 → 不洗牌"随 A53 作废。）
         /// </summary>
-        public void TestP2Search_联机_放弃取牌_不洗牌()
+        public void TestP2Search_联机_强制检索_回包取消时兜底取第一张并洗牌()
         {
             var game = NewGame();
             var gw = new RecGateway { CancelAll = true };
             game.SetInputGateway(gw);
 
             var found = PutOnDeckTop(game, Probe("TS_search_give", cost: 1));
+            int handBefore = game.TurnManager.GetHandOf(1).Count;
             int deckBefore = game.DeckManager.GetPlayer1DeckCount();
-            string orderBefore = DeckSignature(game);
 
             var src = game.CardManager.CreateCardInstance(
                 Probe("TS_search_src12", effect: SearchEffect("TS_search_e12", "费用<=1", "手牌")), 1);
             EffectEngine.Instance.ResolveEffectAsync(src.PlayerTemplate.EffectDataList[0], src, null).Wait(5000);
 
             Assert.AreEqual(1, gw.Requests.Count, "应发起一次检索请求");
-            Assert.AreEqual(CardZone.Deck, found.CurrentZone, "放弃取牌 → 牌应留在牌库");
-            Assert.AreEqual(deckBefore, game.DeckManager.GetPlayer1DeckCount(), "放弃取牌不应改变牌数");
-            Assert.AreEqual(orderBefore, DeckSignature(game),
-                "放弃取牌 = 检索未发生 → 牌库顺序必须逐位不变（不洗牌）");
+            Assert.IsTrue(gw.Requests[0].ForceChoice, "强制检索：请求应标记 ForceChoice = true（客户端不给取消）");
+            Assert.AreEqual(CardZone.Hand, found.CurrentZone, "回包取消 → 兜底取第一张匹配 → 进手牌（强制检索不可规避）");
+            Assert.AreEqual(handBefore + 1, game.TurnManager.GetHandOf(1).Count, "手牌 +1");
+            Assert.AreEqual(deckBefore - 1, game.DeckManager.GetPlayer1DeckCount(), "牌已从牌库取出（不再是『检索未发生』）");
         }
 
         // ==================== ⑦ 洗牌原语 ====================

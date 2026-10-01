@@ -138,6 +138,30 @@ public partial class ZoneManager : Node
         finally { _detachMode = prev; }
     }
 
+    /// <summary>
+    /// 【Setup 幂等】清空某玩家的秘社区（用于"开局重放秘社"：`GameInitializer.DealOpeningHands` 会在
+    /// `InitializeAll` 之后再放一次秘社，以便读到**本局最终卡组**携带的秘社）。
+    /// 旧秘社实例按**移出游戏**（`CardZone.Exiled`）处理并广播 `OnCardMoved` → View 摘除对应秘社 UI；
+    /// 秘社不参与死亡/弃牌/地区赢取等任何规则，故**不进墓地、不触发任何时机**。
+    /// 不清理的后果（2026-09 实测 Bug）：同一玩家 CouncilZone 里会累积 2 张秘社（同模板），
+    /// 导致 `GetCouncilHandSize` 读到先建的旧卡（回退默认 6）等一串错乱。
+    /// </summary>
+    public void ClearCouncilZone(int playerId)
+    {
+        if (!_council.TryGetValue(playerId, out var list) || list == null || list.Count == 0) return;
+        var old = new List<CardInstance>(list);
+        list.Clear();
+        foreach (var card in old)
+        {
+            if (card == null) continue;
+            EE?.UnregisterPersistent(card);          // 与"离场"同款：注销持续效果登记
+            card.CurrentZone = CardZone.Exiled;      // 移出游戏（不在任何区域桶中）
+            card.ZoneDetailId = null;
+            FireMoved(card, CardZone.Exiled, playerId, null);
+            GD.Print($"[ZoneManager] 秘社重放：玩家{playerId} 旧秘社已移除（{card.CouncilTemplate?.CardName ?? card.UID}）");
+        }
+    }
+
     /// <summary>从所有区域列表移除该卡（移动前的统一清理）；若来自牌库则同步从数据层牌库移除。
     /// 当卡【离开争夺区(AreaZone)】前往非争夺区时，其结附的附属（及附属的附属，递归）按当前连带模式处置：
     /// - Normal（卡因效果/伤害离场）→ 附属进入弃牌堆（用户规则）。
@@ -906,6 +930,15 @@ public partial class ZoneManager : Node
             {
                 r.UsedAbilityIds.Add(kv.Key);
                 r.UsedAbilityCounts.Add(kv.Value);
+            }
+        }
+        // 【A57】每局游戏每能力使用次数（同款投影；客户端"每局一次"的可用性判定要读）
+        if (c.AbilityUsesThisGame.Count > 0)
+        {
+            foreach (var kv in c.AbilityUsesThisGame)
+            {
+                r.UsedAbilityIdsGame.Add(kv.Key);
+                r.UsedAbilityCountsGame.Add(kv.Value);
             }
         }
 

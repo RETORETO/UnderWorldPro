@@ -155,6 +155,9 @@ namespace Script.Manager
 
             Sacrifice(cm, picked);
             EnforceInvariant(cm, ee, controllerId, newest);
+            // 【A55·联机 UI 刷新】本流程是**异步**落地（服务端已从意图流程返回）⇒ 主动通知下发快照，
+            // 否则客户端要等到下一次上行才看得到规则牺牲的结果。
+            ee?.TurnManagerRef?.NotifyResolutionSettled();
         }
 
         /// <summary>落地"牺牲"：走死亡唯一入口（DeathCause.Sacrifice），照常广播死亡触发。</summary>

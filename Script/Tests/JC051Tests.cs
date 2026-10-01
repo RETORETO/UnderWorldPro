@@ -1,17 +1,20 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
 using Script.Game.Entities;
 using Script.Manager;
+using Script.Net;
 
 namespace Script.Tests
 {
     /// <summary>
-    /// 【P4·JC051】现身触发的检索『结附』去向（2026-09 用户拍板口径）：
-    /// 宿主**按被检索卡自身的 TargetRules 选定**（与"该牌从手牌打出时能否以它为目标"同一实现），
-    /// 如检索到 JC012『结附于本方秘社』→ 结附**本方秘社**；
+    /// 【P4·JC051】现身触发的检索『结附』去向（【A53·2026-09 用户拍板修订】）：
+    /// 宿主**候选**由被检索卡自身的 TargetRules 决定（与"该牌从手牌打出时能否以它为目标"同一实现），
+    /// 如检索到 JC012『结附于本方秘社』→ 候选为本方秘社；**候选 ≥2 时由玩家选**
+    /// （单机 `PromptPickCard`／联机 `SelectTarget`；仅 1 个候选直接结附；无 UI 确定性兜底取第一个）；
     /// **无合法宿主 → 按"无合法目标"处理**（不结附、牌回拥有者牌库，随后照常洗牌）。
     /// </summary>
     public class JC051Tests : TestRunner
@@ -186,7 +189,213 @@ namespace Script.Tests
             Assert.AreEqual(deckBefore - 1, game.DeckManager.GetPlayer1DeckCount(), "结附成功后牌不再回牌库");
         }
 
+        // ==================== ③b【A53】多合法宿主 → 由玩家选（单机开窗 / 联机 SelectTarget） ====================
+
+        /// <summary>单机：宿主候选多个 → 弹窗让玩家选；玩家选第 2 个候选 → 结附该候选（而非引擎默认的第一个）。</summary>
+        public void TestJC051_单机_多宿主时由玩家选择()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var jc051 = game.CardManager.CreateCardInstance(Load("JC051_nuoennagesita"), 1);
+            game.ZoneManager.MoveToArea(jc051, area, 1);
+
+            // 两个本方角色（结附于"本方角色"的徽章 → 候选 ≥2，环境无关：不依赖秘社数量）
+            var host1 = game.CardManager.CreateCardInstance(Probe("T_jc051_mh1"), 1);
+            game.ZoneManager.MoveToArea(host1, area, 1);
+            var host2 = game.CardManager.CreateCardInstance(Probe("T_jc051_mh2"), 1);
+            game.ZoneManager.MoveToArea(host2, area, 1);
+            var emblem = PutOnDeckTop(game, EmblemProbe("T_jc051_multi", TargetKind.Character, TargetRestriction.Friendly), 1);
+
+            // 第 1 次询问＝检索取牌（选到徽章）；第 2 次询问＝选结附宿主（选第 2 个候选）
+            var stub = new PickStub
+            {
+                Choose = (call, cands) => call == 1 ? cands.Find(c => c == emblem) : cands[1],
+            };
+            EffectEngine.Instance.UIHooks = stub;
+            try
+            {
+                var e = FindEffect(jc051.PlayerTemplate, "JC051_1_SearchEmblemAttach");
+                EffectEngine.Instance.ResolveEffect(e, jc051, null);
+            }
+            finally { EffectEngine.Instance.UIHooks = null; }
+
+            Assert.AreEqual(2, stub.CandidateLists.Count, "应有两次询问：检索取牌 + 选择结附目标");
+            Assert.IsFalse(stub.AllowCancels[0], "检索取牌为强制（A53：不再允许放弃）");
+            Assert.IsFalse(stub.AllowCancels[1], "选宿主不可取消（卡文『结附于合理的目标』为强制）");
+            Assert.IsTrue(stub.CandidateLists[1].Count >= 2, "宿主候选应有多个（本例＝本方角色）");
+            Assert.IsTrue(ReferenceEquals(stub.CandidateLists[1][1], emblem.AttachedTo),
+                "宿主应为玩家所选的**第 2 个候选**——证明不再是引擎代选第一个");
+            Assert.IsFalse(ReferenceEquals(stub.CandidateLists[1][0], emblem.AttachedTo),
+                "不应结附到候选中的第一个（引擎旧口径）");
+        }
+
+        /// <summary>单机：宿主候选只有 1 个 → **不弹窗**（无可决策空间），直接结附那一个。</summary>
+        public void TestJC051_单机_唯一宿主时不弹窗()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var jc051 = game.CardManager.CreateCardInstance(Load("JC051_nuoennagesita"), 1);
+            game.ZoneManager.MoveToArea(jc051, area, 1);
+
+            // 规则：本方 + 指定卡名 → 合法宿主被唯一钉在该角色上（排除自身与其它角色）
+            var myChar = game.CardManager.CreateCardInstance(Probe("T_jc051_only_host"), 1);
+            game.ZoneManager.MoveToArea(myChar, area, 1);
+            var emblem = PutOnDeckTop(game, EmblemProbeWith("T_jc051_solo_emblem", TargetKind.Character,
+                "探针_T_jc051_only_host", TargetRestriction.Friendly, TargetRestriction.CardName), 1);
+
+            var stub = new PickStub { Choose = (call, cands) => cands.Find(c => c == emblem) };
+            EffectEngine.Instance.UIHooks = stub;
+            try
+            {
+                var e = FindEffect(jc051.PlayerTemplate, "JC051_1_SearchEmblemAttach");
+                EffectEngine.Instance.ResolveEffect(e, jc051, null);
+            }
+            finally { EffectEngine.Instance.UIHooks = null; }
+
+            Assert.AreEqual(1, stub.CandidateLists.Count, "只应有 1 次询问（检索取牌）；唯一宿主不弹窗");
+            Assert.IsTrue(ReferenceEquals(myChar, emblem.AttachedTo), "唯一合法宿主 → 直接结附该角色");
+        }
+
+        /// <summary>联机：宿主候选多个 → 经网关 `SelectTarget` 让检索者选（候选＝合法宿主，强制）；客户端选第 2 个。</summary>
+        public void TestJC051_联机_多宿主时经网关选择()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var jc051 = game.CardManager.CreateCardInstance(Load("JC051_nuoennagesita"), 1);
+            game.ZoneManager.MoveToArea(jc051, area, 1);
+
+            var host1 = game.CardManager.CreateCardInstance(Probe("T_jc051_nh1"), 1);
+            game.ZoneManager.MoveToArea(host1, area, 1);
+            var host2 = game.CardManager.CreateCardInstance(Probe("T_jc051_nh2"), 1);
+            game.ZoneManager.MoveToArea(host2, area, 1);
+            var emblem = PutOnDeckTop(game, EmblemProbe("T_jc051_net_multi", TargetKind.Character, TargetRestriction.Friendly), 1);
+
+            string chosenHost = null;
+            var gw = new TwoStepGateway
+            {
+                Pick = req =>
+                {
+                    if (req.RequestKind == ChoiceRequest.Kind.SelectDeckCard) return emblem.UID;
+                    chosenHost = req.OptionUids[1];   // 客户端选第 2 个候选
+                    return chosenHost;
+                },
+            };
+            game.SetInputGateway(gw);
+            EffectEngine.Instance.UIHooks = null;
+
+            var e = FindEffect(jc051.PlayerTemplate, "JC051_1_SearchEmblemAttach");
+            EffectEngine.Instance.ResolveEffectAsync(e, jc051, null).Wait(5000);
+
+            Assert.AreEqual(2, gw.Requests.Count, "应有两次网关请求：选牌库牌 + 选结附宿主");
+            Assert.AreEqual(ChoiceRequest.Kind.SelectDeckCard, gw.Requests[0].RequestKind, "第 1 次＝检索取牌");
+            Assert.IsTrue(gw.Requests[0].ForceChoice, "检索为强制（A53）：客户端不提供取消");
+            Assert.AreEqual(ChoiceRequest.Kind.SelectTarget, gw.Requests[1].RequestKind, "第 2 次＝选结附宿主");
+            Assert.IsTrue(gw.Requests[1].ForceChoice, "选宿主为强制");
+            Assert.IsTrue(gw.Requests[1].OptionUids.Count >= 2, "宿主候选＝多个本方角色");
+            Assert.AreEqual(gw.Requests[1].OptionUids.Count, gw.Requests[1].OptionLabels.Count, "候选显示名随请求下发");
+            Assert.IsNotNull(chosenHost, "客户端确实回过一次宿主选择");
+            Assert.AreEqual(chosenHost, emblem.AttachedTo?.UID, "结附到客户端回包选中的第 2 个候选");
+            Assert.IsFalse(gw.Requests[1].OptionUids[0] == emblem.AttachedTo?.UID, "不应结附到候选第一个");
+        }
+
+        /// <summary>联机：宿主回包非法 → **确定性兜底取第一个合法宿主**（fail-safe：强制结附不可被规避）。</summary>
+        public void TestJC051_联机_宿主回包非法时兜底第一个()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var jc051 = game.CardManager.CreateCardInstance(Load("JC051_nuoennagesita"), 1);
+            game.ZoneManager.MoveToArea(jc051, area, 1);
+
+            var host1 = game.CardManager.CreateCardInstance(Probe("T_jc051_bh1"), 1);
+            game.ZoneManager.MoveToArea(host1, area, 1);
+            var host2 = game.CardManager.CreateCardInstance(Probe("T_jc051_bh2"), 1);
+            game.ZoneManager.MoveToArea(host2, area, 1);
+            var emblem = PutOnDeckTop(game, EmblemProbe("T_jc051_net_bad", TargetKind.Character, TargetRestriction.Friendly), 1);
+
+            var gw = new TwoStepGateway
+            {
+                Pick = req => req.RequestKind == ChoiceRequest.Kind.SelectDeckCard ? emblem.UID : "不存在的宿主UID",
+            };
+            game.SetInputGateway(gw);
+            EffectEngine.Instance.UIHooks = null;
+
+            var e = FindEffect(jc051.PlayerTemplate, "JC051_1_SearchEmblemAttach");
+            EffectEngine.Instance.ResolveEffectAsync(e, jc051, null).Wait(5000);
+
+            Assert.AreEqual(2, gw.Requests.Count, "仍应发出选宿主请求");
+            Assert.IsNotNull(emblem.AttachedTo, "回包非法 → 兜底结附仍在，强制结附不会被规避");
+            Assert.AreEqual(gw.Requests[1].OptionUids[0], emblem.AttachedTo.UID,
+                "兜底取的是**第一个合法候选**");
+        }
+
         // ==================== 辅助 ====================
+
+        /// <summary>选卡窗口桩：记录每次询问的候选与"是否可取消"，并按 `Choose` 决定选谁（缺省取第一个）。</summary>
+        private sealed class PickStub : Script.Interfaces.IGameUIHooks
+        {
+            public readonly List<List<CardInstance>> CandidateLists = new List<List<CardInstance>>();
+            public readonly List<bool> AllowCancels = new List<bool>();
+            public System.Func<int, List<CardInstance>, CardInstance> Choose;
+
+            public void PromptPayOrTap(CardInstance source, int payAmount) { }
+            public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
+                System.Action<CardInstance> onPicked) { }
+            public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
+                bool allowCancel, System.Action<CardInstance> onPicked)
+            {
+                CandidateLists.Add(candidates ?? new List<CardInstance>());
+                AllowCancels.Add(allowCancel);
+                int call = CandidateLists.Count;
+                CardInstance picked = Choose != null
+                    ? Choose(call, candidates)
+                    : (candidates != null && candidates.Count > 0 ? candidates[0] : null);
+                onPicked?.Invoke(picked);
+            }
+            public void PromptCurbMarks(int curbedPlayerId, int remaining,
+                List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid) { }
+            public void PromptPrediction(int predictorId, int count, List<CardInstance> cards,
+                System.Action<List<CardInstance>, List<CardInstance>> onConfirmed) { }
+            public void PromptMultiTargets(CardInstance source, EffectData data,
+                System.Func<int, List<TargetChoice>, SlotCandidates> candidatesForSlot,
+                System.Action<List<TargetChoice>> onConfirmed) { }
+            public void PromptPlayerTarget(int chooserPlayerId, string prompt, List<int> candidates,
+                System.Action<int> onChosen) { }
+            public void PromptEffectMode(CardInstance source, EffectData data, System.Action<int> onChosen) { }
+            public void PromptNumberInput(int chooserPlayerId, string prompt, int min, int max, int defaultValue,
+                string confirmLabel, string cancelLabel, System.Action<int> onChosen) { }
+        }
+
+        /// <summary>按预设规则回答的网关（可区分"选牌库牌"与"选宿主"两段请求）。</summary>
+        private sealed class TwoStepGateway : IInputGateway
+        {
+            public readonly List<ChoiceRequest> Requests = new List<ChoiceRequest>();
+            public System.Func<ChoiceRequest, string> Pick;
+
+            public Task<ChoiceResult> RequestChoice(int playerId, ChoiceRequest req)
+            {
+                Requests.Add(req);
+                string uid = Pick?.Invoke(req);
+                if (string.IsNullOrEmpty(uid)) uid = req?.OptionUids != null && req.OptionUids.Count > 0 ? req.OptionUids[0] : null;
+                return Task.FromResult(new ChoiceResult { RequestId = req?.RequestId, SelectedUid = uid, Cancelled = false });
+            }
+        }
+
+        /// <summary>徽章附属探针（可带多条目标规则——多条之间为 **OR**，用于构造"多个合法宿主"）。</summary>
+        private static PlayerCardData EmblemProbeWithRules(string uid, params TargetRule[] rules)
+        {
+            var tmpl = new PlayerCardData
+            {
+                UID = uid, CardName = "探针_" + uid, Cost = 1,
+                CategoryFlag = CardCategory.Attachment,
+            };
+            tmpl.SubCategories.Add("徽章");
+            var arr = new Array<TargetRule>();
+            if (rules != null)
+                foreach (var r in rules) if (r != null) arr.Add(r);
+            tmpl.TargetRules = arr;
+            tmpl._effectsInjected = true;
+            return tmpl;
+        }
 
         private static PlayerCardData Probe(string uid)
         {

@@ -56,6 +56,12 @@ namespace Script.Net
 
         /// <summary>执行一条 PM 调试命令（仅调试/验证用；服务端权威执行，字符串为整行命令）。</summary>
         void DebugCommand(int playerId, string commandLine);
+
+        /// <summary>
+        /// 【第0回合·调度】客户端主动上报调度选择：`pickedUids` 为**要换掉**的手牌 UID（任意数量、可空）。
+        /// 服务端按该玩家真实手牌权威复检；双方都上报后自动结算（置底 → 抽等量 → 洗牌）并开始第一回合。
+        /// </summary>
+        void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids);
     }
 
     /// <summary>

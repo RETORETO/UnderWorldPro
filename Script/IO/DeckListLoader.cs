@@ -16,7 +16,7 @@ namespace Script.IO
 public static class DeckListLoader
 {
     /// <summary>秘社缺失时的兜底默认秘社（与旧 GameInitializer.DefaultCouncilPath 一致）。</summary>
-    private const string FallbackCouncilPath = "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres";
+    private const string FallbackCouncilPath = "res://Cards/Data/CouncilCards/JC/MSJC009_mishe.tres";
 
     /// <summary>
     /// 读取卡组 JSON。councils 为空时自动补一条默认秘社，保证对局始终有秘社可用。

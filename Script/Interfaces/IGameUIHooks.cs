@@ -29,16 +29,17 @@ namespace Script.Interfaces
             System.Action<CardInstance> onPicked);
 
         /// <summary>
-        /// 【P2】通用"从候选卡中选一张"（封印取手牌 / 检索取牌共用；弃牌见 <see cref="PromptDiscard"/>）。
+        /// 【P2】通用"从候选卡中选一张"（封印取手牌 / 检索取牌 / 检索『结附』选宿主共用；弃牌见 <see cref="PromptDiscard"/>）。
         ///  · 封印（Seal `Args[0]="手牌"`）：候选 = 封印者手牌；
-        ///  · 检索（Search）：候选 = 牌库中通过筛选的牌（**允许取消** → onPicked(null) 表示"不取牌"，
-        ///    卡文"你可以寻找…"的"可以"由玩家自行决定；服务端随后仍会洗牌）。
-        /// UI 选完后必须经 onPicked 回调交回 Controller（由 Controller 执行移动/封印并广播触发），View 不得自行移动卡牌。
+        ///  · 检索（Search）：候选 = 牌库中通过筛选的牌；**【A53·2026-09 用户拍板】检索一律强制、不可取消**
+        ///    （8 张 JC 检索卡的卡文都没有"你可以寻找"），故以 `allowCancel: false` 调用，`onPicked(null)` 不再表示"不取牌"；
+        ///  · 检索『结附』选宿主（JC051）：候选 = 被检索卡自身 TargetRules 给出的合法宿主（≥2 个才询问），同样不可取消。
+        /// UI 选完后必须经 onPicked 回调交回 Controller（由 Controller 执行移动/封印/结附并广播触发），View 不得自行移动卡牌。
         /// 无 UI 时调用方走确定性兜底（取第一张并打日志）。
         /// </summary>
         /// <param name="chooserPlayerId">做选择的玩家。</param>
         /// <param name="prompt">窗口提示文本（如"从牌库中寻找一张法术"）。</param>
-        /// <param name="allowCancel">是否允许"不选"（true 时 onPicked(null) 合法）。</param>
+        /// <param name="allowCancel">是否允许"不选"（true 时 onPicked(null) 合法；检索类已统一为 false）。</param>
         void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates, bool allowCancel,
             System.Action<CardInstance> onPicked);
 

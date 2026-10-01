@@ -16,6 +16,12 @@ namespace Script.Net.Lobby
         /// <summary>停止托管（房间销毁/重开时调用），清除事件订阅与网关注入。</summary>
         void StopServing();
 
+        /// <summary>
+        /// 【第0回合·调度步骤】进入开局调度（联机）。由房间层在**房间状态广播之后**调用：
+        /// 客户端收到 `room.Phase=InMatch` 才挂载战场页并订阅决策请求，故调度请求必须晚于该广播下发。
+        /// </summary>
+        void StartMulligan();
+
         /// <summary>把座位绑定到会话。</summary>
         void BindSeat(int seat, string sessionId);
 

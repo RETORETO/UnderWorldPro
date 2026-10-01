@@ -407,8 +407,10 @@ public partial class Arena
     {
         if (card == null) return;
 
-        // 议会（秘社）卡：走专用同步路径（与玩家卡 _cardUIMap 解耦）
-        if (card.CurrentZone == CardZone.CouncilZone)
+        // 议会（秘社）卡：走专用同步路径（与玩家卡 _cardUIMap 解耦）。
+        // 【2026-09】判定放宽为"**曾是**秘社 UI（`_councilCardUIs` 里有它）"——秘社重放/移除时其
+        // CurrentZone 已不是 CouncilZone，若只按当前区域判定就永远不会进入本分支，旧秘社 UI 会残留。
+        if (card.CurrentZone == CardZone.CouncilZone || _councilCardUIs.ContainsKey(card.UID))
         {
             SyncCouncilCardUI(card);
             return;
@@ -672,35 +674,50 @@ public partial class Arena
     }
 
     /// <summary>
-    /// 议会（秘社）卡后续移动同步（由 SyncCardUIToZone 在 CouncilZone 时转发）。
-    /// 秘社通常常驻 CouncilZone，此方法主要处理：移除（如被替换/离场）时从字典与容器摘除。
-    /// 横置视觉统一由 ArrangeAllCards（按 Instance.IsTapped 旋转）负责，此处不自行旋转。
+    /// 议会（秘社）卡后续移动同步（由 `SyncCardUIToZone` 转发，覆盖"仍是秘社 UI"的两类变更）：
+    ///  · **在秘社区**：UI 尚未建则**补建**（秘社重放后新实例会走这里——原先只打"未找到"日志，
+    ///    导致旧 UI 被摘除后玩家看不到自己的秘社），已建则确保挂到正确容器、正面朝上；
+    ///  · **已不在秘社区**（被替换/移除）：从容器与字典摘除。
+    /// 横置视觉统一由 `ArrangeCouncilCards`（按 `Instance.IsTapped` 旋转）负责，此处不自行旋转。
     /// </summary>
     private void SyncCouncilCardUI(CardInstance card)
     {
         if (card == null) return;
-        if (!_councilCardUIs.TryGetValue(card.UID, out var councilUI) || councilUI == null)
-        {
-            GD.Print($"[Arena.Council] 秘社 UI 未找到，跳过同步: {card.CouncilTemplate?.CardName}");
-            return;
-        }
-
         var container = card.ControllerId == 2 ? _councilContainer2 : _councilContainer1;
-        // 若已不在 CouncilZone（如被替换移除），从容器与字典摘除
+        bool hasUI = _councilCardUIs.TryGetValue(card.UID, out var councilUI) && councilUI != null;
+
+        // ① 已不在秘社区（秘社重放时旧实例被移出游戏 / 被替换）→ 从容器与字典摘除
         if (card.CurrentZone != CardZone.CouncilZone)
         {
+            if (!hasUI) return;   // 从未建过 UI（如"建了实例但还没渲染"）→ 无事可做
             councilUI.GetParent()?.RemoveChild(councilUI);
             _councilCardUIs.Remove(card.UID);
             councilUI.CouncilDoubleClicked -= OnCouncilDoubleClicked;
             GD.Print($"[Arena.Council] 秘社 UI 已移除: {card.CouncilTemplate?.CardName}");
+            if (container != null && GodotObject.IsInstanceValid(container)) ArrangeCouncilCards(container);
             return;
         }
 
-        // 仍在 CouncilZone：确保挂载到正确容器（如归属变更后重挂）
+        // ② 在秘社区但还没有 UI → **补建**（秘社重放：`SetupCouncils` 会在开局发牌前重建秘社）
+        if (!hasUI)
+        {
+            if (_councilUIScene == null || container == null) return;
+            councilUI = _councilUIScene.Instantiate<CouncilCardUI>();
+            container.AddChild(councilUI);   // 先 AddChild 再 Setup，避免 _Ready 的默认状态覆盖 Setup 字段
+            councilUI.Setup(card);
+            _councilCardUIs[card.UID] = councilUI;
+            councilUI.CouncilDoubleClicked += OnCouncilDoubleClicked;
+            GD.Print($"[Arena.Council] 秘社 UI 已补建: {card.CouncilTemplate?.CardName} (玩家{card.ControllerId})");
+            ArrangeCouncilCards(container);
+            return;
+        }
+
+        // ③ 在秘社区且已有 UI：确保挂载到正确容器（如归属变更后重挂）
         if (container != null && councilUI.GetParent() != container)
         {
             councilUI.GetParent()?.RemoveChild(councilUI);
             container.AddChild(councilUI);
+            ArrangeCouncilCards(container);
         }
         councilUI.SetFace(true);   // 秘社始终正面朝上
     }

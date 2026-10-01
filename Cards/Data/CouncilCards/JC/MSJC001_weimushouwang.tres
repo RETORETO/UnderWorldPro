@@ -16,9 +16,12 @@ RequiredCount = 25
 
 [resource]
 script = ExtResource("1_msjc")
-CardText = "（行动，横置，3费）：抽一张牌。
-（行动，横置，4费）：从牌库底抓一张牌。"
+CardText = "持续：构筑时你的牌组中需包含25张或更多【黄】派系的牌。
+行动3，横置：若你具有【先手标志】，则抓一张牌。
+行动4，横置：从你的牌库中寻找一张【帷幕守望】独有牌，展示该牌后置于你的手中，然后洗牌。该能力每局游戏只能发动一次。
+初始手牌：6"
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC001_weimushouwang.jpg"
+StartingHandSize = 6
 SubType = "秘社-法师结社"
 ColorText = "黄·帷幕守望"
 PT = "6"

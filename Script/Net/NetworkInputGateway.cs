@@ -86,6 +86,9 @@ namespace Script.Net
         {
             switch (kind)
             {
+                // 【第0回合·调度】开局调度：需玩家逐张点选手牌，按"选卡"同档给 60s；
+                // 另由 TurnManager 每 5s 幂等重发一包（客户端可能在首包下发后才挂好战场页），只认最新一包的回包。
+                case ChoiceRequest.Kind.SelectMulligan: return 60;
                 case ChoiceRequest.Kind.SelectTriggerOrder: return 60;
                 case ChoiceRequest.Kind.SelectTarget: return 60;
                 case ChoiceRequest.Kind.SelectHandCard: return 60;   // 【P2】手牌选择（弃牌等）

@@ -139,7 +139,12 @@ namespace Script.Tests
                 "后手（天生优先玩家）出牌后优先权应仍在他手中，不得被拉回先手");
         }
 
-        /// <summary>ActionSecond 期间先手（非天生优先）出牌 → 优先权归还后手（天生优先玩家）。</summary>
+        /// <summary>
+        /// ActionSecond 期间**先手（非天生优先）**出牌 → 优先权归还后手（天生优先玩家）。
+        /// 【2026-09 修正】在显式优先权状态机下，"非行动权持有者"根本不能出牌（`PlayCard` 会拒绝：
+        /// "当前行动权在玩家X，玩家Y不能出牌"），故本用例必须先让**天生优先玩家让过**把行动权交给先手，
+        /// 再验证"先手出牌后优先权归回天生优先玩家"（原用例直接让先手出牌，是状态机落地前的旧口径）。
+        /// </summary>
         public void TestPriority_后手行动中先手出牌优先权归后手()
         {
             var game = NewGame();
@@ -148,10 +153,16 @@ namespace Script.Tests
             game.TurnManager.FirstPlayerId = 1;
             game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionSecond;
             game.TurnManager.PriorityPlayerId = game.TurnManager.GetPriorityPlayer();
+            Assert.AreEqual(2, game.TurnManager.GetPriorityPlayer(),
+                "ActionSecond 的天生优先玩家＝后手（玩家2）");
+
+            // 天生优先玩家（后手）让过 → 行动权显式交给先手（玩家1）
+            game.TurnManager.Pass(2);
+            Assert.AreEqual(1, game.TurnManager.PriorityPlayerId, "后手让过后行动权应交到先手（玩家1）");
 
             var card = MakePlayableCard(game, 1, "TS_p5_p1");
             bool played = game.TurnManager.PlayCard(1, card.UID);
-            Assert.IsTrue(played, "先手应能成功打出响应型探针卡");
+            Assert.IsTrue(played, "先手（已获行动权）应能成功打出响应型探针卡");
 
             Assert.AreEqual(2, game.TurnManager.PriorityPlayerId,
                 "先手（非天生优先）出牌后应把优先权交给天生优先玩家（后手，玩家2）");
@@ -175,6 +186,31 @@ namespace Script.Tests
                 "先手（天生优先玩家）出牌后优先权应仍在他手中");
         }
 
+        /// <summary>
+        /// 【显式优先权状态机（用户 2026-09 口径）】推进条件严格等价于「A 让过 + B 让过」：
+        /// A 让过 → 行动权**显式**交给另一方 B（不再盲目翻转 1/2）；仅一方让过不得推进；B 让过 → 直接推进。
+        /// </summary>
+        public void TestPriority_让过后行动权交给另一方且双方让过才推进()
+        {
+            var game = NewGame();
+            game.TurnManager.FirstPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            game.TurnManager.PriorityPlayerId = game.TurnManager.GetPriorityPlayer();
+
+            int natural = game.TurnManager.PriorityPlayerId;   // 天生优先玩家 A
+            int other = natural == 1 ? 2 : 1;                  // 另一方 B
+
+            game.TurnManager.Pass(natural);
+            Assert.AreEqual(other, game.TurnManager.PriorityPlayerId,
+                "天生优先玩家让过后，行动权应显式交给另一位玩家（A 让过 → B 获得行动权）");
+            Assert.IsFalse(game.TurnManager.CurrentPhase != global::TurnManager.TurnPhase.ActionFirst,
+                "仅一方让过不应推进步骤");
+
+            game.TurnManager.Pass(other);
+            Assert.IsFalse(game.TurnManager.CurrentPhase == global::TurnManager.TurnPhase.ActionFirst,
+                "双方都让过后应直接推进（推进条件＝A 让过 + B 让过）");
+        }
+
         // ==================== ④ 起手手牌按秘社 ====================
 
         public void TestOpeningHand_按秘社起手数发牌()
@@ -194,30 +230,67 @@ namespace Script.Tests
                 "玩家2 起手手牌数应＝秘社 StartingHandSize（8）");
         }
 
-        // ==================== ⑤ 调度结算（置底 → 顶抽等量 → 洗牌） ====================
-
-        /// <summary>脚本化网关：收到 SelectMulligan 时按前 N 张回选。</summary>
-        private sealed class MulliganGateway : Script.Net.IInputGateway
+        /// <summary>
+        /// 【2026-09 修复】开局后每位玩家 CouncilZone 里应**恰有 1 张秘社**。
+        /// `DealOpeningHands` 会在 `InitializeAll` 之后再放一次秘社（为了读到本局最终卡组的秘社），
+        /// 若 `SetupCouncils` 不先清空，就会累积成 2 张（同模板）——并把起手数读成旧卡的默认值 6。
+        /// </summary>
+        public void TestCouncilSetup_开局后每位玩家恰一张秘社()
         {
-            public readonly List<Script.Net.ChoiceRequest> Requests = new List<Script.Net.ChoiceRequest>();
-            public int Pick1, Pick2;
+            var game = new GameInitializer { DebugSeed = 7 };
+            game.InitializeAll();
+            game.P1DeckOverride = BuildDeckWithCouncil(handSize: 8);
+            game.P2DeckOverride = BuildDeckWithCouncil(handSize: 8);
 
-            public System.Threading.Tasks.Task<Script.Net.ChoiceResult> RequestChoice(int playerId,
-                Script.Net.ChoiceRequest req)
+            game.StartMatch();   // 内部含 DealOpeningHands（重放秘社）
+
+            foreach (int p in new[] { 1, 2 })
             {
-                Requests.Add(req);
-                var r = new Script.Net.ChoiceResult
-                {
-                    RequestId = req?.RequestId, Cancelled = false, Confirmed = true,
-                };
-                if (req?.RequestKind == Script.Net.ChoiceRequest.Kind.SelectMulligan)
-                {
-                    int n = playerId == 1 ? Pick1 : Pick2;
-                    for (int i = 0; i < n && i < req.OptionUids.Count; i++)
-                        r.SelectedUids.Add(req.OptionUids[i]);
-                }
-                return System.Threading.Tasks.Task.FromResult(r);
+                var councils = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, p);
+                Assert.AreEqual(1, councils.Count, $"玩家{p} 的 CouncilZone 应恰有 1 张秘社（重放不得累积）");
+                Assert.IsNotNull(councils[0].CouncilTemplate, "秘社实例应带 CouncilTemplate（否则起手数会回退默认 6）");
             }
+        }
+
+        /// <summary>重复重放秘社（`DealOpeningHands` 等价路径）不应累积；旧实例按『移出游戏』处理。</summary>
+        public void TestCouncilSetup_重复重放秘社不累积()
+        {
+            var game = NewGame();
+            game.StartMatch();   // → DealOpeningHands（内部再放一次秘社）
+            var before = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, 1);
+            Assert.AreEqual(1, before.Count, "前置：开局后玩家1 恰有 1 张秘社");
+            var first = before[0];
+
+            game.DealOpeningHands();   // 再重放一次
+
+            var after = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, 1);
+            Assert.AreEqual(1, after.Count, "重复重放不得累积（仍是 1 张）");
+            Assert.IsFalse(ReferenceEquals(first, after[0]), "应是新实例（旧实例已被替换）");
+            Assert.AreEqual(CardZone.Exiled, first.CurrentZone,
+                "旧秘社实例按『移出游戏』处理（不进墓地、不触发死亡/弃牌类时机）");
+        }
+
+        // ==================== ⑤ 调度结算（客户端上报：置底 → 顶抽等量 → 洗牌） ====================
+
+        /// <summary>
+        /// 第0回合（客户端驱动）测试辅助：进入第 0 回合，并模拟双方**主动上报**调度选择。
+        /// `pick1/pick2` = 各玩家要换掉的张数（取当前手牌前 N 张）。
+        /// </summary>
+        private static void RunMulligan(GameInitializer game, int pick1, int pick2)
+        {
+            game.TurnManager.InputGateway = game.TurnManager.InputGateway ?? new Script.Net.AutoInputGateway();
+            game.TurnManager.BeginMulligan();
+
+            game.TurnManager.ReportMulligan(1, TakeFirstUids(game, 1, pick1));
+            game.TurnManager.ReportMulligan(2, TakeFirstUids(game, 2, pick2));
+        }
+
+        private static List<string> TakeFirstUids(GameInitializer game, int playerId, int count)
+        {
+            var uids = new List<string>();
+            var hand = game.CardManager.GetHandCardsByOwner(playerId);
+            for (int i = 0; i < count && i < hand.Count; i++) uids.Add(hand[i].UID);
+            return uids;
         }
 
         public void TestMulligan_置底顶抽等量并洗牌()
@@ -230,15 +303,7 @@ namespace Script.Tests
             int deck1Before = game.DeckManager.GetPlayer1DeckCount();
             Assert.IsTrue(hand1Before > 0, "前置：玩家1 已有起手手牌");
 
-            var gw = new MulliganGateway { Pick1 = 3, Pick2 = 0 };
-            game.TurnManager.InputGateway = gw;
-
-            game.TurnManager.BeginMulliganAsync().GetAwaiter().GetResult();
-
-            Assert.AreEqual(2, gw.Requests.Count, "应向双方各下发一次调度请求");
-            Assert.AreEqual(Script.Net.ChoiceRequest.Kind.SelectMulligan, gw.Requests[0].RequestKind,
-                "请求种类＝SelectMulligan");
-            Assert.IsTrue(gw.Requests[0].OptionUids.Count > 0, "候选＝该玩家起手手牌");
+            RunMulligan(game, pick1: 3, pick2: 0);
 
             Assert.AreEqual(hand1Before, game.CardManager.GetHandCardsByOwner(1).Count,
                 "玩家1 调度后手牌张数守恒（置底 N 张 → 顶抽 N 张）");
@@ -255,8 +320,7 @@ namespace Script.Tests
             int hand1Before = game.CardManager.GetHandCardsByOwner(1).Count;
             int deck1Before = game.DeckManager.GetPlayer1DeckCount();
 
-            game.TurnManager.InputGateway = new MulliganGateway { Pick1 = 0, Pick2 = 0 };
-            game.TurnManager.BeginMulliganAsync().GetAwaiter().GetResult();
+            RunMulligan(game, pick1: 0, pick2: 0);
 
             Assert.AreEqual(hand1Before, game.CardManager.GetHandCardsByOwner(1).Count, "空选择：手牌不变");
             Assert.AreEqual(deck1Before, game.DeckManager.GetPlayer1DeckCount(), "空选择：牌库不变");
@@ -269,13 +333,40 @@ namespace Script.Tests
             game.PlayerActionService.DrawCards(1, 6);
             game.PlayerActionService.DrawCards(2, 6);
 
-            game.TurnManager.InputGateway = new MulliganGateway { Pick1 = 1, Pick2 = 1 };
-            game.TurnManager.BeginMulliganAsync().GetAwaiter().GetResult();
+            RunMulligan(game, pick1: 1, pick2: 1);
 
             Assert.AreEqual(1, game.TurnManager.TurnCount, "调度完成后应已开始第一回合（TurnCount=1）");
             Assert.AreEqual(global::TurnManager.TurnPhase.StartPrepare, game.TurnManager.CurrentPhase,
                 "第一回合『重置步骤』免让过 → 应停在『准备步骤』");
             Assert.IsFalse(game.TurnManager.IsMulliganPhase, "调度阶段标记应已清除");
+        }
+
+        /// <summary>
+        /// 【第 0 回合 · 客户端驱动】调度是**回合流程的真实一步**（TurnPhase.Mulligan，先于第一回合的重置步骤）：
+        /// PhaseLabel 显示"第0回合 / 调度步骤"，且第 0 回合**不涉及优先权转换**（无人持有行动权）。
+        /// 只上报一方**不得**推进；双方齐了才结算并进第一回合。
+        /// </summary>
+        public void TestMulligan_第0回合无优先权且单方上报不推进()
+        {
+            Assert.AreEqual("调度步骤",
+                global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.Mulligan, 0),
+                "第0回合步骤名＝调度步骤（PhaseLabel 第4行）");
+
+            var game = NewGame();
+            game.PlayerActionService.DrawCards(1, 6);
+            game.PlayerActionService.DrawCards(2, 6);
+            game.TurnManager.InputGateway = new Script.Net.AutoInputGateway();
+            game.TurnManager.BeginMulligan();
+
+            Assert.IsTrue(game.TurnManager.IsMulliganPhase, "应处于第0回合（调度步骤）");
+            Assert.AreEqual(0, game.TurnManager.TurnCount, "第0回合 TurnCount=0");
+            Assert.AreEqual(0, game.TurnManager.GetPriorityPlayer(),
+                "第0回合不涉及优先权转换：无人持有行动权");
+            Assert.AreEqual("调度步骤", game.TurnManager.CurrentPhaseDisplayName, "PhaseLabel 第4行＝调度步骤");
+
+            game.TurnManager.ReportMulligan(1, TakeFirstUids(game, 1, 2));
+            Assert.IsTrue(game.TurnManager.IsMulliganPhase, "仅一方上报不得推进（要等双方齐）");
+            Assert.AreEqual(0, game.TurnManager.TurnCount, "仅一方上报时仍停在第0回合");
         }
 
         // ==================== ⑥ 卡组构筑校验（张数） ====================
@@ -357,6 +448,10 @@ namespace Script.Tests
                 Forced = false,
                 Duration = "瞬时",
             });
+            // 【2026-09 修正】必须标记"效果已注入"，否则 `CardEffectFactory.EnsureEffects`（在实例化路径上）
+            // 会 **清空** `EffectDataList` 重建 —— 探针未注册构建器 ⇒ 上面这条 `PlayTiming.Response` 被抹掉，
+            // 卡静默退化为 A 档（"先手在 ActionSecond 出牌"就会被 `CanEnterBasicActionMask` 静默拒绝）。
+            tmpl._effectsInjected = true;
             var inst = game.CardManager.CreateCardInstance(tmpl, playerId);
             game.ZoneManager.MoveToHand(inst, playerId);
             return inst;

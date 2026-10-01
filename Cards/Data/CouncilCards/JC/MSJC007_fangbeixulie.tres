@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="MSJC007_fangbeixulie" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC007_fangbeixulie.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[sub_resource type="Resource" id="CouncilRestriction_colorMSJC007"]
+script = ExtResource("1_20xel")
+FilterByColor = true
+TargetColor = 7
+Comparison = 0
+RequiredCount = 25
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中需包含25张或更多【黑】派系的牌。
+行动3，横置：若你具有【先手标志】，则抓一张牌。
+行动4，横置：从你的牌库中寻找一张【方碑序列】独有牌，展示该牌后置于你的手中，然后洗牌。该能力每局游戏只能发动一次。
+初始手牌：6"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC007_fangbeixulie.jpg"
+StartingHandSize = 6
+SubType = "秘社-法师结社"
+ColorText = "黑·方碑序列"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "方碑序列"
+Cost = 3
+Restrictions = [SubResource("CouncilRestriction_colorMSJC007")]
+UID = "MSJC007_fangbeixulie"
+CardName = "方碑序列"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

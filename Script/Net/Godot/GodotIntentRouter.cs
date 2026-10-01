@@ -101,6 +101,9 @@ namespace Script.Net.Godot
 
         public void ResetActionCharges(int playerId) => _service.ResetActionCharges(playerId);
 
+        public void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids)
+            => _service.MulliganReport(playerId, pickedUids);
+
         public void DebugCommand(int playerId, string commandLine)
         {
             if (_pm == null)

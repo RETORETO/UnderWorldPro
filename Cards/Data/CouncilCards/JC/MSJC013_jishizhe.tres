@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="MSJC013_jishizhe" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC013_jishizhe.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中，非【红】且非【中立】派系的牌不能超过12张。
+行动2，横置：在目标角色或附属上放置一个时间标志。
+行动3，横置：消灭所有其上有三个或更多时间标志的角色和附属，然后每有一个角色或附属因此法被消灭，就抓一张牌。
+初始手牌：6"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC013_jishizhe.jpg"
+StartingHandSize = 6
+SubType = "秘社-秘密教派/分支"
+ColorText = "红·鸣钟教派"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "计时者"
+Cost = 2
+
+UID = "MSJC013_jishizhe"
+CardName = "计时者"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

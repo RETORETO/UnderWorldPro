@@ -17,6 +17,7 @@ namespace Script.Manager
     /// | `类别:角色` / `类别:附属` / `类别:事务` | 卡类别（`CardCategory`） |
     /// | `关键字:灵体` | 运行时授予 ∪ 模板固有声明 |
     /// | `组织:王座会` | `Organization` 相等 |
+    /// | `独有`（无值标志段） | `PlayerTemplate.UniqueField` **非空**＝独有牌（用户口径；秘社检索"【X】独有牌"＝`独有;组织:X`） |
     /// | `卡名:某卡` | 卡名包含 |
     /// 空串 = 全匹配（对应 JC131「寻找一张牌」）。
     ///
@@ -50,6 +51,11 @@ namespace Script.Manager
             // 费用区间：费用<=N / 费用>=N（也接受 <= / >= 与全角写法）
             if (TryParseCost(seg, "<=", out int maxCost)) return tmpl != null && tmpl.Cost <= maxCost;
             if (TryParseCost(seg, ">=", out int minCost)) return tmpl != null && tmpl.Cost >= minCost;
+
+            // 【A57·独有牌】`独有`（无值标志段）→ `PlayerTemplate.UniqueField` 非空即为"独有牌"。
+            // 用户口径（2026-09）：**UniqueField 不为空就是独有卡**（该字段由卡表数据回填）。
+            // 用于秘社检索，如 MSJC001『帷幕守望』行动4「寻找一张【帷幕守望】独有牌」＝ `独有;组织:帷幕守望`。
+            if (seg == "独有" || seg == "独有牌") return tmpl != null && !string.IsNullOrWhiteSpace(tmpl.UniqueField);
 
             int colon = seg.IndexOf(':');
             if (colon <= 0) { Godot.GD.Print($"[DeckSearchFilter] ⚠ 无法解析筛选段 '{seg}'（缺字段名或分隔符）→ 视为不通过"); return false; }

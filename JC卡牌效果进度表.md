@@ -135,7 +135,7 @@
 | JC049 深渊细语 | [FAQ] FAQ： ◆通过深渊细语从牌库底获得的手牌，并不算抓牌。 ◆发动深渊细语需先满足额外费用条件牺牲一个己方角色，此能力不可被响应。 | —（规则备注，非效果） | — | ⬜ 待检查 |
 | JC050 丧钟回响 | 行动：选择一个地区，消灭该地区上的所有角色和暗藏者 | ✅ 已实现（**K2 群体动作**：打出目标＝地区（"行动"限行动阶段）；`ResolveEntry` 把选定的 `TargetAreaId` 透传给 `ResolveSorcery` → 群体集合＝该地区内所有角色与暗藏者（`IncludeCovert=true`），`Destroy` 逐张结算、一次完成） | ✅ P3MassTests | ⬜ 待检查 |
 | JC051 诺恩纳格斯塔 | [前缀] 领袖 | ✅ 已实现（**P4·领袖**规则：同一控制者场上至多 1 个领袖；进场超限立刻选一个牺牲、不入堆叠；进场触发照常生效。`LeaderRule` + 进场钩子；本卡已接入效果脚本） | ✅ P4LeaderTests | ⬜ 待检查 |
-| JC051 诺恩纳格斯塔 | 现身触发：自你的牌库中寻找一张徽章附属牌，将该牌放置进场并结附于合理的目标，然后洗牌 | ✅ 已实现（**P4**：`Search` 去向『结附』的宿主**按被检索卡自身 TargetRules 选定**——与打出阶段同一实现 `CardManager.MatchesRule`，如检索到 JC012 → 结附本方秘社；取宿主顺序＝秘社(P1→P2)→争夺区卡→附属卡；**无合法宿主 → 按"无合法目标"处理**（不结附、牌放回拥有者牌库，随后照常洗牌）；筛选 `子类别:徽章`） | ✅ JC051Tests | ⬜ 待检查 |
+| JC051 诺恩纳格斯塔 | 现身触发：自你的牌库中寻找一张徽章附属牌，将该牌放置进场并结附于合理的目标，然后洗牌 | ✅ 已实现（**P4／A53**：`Search` 去向『结附』的宿主**候选**＝被检索卡自身 TargetRules 的合法宿主——与打出阶段同一实现 `CardManager.MatchesRule`，如检索到 JC012 → 候选＝本方秘社；**候选 ≥2 时由玩家从中选**（单机 `PromptPickCard`／联机 `SelectTarget`，**不可取消**；候选 = 1 不弹窗；无 UI 确定性兜底取第一个；回包非法→兜底第一个）；**无合法宿主 → 按"无合法目标"处理**（不结附、牌放回拥有者牌库，随后照常洗牌）；筛选 `子类别:徽章`） | ✅ JC051Tests(10) | ⬜ 待检查 |
 | JC051 诺恩纳格斯塔 | 持续：所有其他本方鸣钟教派角色获得［白星］ | ✅ 已实现（**P3·E 光环组织筛选** `AuraFilterOrganization="鸣钟教派"`＋`Icon:白星`；范围＝来源控制者的**全场**争夺区角色（用户 2026-09 口径：卡文未写"本地区"），排除自身与非本组织者） | ✅ P3AuraFilterTests | ⬜ 待检查 |
 | JC052 终焉的诗寇蒂 | [前缀] 领袖 | ✅ 已实现（**P4·领袖**规则：同一控制者场上至多 1 个领袖；进场超限立刻选一个牺牲、不入堆叠；进场触发照常生效。`LeaderRule` + 进场钩子；本卡已接入效果脚本） | ✅ P4LeaderTests | ⬜ 待检查 |
 | JC052 终焉的诗寇蒂 | 进场触发：消灭所有本地区的其他角色和暗藏者 | ✅ 已实现（**K2 群体动作**：作用地区＝进场事件所在地区（本地区）；集合＝角色∪暗藏者（`IncludeCovert=true`）、**排除自身**（卡文"其他"）；`Destroy` 逐张结算、一次完成；各目标死亡触发按既有管线收集、多条由玩家排序） | ✅ P3MassTests | ⬜ 待检查 |
@@ -888,6 +888,120 @@
   账本：卡接入数 133→**134**、行 ✅257→**258**、⛔ 保持 **3**、**⬜ 待人工归类 1→0（清零）**、
   部分接入 1→**0**（**JC081 三行全 ✅**）；全量 headless **128 套件 873 例 全绿 0 失败 0 错误**。
 
+  **【批次】检索改强制 ＋ JC051 宿主改由玩家选（2026-09，用户裁定 A53）**：
+  · **① 检索一律强制、不可取消**（用户裁定："收紧为强制：单机也去掉取消，与卡文和联机一致"）：
+    8 张 JC 检索卡（JC007/025/026/032/033/051/109/131）卡文**都没有"你可以寻找"** ⇒
+    · 单机 `EffectEngine.ResolveSearch` → `PromptPickCard(..., allowCancel: false)`（窗口 `ForceChoice`，不给"取消"）；
+    · 联机 `SearchViaGatewayAsync` → `ChoiceRequest.ForceChoice = true`；回包**取消/非法**不再等于"不取牌"
+      （原口径"玩家放弃 = 检索未发生 → 不洗牌"**随本批作废**）⇒ **fail-safe 兜底取第一张匹配**，再照常落地 + 洗牌
+      （否则异常客户端可用一次取消/越权回包**规避强制检索**）。安全属性不变：候选永远只来自"检索者牌库 ∧ 通过筛选"。
+    · 留档：若将来出现"你可以寻找…"的卡，需先在 `Args` 增加可选标记，再恢复取消分支。
+  · **② JC051『结附于合理的目标』的宿主改由玩家选择**（用户裁定："改成开窗选宿主"）——
+    **撤销 §7.4b 第 5 条**（2026-09 早期口径"不再由施术者选、按被检索卡自身 TargetRules 自动取第一个"）：
+    · 候选来源**不变**（＝被检索卡自身 `TargetRules` 的合法宿主；判定与打出阶段同一实现 `CardManager.MatchesRule`）；
+    · **候选 ≥2 → 由玩家选**：单机 `IGameUIHooks.PromptPickCard`（不可取消）／联机 `ChoiceRequest.Kind.SelectTarget`
+      （`OptionUids` + 服务端 `OptionLabels`，`ForceChoice=true`，回包**权威复检**必须命中候选）；
+      回包非法/取消 → **确定性兜底取第一个合法宿主**（fail-safe：强制结附不可被规避）；
+    · **候选 = 1 → 不弹窗**（无可决策空间，直接结附）；**无 UI（headless/测试）→ 确定性兜底取第一个**；
+    · 去向落地改为**续算式**（`ApplySearchDestination(..., onDone)`）：选宿主窗挂起期间**不洗牌**，宿主落定后才"揭示 + 洗牌"；
+    · 卡数据 `Args[2]` 由 `"自动"` 改为 **`"按目标规则"`**（语义＝候选由该卡目标规则给出、由玩家选）。
+  · **③ 测试**：`JC051Tests` 6→**10 例**（单机多宿主由玩家选 / 唯一宿主不弹窗 / 联机经网关 `SelectTarget` 选 /
+    联机非法回包兜底第一个）；`P2SealSearchShuffleTests` 的"联机放弃取牌不洗牌"改写为
+    "**强制检索：回包取消 → 兜底取第一张并洗牌**"；`P4OnlineGuardTests` 越权回包用例改写为
+    "越权牌取不走 ＋ **兜底取第一张合法候选**"。
+  · 账本：**效果行数不变**（280 = 260 / 1 / 0 / 19）；全量 headless **136 套件 970 例**：本批新增/改写用例**全绿**，
+    余 **2 例为改动前既有失败**（`TestPriority_后手行动中先手出牌优先权归后手` / `TestOpeningHand_按秘社起手数发牌`，
+    证据：改动前日志 `test_out.txt`、`_run.log` 同为"失败 2"）→ **该 2 例已在下一条批次中定位并修好**；
+    Arena 场景 headless 冒烟 **0 SCRIPT ERROR**。
+  · **顺带发现（本批未改，待裁定）**：`GameInitializer.DealOpeningHands()` 内 `ReloadDecks(); SetupCouncils();`
+    会**再建一次秘社**，而 `ZoneManager.MoveToCouncil` 只"加入"不移除 ⇒ 每位玩家 CouncilZone 里有**2 张秘社**（同模板）。
+    这正好解释上面 2 例既有失败（`GetCouncilHandSize` 读到先建的旧卡 ⇒ 回退默认 6），也让"结附于本方秘社"类徽章
+    在 JC051 里出现**2 个候选**（正常应为 1）。另：联机"场上选目标"窗只高亮 `_cardUIMap`，而**秘社在
+    `_councilCardUIMap`** ⇒ 候选含秘社时联机端点不到，只能等超时后走兜底（不影响单机 `PromptPickCard` 列表窗）。
+
+  **【批次】秘社重放幂等（修既有 2 例失败）＋ 联机"秘社目标"可点（2026-09，用户裁定"现在就修／补上"）**：
+  · **① 秘社重放幂等（根因修复）**：`SetupCouncils` 先 `ZoneManager.ClearCouncilZone(pid)`（新方法：旧实例按
+    `CardZone.Exiled` 移出游戏 + 广播 `OnCardMoved` + 注销持续效果登记）再重建 ⇒ 每位玩家 CouncilZone **恒 1 张**。
+    消费点：`GetCouncilHandSize` 读到本局卡组秘社（起手数 8 生效）、JC051 宿主候选不再凭空多一个。
+  · **② 秘社 UI 生命周期（配套，否则修了数据却看不见牌）**：`Arena.Layout.SyncCardUIToZone` 的秘社判定放宽为
+    "当前在秘社区 **或** `_councilCardUIs` 里曾有它"；`SyncCouncilCardUI` 三态化——不在秘社区→摘除、在秘社区但无 UI→
+    **补建**（秘社重放后新实例原先只打"未找到"日志 ⇒ 玩家看不到秘社）、已有 UI→确保容器正确。移除/补建后重排一次。
+  · **③ 联机"场上选目标"补秘社通道**：`OpenOnlineTargetSelectionWindow` 一并高亮 `_councilCardUIMap` 里的合法目标，
+    `PickLegalActivationTargetAt` 把秘社纳入同一 ZIndex 命中比较（新 `CouncilCardUI.GetVisualGlobalRect()`，
+    与 `CardUI` 同款旋转 AABB），`ClearActivationTargetSelection` 同款清理；`RebuildCouncils` 先清旧登记防残留；
+    提示文案改为"点击场上卡**或秘社**"。**动机**：JC051 的宿主候选里就有秘社（否则联机只能等超时走兜底）。
+  · **④ 顺手修的两处小缺陷**：`Arena.PromptPickCard` 候选文案兜底到 `CouncilTemplate?.CardName`（原先秘社候选会显示
+    原始 UID 如 `inst_115`）；`P5FlowOptimizationTests.MakePlayableCard` 补 `_effectsInjected = true`
+    （否则 `CardEffectFactory.EnsureEffects` 会清空 `EffectDataList` 重建 ⇒ 探针的 `PlayTiming.Response` 被抹掉、
+    静默退化成 A 档，这正是既有失败 `TestPriority_后手行动中先手出牌优先权归后手` 的真因；
+    该用例同时改为"天生优先玩家先 `Pass`，再由先手出牌"，与显式优先权状态机口径一致）。
+  · **⑤ 测试**：新增 `TestCouncilSetup_开局后每位玩家恰一张秘社` / `TestCouncilSetup_重复重放秘社不累积`
+    （`P5FlowOptimizationTests`）；`TestOpeningHand_按秘社起手数发牌`、`TestPriority_后手行动中先手出牌优先权归后手`
+    两例既有失败**转绿**。
+  · 账本：**效果行数不变**；全量 headless **136 套件 972 例 全绿 0 失败 0 错误**（本工作树首次全绿：先前 2 例既有失败已清零）；
+    Arena / ArenaOl 两个场景 headless 冒烟均 **0 SCRIPT ERROR**；秘社 UI 日志实测为
+    `已创建×2 → 已移除×2 → 已补建×2`（不再出现"秘社 UI 未找到"）。
+
+  **【批次】联机"需要玩家选择"的效果全部接上网关（2026-09，用户裁定"这一批全补齐"）**：
+  · **症状**（用户实测服务端日志）：`⚠ Search 无 UI：确定性兜底取第一张匹配（深渊细语）` ⇒ 选卡只能自动选择。
+  · **根因（架构级一处断链）**：生产链路 = `TurnManager.ResolveStackTop`（同步）→ `ResolveEntry` →
+    **同步** `EffectEngine.ResolveEffect`；网关分支却只写在 `ResolveEffectAsync`/`ExecuteVerbAsync`/
+    `*ViaGatewayAsync` 那套"可挂起续算"实现里，而**全项目调用 `ResolveEffectAsync` 的只有测试** ⇒
+    服务端（无 `UIHooks`、有 `InputGateway`）下所有"要玩家选择"的效果都静默走"无 UI 确定性兜底"。
+  · **① 同步核心接入网关**（`ExecuteVerb`）：`Inspect`/`PayOptional`/`PrepareUpkeep`/`Discard`/`Seal(手牌)`/
+    `RevealSealedAndQueueFreePlay`/`Search` 在"无 UI 有网关"时改走既有异步执行体 + 动作链挂起-续算
+    （`SuspendChainForInput`/`ContinuePendingChain`，不阻塞线程；**有 UIHooks 时仍优先本机窗口**）。
+  · **② 补 5 处原本没有网关分支的决策**：JC083「选择一个数字」（原先服务端**整条不发动**）、JC064 支付或牺牲、
+    JC114 可选牺牲自身、JC128 贿赂/牺牲（**顺带修**：单机窗口原先未挂起动作链 ⇒ 玩家选择被丢弃）、
+    `SacrificeChoice`（JC046/113/134/65 逐位牺牲，新增逐位 `SelectTarget` 流程）。
+  · **③ 收口**：`BeginGatewayFlow`（同步回包就地继续 / 未回包则挂起，未回包时**显式 `EnterAtomic`** 保持原子锁）＋
+    `TurnManager.OnEngineChainSettled`（续算后补做"地区赢取 / 解原子锁 / JC119 免费打出队列"——挂起时
+    `ResolveStackTop` 同步段已提前 return）＋ `SuspendChainForInput` 的"不覆盖已记录续算点"护栏。
+  · 测试：新增 **`P4OnlineGatewayWiringTests`（13 例）**，全部按**生产形状**（同步 `ResolveEffect` + 网关注入 +
+    无 UI）驱动，锁定"请求确实下发 / 挂起期间原子锁保持 / 回包后续算剩余动作 / 越权兜底 / 有 UI 不走网关 /
+    无 UI 无网关仍兜底"。
+  · 账本：**效果行数不变**；全量 headless **137 套件 985 例 全绿 0 失败 0 错误**；Arena / ArenaOl 冒烟 0 SCRIPT ERROR。
+  · **留档（待裁定）**："可挂起续算"的并行实现 `ResolveEffectAsync`（缺 K15/K16/K1 等特性）现仅测试调用，
+    建议标注"测试专用"并逐步收口删除，避免以后又被误当生产入口（这正是本缺陷长期被掩盖的原因之一）。
+
+  **【批次】服务端"异步续算"落地后立即下发快照（2026-09，用户实测反馈）**：
+  · **症状**：用户反馈"效果能正常结算，但 UI 刷新有延迟——卡片加入手牌，玩家让过后才能看到手牌"。
+  · **实测取证**（`logs/server_182545.log`）：`🌐 联机决策请求已下发…等待回包` → `下行快照 手牌数=13`
+    →（客户端回包）`检索：逆转异界之门 加入玩家1 手牌` → **`玩家1 让过`** → `下行快照 手牌数=14`。
+  · **根因**：服务端**只在"意图流程结束"时推快照**（`MatchHost` 订阅 `TurnManager.OnAsyncSettlementCompleted`），
+    而**引擎侧挂起-续算**（A55 接入的检索/弃牌/封印/支付/JC119/牺牲…）与**规则类异步流程**
+    （领袖/道途/遏制/预测）落地时**无人通知** ⇒ 客户端 UI 要等下一次上行。
+  · **修法**：新增公开通知口 `TurnManager.NotifyResolutionSettled()`，在 `OnEngineChainSettled()`
+    （引擎续算收尾）与四个规则类异步流程末尾调用 ⇒ `MatchHost` 立即 `PushSnapshot()`，客户端全量重建即刷新。
+    单机不受影响（单机走 `OnCardMoved`/`OnPostMove` 事件总线，见 `事件总线使用说明.md` §三）。
+  · 测试：`P4OnlineGatewayWiringTests` 13→**14 例**（挂起期间不上报 / 回包落地后恰好上报一次"结算完成"）。
+  · 账本：**效果行数不变**；全量 headless **137 套件 986 例 全绿 0 失败 0 错误**；Arena / ArenaOl 冒烟 0 SCRIPT ERROR。
+
+  **【批次】秘社（MSJC）起步：MSJC001 按卡文落地 ＋ 每局游戏一次 / 独有检索 / 先手标志谓词（2026-09，用户裁定）**：
+  · **核对**（用户给出 MSJC001 完整卡表）：`.tres` 静态字段基本齐备——`StartingHandSize` 原靠默认值（已显式写入 6）、
+    `CardText` 是占位文本（已按卡文改写）、`set num`（卡集编号）**数据模型无对应字段**（暂记）；
+    `.cs` 结构够用，但**两条效果原先都没按卡文实现**（① 缺【先手标志】前提；② 是"从牌库底抓一张"的暂代）。
+  · **MSJC001 落地**：① 谓词 `具有先手标志`；② `Search{独有;组织:帷幕守望 → 手牌, 展示}` ＋ `MaxUsesPerGame = 1`。
+  · **新机制【A57】**：`EffectData.MaxUsesPerGame`（按卡×能力；**不随回合重置、离场/换区也不清零**，仅重开一局恢复；
+    门禁同 K23 四处 + 权威两点"先检查后登记"；快照投影往返；开局 `ResetAllAbilityUsesThisGame`）＋
+    `DeckSearchFilter` 的 **`独有`** 段（`UniqueField` 非空）＋ `具有先手标志` 谓词。
+  · **勘误/防呆**：`UniqueField` 的注释（"唯一键（如UID）"）是错的 → 改为"独有卡名/独有标识"；`EffectData.Target`
+    默认非 null ⇒ 秘社"无目标能力"忘写 `Target = null` 会**永远不可激活**（本批实测踩到），门禁已补 `Kind != None` 前置。
+  · 测试：新增 `CouncilEffectTests`（9 例）；账本：全量 headless **138 套件 995 例 全绿 0 失败 0 错误**；双场景冒烟 0 SCRIPT ERROR。
+  · **仍缺（交接给秘社批次）**：① 构筑限制**接入构筑界面**（`DeckBuilder` 目前无校验/展示；数据层与大厅已就绪）；
+    ② 各秘社"独有"数据回填 + 其余秘社的暂代检索逐张核对；③ 其余 16 张秘社（`Card.xml` 17 张名单见清单 §7.10 85）。
+
+  **【批次】秘社 17 张 .tres 数据 ＋ 兜底秘社改 MSJC009（2026-09，用户指定）**：
+  · **17 张 `.tres` 全部生成**（3 位编号 + 拼音命名，与卡图名一致；字段全部来自 `Card.xml`：CardText/SubType/ColorText/PT/
+    RelatedCardUID/TableRow/Cost/StartingHandSize/Organization）；**起始手牌**：多数 6、**016=5**（XML 原文）、**009=7**（用户指定）。
+  · **构筑限制**：001~008＝`FilterByColor+TargetColor+≥25`（黄1/白2/绿3/灰4/紫5/蓝6/黑7/红8）；009 无限制；
+    **010~017 的 8 张当前模型表达不了**（"只能包含…＋例外"/"非X非中立≤12"），已在 .tres 留空并写成交接文档，未伪造字段。
+  · **脚本**：001~009 已按卡文实现（001~008 同构两条；009 单条）；010~017 占位（卡文与 FAQ 写进 doc 注释 + TODO 要点）。
+  · **兜底秘社 → MSJC009**（三处：`GameInitializer.DefaultCouncilPath`/`DeckListLoader.FallbackCouncilPath`/`DeckBuilder`），
+    实局验证起手 **7 张** ✓。
+  · 账本：全量 headless **138 套件 995 例 全绿 0 失败 0 错误**；Arena 冒烟 0 SCRIPT ERROR。
+  · **交接**：`UWPro/秘社制作交接提示词.md`（新窗口贴它即可开工：010~017 效果 + 8 张构筑限制模型 + 逐张卡文）。
+
 - 其中**部分接入**的卡：**0** 张（2026-09 本批**用脚本对表体逐行重算**（＝既有 ✅ 行又有 ⛔/⬜ 行的卡）：**本批 JC057 的持续行落地后，集合保持清零**（JC057 两行全 ✅）——
   原记"11 张"为手工累计、与表体已不一致，以重算值为准；口径：卡名去重后，既有 ✅ 行又有 ⛔/⬜ 行。
   **本批 JC081 全行 ✅（[前缀] 落地），移出本集合**；更早批次 JC049 / JC135 全行 ✅ 亦移出；上一批 JC036 三行全 ✅ 亦移出；此前各批次移出记录（同一口径逐批累计）：JC048 / JC034 / JC115 / JC044 / JC022 / JC074 / JC122 / JC026 / JC066 / JC098 / JC023 / JC069 / JC079 / JC108 / JC067 / JC038 / JC093 / JC118 / JC077 / JC123 / JC099 / JC101 / JC019 / JC033 / JC117 / JC120 / JC110 / JC105 全行 ✅ 故移出本集合；
@@ -895,7 +1009,8 @@
 - 已交付公共底座：P0（C/S 单一真相源）、P1（触发接线 + restriction/Attribute/Gain/Pay/Latent）、P2（弃牌/封印/检索/洗牌/展示）、
   P3-词条第一批（隐匿/屏障/撤回/非资产/XX标志X/杀伤X）、**P3-目标与语义批（非争夺区目标 K14＋或种类 / 每回合每能力次数 K23 /
   阶段排除 K26（判据＝伤害分配窗口打开期间）/ 群体动作 K2 / 动态数值 X K1）**、
-  P4-词条与原语第二批（领袖 / 遏制X / 预测X / 检索『结附』去向按被检索卡自身 TargetRules 选宿主）、
+  P4-词条与原语第二批（领袖 / 遏制X / 预测X / 检索『结附』去向：候选＝被检索卡自身 TargetRules 的合法宿主、
+  候选 ≥2 时**由玩家选**（单机 `PromptPickCard` / 联机 `SelectTarget`，A53））、
   **P3-费用批（持续费用修正 `ContinuousCostMod`（含每回合可再生）/ 费用通道隔离 `CostScope`：「打出」与「现身（付费翻面）」互不串味）**、
   **P3-防止批（伤害护盾：`PreventDamage` 动词 + `RegisterDamageShield`/`IsDamagePrevented`，接在伤害唯一收口 `CardManager.DamagePreventer` 上与灵体防止并联）**、
   **P3-镜像批（图标镜像：持续授予来源改写＝读"被封印在本卡上的角色牌"的印刷能力图标，封印牌集合变化即重算）**、

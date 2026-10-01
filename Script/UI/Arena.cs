@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Game.Entities;
@@ -743,7 +743,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             var captured = c;
             items.Add(new ActivationChoiceItem
             {
-                Label = captured.PlayerTemplate?.CardName ?? captured.UID,
+                // 【2026-09】秘社实例没有 PlayerTemplate（秘社走 CouncilTemplate）——缺这层兜底时
+                // 候选列表会显示原始 UID（如 "inst_115"）。JC051 的"选择结附宿主"候选里就可能有秘社。
+                Label = captured.PlayerTemplate?.CardName ?? captured.CouncilTemplate?.CardName ?? captured.UID,
                 OnChosen = () => onPicked?.Invoke(captured),
             });
         }

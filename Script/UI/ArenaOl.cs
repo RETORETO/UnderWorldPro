@@ -270,6 +270,65 @@ namespace Script.UI
             _snapshotQueue.Enqueue(snap);
         }
 
+        /// <summary>【第0回合·调度】本地是否已上报过调度选择（防重复弹出 / 重复上报）。</summary>
+        private bool _mulliganReportedLocal;
+
+        /// <summary>
+        /// 【第0回合·调度（客户端驱动）】每次应用快照后检查：若处于第 0 回合且尚未上报，
+        /// 就**本地**弹出调度框（不再依赖服务端下发决策请求——那会早于本页挂载而丢失）。
+        /// 玩家点"确认调度"时经 `PlayerIntent.MulliganReport` 主动上报，上报那一刻本页必然已就绪。
+        /// </summary>
+        private void EnsureMulliganPrompt()
+        {
+            var turn = _matchClient?.ClientTurnManager;
+            if (turn == null) return;
+            if (turn.CurrentPhase != global::TurnManager.TurnPhase.Mulligan) return;   // 仅第0回合
+            if (_mulliganReportedLocal) return;                    // 已上报
+            if (_choicePromptPanel != null && GodotObject.IsInstanceValid(_choicePromptPanel)
+                && _choicePromptPanel.Visible) return;             // 已弹出
+
+            int localSeat = _matchClient.LocalSeat;
+            var hand = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.Hand, localSeat);
+            if (hand == null || hand.Count == 0) return;           // 手牌还没到（等下一份快照）
+
+            // 组装一份**本地**请求（服务端不参与下发）：复用同一个 ChoicePromptPanel.BuildMulligan 界面
+            var req = new Script.Net.ChoiceRequest
+            {
+                PlayerId = localSeat,
+                RequestKind = Script.Net.ChoiceRequest.Kind.SelectMulligan,
+                Prompt = "开局调度：点选手牌以置入牌库底，并从牌库顶抽等量张后洗牌",
+                ForceChoice = false,
+                NumberMax = hand.Count,
+            };
+            foreach (var c in hand)
+            {
+                if (c == null) continue;
+                req.OptionUids.Add(c.UID);
+                req.OptionCardRefs.Add(ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+                req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
+            }
+
+            if (_choicePromptPanel == null || !GodotObject.IsInstanceValid(_choicePromptPanel))
+            {
+                _choicePromptPanel = new ChoicePromptPanel();
+                AddChild(_choicePromptPanel);
+            }
+            _choicePromptPanel.Init(req, ResolveChoiceLabel, result =>
+            {
+                _mulliganReportedLocal = true;
+                // 客户端驱动：走意图通道上报（服务端按真实手牌权威复检）
+                var picked = (result != null && !result.Cancelled && result.SelectedUids != null)
+                    ? result.SelectedUids
+                    : new System.Collections.Generic.List<string>();
+                _matchClient?.SendIntentAs(localSeat, Script.Net.PlayerIntent.Kind.MulliganReport, picked.ToArray());
+                GD.Print($"[ArenaOl] 调度已上报：{picked.Count} 张");
+            });
+            var vpSize = GetViewport().GetVisibleRect().Size;
+            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
+            _choicePromptPanel.Popup();
+            GD.Print($"[ArenaOl] 第0回合·已弹出调度框（候选 {req.OptionUids.Count} 张手牌）");
+        }
+
         /// <summary>服务端下发决策请求：弹出联机决策面板，玩家选择后回包。</summary>
         private void OnClientChoiceRequest(Script.Net.ChoiceRequest request)
         {
@@ -745,6 +804,9 @@ namespace Script.UI
                 if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
                 if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(true);
             }
+            // 【2026-09】秘社不在 `_cardUIMap`（走 `_councilCardUIMap`），但同样可能是合法目标
+            // （如 JC051「结附于本方秘社」的宿主候选）→ 必须一并高亮，否则联机端"看不到可点目标"。
+            HighlightOnlineCouncilTargets(true);
             ApplyOnlineAreaHighlights();
 
             EnsureTargetWindow();
@@ -759,7 +821,7 @@ namespace Script.UI
             _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡/地区
             string hint = cardUids.Count == 0 && areaUids.Count > 0
                 ? "请点击一个高亮的地区（将移动至该地区）。"
-                : "请在场上选择合法目标卡（点击场上卡完成选择）。";
+                : "请在场上选择合法目标卡（点击场上卡或秘社完成选择）。";
             _onlineTargetWindow.Open(req.Prompt ?? "请选择目标", hint);
             GD.Print($"[ArenaOl] 触发选目标窗口已打开（卡目标 {cardUids.Count} 个，地区目标 {areaUids.Count} 个）");
             return true;
@@ -1012,7 +1074,8 @@ namespace Script.UI
             if (_phaseLabel != null && turn != null)
             {
                 // 四行显示（与单机 Arena 同口径）：① 回合　② 优先权　③ 先手　④ 当前步骤中文名
-                string turnText = $"回合: {turn.TurnCount}";
+                // 第0回合＝开局调度步骤（TurnCount==0 → "第0回合"）
+                string turnText = $"第{turn.TurnCount}回合";
                 string priorityText = turn.PriorityPlayerId > 0
                     ? $"优先权: P{turn.PriorityPlayerId}"
                     : "优先权: 无";
@@ -1047,6 +1110,9 @@ namespace Script.UI
 
             // 快照即权威状态：每次全量重建后刷新「可发动」高亮（联机无本地优先权变更事件）
             RefreshActivateHighlights();
+
+            // 【第0回合·调度】进入第 0 回合且尚未上报 → 本地弹出调度框（客户端驱动，见 EnsureMulliganPrompt）
+            EnsureMulliganPrompt();
         }
 
         /// <summary>争夺区已渲染卡数（诊断日志用）。</summary>
@@ -1283,6 +1349,20 @@ namespace Script.UI
                     }
 
                 var cards = new System.Collections.Generic.List<Control>();
+                // 【2026-09】全量重建：先清空本玩家旧秘社 UI 的登记，避免"秘社重放/移除"后残留已释放节点的条目
+                // （选目标命中与高亮都按 UID 查本表，残留条目会指向已 QueueFree 的节点）。
+                {
+                    var stale = new System.Collections.Generic.List<string>();
+                    foreach (var kv in _councilCardUIMap)
+                        if (kv.Value == null || !GodotObject.IsInstanceValid(kv.Value) || kv.Value.Instance?.ControllerId == p)
+                            stale.Add(kv.Key);
+                    foreach (var uid in stale)
+                    {
+                        if (_councilCardUIMap.TryGetValue(uid, out var old) && old != null && GodotObject.IsInstanceValid(old))
+                            old.CouncilDoubleClicked -= OnCouncilDoubleClicked;
+                        _councilCardUIMap.Remove(uid);
+                    }
+                }
                 foreach (var inst in zone.GetZoneCards(CardZone.CouncilZone, p))
                 {
                     if (inst == null || inst.CouncilTemplate == null) continue;
@@ -1743,7 +1823,8 @@ namespace Script.UI
             }
         }
 
-        /// <summary>场上选目标命中：返回点击位置下 ZIndex 最高的合法目标卡 UID（无则 null）。</summary>
+        /// <summary>场上选目标命中：返回点击位置下 ZIndex 最高的合法目标卡 UID（无则 null）。
+        /// 候选同时覆盖玩家卡（`_cardUIMap`）与**秘社**（`_councilCardUIMap`）——两者共用同一 ZIndex 比较。</summary>
         private string PickLegalActivationTargetAt(Vector2 globalPos)
         {
             string best = null;
@@ -1759,7 +1840,30 @@ namespace Script.UI
                     best = ui.Instance.UID;
                 }
             }
+            foreach (var kv in _councilCardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (!_activationLegalCardUids.Contains(ui.Instance.UID)) continue;
+                if (ui.GetVisualGlobalRect().HasPoint(globalPos) && ui.ZIndex > bestZ)
+                {
+                    bestZ = ui.ZIndex;
+                    best = ui.Instance.UID;
+                }
+            }
             return best;
+        }
+
+        /// <summary>【2026-09】秘社目标高亮开关（与玩家卡 `SetTargetHighlight` 同款视觉）。
+        /// 秘社在 `_councilCardUIMap` 里，`OpenOnlineTargetSelectionWindow` 的卡片循环覆盖不到它。</summary>
+        private void HighlightOnlineCouncilTargets(bool on)
+        {
+            foreach (var kv in _councilCardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(on);
+            }
         }
 
         /// <summary>场上选目标命中（地区）：返回点击位置下的合法目标地区 UID（无则 null）。
@@ -2167,6 +2271,7 @@ namespace Script.UI
                 if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
                 if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(false);
             }
+            HighlightOnlineCouncilTargets(false);   // 秘社高亮同款清理
             if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
                 _onlineTargetWindow.Visible = false;
             ClearOnlineAreaHighlights();

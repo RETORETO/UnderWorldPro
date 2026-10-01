@@ -56,6 +56,7 @@ namespace Script.Manager
 
                         // 【K23】次数上限：该能力本回合已用满（每张卡·每回合·每能力）→ 不可发动
                         if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+                        if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
 
                         // 【K1】动态值 X 求值为 0（或表达式未登记）→ 该效果不算发动 → 不可发动
                         if (Script.Manager.EffectEngine.Instance != null
@@ -106,6 +107,7 @@ namespace Script.Manager
                             if (PhaseGateRule.IsExcluded(e, tm)) continue;
                             // 【K23】次数上限（秘社激活同办）
                             if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+                            if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
                             if (e.Cost > mana) continue;
                             if (e.Target != null && e.Target.NeedsSelection)
                             {
@@ -168,6 +170,7 @@ namespace Script.Manager
                 if (PhaseGateRule.IsExcluded(e, tm)) continue;
                 // 【K23】次数上限：该能力本回合已用满 → 不可发动
                 if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+                if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
                 // 【K1】动态值 X 不可用（0 或求值失败）→ 不可发动
                 if (Script.Manager.EffectEngine.Instance != null
                     && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
@@ -303,6 +306,7 @@ namespace Script.Manager
                     if (PhaseGateRule.IsExcluded(e, tm)) continue;
                     // 【K23】次数上限（秘社激活同办）
                     if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
+                    if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
                     if (e.Cost > mana) continue;
                     if (e.ActivateWindow.Contains("行动"))
                     {
@@ -311,7 +315,11 @@ namespace Script.Manager
                     if (!string.IsNullOrEmpty(e.ActivateCondition) &&
                         e.ActivateCondition.Contains("横置本角色") &&
                         card.IsTapped) continue;
-                    if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm, pm)) continue;
+                    // 【A57·防呆】"无目标能力"必须显式 `Target = null`；但 `EffectData.Target` 的**默认值是非 null 的
+                    // TargetSpec**，忘了清空时这里会误判成"需要选目标" ⇒ 该秘社能力**永远不可激活**（做 MSJC 批次时踩到）。
+                    // 故补一条：`Kind == None` 的目标声明**不可能有可选目标**，不参与本门禁（fail-open，且不会放过任何真需求）。
+                    if (e.Target != null && e.Target.Kind != TargetKind.None && e.Target.NeedsSelection
+                        && !HasLegalTarget(card, e, cm, pm)) continue;
                     return true;
                 }
             }

@@ -146,6 +146,8 @@ namespace Script.Manager
             foreach (var c in cards) if (!toTop.Contains(c)) toBottom.Add(c);
 
             Apply(zm, predictor, cards, toTop, toBottom);
+            // 【A55·联机 UI 刷新】异步落地 ⇒ 主动通知下发快照（牌库顶/底顺序变化客户端需立刻看到）
+            ee?.TurnManagerRef?.NotifyResolutionSettled();
         }
 
         private static string DescribeCards(List<CardInstance> cards)

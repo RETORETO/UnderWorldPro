@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="MSJC012_aifuluodejiazu" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC012_aifuluodejiazu.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中只能包含【蓝】和【中立】派系的牌，以及其他派系的吸血鬼或奴仆角色牌。
+持续：所有印刷费用小于或等于2的本方人类角色额外具有奴仆类别。
+行动，1，横置，横置三个本方奴仆角色：抓一张牌。
+行动，2，横置，横置三个本方吸血鬼角色：目标敌方玩家弃一张牌。
+初始手牌：6
+
+FAQ：
+◆当你的秘社是爱弗罗德家族时，只有在场上的 2 费及以下人类角色才额外具有奴仆类别。在牌库、 手牌以及墓地等其他区域的人类角色牌，都不具有奴仆类别。"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC012_aifuluodejiazu.jpg"
+StartingHandSize = 6
+SubType = "秘社-家族/吸血鬼"
+ColorText = "蓝·王座会"
+PT = "6"
+
+TableRow = 2
+Organization = "爱弗罗德家族"
+Cost = 1
+
+UID = "MSJC012_aifuluodejiazu"
+CardName = "爱弗罗德家族"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"

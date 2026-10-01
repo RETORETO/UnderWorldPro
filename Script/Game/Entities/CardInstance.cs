@@ -163,6 +163,42 @@ namespace Script.Game.Entities
                 if (!string.IsNullOrEmpty(kv.Key) && kv.Value > 0) _abilityUsesThisTurn[kv.Key] = kv.Value;
         }
 
+        // ---------- 【A57】每局游戏"每张卡每能力"使用次数（"该能力每局游戏只能发动一次"） ----------
+        // 与 K23 平行，差别只在重置时机：**不随回合重置**（DoReset 不动它）、**不因版本号变动/离场清零**
+        // （`ResetToBaseState`/`BumpVersion` 只清回合计数），只有重开一局才恢复。
+        // 声明：`EffectData.MaxUsesPerGame`（0 = 不限次）。
+        private readonly Dictionary<string, int> _abilityUsesThisGame = new Dictionary<string, int>();
+
+        /// <summary>本局某能力（EffectId）已发动次数；未发动过返回 0。</summary>
+        public int GetAbilityUsesThisGame(string effectId)
+            => (!string.IsNullOrEmpty(effectId) && _abilityUsesThisGame.TryGetValue(effectId, out var n)) ? n : 0;
+
+        /// <summary>登记一次发动（计数 +1）。调用点与 `MarkAbilityUsedThisTurn` 同点（激活入堆叠前 / 触发结算前）。</summary>
+        public void MarkAbilityUsedThisGame(string effectId)
+        {
+            if (string.IsNullOrEmpty(effectId)) return;
+            _abilityUsesThisGame[effectId] = GetAbilityUsesThisGame(effectId) + 1;
+        }
+
+        /// <summary>该能力本局是否已达上限（max &lt;= 0 = 不限次）。</summary>
+        public bool IsGameAbilityLimitReached(string effectId, int maxPerGame)
+            => maxPerGame > 0 && GetAbilityUsesThisGame(effectId) >= maxPerGame;
+
+        /// <summary>清空本卡的本局能力计数（**只在重开一局时**调用）。</summary>
+        public void ResetAbilityUsesThisGame() => _abilityUsesThisGame.Clear();
+
+        /// <summary>快照投影用：本局已使用的能力与次数（只读）。</summary>
+        public IReadOnlyDictionary<string, int> AbilityUsesThisGame => _abilityUsesThisGame;
+
+        /// <summary>快照恢复（客户端投影）：以权威态覆盖本卡的本局能力计数。</summary>
+        public void SetAbilityUsesThisGame(IEnumerable<KeyValuePair<string, int>> pairs)
+        {
+            _abilityUsesThisGame.Clear();
+            if (pairs == null) return;
+            foreach (var kv in pairs)
+                if (!string.IsNullOrEmpty(kv.Key) && kv.Value > 0) _abilityUsesThisGame[kv.Key] = kv.Value;
+        }
+
         // ---------- 状态变更中枢（Model 自身事件，供 Controller 订阅转发） ----------
         // 【MVC 修复】原实现直接调用 CardManager.Notify* 静态总线，形成 Model→Controller 反向依赖。
         // 现改为 Model 声明自身事件（OnStateChanged），由 CardManager.CreateCardInstance 工厂订阅并转发到全局总线，

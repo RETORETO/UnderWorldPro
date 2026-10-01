@@ -107,6 +107,23 @@ namespace Script.UI
             return new Rect2(Vector2.Zero, Size).HasPoint(point);
         }
 
+        /// <summary>获取真实视觉包围盒（旋转后的 AABB）——与 `CardUI.GetVisualGlobalRect` 同款实现。
+        /// 【2026-09】联机"场上选目标"命中测试需要它：秘社在 `_councilCardUIMap`（不是 `_cardUIMap`），
+        /// 但同样会作为合法目标出现（如 JC051「结附于本方秘社」的宿主候选）。</summary>
+        public Rect2 GetVisualGlobalRect()
+        {
+            Transform2D gt = GetGlobalTransform();
+            Vector2 p1 = gt * new Vector2(0, 0);
+            Vector2 p2 = gt * new Vector2(Size.X, 0);
+            Vector2 p3 = gt * new Vector2(0, Size.Y);
+            Vector2 p4 = gt * new Vector2(Size.X, Size.Y);
+            float minX = Mathf.Min(Mathf.Min(p1.X, p2.X), Mathf.Min(p3.X, p4.X));
+            float minY = Mathf.Min(Mathf.Min(p1.Y, p2.Y), Mathf.Min(p3.Y, p4.Y));
+            float maxX = Mathf.Max(Mathf.Max(p1.X, p2.X), Mathf.Max(p3.X, p4.X));
+            float maxY = Mathf.Max(Mathf.Max(p1.Y, p2.Y), Mathf.Max(p3.Y, p4.Y));
+            return new Rect2(new Vector2(minX, minY), new Vector2(maxX - minX, maxY - minY));
+        }
+
         private void OnGuiInput(InputEvent @event)
         {
             if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)

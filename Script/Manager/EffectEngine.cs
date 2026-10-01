@@ -413,18 +413,31 @@ namespace Script.Manager
             string targetAreaId, int winnerId, int targetVersionId, int eventAmount,
             System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId)
         {
-            if (UIHooks == null) return false;
             int chooser = source?.ControllerId ?? -1;
-            if (chooser < 0) return false;
             int min = System.Math.Max(0, data.ValueMin);
             int max = System.Math.Max(min, data.ValueMax);
+            string prompt = $"{source?.PlayerTemplate?.CardName}：请选择一个数字（{min}～{max}）";
+            // ① 联机（服务端无 View）：经网关下发数值输入请求；回包后写回选择值并**重入结算**
+            if (UIHooks == null && InputGateway != null)
+            {
+                if (chooser < 0) return false;
+                _pendingResolve = new PendingResolve
+                {
+                    Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
+                    WinnerId = winnerId, TargetVersionId = targetVersionId, EventAmount = eventAmount,
+                    Choices = choices, ModeIndex = modeIndex, TargetPlayerId = targetPlayerId,
+                };
+                _ = AskPlayerValueViaGatewayAsync(chooser, prompt, min, max);
+                return true;
+            }
+            if (UIHooks == null) return false;
+            if (chooser < 0) return false;
             _pendingResolve = new PendingResolve
             {
                 Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
                 WinnerId = winnerId, TargetVersionId = targetVersionId, EventAmount = eventAmount,
                 Choices = choices, ModeIndex = modeIndex, TargetPlayerId = targetPlayerId,
             };
-            string prompt = $"{source?.PlayerTemplate?.CardName}：请选择一个数字（{min}～{max}）";
             UIHooks.PromptNumberInput(chooser, prompt, min, max, min, "确认", "取消", chosen =>
             {
                 var p = _pendingResolve;
@@ -441,6 +454,44 @@ namespace Script.Manager
                     p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
             });
             return true;
+        }
+
+        /// <summary>【A55】"选择一个数字"（JC083）的联机落地：`Kind.NumberInput` 回包 → 写回选择值 → 重入结算。
+        /// 与单机同一口径：**取消/超时/越界 → 该效果不发动**（fail-closed，绝不替玩家猜）。</summary>
+        private async System.Threading.Tasks.Task AskPlayerValueViaGatewayAsync(int chooser, string prompt, int min, int max)
+        {
+            Script.Net.ChoiceResult res = null;
+            try
+            {
+                res = await InputGateway.RequestChoice(chooser, new Script.Net.ChoiceRequest
+                {
+                    PlayerId = chooser,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.NumberInput,
+                    Prompt = prompt,
+                    ForceChoice = true,
+                    NumberMin = min,
+                    NumberMax = max,
+                    NumberDefault = min,
+                });
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 联机数字选择请求异常：{ex.GetType().Name}: {ex.Message} → 不发动");
+            }
+            var p = _pendingResolve;
+            _pendingResolve = null;
+            if (p == null) return;
+            bool cancelled = res == null || res.Cancelled || res.SelectedAmounts == null || res.SelectedAmounts.Count == 0;
+            int chosen = cancelled ? -1 : res.SelectedAmounts[0];
+            if (chosen < min || chosen > max)
+            {
+                GD.Print($"[EffectEngine] 玩家{chooser} 取消/非法数字选择（{chosen}）→ {p.Data.EffectId} 不发动");
+                return;
+            }
+            GD.Print($"[EffectEngine] 玩家{chooser} 选择数字 {chosen}（{p.Data.EffectId}，联机）");
+            _playerChosenValue = chosen;
+            ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
+                p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
         }
 
         /// <summary>
@@ -781,16 +832,27 @@ namespace Script.Manager
 
         private PendingChain _pendingChain;
 
-        /// <summary>【K11】请求玩家输入（如"是否支付 N"）：登记挂起链，回调中调 `ContinuePendingChain()` 续算。</summary>
-        private void SuspendChainForInput() => _pendingChain = new PendingChain();
+        /// <summary>【K11】请求玩家输入（如"是否支付 N"）：登记挂起链，回调中调 `ContinuePendingChain()` 续算。
+        /// 【A55】不覆盖"**已记录续算点**"的挂起链：嵌套场景（在玩家回包的回调里又发起一次决策）下，
+        /// 覆盖会把外层尚未执行的动作整段丢掉。</summary>
+        private void SuspendChainForInput()
+        {
+            if (_pendingChain != null && _pendingChain.Actions != null) return;
+            _pendingChain = new PendingChain();
+        }
 
-        /// <summary>【K11】玩家输入完成 → 从他中断处继续执行剩余动作（含"支付失败/不支付 → 后续整段跳过"的语义）。</summary>
+        /// <summary>【K11】玩家输入完成 → 从他中断处继续执行剩余动作（含"支付失败/不支付 → 后续整段跳过"的语义）。
+        /// 【A55】续算跑完后若链上**不再等待输入**，则做一次"结算收尾"（服务端没有 Arena 帮忙收尾：
+        /// 同步段末尾的 地区赢取检查 / 解原子锁 / 免费打出队列 都在 `TurnManager.ResolveStackTop` 里，
+        /// 而挂起时那条同步段已提前 return 了）。</summary>
         public void ContinuePendingChain()
         {
             var chain = _pendingChain;
             _pendingChain = null;
-            if (chain?.Actions == null) return;
+            if (chain?.Actions == null) return;   // 无续算点（同步回调场景）：不做任何事（含不触发收尾）
             ExecuteActionsFrom(chain.Actions, chain.NextIndex, chain.Source, chain.Target, chain.Duration, chain.AreaId);
+            // 链上仍有等待（续算中又发起了一次决策）→ 等它的回调，不在此收尾
+            if (_pendingChain == null) TurnManagerRef?.OnEngineChainSettled();
         }
 
         /// <summary>【P1】动作链中止标志：由 `Pay` 支付失败置位；每个动作序列开始时重置。</summary>
@@ -1060,10 +1122,126 @@ namespace Script.Manager
             ExecuteVerb(action, source, target, durationText, targetAreaId);
         }
 
+        // ==================== 【A55】联机决策：动作链"挂起-续算"统一收口 ====================
+        // 背景（2026-09 实测缺陷）：生产链路是 TurnManager.ResolveStackTop（同步）→ ResolveEntry →
+        // **同步** `ResolveEffect`，而网关分支只写在 `ExecuteVerbAsync`/`*ViaGatewayAsync` 那套
+        // "可挂起续算"实现里 —— 全项目调用 `ResolveEffectAsync` 的只有测试 ⇒ 服务端（无 UIHooks）
+        // 下所有"要玩家选择"的效果都会静默走"无 UI 确定性兜底"（自动取第一张/自动弃/不支付）。
+        // 修法：在**同步**执行体里，遇到"有网关且该动词需要玩家选择"时，把该动词交给既有异步执行体，
+        // 并用动作链挂起-续算（`SuspendChainForInput` / `ContinuePendingChain`，服务端不阻塞线程）。
+
+        /// <summary>当前是否有"等待玩家输入"的挂起动作链（服务端则等客户端回包）。
+        /// 供 `TurnManager` 在等待期间**维持原子锁**（服务端没有 View，无人 `NotifyModalOpened`）。</summary>
+        public bool HasPendingInput => _pendingChain != null;
+
+        /// <summary>
+        /// 把一段"需要玩家决策"的异步网关流程接到动作链上（挂起-续算）：
+        ///  · 流程**尚未完成**（真实网络等待）→ 挂起动作链，回包落地后 `ContinuePendingChain()` 续算；
+        ///  · 流程**已同步完成**（测试/自动网关/回包即刻到达）→ 清掉挂起登记，调用方继续执行剩余动作；
+        ///  · 无网关可用 → 返回 false（调用方走 UI 分支或确定性兜底）。
+        /// </summary>
+        private bool BeginGatewayFlow(System.Func<System.Threading.Tasks.Task> flow)
+        {
+            if (InputGateway == null || flow == null) return false;
+            SuspendChainForInput();   // 先登记"要挂起"：ExecuteActionsFrom 据此记录续算点
+            System.Threading.Tasks.Task t;
+            try
+            {
+                t = flow();
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 联机决策流程异常：{ex.GetType().Name}: {ex.Message} → 就地继续后续动作");
+                _pendingChain = null;
+                return true;
+            }
+            if (t == null || t.IsCompleted)
+            {
+                // 同步完成（含异常/取消）：无需挂起，剩余动作照常执行
+                _pendingChain = null;
+                return true;
+            }
+            // 【A55】真正等待客户端回包：服务端没有 View 帮忙 `NotifyModalOpened`，故由引擎**显式持住原子锁**，
+            // 否则等待窗口内对手仍可行动；回包续算后的"结算收尾"（`ContinuePendingChain` → `OnEngineChainSettled`）
+            // 会按常规把锁放掉。
+            TurnManagerRef?.EnterAtomic();
+            GD.Print($"[EffectEngine] 🌐 联机决策请求已下发，动作链挂起等待回包（保持原子锁）");
+            _ = AwaitGatewayFlowAsync(t);
+            return true;   // 已挂起：ExecuteActionsFrom 记录续算点并返回
+        }
+
+        private async System.Threading.Tasks.Task AwaitGatewayFlowAsync(System.Threading.Tasks.Task t)
+        {
+            try { await t; }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 联机决策流程异常（续算前）：{ex.GetType().Name}: {ex.Message}");
+            }
+            ContinuePendingChain();   // 内部完成"结算收尾"（见 ContinuePendingChain）
+        }
+
+        /// <summary>
+        /// 【A55】"0/1 二选一"（支付/牺牲、可选牺牲自身、移除标志/改为牺牲）的**联机落地**：
+        /// 与单机 `PromptNumberInput(0,1,default,…)` 同语义——下发 `Kind.NumberInput`（min=0/max=1，
+        /// `OptionLabels` 为两个按钮文案），回包 >0 ＝ 选"是"，否则 ＝ 选"否"（取消/超时也归"否"）。
+        /// </summary>
+        private async System.Threading.Tasks.Task AskZeroOrOneViaGatewayAsync(int chooser, string prompt,
+            string yesLabel, string noLabel, System.Action<bool> onDecided)
+        {
+            Script.Net.ChoiceResult res = null;
+            try
+            {
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = chooser,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.NumberInput,
+                    Prompt = prompt,
+                    ForceChoice = true,
+                    NumberMin = 0,
+                    NumberMax = 1,
+                    NumberDefault = 0,
+                };
+                req.OptionLabels.Add(yesLabel);
+                req.OptionLabels.Add(noLabel);
+                res = await InputGateway.RequestChoice(chooser, req);
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 联机 0/1 决策请求异常：{ex.GetType().Name}: {ex.Message} → 按『否』处理");
+            }
+            int chosen = (res != null && !res.Cancelled && res.SelectedAmounts != null && res.SelectedAmounts.Count > 0)
+                ? res.SelectedAmounts[0] : 0;
+            onDecided?.Invoke(chosen > 0);
+        }
+
+        /// <summary>该动词在"有网关"时是否必须走异步执行体（＝ `ExecuteVerbAsync` 里有网关分支的动词）。
+        /// 条件与那些分支自身的守卫保持一致，避免把纯模型写入的动词也绕一圈异步。</summary>
+        private bool VerbNeedsGateway(EffectAction a)
+        {
+            if (InputGateway == null || a == null) return false;
+            return a.Verb switch
+            {
+                ActionVerb.Inspect => true,                          // 检视：把卡面只下发给检视者本人
+                ActionVerb.PayOptional => true,                      // K11 可选支付：数值输入框
+                ActionVerb.PrepareUpkeep => true,                    // JC068 支付/横置二选一
+                ActionVerb.Discard => true,                          // 弃牌（自选走选牌请求；随机在异步分支内自行处理）
+                ActionVerb.Seal => ArgAt(a, 0, "自身") == "手牌",     // "从手牌中选一张封印"
+                ActionVerb.RevealSealedAndQueueFreePlay => true,     // JC119② 挑一张免费打出
+                ActionVerb.Search => true,                           // 检索取牌（含 JC051 选宿主）
+                _ => false,
+            };
+        }
+
         /// <summary>执行单个动作原语。**未实现的原语 = `GenerateToken`/`Investigate`/`Strength`/`Power`（各自显式报错）
         /// 与 `Win`/`Lose`（仅打 TODO）**——除这 6 个外其余动词均有执行体（详见类顶职责 2）。</summary>
         private void ExecuteVerb(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
         {
+            // 【A55】联机（服务端 = 无 UI、有网关）：需要玩家选择的动词走网关 + 动作链挂起-续算。
+            // 判定顺序与既有口径一致：**有 UI 时优先本机窗口**（单机/客户端表现层），只有无 UI 才走网关。
+            if (UIHooks == null && VerbNeedsGateway(action)
+                && BeginGatewayFlow(() => ExecuteVerbAsync(action, source, target, durationText, targetAreaId)))
+                return;
+
             switch (action.Verb)
             {
                 case ActionVerb.Tap:
@@ -1238,34 +1416,46 @@ namespace Script.Manager
                     }
                     int owned = CurbRule.TotalMarks(am, targetPlayer);
                     bool mayPay = owned >= needMarks;                 // A12：不足 → 必须牺牲，不再询问
-                    bool payChosen = false;
-                    if (mayPay)
+                    // 落地（单机回调 / 联机回包共用；**必须在玩家答复之后**才分叉，见下方缺陷说明）
+                    System.Action<bool> landBribe = pay =>
                     {
-                        if (UIHooks != null)
+                        if (pay)
                         {
-                            UIHooks.PromptNumberInput(targetPlayer,
-                                $"是否移除 {needMarks} 个你所拥有的势力标志？（取消则牺牲一个{KindName(kind)}）",
-                                needMarks, needMarks, needMarks, "移除标志", "改为牺牲",
-                                chosen => payChosen = chosen >= needMarks);
+                            CurbRule.Resolve(this, source, needMarks, "对手");
+                            GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 选择移除 {needMarks} 个势力标志（而非牺牲）");
+                            return;
                         }
-                        else
+                        GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 走牺牲路线（无合法候选则什么都不付出）");
+                        ResolveSacrificeChoice(new EffectAction
                         {
-                            payChosen = true;   // 无 UI（headless/测试）：能付则付（与既有同类兜底口径一致）
-                            GD.Print($"[EffectEngine] BribeOrSacrifice：无 UI → 玩家{targetPlayer} 确定性兜底选择支付标志");
-                        }
-                    }
-                    if (payChosen)
+                            Verb = ActionVerb.SacrificeChoice,
+                            Args = new Array<string> { kind, "目标玩家", "任意" },
+                        }, source, targetAreaId);
+                    };
+                    if (!mayPay)
                     {
-                        CurbRule.Resolve(this, source, needMarks, "对手");
-                        GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 选择移除 {needMarks} 个势力标志（而非牺牲）");
+                        landBribe(false);
                         break;
                     }
-                    GD.Print($"[EffectEngine] BribeOrSacrifice：玩家{targetPlayer} 走牺牲路线（无合法候选则什么都不付出）");
-                    ResolveSacrificeChoice(new EffectAction
+                    string bribePrompt = $"是否移除 {needMarks} 个你所拥有的势力标志？（取消则牺牲一个{KindName(kind)}）";
+                    // ① 联机：经网关下发 0/1 二选一
+                    if (UIHooks == null && BeginGatewayFlow(() => AskZeroOrOneViaGatewayAsync(targetPlayer, bribePrompt, "移除标志", "改为牺牲",
+                            pay => landBribe(pay))))
+                        break;
+                    // ② 单机：数值输入窗（0/1）
+                    //    ⚠ 原实现**未挂起动作链**：窗口是回调式异步的，代码却在同一帧按 `payChosen=false`
+                    //    直接走了牺牲路线 ⇒ 玩家在窗口里的选择被丢弃（现有单测用同步桩，长期掩盖）。
+                    if (UIHooks != null)
                     {
-                        Verb = ActionVerb.SacrificeChoice,
-                        Args = new Array<string> { kind, "目标玩家", "任意" },
-                    }, source, targetAreaId);
+                        SuspendChainForInput();
+                        UIHooks.PromptNumberInput(targetPlayer, bribePrompt, needMarks, needMarks, needMarks,
+                            "移除标志", "改为牺牲",
+                            chosen => { landBribe(chosen >= needMarks); ContinuePendingChain(); });
+                        break;   // 已挂起：ExecuteActionsFrom 记录续算点
+                    }
+                    // ③ 无 UI / 无网关：确定性兜底＝能付则付（与既有同类兜底口径一致）
+                    GD.Print($"[EffectEngine] BribeOrSacrifice：无 UI/网关 → 玩家{targetPlayer} 确定性兜底选择支付标志");
+                    landBribe(true);
                     break;
                 }
 
@@ -1664,32 +1854,38 @@ namespace Script.Manager
                         _actionChainAborted = true;
                         break;
                     }
-                    if (UIHooks == null)
-                    {
-                        GD.Print("[EffectEngine] ⚠ SacrificeSelfOptional 无 UI：确定性兜底＝**不牺牲**（绝不替玩家牺牲）");
-                        _actionChainAborted = true;
-                        break;
-                    }
                     int sacChooser = source.ControllerId;
-                    SuspendChainForInput();
-                    UIHooks.PromptNumberInput(sacChooser,
-                        $"{source.PlayerTemplate?.CardName}：是否牺牲它？（牺牲后才弃掉你指定的那张牌）",
-                        0, 1, 0, "牺牲", "不牺牲", chosen =>
+                    string sacPrompt = $"{source.PlayerTemplate?.CardName}：是否牺牲它？（牺牲后才弃掉你指定的那张牌）";
+                    // 落地（单机回调 / 联机回包共用同一份，避免两条路径口径分叉）
+                    System.Action<bool> landSac = sacrifice =>
+                    {
+                        if (!sacrifice)
                         {
-                            if (chosen <= 0)
-                            {
-                                GD.Print($"[EffectEngine] 玩家{sacChooser} 选择**不牺牲** → 中止后续动作（SacrificeSelfOptional）");
-                                _actionChainAborted = true;
-                            }
-                            else
-                            {
-                                GD.Print($"[EffectEngine] ✝ 可选牺牲：{source.PlayerTemplate?.CardName} 被牺牲（发动者选择）");
-                                CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
-                                Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
-                            }
-                            ContinuePendingChain();
-                        });
-                    break;   // 已挂起：ExecuteActionsFrom 记录续算点
+                            GD.Print($"[EffectEngine] 玩家{sacChooser} 选择**不牺牲** → 中止后续动作（SacrificeSelfOptional）");
+                            _actionChainAborted = true;
+                        }
+                        else
+                        {
+                            GD.Print($"[EffectEngine] ✝ 可选牺牲：{source.PlayerTemplate?.CardName} 被牺牲（发动者选择）");
+                            CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
+                            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                        }
+                    };
+                    // ① 联机：经网关下发 0/1 二选一（与服务端同语义）
+                    if (UIHooks == null && BeginGatewayFlow(() => AskZeroOrOneViaGatewayAsync(sacChooser, sacPrompt, "牺牲", "不牺牲", landSac)))
+                        break;
+                    // ② 单机：数值输入窗（0/1）
+                    if (UIHooks != null)
+                    {
+                        SuspendChainForInput();
+                        UIHooks.PromptNumberInput(sacChooser, sacPrompt, 0, 1, 0, "牺牲", "不牺牲",
+                            chosen => { landSac(chosen > 0); ContinuePendingChain(); });
+                        break;   // 已挂起：ExecuteActionsFrom 记录续算点
+                    }
+                    // ③ 无 UI / 无网关：确定性兜底＝**不牺牲**（绝不替玩家牺牲）
+                    GD.Print("[EffectEngine] ⚠ SacrificeSelfOptional 无 UI/网关：确定性兜底＝**不牺牲**");
+                    landSac(false);
+                    break;
                 }
 
                 // 【P3·K4·JC027/JC028】**实例级形态转换**：把本效果声明的 `FormChange` 施加到对象卡上
@@ -1766,32 +1962,38 @@ namespace Script.Manager
                         Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                         break;
                     }
-                    if (UIHooks == null)
+                    string posPrompt = $"{source.PlayerTemplate?.CardName}：支付 {amount} 还是牺牲它？（当前可用 {pm3?.GetAvailableMana(payer3) ?? 0}）";
+                    // 落地（单机回调 / 联机回包共用）
+                    System.Action<bool> landPay = pay =>
                     {
-                        GD.Print($"[EffectEngine] ⚠ PayOrSacrificeSelf 无 UI：确定性兜底＝支付 {amount}（不必牺牲）");
-                        pm3?.SpendMana(payer3, amount);
-                        break;
-                    }
-                    SuspendChainForInput();
-                    UIHooks.PromptNumberInput(payer3,
-                        $"{source.PlayerTemplate?.CardName}：支付 {amount} 还是牺牲它？（当前可用 {pm3?.GetAvailableMana(payer3) ?? 0}）",
-                        0, 1, 1, $"支付 {amount}", "牺牲", chosen =>
+                        if (!pay)
                         {
-                            if (chosen <= 0)
-                            {
-                                GD.Print($"[EffectEngine] ✝ 玩家{payer3} 选择不支付 → 牺牲 {source.PlayerTemplate?.CardName}");
-                                CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
-                            }
-                            else
-                            {
-                                bool ok3 = pm3 == null || amount == 0 || pm3.SpendMana(payer3, amount);
-                                GD.Print($"[EffectEngine] {(ok3 ? "✓" : "✗")} 玩家{payer3} 支付 {amount}（PayOrSacrificeSelf）");
-                                if (!ok3) CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);   // 支付失败 → 兜底牺牲
-                            }
-                            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
-                            ContinuePendingChain();
-                        });
-                    break;   // 已挂起
+                            GD.Print($"[EffectEngine] ✝ 玩家{payer3} 选择不支付 → 牺牲 {source.PlayerTemplate?.CardName}");
+                            CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);
+                        }
+                        else
+                        {
+                            bool ok3 = pm3 == null || amount == 0 || pm3.SpendMana(payer3, amount);
+                            GD.Print($"[EffectEngine] {(ok3 ? "✓" : "✗")} 玩家{payer3} 支付 {amount}（PayOrSacrificeSelf）");
+                            if (!ok3) CM.ResolveDeath(source, CardManager.DeathCause.Sacrifice);   // 支付失败 → 兜底牺牲
+                        }
+                        Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+                    };
+                    // ① 联机：经网关下发 0/1 二选一
+                    if (UIHooks == null && BeginGatewayFlow(() => AskZeroOrOneViaGatewayAsync(payer3, posPrompt, $"支付 {amount}", "牺牲", landPay)))
+                        break;
+                    // ② 单机：数值输入窗（0/1）
+                    if (UIHooks != null)
+                    {
+                        SuspendChainForInput();
+                        UIHooks.PromptNumberInput(payer3, posPrompt, 0, 1, 1, $"支付 {amount}", "牺牲",
+                            chosen => { landPay(chosen > 0); ContinuePendingChain(); });
+                        break;   // 已挂起
+                    }
+                    // ③ 无 UI / 无网关：确定性兜底＝**能付就付**（不替玩家放弃已能支付的代价）
+                    GD.Print($"[EffectEngine] ⚠ PayOrSacrificeSelf 无 UI/网关：确定性兜底＝支付 {amount}（不必牺牲）");
+                    landPay(true);
+                    break;
                 }
 
                 // 【JC119 守秘人】"死亡触发：**展示封印在守秘人上的所有牌**，你可以**打出其中一张**，
@@ -2632,9 +2834,15 @@ namespace Script.Manager
         ///
         /// **洗牌语义（用户拍板 2026-09）**：
         ///  · 取到牌 → 洗牌；
-        ///  · **没找到**（确实执行了检索，但无匹配）→ 洗牌（卡文"然后洗牌"对"没找到"同样成立）；
-        ///  · **玩家放弃**（`Cancelled=true`，即"你可以寻找…"选择不找）→ 检索行为**根本没有发生**，
-        ///    故**什么都不做、不洗牌**（牌库不能因一次未发生的检索而被打乱）。
+        ///  · **没找到**（确实执行了检索，但无匹配）→ 洗牌（卡文"然后洗牌"对"没找到"同样成立）。
+        ///
+        /// **【A53·2026-09 用户拍板】检索一律强制，不可取消**（8 张 JC 检索卡卡文均无"你可以寻找"）：
+        /// `ForceChoice = true` → 客户端不提供"取消"；若回包仍是取消/非法（异常客户端），则**不能靠取消规避
+        /// 强制检索** → 按"无有效回包"的确定性兜底口径取**第一张匹配**（fail-safe），随后照常落地 + 洗牌。
+        /// （原"玩家放弃 = 检索未发生 → 不洗牌"的口径随 A53 作废。）
+        ///
+        /// 去向『结附』且无显式目标时（JC051），还要再问一次"结附到哪个宿主"——候选 ≥ 2 时经网关 `SelectTarget`，
+        /// 见 `AttachSearchedCardByOwnRulesViaGatewayAsync`。
         /// </summary>
         private async System.Threading.Tasks.Task SearchViaGatewayAsync(EffectAction action, CardInstance source,
             CardInstance target, string targetAreaId)
@@ -2658,7 +2866,7 @@ namespace Script.Manager
                 RequestKind = Script.Net.ChoiceRequest.Kind.SelectDeckCard,
                 SourceUid = source?.UID,
                 Prompt = $"从牌库中寻找：{DescribeSearchFilter(ArgAt(action, 0, ""))}",
-                ForceChoice = false,           // "你可以寻找…"：允许不取
+                ForceChoice = true,            // 【A53】强制检索：客户端不提供"取消"
             };
             foreach (var c in matches)
             {
@@ -2671,41 +2879,43 @@ namespace Script.Manager
             }
 
             var result = await InputGateway.RequestChoice(searcher, req);
-            if (result == null || result.Cancelled || string.IsNullOrEmpty(result.SelectedUid))
-            {
-                GD.Print("[EffectEngine] 检索：玩家放弃取牌 → 检索未发生，不洗牌");
-                return;
-            }
-            var picked = CM?.GetInstance(result.SelectedUid);
-            if (picked == null)
-            {
-                GD.Print($"[EffectEngine] ⚠ 检索回包卡不存在：{result.SelectedUid}");
-                return;
-            }
+            CardInstance picked = null;
+            if (result != null && !result.Cancelled && !string.IsNullOrEmpty(result.SelectedUid))
+                picked = CM?.GetInstance(result.SelectedUid);
             // 【P2·联机权威复检】回包必须命中"**服务端本次下发的候选**"（＝在检索者牌库中 ∧ 通过筛选 ∧ 未越界）。
-            // 原先只判"实例存在"，客户端可回包任意 UID（如对手手牌/墓地里的牌）把它当检索结果取走。
-            // 与 K10/K15/遏制/预测的复检同一口径（fail-closed：不合规 → 本次检索不生效、不洗牌）。
-            if (!matches.Contains(picked))
+            // 原先只判"实例存在"，客户端可回包任意 UID（如对手手牌/墓地里的牌）把它当检索结果取走；
+            // 与 K10/K15/遏制/预测的复检同一口径。**A53**：强制检索下"取消/非法"不再等于"不取牌"，
+            // 而是 fail-safe 兜底取第一张匹配（否则异常客户端可以规避强制检索）。
+            if (picked == null || !matches.Contains(picked))
             {
-                GD.PrintErr($"[EffectEngine] ⛔ 检索回包 {result.SelectedUid} 不在本次合法候选中 → 拒绝（fail-closed）");
-                return;
+                GD.PrintErr($"[EffectEngine] ⛔ 检索回包『{(result?.Cancelled == true ? "取消" : result?.SelectedUid)}』" +
+                            "不是本次合法候选 → 按强制检索确定性兜底取第一张匹配（fail-safe）");
+                picked = matches[0];
             }
             TurnManagerRef.RemoveCardFromDeckOf(picked.OwnerId, picked);
-            ApplySearchDestination(picked, dest, ArgAt(action, 2, ""), source, target, targetAreaId);
+            string extra = ArgAt(action, 2, "");
+            if (dest == "结附" && extra != "地区" && target == null)
+                await AttachSearchedCardByOwnRulesViaGatewayAsync(picked, source, targetAreaId, searcher);
+            else
+                ApplySearchDestination(picked, dest, extra, source, target, targetAreaId);
             // 卡文"展示该牌后置于你的手中"：`附加` 含"展示"时公开展示（JC007/JC025；联机路径）
             if (HasArg(action, "展示")) RevealCardPublicly(picked, searcher);
             TurnManagerRef.ShuffleDeckOf(searcher);   // 取到牌 → 洗牌
         }
 
         /// <summary>
-        /// 【P2】检索落地（单机/无网关路径）：按"范围"取候选池 → 筛出匹配 → 询问玩家取一张（可放弃）
-        /// → 按去向放置 → 洗牌。洗牌口径见 `SearchViaGatewayAsync` 的说明
-        /// （**取到牌 / 没找到 → 洗牌；玩家放弃 → 不洗牌**）。
+        /// 【P2】检索落地（单机/无网关路径）：按"范围"取候选池 → 筛出匹配 → 询问玩家取一张
+        /// → 按去向放置（JC051 的『结附』去向还会再问一次"结附到哪个宿主"）→ 洗牌。
+        /// 洗牌口径见 `SearchViaGatewayAsync` 的说明（**取到牌 / 没找到 → 洗牌**）。
         ///
         /// 三条路径与弃牌完全对称：
         ///  · 有 UI（`IGameUIHooks`）→ 弹窗选牌，回调内续算（View 不写 Model）；
         ///  · 无 UI（测试/headless）→ 确定性兜底取第一张匹配；
         ///  · 联机 → `ExecuteVerbAsync` 在进入本方法前已改走 `SearchViaGatewayAsync`。
+        ///
+        /// 【A53·2026-09 用户拍板】检索**一律强制、不可取消**（8 张 JC 检索卡的卡文都没有"你可以寻找"）：
+        /// `allowCancel: false`。原先"玩家可以放弃取牌"的口径作废——联机侧同步改为强制
+        /// （见 `SearchViaGatewayAsync` 的 `ForceChoice = true` 与回包兜底）。
         /// </summary>
         private void ResolveSearch(EffectAction action, CardInstance source, CardInstance target, string targetAreaId)
         {
@@ -2730,21 +2940,28 @@ namespace Script.Manager
             {
                 if (picked == null)
                 {
-                    // 玩家放弃 = 检索行为未发生 → 不洗牌（用户拍板）
-                    GD.Print("[EffectEngine] 检索：玩家放弃取牌 → 检索未发生，不洗牌");
+                    // 强制检索（allowCancel=false）下不应出现；防御性兜底＝按"没找到"处理（卡文"然后洗牌"仍成立）
+                    GD.PrintErr("[EffectEngine] ⚠ 检索回调收到 null（强制检索本不应发生）→ 按『没找到』处理：洗牌");
+                    TurnManagerRef.ShuffleDeckOf(searcher);
                     return;
                 }
                 TurnManagerRef.RemoveCardFromDeckOf(picked.OwnerId, picked);
-                ApplySearchDestination(picked, dest, extra, source, target, targetAreaId);
-                // 卡文"展示该牌后置于你的手中"：`附加` 含"展示"时公开展示（JC007/JC025）
-                if (HasArg(action, "展示")) RevealCardPublicly(picked, searcher);
-                TurnManagerRef.ShuffleDeckOf(searcher);
+                // 去向**落地完成之后**才揭示 + 洗牌：JC051 的『结附』去向可能还要弹一次"选宿主"窗，
+                // 此时本回调继续挂在那个窗的 onPicked 上（`ApplySearchDestination` 的 onDone 续算）。
+                System.Action finish = () =>
+                {
+                    // 卡文"展示该牌后置于你的手中"：`附加` 含"展示"时公开展示（JC007/JC025）
+                    if (HasArg(action, "展示")) RevealCardPublicly(picked, searcher);
+                    TurnManagerRef.ShuffleDeckOf(searcher);
+                };
+                ApplySearchDestination(picked, dest, extra, source, target, targetAreaId, finish);
             };
 
             if (UIHooks != null)
             {
+                // 【A53】强制检索：`allowCancel: false`（窗口不给"取消"，必须选一张）
                 UIHooks.PromptPickCard(searcher, $"从牌库中寻找：{DescribeSearchFilter(filter)}", matches,
-                    allowCancel: true, takeAndShuffle);
+                    allowCancel: false, takeAndShuffle);
                 return;
             }
             GD.Print($"[EffectEngine] ⚠ Search 无 UI：确定性兜底取第一张匹配（{matches[0].PlayerTemplate?.CardName}）");
@@ -2781,13 +2998,19 @@ namespace Script.Manager
         ///  · `进场`：置于来源所在地区（`source.ZoneDetailId ?? targetAreaId`）；
         ///  · `暗藏进场`：同"进场"，但以暗藏者状态（背面）进入——先 SetCovert(true) 再移动，与"派遣暗藏者"同序；
         ///  · `结附`：结附到 `target`（`Args[2]="地区"` 则结附到本地区，不绑定宿主卡）；
+        ///    既无显式 target 又非"地区"时 → 宿主由**玩家**从"被检索卡自身 TargetRules 的合法宿主"中选
+        ///    （见 `AttachSearchedCardByOwnRules`，≥2 个候选才弹窗）；
         ///  · `封印`：封到宿主（`Args[2]="自身"` → source，缺省 `目标` → target）。
         /// 去向无法成立时（如"进场"但推不出地区）回落到"加入手牌"，保证牌不会卡在牌库外无归属状态。
+        ///
+        /// <paramref name="onDone"/>：整个去向**落地完成**后的续算回调（调用方在其中揭示 / 洗牌）。
+        /// 『结附·选宿主』会挂起等待玩家选择，因此该续算可能**不是**同步发生的——调用方不得假设
+        /// `ApplySearchDestination` 返回时去向已落地。
         /// </summary>
         private void ApplySearchDestination(CardInstance card, string dest, string extra,
-            CardInstance source, CardInstance target, string targetAreaId)
+            CardInstance source, CardInstance target, string targetAreaId, System.Action onDone = null)
         {
-            if (card == null) return;
+            if (card == null) { onDone?.Invoke(); return; }
             switch (dest)
             {
                 case "进场":
@@ -2808,15 +3031,23 @@ namespace Script.Manager
 
                 case "结附":
                 {
-                    // 宿主解析（2026-09 用户拍板修订，详见 `EffectAction` 的 `Search` 注释）：
+                    // 宿主解析（**A53·2026-09 用户拍板修订**，详见 `EffectAction` 的 `Search` 注释）：
                     //  · `附加="地区"` → 显式结附「来源所在地区」（原语义保留）；
-                    //  · 本次结算**已有显式 target**（效果声明了目标且玩家已选）→ 结附该 target（原语义保留，P2 既有口径）；
-                    //  · 否则 → **按被检索卡自身的 TargetRules 自动选宿主**（JC051 口径）；
+                    //  · 本次结算**已有显式 target**（效果声明了目标且玩家已选）→ 结附该 target（原语义保留）；
+                    //  · 否则 → 候选＝被检索卡自身 TargetRules 的**合法宿主**，由**玩家**从中选一个（JC051 口径）；
                     //    无合法宿主 → 按"无合法目标"处理（不结附；牌放回拥有者牌库，随后照常洗牌）。
-                    if (extra == "地区") AttachSearchedCard(card, null, source, targetAreaId);
-                    else if (target != null) AttachSearchedCard(card, target, source, targetAreaId);
-                    else AttachSearchedCardByOwnRules(card, source, targetAreaId);
-                    break;
+                    if (extra == "地区")
+                    {
+                        AttachSearchedCard(card, null, source, targetAreaId);
+                        break;
+                    }
+                    if (target != null)
+                    {
+                        AttachSearchedCard(card, target, source, targetAreaId);
+                        break;
+                    }
+                    AttachSearchedCardByOwnRules(card, source, targetAreaId, onDone);
+                    return;   // 续算由 onPicked 回调触发
                 }
 
                 case "封印":
@@ -2832,6 +3063,7 @@ namespace Script.Manager
                     GD.Print($"[EffectEngine] 检索：{card.PlayerTemplate?.CardName} 加入玩家{card.OwnerId} 手牌（检索不是抓牌，不广播 OnDraw）");
                     break;
             }
+            onDone?.Invoke();
         }
 
         /// <summary>检索"进场/结附地区"落点：优先来源所在地区，其次本次结算的目标地区。</summary>
@@ -2893,28 +3125,119 @@ namespace Script.Manager
             => string.IsNullOrWhiteSpace(filter) ? "任意牌" : filter;
 
         /// <summary>
-        /// 【P4·JC051 口径】检索去向『结附』的**自动选宿主**：宿主由**被检索卡自身的 TargetRules** 决定
+        /// 【P4·JC051／A53】检索去向『结附』的**宿主选择**：宿主候选由**被检索卡自身的 TargetRules** 决定
         /// ——"检索到的牌能否结附于某宿主"与"该牌从手牌打出时能否选它为目标"共用同一实现（`CardManager.MatchesRule`），
-        /// 因此不会再出现"随便选一个宿主"或"卡文写了结附秘社却结到别处"。
+        /// 因此不会出现"随便选一个宿主"或"卡文写了结附秘社却结到别处"。
+        ///
+        /// 【A53·2026-09 用户拍板修订】候选有多个时**必须由玩家选**（原"引擎取确定性第一个"的口径作废）：
+        ///  · 单机有 UI 且候选 ≥ 2 → `IGameUIHooks.PromptPickCard`（**不可取消**：卡文"结附于合理的目标"是强制的）；
+        ///  · 单机无 UI（headless/测试）→ 确定性兜底取第一个（与其它"无 UI 兜底"同款纪律）；
+        ///  · 联机 → `AttachSearchedCardByOwnRulesViaGatewayAsync` 经网关 `SelectTarget` 让检索者选。
+        ///  · 候选 = 1 时**不弹窗**（没有可决策空间）→ 直接结附那一个。
         ///
         /// 解析顺序：
-        ///  1. `匹配到卡类合法宿主` → 取**确定性顺序的第一个**（秘社 P1→P2 → 争夺区卡 → 附属卡）；
+        ///  1. `匹配到卡类合法宿主` → 玩家从中选（1 个则直接结附）；
         ///     （如检索到 JC012『结附于本方秘社』→ 结附本方秘社）
         ///  2. 无卡类宿主、但被检索卡声明了 `Kind=Area` 规则（结附于地区）→ 结附「来源所在地区」；
         ///  3. 都没有 → **按"无合法目标"处理**：不结附、不进场的牌**放回拥有者牌库**
         ///     （牌库不因一次失败的结附少一张牌；调用方随后仍按卡文"然后洗牌"洗牌）。
         /// </summary>
-        private void AttachSearchedCardByOwnRules(CardInstance card, CardInstance source, string targetAreaId)
+        /// <param name="onDone">宿主选定并结附完成后的续算（调用方在其中揭示/洗牌）；选宿主时会挂起等待。</param>
+        private void AttachSearchedCardByOwnRules(CardInstance card, CardInstance source, string targetAreaId,
+            System.Action onDone = null)
         {
-            if (card == null) return;
+            if (card == null) { onDone?.Invoke(); return; }
             string areaUid = ResolveSearchArea(source, targetAreaId);
             var hosts = CollectOwnRuleHosts(card, out bool areaRuleDeclared);
+
+            if (hosts.Count > 1 && UIHooks != null && card.ControllerId >= 1)
+            {
+                GD.Print($"[EffectEngine] 检索：宿主候选 {hosts.Count} 个 → 由玩家{card.ControllerId} 选择结附目标（不可取消）");
+                UIHooks.PromptPickCard(card.ControllerId,
+                    $"为「{card.PlayerTemplate?.CardName ?? card.UID}」选择结附的目标",
+                    hosts, allowCancel: false,
+                    picked =>
+                    {
+                        CardInstance host = hosts[0];
+                        if (picked != null && hosts.Contains(picked)) host = picked;
+                        else
+                            GD.PrintErr($"[EffectEngine] ⛔ 结附宿主回包非法 → 确定性兜底取第一个合法宿主（{host.UID}）");
+                        AttachSearchedCard(card, host, source, targetAreaId);
+                        onDone?.Invoke();
+                    });
+                return;
+            }
 
             if (hosts.Count > 0)
             {
                 var host = hosts[0];
-                GD.Print($"[EffectEngine] 检索：按被检索卡自身目标规则选定宿主 → {host.PlayerTemplate?.CardName ?? host.CouncilTemplate?.CardName ?? host.UID}");
+                GD.Print($"[EffectEngine] 检索：宿主候选 {hosts.Count} 个 → 直接结附 {host.PlayerTemplate?.CardName ?? host.CouncilTemplate?.CardName ?? host.UID}" +
+                         (hosts.Count == 1 ? "（唯一合法宿主，无可决策空间）" : "（无 UI：确定性兜底取第一个）"));
                 AttachSearchedCard(card, host, source, targetAreaId);
+                onDone?.Invoke();
+                return;
+            }
+
+            if (areaRuleDeclared && !string.IsNullOrEmpty(areaUid))
+            {
+                GD.Print($"[EffectEngine] 检索：被检索卡目标规则为『结附于地区』→ 结附地区 {areaUid}");
+                AttachSearchedCard(card, null, source, targetAreaId);
+                onDone?.Invoke();
+                return;
+            }
+
+            GD.Print($"[EffectEngine] ⚠ 检索去向『结附』：{card.PlayerTemplate?.CardName} 无合法宿主" +
+                     "（其 TargetRules 在当前场上无匹配对象）→ 按『无合法目标』处理（不结附；牌回拥有者牌库）");
+            ReturnSearchedCardToDeck(card);
+            onDone?.Invoke();
+        }
+
+        /// <summary>
+        /// 【P4·JC051／A53·联机】检索去向『结附』的宿主选择（网关版，与单机 `AttachSearchedCardByOwnRules`
+        /// **同一候选集、同一强制口径**，差别只在"谁来问"）：
+        /// 候选 ≥ 2 → 经网关 `SelectTarget` 让检索者选；回包不在候选内/取消 → **确定性兜底取第一个合法宿主**
+        /// （fail-safe：强制结附不能被非法回包"取消掉"）。候选 = 1 → 直接结附；无候选 → 地区规则 / 回牌库。
+        /// </summary>
+        private async System.Threading.Tasks.Task AttachSearchedCardByOwnRulesViaGatewayAsync(CardInstance card,
+            CardInstance source, string targetAreaId, int searcher)
+        {
+            if (card == null || InputGateway == null) return;
+            string areaUid = ResolveSearchArea(source, targetAreaId);
+            var hosts = CollectOwnRuleHosts(card, out bool areaRuleDeclared);
+
+            if (hosts.Count > 1)
+            {
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = searcher,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                    SourceUid = source?.UID,
+                    Prompt = $"为「{card.PlayerTemplate?.CardName ?? card.UID}」选择结附的目标",
+                    ForceChoice = true,          // 强制结附：客户端不提供"取消"
+                };
+                foreach (var h in hosts)
+                {
+                    req.OptionUids.Add(h.UID);
+                    req.OptionLabels.Add(h.PlayerTemplate?.CardName ?? h.CouncilTemplate?.CardName ?? h.UID);
+                }
+                var result = await InputGateway.RequestChoice(searcher, req);
+                CardInstance chosen = null;
+                if (result != null && !result.Cancelled && !string.IsNullOrEmpty(result.SelectedUid))
+                    chosen = hosts.Find(h => string.Equals(h.UID, result.SelectedUid, System.StringComparison.Ordinal));
+                if (chosen == null)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ 结附宿主回包『{result?.SelectedUid}』不在本次合法候选中（或取消）" +
+                                " → 确定性兜底取第一个合法宿主（fail-safe：强制结附不可被规避）");
+                    chosen = hosts[0];
+                }
+                AttachSearchedCard(card, chosen, source, targetAreaId);
+                return;
+            }
+
+            if (hosts.Count > 0)
+            {
+                GD.Print($"[EffectEngine] 检索：宿主候选 {hosts.Count} 个 → 直接结附 {hosts[0].PlayerTemplate?.CardName ?? hosts[0].CouncilTemplate?.CardName ?? hosts[0].UID}（唯一合法宿主）");
+                AttachSearchedCard(card, hosts[0], source, targetAreaId);
                 return;
             }
 
@@ -2925,8 +3248,14 @@ namespace Script.Manager
                 return;
             }
 
-            GD.Print($"[EffectEngine] ⚠ 检索去向『结附』：{card.PlayerTemplate?.CardName} 无合法宿主" +
-                     "（其 TargetRules 在当前场上无匹配对象）→ 按『无合法目标』处理（不结附；牌回拥有者牌库）");
+            GD.Print($"[EffectEngine] ⚠ 检索去向『结附』：{card.PlayerTemplate?.CardName} 无合法宿主 → 按『无合法目标』处理（不结附；牌回拥有者牌库）");
+            ReturnSearchedCardToDeck(card);
+        }
+
+        /// <summary>【P4·JC051】检索去向『结附』无合法目标时的收口：牌**放回拥有者牌库**（牌库不因此少牌）。</summary>
+        private void ReturnSearchedCardToDeck(CardInstance card)
+        {
+            if (card == null) return;
             if (ZoneManagerRef != null) ZoneManagerRef.MoveToDeckBottom(card, card.OwnerId, false);
             else CM?.MoveCardToHand(card);
         }
@@ -3725,6 +4054,18 @@ namespace Script.Manager
             {
                 case "已横置":
                     return target != null && target.IsTapped;
+                // 【A57·秘社 MSJC001】"若你具有【先手标志】"：先手标志由 `TurnManager.FirstPlayerId` 派生
+                // （`PlayerManager.SetFirstPlayer` 写入 `Player.IsFirstPlayer`；见该字段注释"先手标志不参与恢复、
+                // 由 TurnManager.FirstPlayerId 派生"）。判定基准＝**来源控制者是否为本回合先手**。
+                case "具有先手标志":
+                case "先手标志":
+                {
+                    int owner = (source ?? target)?.ControllerId ?? -1;
+                    var pmFirst = TurnManagerRef?.PlayerManagerRef;
+                    bool has = owner > 0 && pmFirst != null && pmFirst.IsFirstPlayer(owner);
+                    GD.Print($"[EffectEngine] 条件「具有先手标志」：玩家{owner} → {(has ? "满足" : "不满足")}");
+                    return has;
+                }
                 // 【P3】前提类谓词：本卡（附属）的**结附宿主**属于指定大类（无宿主 → 不满足）。
                 // 用于 JC082 索亚之书：「·收藏：结附于本方秘社 快速行动2…」——只有结附在秘社上时才允许发动该能力。
                 case "HostIsCouncil":
@@ -4286,7 +4627,7 @@ namespace Script.Manager
                         CM.ResolveDeath(card, CardManager.DeathCause.Sacrifice);
                     Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                 }
-                if (state.ChainSuspended) ContinuePendingChain();   // 只在此处续算一次（见上方说明）
+                if (state.ChainSuspended && !state.ResumeByGateway) ContinuePendingChain();   // 只在此处续算一次（见上方说明）
             });
         }
 
@@ -4294,6 +4635,9 @@ namespace Script.Manager
         private sealed class SacrificePickState
         {
             public bool ChainSuspended;
+            /// <summary>【A55】本次收集走的是联机网关流程 ⇒ 续算由 `BeginGatewayFlow` 统一负责，
+            /// `onAllDone` 不得再自行 `ContinuePendingChain()`（否则会重复续算/丢链）。</summary>
+            public bool ResumeByGateway;
         }
 
         /// <summary>
@@ -4344,9 +4688,68 @@ namespace Script.Manager
                     }
                     return;
                 }
-                var fallback = candidates[0];   // 无 UI（headless/测试）：确定性兜底
+                // 【A55】联机：逐位向该玩家下发 `SelectTarget`（顺序与单机一致：先手优先），全部收齐后 onAllDone。
+                // 挂起-续算由 `BeginGatewayFlow` 统一负责 ⇒ 告知 onAllDone 不要再自行续算。
+                if (BeginGatewayFlow(() => CollectSacrificePicksViaGatewayAsync(
+                        choosers, i, kind, areaScope, areaUid, picked, state, onAllDone)))
+                {
+                    state.ResumeByGateway = true;
+                    return;
+                }
+                var fallback = candidates[0];   // 无 UI/网关（headless/测试）：确定性兜底
                 picked.Add(fallback);
-                GD.Print($"[EffectEngine] SacrificeChoice：无 UI → 玩家{playerId} 确定性兜底选择 {fallback.PlayerTemplate?.CardName}");
+                GD.Print($"[EffectEngine] SacrificeChoice：无 UI/网关 → 玩家{playerId} 确定性兜底选择 {fallback.PlayerTemplate?.CardName}");
+            }
+            onAllDone();
+        }
+
+        /// <summary>
+        /// 【A55】联机的逐位牺牲选择：从第 <paramref name="startIndex"/> 位开始，对每位"有合法候选"的玩家
+        /// 依次下发 `Kind.SelectTarget`（不可取消），回包**权威复检**（必须命中本次下发的候选），
+        /// 非法/取消/超时 → 确定性兜底取第一个候选（与单机无 UI 同口径）。全部收齐后调用 `onAllDone()`。
+        /// </summary>
+        private async System.Threading.Tasks.Task CollectSacrificePicksViaGatewayAsync(
+            System.Collections.Generic.List<int> choosers, int startIndex, string kind, string areaScope, string areaUid,
+            System.Collections.Generic.List<CardInstance> picked, SacrificePickState state, System.Action onAllDone)
+        {
+            for (int i = startIndex; i < choosers.Count; i++)
+            {
+                int playerId = choosers[i];
+                var candidates = CollectSacrificeChoiceCandidates(playerId, kind, areaScope, areaUid);
+                if (candidates.Count == 0)
+                {
+                    GD.Print($"[EffectEngine] SacrificeChoice（联机）：玩家{playerId} 无合法候选 → 跳过（什么都不付出）");
+                    continue;
+                }
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = playerId,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectTarget,
+                    Prompt = $"{KindName(kind)}：请选择你要牺牲的{KindName(kind)}（{candidates.Count} 个候选）",
+                    ForceChoice = true,
+                };
+                foreach (var c in candidates)
+                {
+                    req.OptionUids.Add(c.UID);
+                    req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.CouncilTemplate?.CardName ?? c.UID);
+                }
+                Script.Net.ChoiceResult res = null;
+                try { res = await InputGateway.RequestChoice(playerId, req); }
+                catch (System.Exception ex)
+                {
+                    GD.PrintErr($"[EffectEngine] ⚠ SacrificeChoice 联机请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底）");
+                }
+                CardInstance chosen = null;
+                if (res != null && !res.Cancelled && !string.IsNullOrEmpty(res.SelectedUid))
+                    chosen = candidates.Find(c => string.Equals(c.UID, res.SelectedUid, System.StringComparison.Ordinal));
+                if (chosen == null)
+                {
+                    GD.PrintErr($"[EffectEngine] ⛔ SacrificeChoice 回包『{res?.SelectedUid}』不在本次合法候选中（或取消）" +
+                                " → 确定性兜底取第一个候选");
+                    chosen = candidates[0];
+                }
+                picked.Add(chosen);
+                GD.Print($"[EffectEngine] SacrificeChoice（联机）：玩家{playerId} 选定牺牲 {chosen.PlayerTemplate?.CardName}");
             }
             onAllDone();
         }
@@ -6602,6 +7005,14 @@ namespace Script.Manager
                             $"（上限 {data.MaxUsesPerTurn}）→ 拒绝激活");
                 return;
             }
+            // 2.0b)【A57】每局游戏次数上限（`EffectData.MaxUsesPerGame`，0=不限次；如秘社 MSJC001 行动4
+            //   "该能力每局游戏只能发动一次"）。同样放在代价之前，避免"已达上限却已付出代价"。
+            if (source.IsGameAbilityLimitReached(data.EffectId, data.MaxUsesPerGame))
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 每局次数上限：{data.EffectId} 本局已发动 {source.GetAbilityUsesThisGame(data.EffectId)} 次" +
+                            $"（上限 {data.MaxUsesPerGame}）→ 拒绝激活");
+                return;
+            }
             if (!string.IsNullOrEmpty(data.ActivateCondition) &&
                 data.ActivateCondition.Contains("横置本角色") &&
                 source.IsTapped)
@@ -6786,6 +7197,8 @@ namespace Script.Manager
             // ===== 入堆叠（由堆叠统一结算，含优先权让过） =====
             // 【K23】登记本次发动（计数在"发动被接受"的这一刻 +1，与"结算是否成功"无关）。
             source.MarkAbilityUsedThisTurn(data.EffectId);
+            // 【A57】同一时刻登记"本局"计数（每局游戏次数上限，如 MSJC001 行动4）
+            source.MarkAbilityUsedThisGame(data.EffectId);
             var sm = TurnManagerRef?.StackManagerRef;
             if (sm != null)
             {

@@ -17,7 +17,14 @@ namespace Script.Data.Cards
         /// <summary>子卡名称（SubCardName）—— 用于表示同一主卡下的变体或子类型</summary>
         [Export] public string SubCardName { get; set; }
 
-        /// <summary>唯一标识字段（UniqueField）—— 卡牌在数据库或系统中的唯一键（如UID或特定代码）</summary>
+        /// <summary>
+        /// **独有卡名（UniqueField）**：本卡所属的"独有"标识——**非空即视为"独有牌"**（用户 2026-09 口径）。
+        /// 用途：秘社检索（如 MSJC001『帷幕守望』行动4「寻找一张【帷幕守望】独有牌」＝筛选 `独有;组织:帷幕守望`，
+        /// 见 `DeckSearchFilter`）。数据由卡表回填；未回填的卡一律按"非独有"处理。
+        ///
+        /// ⚠ 历史注释勘误：本字段早期注释写成"唯一标识字段（如 UID 或特定代码）"，那是**错的**——
+        /// 唯一标识是 `UID`；本字段的实际语义是**独有卡名/独有标识**（也正因注释误导，全卡库长期 0 处赋值）。
+        /// </summary>
         [Export] public string UniqueField { get; set; }
 
         /// <summary>打出费用（Cost），-1 表示该卡不可直接打出（例如需要特殊条件）</summary>

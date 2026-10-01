@@ -127,6 +127,7 @@ namespace Script.Tests
         public void Concede(int playerId) { }
         public void ActivateAbility(string sourceUid, string effectId, string targetUid) { }
         public void ResetActionCharges(int playerId) { }
+        public void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids) { }
         public string LastDebugCommand;
         public void DebugCommand(int playerId, string commandLine) { LastDebugCommand = commandLine; }
     }

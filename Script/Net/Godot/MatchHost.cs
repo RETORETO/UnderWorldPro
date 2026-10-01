@@ -110,18 +110,34 @@ namespace Script.Net.Godot
             _onAsyncSettlementCompletedHandler = () => PushSnapshot();
             Game.TurnManager.OnAsyncSettlementCompleted += _onAsyncSettlementCompletedHandler;
 
-            // 【联机开局·调度步骤】必须在**网关注入 + 绑座之后**才下发（调度请求是首个决策请求，
-            // 需要"座位→会话"解析才能送达到玩家）。此前在 GameInitializer.StartMatch 内触发时网关尚未注入，
-            // 导致 _inputGateway == null 而整段被跳过（调度提示框不弹出）。
-            // 此处改为：StartServing 完成后，先推一份初始快照让客户端进入对局界面，再进入调度。
+            // 【联机开局·第0回合调度步骤】**此处不再触发调度**：
+            // 调度请求是"座位→会话"解析后的首个决策请求，若在这里下发，客户端往往还没收到
+            // `room.Phase=InMatch`（＝进入对局的就绪信号）并挂载战场页，请求会被漏接（表现为不弹窗）。
+            // 按方案 B：调度改由房间层在**房间广播之后**调用 `StartMulligan()` 触发。
+            // 这里只推一份初始快照，让客户端进入对局界面即可看到起手手牌。
             PushSnapshot();
-            _ = Game.TurnManager.BeginMulliganAsync();
 
             // 结束信号（房间层据此宣布结果；批次 5 会在此广播 RoomState(Finished)）
             if (Game.PlayerManager != null)
                 Game.PlayerManager.OnGameOver += OnPlayerManagerGameOver;
 
             GD.Print($"[MatchHost] {MatchId} 已接管网络侧（座位绑定数 {_seatToSession.Count}）");
+        }
+
+        /// <summary>
+        /// 【第0回合·调度步骤】联机开局的正式触发点：由**房间层**在 `room.Phase=InMatch` 广播**之后**调用。
+        /// 只负责把阶段置为第 0 回合并下发一份快照（客户端据此弹调度框）；
+        /// **不主动下发决策请求**——客户端收到 InMatch 是延迟一帧才挂载战场页的，
+        /// 服务端若此刻发请求会落在"尚未订阅决策请求"的空档里而丢失。
+        /// 之后只等客户端主动上报（`PlayerIntent.MulliganReport`），双方齐了自动结算并开始第一回合。
+        /// 幂等：`TurnManager.BeginMulligan` 内部已做重复保护；网关未注入时直接开始第一回合。
+        /// </summary>
+        public void StartMulligan()
+        {
+            if (Game?.TurnManager == null) return;
+            GD.Print($"[MatchHost] {MatchId} 进入第0回合·调度步骤（等客户端上报调度选择）");
+            Game.TurnManager.BeginMulligan();
+            PushSnapshot();   // 让客户端立刻看到「第0回合 / 调度步骤」并弹出调度框
         }
 
         /// <summary>释放本场托管（房间销毁/重开时调用）：退订并解除网关注入，避免事件残留造成跨局串扰。</summary>

@@ -234,6 +234,8 @@ namespace Script.Manager
 
             int removed = Apply(am, curbed, plan);
             GD.Print($"[遏制] 联机分配落地：被遏制者玩家{curbed} 共移除 {removed} 个（目标 {amount}，{(result == null || result.Cancelled ? "回包缺失/取消 → 含兜底" : "按回包")}）");
+            // 【A55·联机 UI 刷新】异步落地 ⇒ 主动通知下发快照（否则客户端要等下一条上行才更新）
+            ee?.TurnManagerRef?.NotifyResolutionSettled();
         }
     }
 }

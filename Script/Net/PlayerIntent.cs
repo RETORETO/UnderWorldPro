@@ -47,6 +47,9 @@ namespace Script.Net
             ActivateAbility,    // 发动能力（Args: sourceUid, effectId, targetUid[可空]）
             ResetActionCharges, // 重置行动次数（Args: 无）
             DebugCommand,       // PM 调试命令（Args: 整行命令字符串；仅调试/验证用）
+            MulliganReport,     // 【第0回合·调度】客户端主动上报调度选择（Args: 要换掉的手牌 UID，任意数量、可空）
+                                //   说明：第 0 回合**不走服务端下发决策请求**（会早于客户端订阅决策请求而丢失），
+                                //   改由客户端弹调度框、玩家确认时上行本条意图；上报即代表客户端已就绪。
         }
 
         public Kind IntentKind;

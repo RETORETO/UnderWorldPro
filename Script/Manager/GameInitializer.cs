@@ -387,7 +387,7 @@ public partial class GameInitializer : Node
     // ============================================================
 
     /// <summary>默认秘社资源路径（仅当卡组 JSON 未携带任何秘社时的兜底）。</summary>
-    private const string DefaultCouncilPath = "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres";
+    private const string DefaultCouncilPath = "res://Cards/Data/CouncilCards/JC/MSJC009_mishe.tres";
 
     /// <summary>
     /// 从已加载卡组（_loadedDeck.Councils）实例化双方秘社并移入各自 CouncilZone。
@@ -405,6 +405,14 @@ public partial class GameInitializer : Node
                 new DeckList.DeckEntry { TemplatePath = DefaultCouncilPath, Copies = 1 },
             };
         }
+
+        // 【幂等·2026-09 修复】本方法会被调用两次（InitializeAll → DealOpeningHands 重放，
+        // 目的是读到本局最终卡组携带的秘社），而 MoveToCouncil 只"加入"不移除 ⇒
+        // 原先每位玩家 CouncilZone 里会累积 2 张秘社（同模板）：
+        //   · `GetCouncilHandSize` 读到先建的旧卡 → 起手数回退默认 6（本局卡组秘社的 StartingHandSize 失效）；
+        //   · "结附于本方秘社"类效果会出现重复候选（JC051 的宿主选择会多出一个候选）。
+        // 故先清空双方秘社区（旧实例按移出游戏处理并广播 → View 摘除旧秘社 UI），再按本次卡组重建。
+        for (int pid = 1; pid <= 2; pid++) ZoneManager.ClearCouncilZone(pid);
 
         foreach (var entry in councils)
         {
@@ -477,6 +485,9 @@ public partial class GameInitializer : Node
         }
 
         GD.Print("=== GameInitializer: 开局编排 ===");
+        // 【A57】开局清空"每局游戏"能力使用次数（`EffectData.MaxUsesPerGame`，如秘社 MSJC001 行动4）：
+        // 实例虽按局重建，这里显式兜底"重开一局复用实例"的情形——**回合重置不清它**。
+        CardManager?.ResetAllAbilityUsesThisGame();
         DealOpeningHands();
 
         // 单机：直接开始第一回合（无联机调度步骤）。

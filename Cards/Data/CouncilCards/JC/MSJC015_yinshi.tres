@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="MSJC015_yinshi" format=3]
+
+[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
+[ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
+[ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC015_yinshi.cs" id="1_msjc"]
+[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
+[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
+[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+[resource]
+script = ExtResource("1_msjc")
+CardText = "持续：构筑时你的牌组中，非【白】且非【中立】派系的牌不能超过12张。
+持续：在每局游戏开始时，在本方秘社上放置一个【隐秘】标志。
+行动3，横置：选择目标地区，若你的手牌数量大于或等于四张，你可以从手中展示一张角色牌，然后将其以暗藏者状态置于该地区。
+初始手牌：6
+
+FAQ：
+◆隐士秘社的二能力可以将带公开关键词的角色以暗藏者状态置于地区。"
+CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC015_yinshi.jpg"
+StartingHandSize = 6
+SubType = "秘社-群体"
+ColorText = "白·圣贤"
+PT = "6"
+RelatedCardUID = "TK007"
+TableRow = 2
+Organization = "隐士"
+Cost = 3
+
+UID = "MSJC015_yinshi"
+CardName = "隐士"
+metadata/_custom_type_script = "uid://dw21n4hg3l2a8"
