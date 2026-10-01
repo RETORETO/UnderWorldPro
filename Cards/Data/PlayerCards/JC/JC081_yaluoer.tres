@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["灵体 除装备与祝福外不受附属 额外费用：展示任意数量的手牌，你每展示一张【圣贤】牌或者具有【圣】图标的牌，亚洛尔的所需费用就减少1。"])
 UID = "JC081_yaluoer"
 CardName = "亚洛尔"
+UniqueField = "亚洛尔"

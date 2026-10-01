@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["准备步骤触发：在目标角色或附属上放置一个时间标志。 行动：自本方卡牌上移除X个时间标志：本回合中，你所打出的下一张灾难牌的所需费用减少X。"])
 UID = "JC055_annisiduola"
 CardName = "安妮斯朵拉"
+UniqueField = "安妮斯朵拉"

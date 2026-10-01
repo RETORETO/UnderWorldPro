@@ -24,3 +24,5 @@ Defense = 1
 Effects = Array[String](["领袖 公开 声望 持续：本地区在对抗阶段时额外进行一次势力对抗。"])
 UID = "JC067_yuehanFnateli"
 CardName = "约翰·F·纳特里"
+UniqueField = "约翰·F·纳特里"
+

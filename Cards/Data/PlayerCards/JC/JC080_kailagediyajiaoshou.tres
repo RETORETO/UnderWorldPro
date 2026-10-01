@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["公开 声望 触发：每当你抓牌时，你可以在本地区上放置X个本方势力标记。X等于此次抓牌的数量。"])
 UID = "JC080_kailagediyajiaoshou"
 CardName = "凯拉·歌迪亚教授"
+UniqueField = "凯拉·歌迪亚"

@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["灵体 手牌行动4：将闲人的绿地封印在目标角色上。 触发：当闲人的绿地被封印在一个角色上时，你可以横置或重置该角色。"])
 UID = "JC110_xianrendelvdi"
 CardName = "闲人的绿地"
+UniqueField = "闲人的绿地"

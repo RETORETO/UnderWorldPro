@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["快速行动1，横置：将你牌库顶的一张牌封印在目标角色上。 持续：只要乔治·帕佐，织梦人在场，所有其上有牌封印的敌方角色于重置步骤中不能被重置。"])
 UID = "JC108_qiaozhipazuozhimengren"
 CardName = "乔治·帕佐，织梦人"
+UniqueField = "乔治·帕佐"

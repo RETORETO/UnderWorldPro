@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["领袖 灵体 快速行动，横置：消灭目标已横置的角色。"])
 UID = "JC010_qingshoufeinandier"
 CardName = "青手费南迪尔"
+UniqueField = "费南迪尔"

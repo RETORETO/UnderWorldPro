@@ -27,3 +27,4 @@ Defense = 1
 Effects = Array[String](["快速行动2：在目标角色或暗藏者上放置一个锁定标记。 持续：只要哈克·亚当斯在场，所有具有锁定标记的角色或暗藏者不能翻面。"])
 UID = "JC122_hakeyadangsi"
 CardName = "哈克·亚当斯"
+UniqueField = "哈克·亚当斯"

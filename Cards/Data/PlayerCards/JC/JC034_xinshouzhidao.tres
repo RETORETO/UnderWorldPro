@@ -31,3 +31,4 @@ Defense = -1
 Effects = Array[String](["结附于本方秘社 你只能操控至多一个道途。 持续：当你赢得一次战斗对抗时，若有本方吸血鬼角色参与了这次战斗对抗，你可以令目标对手弃一张手牌。"])
 UID = "JC034_xinshouzhidao"
 CardName = "心兽之道"
+UniqueField = "心兽之道"

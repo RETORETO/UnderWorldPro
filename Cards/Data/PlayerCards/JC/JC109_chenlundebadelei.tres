@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["结束步骤触发：从你的牌库中寻找一张灵体角色牌，将该牌封印在沉沦的巴德勒上，然后洗牌。 持续：每有一张牌被封印在其上，沉沦的巴德勒就获得一个［黑刀］。"])
 UID = "JC109_chenlundebadelei"
 CardName = "沉沦的巴德勒"
+UniqueField = "巴德勒"

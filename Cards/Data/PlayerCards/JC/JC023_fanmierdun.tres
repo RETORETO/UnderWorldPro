@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["领袖 威名 机动 袭击2 持续：所有本地区的敌方暗藏者不能参与势力对抗。"])
 UID = "JC023_fanmierdun"
 CardName = "范·弥尔顿"
+UniqueField = "范·弥尔顿"

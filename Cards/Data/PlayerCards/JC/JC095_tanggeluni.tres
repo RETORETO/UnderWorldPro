@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["领袖 声望 进场触发：将本地区上的所有敌方势力标志移除，然后放置等量的本方势力标志。"])
 UID = "JC095_tanggeluni"
 CardName = "唐·格鲁尼"
+UniqueField = "唐·格鲁尼"

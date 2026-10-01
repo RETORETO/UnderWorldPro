@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["持续：每个回合中你所打出的第一张装备牌，其所需费用减少1。 进场触发：从你的牌库中寻找一张装备牌，展示该牌后置于你的手中，然后洗牌。"])
 UID = "JC026_luotenikefu"
 CardName = "洛特尼科夫"
+UniqueField = "洛特尼科夫"

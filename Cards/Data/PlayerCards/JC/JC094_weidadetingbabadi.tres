@@ -31,3 +31,4 @@ Defense = 3
 Effects = Array[String](["行动，牺牲本地区的另一个角色：消灭目标角色或暗藏者。"])
 UID = "JC094_weidadetingbabadi"
 CardName = "威达的汀巴巴迪"
+UniqueField = "汀巴巴迪"

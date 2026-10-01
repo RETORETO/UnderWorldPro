@@ -31,3 +31,4 @@ Defense = -1
 Effects = Array[String](["结附于本方秘社 快速行动，横置：本回合中你下一张正面打出或翻面的【鸣钟教派】牌所需费用减少1。 快速行动1，横置：本回合中，若有敌方势力标志曾被移除，你可以抓一张牌。"])
 UID = "JC053_mingzhongjiaopaihuiji"
 CardName = "鸣钟教派徽记"
+UniqueField = "鸣钟教派徽记"

@@ -22,3 +22,4 @@ Organization = "国家机构"
 Effects = Array[String](["结附于本方秘社 准备步骤强制触发：支付1，否则横置阿格斯IV。 持续：只要阿格斯IV未横置，对手就不能进行秘密派遣行动。"])
 UID = "JC068_agesiIV"
 CardName = "阿格斯IV"
+UniqueField = "阿格斯IV"

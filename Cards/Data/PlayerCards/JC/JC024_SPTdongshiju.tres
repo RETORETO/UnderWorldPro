@@ -26,3 +26,4 @@ Defense = 3
 Effects = Array[String](["领袖 进场触发：所有其他本方角色获得机动直到回合结束。 快速行动2：将S．P．T董事局潜伏。在下一个准备步骤开始时，令其现身，且不需要支付其费用。"])
 UID = "JC024_SPTdongshiju"
 CardName = "S．P．T董事局"
+UniqueField = "S．P．T董事局"

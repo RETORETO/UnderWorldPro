@@ -31,3 +31,4 @@ Defense = 2
 Effects = Array[String](["快速行动1，横置，牺牲一个角色：抓一张牌。"])
 UID = "JC096_agelipazhiquan"
 CardName = "阿格里帕之犬"
+UniqueField = "阿格里帕之犬"

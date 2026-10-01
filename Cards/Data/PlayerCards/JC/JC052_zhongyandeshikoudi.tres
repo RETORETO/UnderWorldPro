@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["领袖 进场触发：消灭所有本地区的其他角色和暗藏者。"])
 UID = "JC052_zhongyandeshikoudi"
 CardName = "终焉的诗寇蒂"
+UniqueField = "诗寇蒂"

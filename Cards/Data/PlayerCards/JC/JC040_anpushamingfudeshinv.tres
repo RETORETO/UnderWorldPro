@@ -31,3 +31,4 @@ Defense = 1
 Effects = Array[String](["触发：每当敌方玩家弃牌时，遏制X。X等于此次弃牌的数量。"])
 UID = "JC040_anpushamingfudeshinv"
 CardName = "安普莎，冥府的侍女"
+UniqueField = "安普莎"

@@ -31,3 +31,4 @@ Defense = 4
 Effects = Array[String](["领袖 持续：所有其他本方【王座会】角色获得袭击1。 行动，牺牲一个吸血鬼或奴仆角色：令目标对手弃一张手牌，然后你抓一张牌。"])
 UID = "JC038_lieenaifuluode"
 CardName = "列恩·爱弗罗德"
+UniqueField = "列恩"

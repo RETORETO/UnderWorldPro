@@ -31,3 +31,4 @@ Defense = 3
 Effects = Array[String](["领袖 现身触发：自你的牌库中寻找一张徽章附属牌，将该牌放置进场并结附于合理的目标，然后洗牌。 持续：所有其他本方鸣钟教派角色获得［白星］。"])
 UID = "JC051_nuoennagesita"
 CardName = "诺恩纳格斯塔"
+UniqueField = "诺恩纳格斯塔"
