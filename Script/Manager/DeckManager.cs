@@ -51,7 +51,7 @@ public partial class DeckManager : Node
         ("JC030_juxingbianfu",      "res://Cards/Data/PlayerCards/JC/JC030_juxingbianfu.tres",      3),
         ("JC049_shenyuanxiyu",      "res://Cards/Data/PlayerCards/JC/JC049_shenyuanxiyu.tres",      3),
         ("JC047_liehuozhongwei",      "res://Cards/Data/PlayerCards/JC/JC047_liehuozhongwei.tres",      3),
-        ("JC068_agesiIV",             "res://Cards/Data/PlayerCards/JC/JC068_agesIV.tres",              3),
+        ("JC068_agesiIV",             "res://Cards/Data/PlayerCards/JC/JC068_agesiIV.tres",             3),
         
 
     };

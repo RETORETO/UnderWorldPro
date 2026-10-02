@@ -152,6 +152,7 @@ namespace Script.Tests
                 new P5FlowOptimizationTests(),         // 流程优化：步骤中文名 / 免让过推进 / 优先权交换修复 / 秘社起手数 / 调度结算 / 卡组张数校验
                 new P5CouncilRestrictionTests(),       // 秘社构筑限制：CouncilRestriction.Describe / ValidateDeckDetailed / MSJC001 需 ≥25 张黄色牌
                 new CouncilEffectTests(),              // 秘社效果：MSJC001 按卡文落地（先手标志前提 / 独有检索 / 每局一次）＋【A57】每局上限 + 独有筛选
+                new CouncilEffectBatch2Tests(),        // 秘社效果批次2：MSJC010~017 按卡文落地 + 牌作代价/卡上标志门槛/磨牌/抓牌方向/静态子类别授予/开局效果
             };
 
             var redlines = new List<string>();

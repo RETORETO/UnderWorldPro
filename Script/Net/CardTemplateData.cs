@@ -38,7 +38,7 @@ namespace Script.Net
         public string CategoryFlag;              // 卡类别（字符串承载，如 "Character/Attachment/..."）
 
         public List<string> SubCategories = new List<string>();
-        public List<string> Colors = new List<string>();        // CardColor 名
+        public List<string> Colors = new List<string>();        // CardColor 名（玩家卡与秘社卡共用，秘社不再有独立的 ColorText）
         public List<string> MagicDomains = new List<string>();  // MagicDomain 名
         public string Organization;
 
@@ -77,7 +77,6 @@ namespace Script.Net
         public string CardText;
         public string MainType = "秘社";
         public string SubType;
-        public string ColorText;
         public string ColorIdentity = "无";
         public string Layout = "normal";
         public string Side = "front";

@@ -647,6 +647,13 @@ namespace Script.Game.Entities
                 // 初始化当前子类型集合：拷贝模板静态 SubCategories（后续持续效果可追加运行时子类型）
                 foreach (var s in PlayerTemplate.SubCategories) CurrentSubCategories.Add(s);
             }
+
+            // 【2026-09 修复·秘社批次实测暴露】`MagicDomains` 原先**只在 `ResetToBaseValues`（进场路径）**里
+            // 从模板拷入 ⇒ 尚未进过争夺区的实例（牌库/手牌/墓地中的牌）领域列表是**空**的：
+            //  · `DeckSearchFilter` 的 `领域:…` 段（MSJC016②"墓地中的目标【死】领域角色牌"）永远匹配不上；
+            //  · 任何"按领域筛选牌库/墓地/手牌的牌"的效果都会静默失败。
+            // 按"模板固有 + 运行期授予"统一重建（`RebuildDomains` 已处理 `-1` 哨兵与"领域被抑制"两种情形）。
+            RebuildDomains();
         }
 
         // ============================================================
@@ -843,6 +850,11 @@ namespace Script.Game.Entities
             _grantedIcons.Clear();
             _grantedAttributes.Clear();
             _grantedDomains.Clear();
+            // 【2026-09 修复·秘社批次实测暴露】`_grantedDomains` 清空后必须**立刻按模板重建** `MagicDomains`，
+            // 否则该实例的领域列表会被清成空（只有再次进争夺区走 `ResetToBaseValues` 才会填回）——
+            // 于是"从墓地/牌库/手牌按领域筛牌"的效果在**卡离开争夺区之后**全部失效
+            // （实测：MSJC016②"墓地中的目标【死】领域角色牌"零候选）。`RebuildDomains` 会跳过"领域被抑制"态。
+            RebuildDomains();
             // 【P3·K4】"被改写掉的子类别"同属运行期状态：离场一并清零（下方按模板重建当前集合）
             _suppressedSubCategories.Clear();
             // 【P3·K4】实例级形态（JC027/JC028）同属运行期状态：离场复位即还原为印刷形态

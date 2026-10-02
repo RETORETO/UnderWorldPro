@@ -447,6 +447,92 @@ namespace Script.Data.Effects
     }
 
     /// <summary>
+    /// 【秘社批次·"牌作代价"】**从某区域取 N 张牌作为发动/打出的代价**（用户 2026-09 口径）。
+    ///
+    /// 与既有两类代价并列、同一实现风格（代价在**入堆叠之前**支付；候选枚举与门禁共用同一实现，UI 不会与服务端分叉）：
+    ///   · `SacrificeCostSpec`（K22，牺牲一个**角色**＝死亡）；
+    ///   · `CounterCostSpec`（K5，移除卡上的**标志**）；
+    ///   · **本类**（把**牌本身**从某区域取走并做一件事）。
+    ///
+    /// 覆盖：
+    ///  · MSJC010 貘组②③："**将一张/两张封印在貘组上的牌置于你的牌库底**"（`FromZone=SealedZone`，
+    ///    `HostSelf=true`，`CostAction=MoveToZone{牌库底}`）；
+    ///  · MSJC016 颂亡者②："**将你墓地中的七张牌封印在颂亡者上**"（`FromZone=Graveyard`，`HostSelf=true`，
+    ///    `CostAction=Seal{自身,自身}`）；
+    ///  · MSJC012 爱弗罗德家族①②："**横置三个本方奴仆/吸血鬼角色**"（`FromZone=BoardArea`，
+    ///    `Filter="子类别:奴仆"`，`CostAction=Tap`，`UntappedOnly=true`）。
+    /// </summary>
+    [GlobalClass]
+    public partial class CardCostSpec : RefCounted
+    {
+        /// <summary>取牌区域：`"封印区"`（缺省）/ `"墓地"` / `"手牌"` / `"场上争夺区"`。</summary>
+        [Export] public string FromZone { get; set; } = "封印区";
+
+        /// <summary>取牌来源宿主：`true`（缺省）＝**本效果来源卡**（秘社自身）；
+        /// `false` ＝ 来源控制者的任意/全部合法卡（如"你墓地中的…"）。</summary>
+        [Export] public bool HostSelf { get; set; } = true;
+
+        /// <summary>张数（缺省 1）。"七张"＝7；"两张"＝2；"三个"＝3。</summary>
+        [Export] public int Count { get; set; } = 1;
+
+        /// <summary>筛选串（**复用 `DeckSearchFilter` 语法**，`;`=AND、`,`=OR）：
+        /// 例 `"子类别:奴仆"` / `"关键字:灵体;类别:角色"` / `"独有"`。空串＝不限。</summary>
+        [Export] public string Filter { get; set; } = "";
+
+        /// <summary>是否**必须支付**（缺省 true）。true＝候选不足 N 张时不能发动；
+        /// false＝能取多少取多少（当前仅有 true 的用户口径，保留字段以备后续卡）。</summary>
+        [Export] public bool Mandatory { get; set; } = true;
+
+        /// <summary>候选是否限定**未横置**（缺省 false）。用于"横置三个本方角色"（不能重复横置同一张）。</summary>
+        [Export] public bool UntappedOnly { get; set; } = false;
+
+        /// <summary>
+        /// 对每张选中的牌执行的**代价动作**（普通 `EffectAction`，复用既有动词，禁止新造特例）。
+        /// **约定：动作里的"对象"一律写 `"目标"`** —— `PayCardCost` 会把"选中的那张牌"作为 `target` 传入
+        /// （写 `"自身"` 会解析成**来源卡**，即"把秘社自己塞进牌库"这种灾难性误动作，实测踩到）。
+        ///  · `ActionVerb.Tap{目标}` → 横置（MSJC012 横置三个奴仆/吸血鬼角色）；
+        ///  · `ActionVerb.MoveToZone{目标, 牌库底, 正面, 自己}` → 置于**来源控制者**的牌库底（MSJC010②③）；
+        ///  · `ActionVerb.Seal{自身, 自身}` → 把选中的牌封印在来源卡上（MSJC016②，"自身"在此处指被封印者＝target）。
+        /// 为空 ⇒ 只"取走"不做动作（当前无卡使用）。
+        /// </summary>
+        [Export] public EffectAction CostAction { get; set; } = null;
+    }
+
+    /// <summary>
+    /// 【秘社批次·静态规则】**秘社在场期间**对符合条件的卡施加一条静止授予（用户 2026-09 口径）。
+    ///
+    /// 为什么单独建类、不复用光环（`EffectData.IsAura`）：光环的注册与重算入口
+    /// （`EffectEngine.ApplyAura` / `ReevaluateAuras`）读的是 `PlayerCardData.EffectDataList`，
+    /// 而秘社模板是 `CouncilCardData`（`PlayerTemplate == null`）⇒ 光环机制**结构上覆盖不到秘社**。
+    /// 故按 `LeaderRule`/`PathRule` 同款做法建独立规则类，挂在装配层的 `ZoneManager.OnPostMove` 上重算。
+    ///
+    /// 覆盖：**MSJC012 爱弗罗德家族**"所有印刷费用小于或等于 2 的本方人类角色额外具有奴仆类别"
+    /// （`FilterByMaxCost=2` + `FilterBySubCategories={人类}` + `FilterByCategory=角色` → 授予子类别 `奴仆`）。
+    /// **来源卡自身不是角色、不入争夺区**，故天然不会授予自己（无需 `ExcludeSource`）。
+    /// </summary>
+    [GlobalClass]
+    public partial class CouncilStaticGrant : Resource
+    {
+        /// <summary>按卡类别筛选（角色/附属/事务…）。</summary>
+        [Export] public bool FilterByCategory { get; set; }
+        [Export] public CardCategory TargetCategoryFlag { get; set; }
+
+        /// <summary>按子类别筛选（任一命中即算命中）。</summary>
+        [Export] public bool FilterBySubCategories { get; set; }
+        [Export] public Array<string> TargetSubCategories { get; set; } = new Array<string>();
+
+        /// <summary>按**印刷费用上限**筛选（"印刷费用小于或等于 2"＝`FilterByMaxCost=true, MaxCost=2`）。</summary>
+        [Export] public bool FilterByMaxCost { get; set; }
+        [Export] public int MaxCost { get; set; }
+
+        /// <summary>是否**只影响本地区**（缺省 false＝本控制者全部争夺区）。</summary>
+        [Export] public bool LocalZoneOnly { get; set; }
+
+        /// <summary>授予的**子类别**（进 `CardInstance.CurrentSubCategories`，**叠加**不替换；印刷类别不变）。</summary>
+        [Export] public string GrantSubCategory { get; set; } = "";
+    }
+
+    /// <summary>
     /// 【P3·K3】持续型"**伤害改由本卡承受**"的受保护对象（**用户 2026-09 口径：JC077/JC121 这类卡是持续效果**，
     /// 不是入堆叠的触发、也不是"替代式效应"框架）。
     /// </summary>
@@ -667,6 +753,15 @@ namespace Script.Data.Effects
         /// 动作序列会对集合内每张卡各执行一次，**在一次结算内全部完成**；`NeedsSelection` 应为 false。
         /// </summary>
         [Export] public MassMode MassMode { get; set; } = MassMode.Single;
+
+        /// <summary>
+        /// 【秘社批次·卡上标志门槛】目标（或群体集合成员）**其上某标志的数量须 ≥ N**。
+        /// 写法 `<标志名>:<N>`（如 MSJC013 计时者②「消灭**所有其上有三个或更多时间标志**的角色和附属」
+        /// ＝ `"时间标志:3"`）；空串＝不限。
+        /// 消费点：`MassTargetPool.MatchesOne`（群体集合）与 `CardManager.GetLocalZoneTargets` / `HasLegalTarget`
+        /// （单目标候选）；单一解析实现在 `MassTargetPool.MeetsMinCounters`。
+        /// </summary>
+        [Export] public string MinCounters { get; set; } = "";
     }
 
     /// <summary>
@@ -907,6 +1002,20 @@ namespace Script.Data.Effects
 
         /// <summary>【P3·K5】激活代价：自本方卡牌上移除 N 个（时间）标志（JC044；见 `CounterCostSpec`）。</summary>
         [Export] public CounterCostSpec CounterCost { get; set; } = null;
+
+        /// <summary>
+        /// 【秘社批次】激活代价：**从某区域取 N 张牌**（并对其执行一个代价动作）——见 `CardCostSpec`。
+        /// 用户 2026-09 口径。覆盖 MSJC010②③（封印区的牌→牌库底）/ MSJC016②（墓地七张→封印在颂亡者上）/
+        /// MSJC012① ②（横置三个本方奴仆·吸血鬼角色）。
+        /// </summary>
+        [Export] public CardCostSpec CardCost { get; set; } = null;
+
+        /// <summary>
+        /// 【秘社批次】**秘社在场期间的静态子类别授予**（用户 2026-09 口径，见 `CouncilStaticGrant`）：
+        /// 非空时按该规则对本控制者争夺区内符合条件的卡额外授予子类别（MSJC012"费用≤2 的本方人类获得奴仆类别"）。
+        /// 由装配层 `GameInitializer` 的 `OnPostMove` 钩子调用 `EffectEngine.ReevaluateCouncilStaticGrants` 重算。
+        /// </summary>
+        [Export] public CouncilStaticGrant CouncilStatic { get; set; } = null;
 
         /// <summary>
         /// 【P3·K1】`ValueExpr="玩家选择"` 时**玩家可输入的数字范围**（含端点；缺省 1～9）。

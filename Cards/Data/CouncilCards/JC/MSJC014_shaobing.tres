@@ -7,6 +7,19 @@
 [ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
 [ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
 
+[ext_resource type="Script" path="res://Script/Data/Cards/CouncilExceptionRule.cs" id="6_exc"]
+
+[sub_resource type="Resource" id="Exc_MSJC014_shaobing_014_NoDomain"]
+script = ExtResource("6_exc")
+RequireNoDomain = true
+
+[sub_resource type="Resource" id="Res_MSJC014_shaobing_Whitelist"]
+script = ExtResource("1_20xel")
+UseWhitelist = true
+AllowedColors = Array[int]([4, 0])
+ExceptionMaxCount = 0
+ExceptionRules = Array[Resource]([SubResource("Exc_MSJC014_shaobing_014_NoDomain")])
+
 [resource]
 script = ExtResource("1_msjc")
 CardText = "持续：构筑时你的牌组中只能包含【灰】和【中立】派系的牌，以及其他派系不具有魔法领域图标的牌。
@@ -19,12 +32,13 @@ FAQ：
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC014_shaobing.jpg"
 StartingHandSize = 6
 SubType = "秘社-机构"
-ColorText = "灰·国家机构"
+Colors = Array[int]([4])
 PT = "6"
 RelatedCardUID = "TK007"
 TableRow = 2
-Organization = "哨兵"
+Organization = "国家机构"
 Cost = 3
+Restrictions = Array[Resource]([SubResource("Res_MSJC014_shaobing_Whitelist")])
 
 UID = "MSJC014_shaobing"
 CardName = "哨兵"

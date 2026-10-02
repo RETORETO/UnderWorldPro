@@ -37,8 +37,12 @@ namespace Script.Data.Cards
             /// <summary>子类别（SubType），如"秘社-法师结社"</summary>
             [Export] public string SubType { get; set; } = "";
 
-            /// <summary>颜色标识文本（Colors），如"黄·帷幕守望"</summary>
-            [Export] public string ColorText { get; set; } = "";
+            /// <summary>组织/阵营（Organization），如"帷幕守望"。务必与玩家卡 Organization 取值口径一致（取 XML &lt;colors&gt; 中"·"后的阵营名）</summary>
+            [Export] public string Organization { get; set; } = "";
+
+            /// <summary>颜色（Colors）—— 与玩家卡同名同类型；卡牌自身颜色标签，影响操控/忠诚门槛等判定。
+            /// 取值来自 XML &lt;colors&gt; 中"·"之前的色名（黄/白/绿/灰/紫/蓝/黑/红/中立）。</summary>
+            [Export] public Array<CardColor> Colors { get; set; } = new Array<CardColor> { CardColor.Brown };
 
             /// <summary>颜色身份（ColorIdentity），如"无"</summary>
             [Export] public string ColorIdentity { get; set; } = "无";
@@ -57,9 +61,6 @@ namespace Script.Data.Cards
 
             /// <summary>牌桌行（TableRow），如"2"</summary>
             [Export] public int TableRow { get; set; } = 0;
-
-            /// <summary>组织/阵营（Organization），如"帷幕守望"</summary>
-            [Export] public string Organization { get; set; } = "";
 
         // ==================== 激活效果框架（参考 PlayerCardData 行动效果） ====================
         // 秘社效果为"非快速行动效果"，需门槛 + 付费用 + 进堆叠 + TargetRules 选目标。
@@ -89,6 +90,42 @@ namespace Script.Data.Cards
         /// 为空时走默认 EffectDataList + Cost + TargetRules 的单一激活。</summary>
         [Export] public Array<CouncilActivationOption> ActivationOptions { get; set; }
             = new Array<CouncilActivationOption>();
+
+        /// <summary>
+        /// 【秘社批次】**持续性 / 触发类效果列表**（非"激活选项"）。
+        /// 秘社的"持续：…"与"触发：…"文本（如 MSJC012「费用≤2 的本方人类获得奴仆类别」、
+        /// MSJC016「第一个回合的准备步骤开始时磨三张」、MSJC017「从牌库底抓牌」）不是可发动能力，
+        /// 故与 `ActivationOptions` 分开承载：由秘社卡 `.cs` 构造函数填充，不序列化进 `.tres`。
+        /// 消费点：
+        ///  · `EffectData.CouncilStatic`（`CouncilStaticGrant`）→ `EffectEngine.ReevaluateCouncilStaticGrants`
+        ///    （装配层 `ZoneManager.OnPostMove` 钩子驱动，与光环同款"随进出场重算"）；
+        ///  · `Timing = OnTurnStarted` 等触发时机的条目 → `TriggerRegistry` 收集（与玩家卡触发同源）。
+        /// </summary>
+        public Godot.Collections.Array<Script.Data.Effects.EffectData> StaticEffectList { get; set; }
+            = new Godot.Collections.Array<Script.Data.Effects.EffectData>();
+
+        /// <summary>
+        /// 【秘社批次】**抓牌方向**：`true` ＝ 从**牌库底**抓牌而非牌库顶（MSJC017 梦魇族群「持续：你从牌库底抓牌，而非牌库顶」）。
+        /// 消费点：`TurnManager.DrawCardsForPlayer`（抓牌唯一收口）——该玩家所有"抓牌"行为统一改向；
+        /// `DrawFromBottomForPlayer` 自身不受影响（它本来就是从底取）。
+        /// </summary>
+        [Export] public bool DrawFromBottom { get; set; }
+
+        /// <summary>
+        /// 【秘社批次】**开局效果**（"持续：在每局游戏开始时…"，MSJC015「在本方秘社上放置一个【隐秘】标志」）。
+        /// 由 `GameInitializer.StartMatch` 在秘社就位后、发牌前调用 `ApplyCouncilOpeningEffects` 执行一次。
+        /// 每局只执行一次（重开一局会重新走 `StartMatch`）。
+        /// </summary>
+        public Godot.Collections.Array<Script.Data.Effects.EffectData> OpeningEffectList { get; set; }
+            = new Godot.Collections.Array<Script.Data.Effects.EffectData>();
+
+        /// <summary>
+        /// 【秘社批次】**首个准备步骤触发**（卡文"触发：**在第一个回合的准备步骤开始时**…"，MSJC016 颂亡者）。
+        /// 由 `TurnManager.DoPrepare` 在 `TurnCount == 1` 时执行一次（**在起手发完之后**，见该处注释）。
+        /// </summary>
+        public Godot.Collections.Array<Script.Data.Effects.EffectData> TurnStartEffectList { get; set; }
+            = new Godot.Collections.Array<Script.Data.Effects.EffectData>();
+
 
         /// <summary>防御性兜底：确保 EffectDataList 始终非空，避免运行时 NRE</summary>
         public CouncilCardData()

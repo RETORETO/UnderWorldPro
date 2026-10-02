@@ -313,6 +313,22 @@ namespace Script.Manager
                         // 双层语义（与 CardInstance.HasPublicKeyword 一致）：运行时授予 ∪ 模板固有声明。
                         if (!t.HasKeyword(param) && !(t.PlayerTemplate?.HasInherentKeyword(param) ?? false)) return false;
                         break;
+                    case TargetRestriction.HasAbilityIcon:
+                    {
+                        // 【秘社批次·MSJC011②】"带有［黑刀］能力图标"——用户 2026-09 口径：按**战力 > 0** 判定，
+                        // **不含先手战力**（数据层没有图标标签、只有数值，故这是唯一与数据一致的做法）。
+                        // 先按印刷值判定（`PlayerCardData.Strength`），再放宽到 `CurrentStrength`
+                        // （含光环/持续授予带来的战力 —— "图标"的实际存在性）。
+                        string icon = (param ?? "").Trim();
+                        if (icon != "黑刀")
+                        {
+                            Godot.GD.Print($"[CheckRestrictions] ⚠ 未登记的能力图标「{icon}」→ 不通过（fail-closed）");
+                            return false;
+                        }
+                        bool printed = (t.PlayerTemplate?.Strength ?? 0) > 0;
+                        if (!printed && t.CurrentStrength <= 0) return false;
+                        break;
+                    }
                     case TargetRestriction.AttachedToCharacterIfNoMind:
                         // 条件式：仅取目标(打出)阶段评估。资产区【无】【心】(心灵领域忠诚≥1) 时，
                         // 目标须结附于角色（AttachedTo 为角色）；有【心】时放行任意附属。

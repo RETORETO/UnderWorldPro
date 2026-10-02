@@ -51,6 +51,7 @@ namespace Script.Manager
             // 费用区间：费用<=N / 费用>=N（也接受 <= / >= 与全角写法）
             if (TryParseCost(seg, "<=", out int maxCost)) return tmpl != null && tmpl.Cost <= maxCost;
             if (TryParseCost(seg, ">=", out int minCost)) return tmpl != null && tmpl.Cost >= minCost;
+            if (TryParseCost(seg, "=", out int eqCost)) return tmpl != null && tmpl.Cost == eqCost;
 
             // 【A57·独有牌】`独有`（无值标志段）→ `PlayerTemplate.UniqueField` 非空即为"独有牌"。
             // 用户口径（2026-09）：**UniqueField 不为空就是独有卡**（该字段由卡表数据回填）。
@@ -80,6 +81,10 @@ namespace Script.Manager
                     {
                         var flag = ParseCategory(v.Trim());
                         if (flag == CardCategory.None) { Godot.GD.Print($"[DeckSearchFilter] ⚠ 未知类别 '{v}'"); continue; }
+                        // 【2026-09 修复·秘社批次实测暴露】与"子类别"同款的**模板回落**：
+                        // 尚未进过争夺区的实例（牌库/手牌/墓地中的牌）没有实例级类别覆盖 ⇒ 只读模板 `CategoryFlag`，
+                        // 否则 `类别:角色` 类筛选会**永远匹配不上**，表现为 MSJC015①"从手中暗藏派遣一张**角色牌**"
+                        // 与 MSJC016②"墓地中的角色牌"全部零候选。
                         if (tmpl != null && (tmpl.CategoryFlag & flag) != 0) return true;
                     }
                     return false;
@@ -98,8 +103,34 @@ namespace Script.Manager
                     foreach (var v in values)
                         if (!string.IsNullOrEmpty(tmpl?.CardName) && tmpl.CardName.Contains(v.Trim())) return true;
                     return false;
+                // 【秘社批次·MSJC016②】`领域:死亡` —— 筛选**魔法领域**（如"你墓地中的目标【死】领域的角色牌"）。
+                // 口径与 `CouncilRestriction.HasMagicDomain` 一致：无领域卡的哨兵值 `[-1]` 不算任何领域。
+                case "领域":
+                    foreach (var v in values)
+                    {
+                        if (!TryParseDomain(v.Trim(), out var want)) continue;
+                        if (card.MagicDomains != null && card.MagicDomains.Contains(want)) return true;
+                    }
+                    return false;
                 default:
                     Godot.GD.Print($"[DeckSearchFilter] ⚠ 未知筛选字段 '{field}' → 视为不通过（避免静默全匹配）");
+                    return false;
+            }
+        }
+
+        /// <summary>中文领域名 → `MagicDomain`（未登记 ⇒ false；调用方 fail-closed 跳过）。</summary>
+        private static bool TryParseDomain(string name, out MagicDomain domain)
+        {
+            switch (name)
+            {
+                case "心灵": domain = MagicDomain.Mind; return true;
+                case "神圣": domain = MagicDomain.Divine; return true;
+                case "星空": domain = MagicDomain.Star; return true;
+                case "死亡": domain = MagicDomain.Death; return true;
+                case "鲜血": domain = MagicDomain.Blood; return true;
+                default:
+                    Godot.GD.Print($"[DeckSearchFilter] ⚠ 未登记的领域名「{name}」");
+                    domain = MagicDomain.Mind;
                     return false;
             }
         }

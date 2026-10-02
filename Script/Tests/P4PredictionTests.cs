@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot.Collections;
 using Script.Data.Cards;
@@ -309,7 +309,7 @@ namespace Script.Tests
         public void TestP4_预测_JC104占卜师结构()
         {
             Cards.Effects.AllEffects.RegisterAll();
-            var tmpl = Godot.ResourceLoader.Load<PlayerCardData>(Dir + "JC104_zhanboshi.tres");
+            var tmpl = Godot.ResourceLoader.Load<PlayerCardData>(Dir + "JC104_zhanbushi.tres");
             Assert.IsNotNull(tmpl, "JC104 模板应可加载");
             CardEffectFactory.EnsureEffects(tmpl);
 

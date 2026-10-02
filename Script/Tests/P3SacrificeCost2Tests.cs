@@ -178,10 +178,13 @@ namespace Script.Tests
         {
             var game = NewGame();
             var areas = Areas(game);
-            var host = OnField(game, Probe("TS_s2_host2"), 1, areas[0]);
+            // ⚠ 顺序有意义：牺牲代价在"未指定候选"时确定性兜底取**第一个合法候选**。
+            // 若把宿主排在最前，第 1 次发动的代价就会牺牲掉宿主自己 ⇒ 怨灵咒刃随宿主进墓地，
+            // 第 2 次发动会因"来源不在生效区"被拒（旧实现用次数上限先拒一次，恰好掩盖了这一点）。
             OnField(game, Probe("TS_s2_v1"), 1, areas[0]);
             OnField(game, Probe("TS_s2_v2"), 1, areas[0]);
             OnField(game, Probe("TS_s2_v3"), 1, areas[0]);
+            var host = OnField(game, Probe("TS_s2_host2"), 1, areas[0]);
             var blade = game.CardManager.CreateCardInstance(Load("JC093_yuanlingzhouren"), 1);
             game.ZoneManager.MoveToArea(blade, areas[0], 1);
             Attach(game, host, blade);
@@ -199,6 +202,8 @@ namespace Script.Tests
 
             Assert.AreEqual(2, usesAfterTwo, "前两次发动均被接受");
             Assert.AreEqual(2, blade.GetAbilityUsesThisTurn(ability.EffectId), "第 3 次被次数上限拒绝（未登记发动）");
+            Assert.AreEqual(CardZone.AttachedZone, blade.CurrentZone,
+                "两次发动都只牺牲了普通角色 ⇒ 宿主仍在场、咒刃仍结附（激活类条目不得在结算时二次计数，否则第 2 次发动会被误拒）");
         }
 
         // ==================== ④ JC096：可以牺牲来源卡自身（用户口径） ====================

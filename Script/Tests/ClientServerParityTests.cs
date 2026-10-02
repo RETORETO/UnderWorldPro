@@ -31,7 +31,7 @@ namespace Script.Tests
         private const string P_Jc005 = "res://Cards/Data/PlayerCards/JC/JC005_liejieshu.tres";        // 事务：条件式目标限制
         private const string P_Jc012 = "res://Cards/Data/PlayerCards/JC/JC012_weimushouwanghuiji.tres"; // 附属（结附秘社）
         private const string P_Jc020 = "res://Cards/Data/PlayerCards/JC/JC020_yinbidefeidao.tres";      // [装备,武器] 附属
-        private const string P_Jc068 = "res://Cards/Data/PlayerCards/JC/JC068_agesIV.tres";            // 全局封锁秘密派遣
+        private const string P_Jc068 = "res://Cards/Data/PlayerCards/JC/JC068_agesiIV.tres";           // 全局封锁秘密派遣
         private const string P_Jc081 = "res://Cards/Data/PlayerCards/JC/JC081_yaluoer.tres";           // [前缀] 除装备与祝福外不受附属（子类别白名单）
         private const string P_Jc089 = "res://Cards/Data/PlayerCards/JC/JC089_duxuezuzhou.tres";       // [诅咒] 附属（结附角色，白名单外）
         private const string P_Council = "res://Cards/Data/CouncilCards/JC/MSJC001_weimushouwang.tres";

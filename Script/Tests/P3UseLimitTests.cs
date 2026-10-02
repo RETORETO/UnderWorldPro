@@ -249,6 +249,56 @@ namespace Script.Tests
             }
         }
 
+        // ==================== ③b 激活类条目：结算时**不得二次计数**（双重计数修复） ====================
+
+        /// <summary>
+        /// 【缺陷回归】激活类能力的次数上限在"发动被接受"时已登记（`ActivateAbility`），
+        /// 结算分支（`TurnManager.ResolveEntry` 的 Trigger 分支）**不得再检查/再登记**——
+        /// 否则 `MaxUsesPerTurn/MaxUsesPerGame = 1` 的能力**首次结算就会被跳过**（实测缺陷）。
+        /// 本用例覆盖"激活 → 入堆栈 → 让过结算"整条链：既要**真的结算**，又要**计数仍为 1**。
+        /// </summary>
+        public void TestK23_激活类条目结算不得二次计数()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            // 探针：每回合 1 次 + 效果可观测（获得 2 点临时费用）
+            var tmpl = new PlayerCardData
+            {
+                UID = "TS_k23_once", CardName = "探针_TS_k23_once", Cost = 0,
+                CategoryFlag = CardCategory.Character, Defense = 1,
+            };
+            tmpl.EffectDataList.Add(new EffectData
+            {
+                EffectId = "TS_k23_once_e",
+                Timing = EffectTiming.CharacterActivated,
+                ActivateWindow = "快速",
+                MaxUsesPerTurn = 1,
+                Target = null,
+                Actions = new Array<EffectAction>
+                {
+                    new EffectAction { Verb = ActionVerb.GrantTemporaryMana, Args = new Array<string> { "2" } },
+                },
+            });
+            tmpl._effectsInjected = true;
+
+            var card = game.CardManager.CreateCardInstance(tmpl, 1);
+            game.ZoneManager.MoveToArea(card, area, 1);
+
+            EffectEngine.Instance.ActivateAbility(card, tmpl.EffectDataList[0], null);
+            Assert.AreEqual(1, card.GetAbilityUsesThisTurn("TS_k23_once_e"), "发动被接受 → 本回合计数 = 1");
+            Assert.IsTrue(StackHas(game, card.UID), "应入堆叠");
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(2, game.PlayerManager.GetTemporaryMana(1),
+                "**首次结算必须真的执行效果**（旧实现：结算分支二次检查，1≥1 ⇒ 首发动即被跳过）");
+            Assert.AreEqual(1, card.GetAbilityUsesThisTurn("TS_k23_once_e"), "结算不得把本回合计数再加一次（仍为 1）");
+            Assert.AreEqual(0, game.StackManager.Entries.Count, "堆叠已清空");
+        }
+
         /// <summary>触发排序窗口网关：全部入堆叠（与 P1/P4 测试同款）。</summary>
         private sealed class EnterAllGateway : Script.Net.IInputGateway
         {

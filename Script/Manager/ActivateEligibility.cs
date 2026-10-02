@@ -320,6 +320,18 @@ namespace Script.Manager
                     // 故补一条：`Kind == None` 的目标声明**不可能有可选目标**，不参与本门禁（fail-open，且不会放过任何真需求）。
                     if (e.Target != null && e.Target.Kind != TargetKind.None && e.Target.NeedsSelection
                         && !HasLegalTarget(card, e, cm, pm)) continue;
+                    // 【秘社批次】"牌作代价"门禁（与 `EffectEngine.ActivateAbility` 的权威门禁同源实现）：
+                    // 候选不足 N 张（强制）→ 不可发动，UI 据此置灰。
+                    if (e.CardCost != null)
+                    {
+                        int need = e.CardCost.Count > 0 ? e.CardCost.Count : 1;
+                        var cand = Script.Manager.EffectEngine.Instance
+                            ?.GetCardCostCandidates(card, e.CardCost)
+                            ?? new System.Collections.Generic.List<Script.Game.Entities.CardInstance>();
+                        if (cand.Count < need && e.CardCost.Mandatory) continue;
+                    }
+                    // 【秘社批次】"从手牌封印一张符合条件的牌"（MSJC010①）门禁：手牌中没有合格候选 → 不可发动。
+                    if (!Script.Manager.EffectEngine.HasSealHandCandidate(e, card, tm)) continue;
                     return true;
                 }
             }

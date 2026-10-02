@@ -7,6 +7,20 @@
 [ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
 [ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
 
+[ext_resource type="Script" path="res://Script/Data/Cards/CouncilExceptionRule.cs" id="6_exc"]
+
+[sub_resource type="Resource" id="Exc_MSJC016_songwangzhe_016_Death"]
+script = ExtResource("6_exc")
+FilterByDomain = true
+TargetDomains = Array[int]([3])
+
+[sub_resource type="Resource" id="Res_MSJC016_songwangzhe_Whitelist"]
+script = ExtResource("1_20xel")
+UseWhitelist = true
+AllowedColors = Array[int]([7, 0])
+ExceptionMaxCount = 0
+ExceptionRules = Array[Resource]([SubResource("Exc_MSJC016_songwangzhe_016_Death")])
+
 [resource]
 script = ExtResource("1_msjc")
 CardText = "持续：构筑时你的牌组中只能包含【黑】和【中立】派系的牌，以及其他派系【死】领域的牌。
@@ -20,12 +34,13 @@ FAQ：
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC016_songwangzhe.jpg"
 StartingHandSize = 5
 SubType = "秘社-法师结社/分支"
-ColorText = "黑·方碑序列"
+Colors = Array[int]([7])
 PT = "5"
 RelatedCardUID = "TK007"
 TableRow = 2
-Organization = "颂亡者"
+Organization = "方碑序列"
 Cost = 3
+Restrictions = Array[Resource]([SubResource("Res_MSJC016_songwangzhe_Whitelist")])
 
 UID = "MSJC016_songwangzhe"
 CardName = "颂亡者"

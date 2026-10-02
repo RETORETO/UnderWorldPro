@@ -58,7 +58,8 @@ namespace Script.Tests
             Assert.IsNotNull(tmpl, "秘社模板应可加载");
             Assert.AreEqual("帷幕守望", tmpl.CardName, "卡名");
             Assert.AreEqual("秘社-法师结社", tmpl.SubType, "子类型＝秘社-法师结社");
-            Assert.AreEqual("黄·帷幕守望", tmpl.ColorText, "派系色＝黄·帷幕守望");
+            Assert.AreEqual(1, tmpl.Colors.Count, "派系色单一");
+            Assert.AreEqual(CardColor.Yellow, tmpl.Colors[0], "派系色＝【黄】（与玩家卡同名字段 Colors）");
             Assert.AreEqual("6", tmpl.PT, "PT");
             Assert.AreEqual("TK007", tmpl.RelatedCardUID, "关联卡＝TK007 先手标志");
             Assert.AreEqual("帷幕守望", tmpl.Organization, "组织");
@@ -242,6 +243,84 @@ namespace Script.Tests
             restored.SetAbilityUsesThisGame(pairs);
             Assert.AreEqual(1, restored.GetAbilityUsesThisGame("TS_c57_proj_e"), "投影恢复后计数一致");
             Assert.IsTrue(restored.IsGameAbilityLimitReached("TS_c57_proj_e", 1), "恢复后即视为已达上限");
+        }
+
+        // ==================== ⑤ 秘社激活链路：首次激活必须真的结算（双重计数缺陷回归） ====================
+
+        /// <summary>把一张卡放到玩家1 牌库顶（作为检索目标池）。</summary>
+        private static CardInstance PutOnDeckTop(GameInitializer game, PlayerCardData tmpl, int ownerId = 1)
+        {
+            var card = game.CardManager.CreateCardInstance(tmpl, ownerId);
+            card.CurrentZone = CardZone.Deck;
+            game.DeckManager.GetDeckPlayer1().Insert(0, card);
+            return card;
+        }
+
+        /// <summary>给某玩家若干未横置资产（凑够秘社费用；本作费用均为无色）。</summary>
+        private static void GiveMana(GameInitializer game, int playerId, int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                var tmpl = new PlayerCardData
+                {
+                    UID = $"TS_c57_mana_{playerId}_{i}", CardName = "探针资产", Cost = 0,
+                    CategoryFlag = CardCategory.Attachment, Defense = -1,
+                };
+                tmpl._effectsInjected = true;
+                var asset = game.CardManager.CreateCardInstance(tmpl, playerId);
+                game.ZoneManager.MoveToAsset(asset, playerId);
+            }
+        }
+
+        /// <summary>双方连续让过一次 → 结算堆叠顶。</summary>
+        private static void ResolveStackOnce(GameInitializer game)
+        {
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+            {
+                int p = game.TurnManager.PriorityPlayerId;
+                game.TurnManager.Pass(p);
+            }
+        }
+
+        /// <summary>
+        /// 【缺陷回归】MSJC001 行动4（每局游戏一次）**第一次发动必须真的结算**：
+        /// 缺陷现象＝激活时已登记"本局 1 次"，入堆栈结算时又被检查一次 ⇒ `1 ≥ 1` 直接跳过，
+        /// 表现为"秘社效果第一次发动就被跳过"。本用例走完整链路（激活 → 入堆栈 → 让过结算 → 检索落地）。
+        /// </summary>
+        public void TestCouncilMSJC001_首次激活即正常结算()
+        {
+            var game = NewGame();
+            GiveMana(game, 1, 6);
+            game.TurnManager.FirstPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            game.TurnManager.PriorityPlayerId = 1;
+
+            var council = game.CardManager.CreateCardInstance(LoadCouncil(), 1);
+            game.ZoneManager.MoveToCouncil(council, 1);
+
+            // 牌库顶放一张"【帷幕守望】独有牌"（满足 `独有;组织:帷幕守望`），检索应把它找出来
+            var target = PutOnDeckTop(game, Probe("TS_c57_search_hit", "帷幕守望", "帷幕守望独有"));
+
+            var e = LoadCouncil().ActivationOptions[1].EffectDataList[0];   // 行动4：检索独有牌（每局一次）
+            Assert.AreEqual("MSJC001_2_SearchUniqueCard", e.EffectId, "前置：选项②＝检索独有牌");
+
+            EffectEngine.Instance.ActivateAbility(council, e, null);
+
+            Assert.AreEqual(1, council.GetAbilityUsesThisGame(e.EffectId), "发动被接受 → 本局计数 = 1");
+            Assert.AreEqual(1, game.StackManager.Entries.Count, "应入堆叠（等待结算）");
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(CardZone.Hand, target.CurrentZone,
+                "**首次结算必须真的执行检索**（旧实现：结算分支二次检查 1≥1 ⇒ 首发动即被跳过）");
+            Assert.AreEqual(1, council.GetAbilityUsesThisGame(e.EffectId), "结算不得把本局计数再加一次（仍为 1）");
+            Assert.IsTrue(council.IsGameAbilityLimitReached(e.EffectId, 1), "本局额度已用尽");
+
+            // 第二次发动必须被拒（额度用完；权威入口与高亮一致）
+            int stackBefore = game.StackManager.Entries.Count;
+            EffectEngine.Instance.ActivateAbility(council, e, null);
+            Assert.AreEqual(stackBefore, game.StackManager.Entries.Count, "第二次发动被拒（不入堆叠）");
+            Assert.AreEqual(1, council.GetAbilityUsesThisGame(e.EffectId), "被拒的发动不计入次数");
         }
     }
 }

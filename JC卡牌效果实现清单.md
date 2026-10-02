@@ -566,7 +566,8 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 | A53 | **检索一律强制（不可取消）＋ JC051 宿主改由玩家选（2026-09，用户裁定；撤销 §7.4b 第 5 条）** | 用户两项裁定：**①"收紧为强制：单机也去掉取消，与卡文和联机一致"**（8 张 JC 检索卡 JC007/025/026/032/033/051/109/131 的卡文**都没有"你可以寻找"**）⇒ 单机 `EffectEngine.ResolveSearch` 改 `allowCancel: false`；联机 `SearchViaGatewayAsync` 改 `ForceChoice = true`，且回包**取消/非法**不再等于"不取牌"（**原口径"玩家放弃 = 检索未发生 → 不洗牌"作废**）⇒ **fail-safe 兜底取第一张匹配**再落地 + 洗牌，否则异常客户端可用一次取消/越权回包**规避强制检索**；安全属性不变（候选只来自"检索者牌库 ∧ 通过筛选"）。**②"改成开窗选宿主"**（JC051『结附于合理的目标』）⇒ 宿主**候选来源不变**（＝被检索卡自身 `TargetRules` 的合法宿主，判定与打出阶段同一实现 `CardManager.MatchesRule`），但**候选 ≥2 时由玩家选**：单机 `IGameUIHooks.PromptPickCard`（不可取消）/ 联机 `Kind.SelectTarget`（服务端 `OptionLabels`，`ForceChoice=true`，回包权威复检）；回包非法/取消 → **确定性兜底取第一个合法宿主**（强制结附不可被规避）；**候选 = 1 时不弹窗**（无可决策空间）、无 UI 时确定性兜底取第一个。实现细节：去向落地改为**续算式** `ApplySearchDestination(..., onDone)`（选宿主窗挂起期间不洗牌，宿主落定后才"揭示 + 洗牌"）；卡数据 `Args[2]` 由 `"自动"` 改 `"按目标规则"`。**留档**：若将来出现"你可以寻找…"的卡，需先在 `Args` 加可选标记再恢复取消分支 |
 | A54 | **秘社重放幂等 ＋ 联机"秘社目标"可点（2026-09，用户裁定"现在就修／补上"）** | 用户对两项"顺手发现"的裁定：**"现在就修"＋"补上"**。① **`SetupCouncils` 幂等化**（`ZoneManager.ClearCouncilZone` 新方法：旧秘社按 `CardZone.Exiled` 移出游戏 + 广播 `OnCardMoved` + 注销持续效果登记）——原先 `DealOpeningHands` 的"重放秘社"会累积 **2 张/玩家**，导致起手数读旧卡（回退 6）与"结附本方秘社"类效果重复候选；**秘社恒 1 张**后两者同时消失。② **秘社 UI 三态化**（`Arena.Layout.SyncCouncilCardUI`）：不在秘社区→摘除、在秘社区但无 UI→**补建**、已有→确保容器，配套秘社重放；`SyncCardUIToZone` 秘社判定放宽为"当前在秘社区 **或** 曾有 UI"。③ **联机选目标补秘社通道**：`OpenOnlineTargetSelectionWindow` 外加高亮 `_councilCardUIMap` 合法目标、`PickLegalActivationTargetAt` 纳入秘社同款 ZIndex 命中（新增 `CouncilCardUI.GetVisualGlobalRect`）、清理同款；动机＝JC051 宿主候选含秘社（否则联机只能等超时走兜底）。④ 顺手修：`PromptPickCard` 候选名兜底 `CouncilTemplate?.CardName`（原显示原始 UID）；`MakePlayableCard` 补 `_effectsInjected`（否则 `EnsureEffects` 清空效果表 ⇒ 探针 `PlayTiming.Response` 被抹掉、静默退化 A 档 = 既有失败真因） |
 | A55 | **联机"需要玩家选择"的效果必须真问玩家（2026-09，用户裁定"这一批全补齐"）** | 用户实测反馈：服务端日志出现 `⚠ Search 无 UI：确定性兜底取第一张匹配` ⇒ 选卡只能自动选择。**根因（架构级）**：生产链路是 `TurnManager.ResolveStackTop`（同步）→ `ResolveEntry` → **同步** `EffectEngine.ResolveEffect`，而网关分支只写在 `ResolveEffectAsync`/`ExecuteVerbAsync`/`*ViaGatewayAsync` 那套"可挂起续算"实现里——**全项目调用 `ResolveEffectAsync` 的只有测试** ⇒ 服务端（无 `UIHooks`、有 `InputGateway`）下所有决策都静默走无 UI 兜底。**修法**：① 在**同步**执行体里接入网关：`ExecuteVerb` 对 `Inspect/PayOptional/PrepareUpkeep/Discard/Seal(手牌)/RevealSealedAndQueueFreePlay/Search` 改走既有异步执行体，并用 `SuspendChainForInput`/`ContinuePendingChain` 挂起-续算（服务端不阻塞线程；**有 UIHooks 时仍优先本机窗口**）；② 补齐原本**没有**网关分支的 5 处：JC083「选择一个数字」`ValueExpr=玩家选择`（原先服务端**整条不发动**）、JC064 `PayOrSacrificeSelf`、JC114 `SacrificeSelfOptional`、JC128 `BribeOrSacrifice`、`SacrificeChoice`（JC046/113/134/65 逐位牺牲）；③ 统一收口 `BeginGatewayFlow`（同步/异步回包都正确接管链）+ `AskZeroOrOneViaGatewayAsync`（0/1 二选一）+ `AskPlayerValueViaGatewayAsync`（数字）；④ 等待回包期间由引擎**显式 `EnterAtomic`**（服务端没有 View 帮忙 `NotifyModalOpened`），续算后经新 `TurnManager.OnEngineChainSettled` 补做"地区赢取检查 / 解原子锁 / JC119 免费打出队列"（挂起时 `ResolveStackTop` 已提前 return）；⑤ `SuspendChainForInput` 加"不覆盖已记录续算点"护栏（嵌套决策不再丢动作）。**顺带修复**：JC128 单机窗口原先**未挂起动作链**（窗口异步，代码同帧按"牺牲"分叉 ⇒ 玩家选择被丢弃；旧测试用同步桩掩盖）。 |
-| A57 | **秘社（MSJC）效果机制：每局游戏一次 ＋ 独有检索 ＋ 先手标志谓词（2026-09，用户裁定）** | 用户三项裁定/口径：**①"每局游戏只能发动一次"做成通用机制**＝新增 `EffectData.MaxUsesPerGame`（用户选定"按卡×能力"粒度，与 K23 `MaxUsesPerTurn` 平行，但**不随回合重置、离场/换区/版本号变动也不清零**，只有重开一局才恢复；客户端随 `ZoneCardRef.UsedAbilityIdsGame/CountsGame` 同解投影）；**②"独有牌"＝`PlayerCardData.UniqueField`（独有卡名）非空**（用户："UniqueField 不为空就为独有卡，后续我会填入独有卡数据"）——`DeckSearchFilter` 新增无值标志段 **`独有`**；**③【先手标志】谓词**：新增 `EvaluateCondition("具有先手标志"/"先手标志")`，基准＝来源控制者是否为本回合先手（`PlayerManager.IsFirstPlayer`，由 `TurnManager.FirstPlayerId` 派生）。附：`UniqueField` 历史注释（"唯一键（如UID）"）是**错的**，已勘误为"独有卡名/独有标识"；该字段此前全项目仅 3 处搬运式引用（声明/DTO/导出工具）、**全卡库 0 处赋值**，属长期空转的预留字段。**⚠ 数据侧待办**：各秘社"独有"数据仍待按卡表回填（未回填 ⇒ `独有` 筛选恒不命中）。**⚠ 实现陷阱（已修）**：`EffectData.Target` 默认是**非 null 的 `TargetSpec`**，秘社"无目标能力"若忘了 `Target = null`，`CanActivateCouncil` 会误判"需要选目标"⇒ 该能力**永远不可激活**；已在门禁补 `Target.Kind != None` 前置（fail-open，不放过真需求）。 |
+| A58 | **激活类能力"次数上限"的双重计数修复（2026-09，用户实测反馈）** | 用户实测：**"秘社效果第一次发动就被跳过了"**（`[Resolve] ⏹ 每局次数上限：MSJC001_2_SearchUniqueCard 本局已发动 1 次（上限 1）→ 跳过本次结算`）。**根因**：激活类能力的次数上限有**两处登记/检查**——① 发动阶段 `EffectEngine.ActivateAbility`（语义＝"发动被接受即计数，与结算成功与否无关"，`MarkAbilityUsedThisTurn/ThisGame`）；② 结算阶段 `TurnManager.ResolveEntry` 的 `ResolveKind.Trigger` 分支（本意只管**触发类**"同批次多条同源触发只结算到上限"）。而**激活条目也是 `Kind=ResolveKind.Trigger`**（`PushActivationToStack`）⇒ 首次结算就被自己刚登记的 1 次判成"已达上限"而整条跳过。**影响面**：不止秘社——`MaxUsesPerTurn=1` 的 **JC031/JC032/JC069** 与 `=2` 的 **JC093** 第二次，**一直是首发动即被跳过**（既有单测只驱动 `ActivateAbility` 断言入堆栈/计数，从未推进堆栈结算，故长期未暴露）。**修法**：`StackEntry` 新增 **`FromActivation`**（`PushActivationToStack` 置 true），`ResolveEntry` 的 K23/A57 检查+登记**整段对激活条目跳过**（触发条目照旧在结算前检查+登记）。**顺带修**：`P3SacrificeCost2Tests.TestSacrifice2_JC093每回合两次上限` 原先把"宿主"排在牺牲候选首位（牺牲代价确定性兜底取第一个 ⇒ 第 1 次就牺牲掉宿主、咒刃进墓地），旧实现靠"第 2 次被上限误拒"掩盖；现改为"牺牲品先上场、宿主最后"，并补断言"咒刃仍在场"。 |
+| A57 | **秘社（MSJC）效果机制：每局游戏一次 ＋ 独有检索 ＋ 先手标志谓词（2026-09，用户裁定）** | 用户三项裁定/口径：**①"每局游戏只能发动一次"做成通用机制**＝新增 `EffectData.MaxUsesPerGame`（用户选定"按卡×能力"粒度，与 K23 `MaxUsesPerTurn` 平行，但**不随回合重置、离场/换区/版本号变动也不清零**，只有重开一局才恢复；客户端随 `ZoneCardRef.UsedAbilityIdsGame/CountsGame` 同解投影）；**②"独有牌"＝`PlayerCardData.UniqueField`（独有卡名）非空**（用户："UniqueField 不为空就为独有卡"）——`DeckSearchFilter` 新增无值标志段 **`独有`**；**③【先手标志】谓词**：新增 `EvaluateCondition("具有先手标志"/"先手标志")`，基准＝来源控制者是否为本回合先手（`PlayerManager.IsFirstPlayer`，由 `TurnManager.FirstPlayerId` 派生）。附：`UniqueField` 历史注释（"唯一键（如UID）"）是**错的**，已勘误为"独有卡名/独有标识"。**⚠ 勘误（后续实测纠正）**：早先记的"该字段全卡库 0 处赋值 / 数据待回填"**是错的**（首查漏检）——实测 **JC 卡包内已填 31 张**（JC010=`费南迪尔`、JC011=`德莫斯提尼`、JC012=`帷幕守望徽记`…；全库 698 张 .tres 中的 31 张），其余卡包/卡待继续回填。**⚠ 实现陷阱（已修）**：`EffectData.Target` 默认是**非 null 的 `TargetSpec`**，秘社"无目标能力"若忘了 `Target = null`，`CanActivateCouncil` 会误判"需要选目标"⇒ 该能力**永远不可激活**；已在门禁补 `Target.Kind != None` 前置（fail-open，不放过真需求）。 |
 | A56 | **服务端"异步续算"落地后必须立即下发快照（2026-09，用户实测反馈）** | 用户反馈：**"效果能正常结算，但 UI 刷新有延迟，卡片加入手牌，玩家让过后才能看到手牌"**。服务器日志（18:25 实测）逐行定位：`🌐 联机决策请求已下发，动作链挂起等待回包` → `[MatchHost] 下行快照 手牌数=13` → （客户端回包）`检索：逆转异界之门 加入玩家1 手牌` → **直到 `玩家1 让过` 才又出现 `下行快照 手牌数=14`**。根因＝**快照只在"意图流程结束"时推送**（`MatchHost` 订阅 `TurnManager.OnAsyncSettlementCompleted`），而引擎侧"挂起-续算"（A55 新接的网关路径）与规则类异步流程（领袖/道途/遏制/预测）落地时**没人通知** ⇒ 客户端 UI 滞后到下一次上行。修法：新增公开通知口 `TurnManager.NotifyResolutionSettled()`，在 `OnEngineChainSettled()`（引擎续算收尾）与四个规则类的异步流程末尾调用 ⇒ `MatchHost` 立即 `PushSnapshot()`。单机不受影响（单机 UI 走 `OnCardMoved`/`OnPostMove` 事件总线，见 `事件总线使用说明.md` §三 收口原则）。 |
 用户口径（2026-09）：
 - **"不能被分配伤害"的卡，一开始就不能被选为伤害对象** → 这是**分配阶段的目标合法性**（不是结算期防止）；
@@ -907,11 +908,172 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   （因该能力在准备步骤后发动时事件已过，兑现必然落在下一回合的准备步骤）。
 - 其余"步骤级"需求（如"结束步骤触发"）走既有 `OnTurnEnded` 时机，无需再扩机制。
 
+**89 秘社构筑限制模型扩展：白名单 ＋ 例外 ＋ 额度（用户 2026-09 逐条口径）**
+- **背景**：`CouncilRestriction` 原模型只有"正向 AND 筛选 ＋ 数量比较"，**表达不了** 010~017 的
+  "只能包含…**以及**其他派系的…"与"非X且非中立 ≤12"。用户选"先给字段设计再定"→ 出 `秘社构筑限制模型扩展设计稿.md`，
+  逐条确认后落地（**用户拍板 5 条口径**）：
+  ① "只能包含"＝**只要含白名单颜色就合法**（不要求全部颜色都在白名单里）；
+  ② "中立"＝ `CardColor.Brown`（`PlayerCardData.Colors` 注释原文即"默认棕色（中立）"，全库 154 张棕牌）；
+  ③ 白名单模式下 `GetActualCount` 返回**违规张数**（UI 直接显示"当前 7/12"）；
+  ④ "［黑刀］能力图标"＝**战力 > 0**（**不含先手战力**）——数据层只有 6 个数值、没有图标标签，卡面图标是桌面游戏术语的电子化；
+  ⑤ "不具有魔法领域图标"＝`MagicDomains` 为空**或只含哨兵值 `-1`**（实测无领域卡在 `.tres` 里就是 `[-1]`）。
+- **新增字段（`CouncilRestriction`）**：`UseWhitelist`（启用白名单模式，false 时**旧逻辑完全不变**，001~008 的 .tres 不动）／
+  `AllowedColors: Array<CardColor>`／`ExceptionMaxCount`（0＝一个违规都不许；12＝013/015）／
+  `ExceptionRules: Array<CouncilExceptionRule>`（**OR** 语义）。
+- **新增类 `CouncilExceptionRule`**（`Script/Data/Cards/CouncilExceptionRule.cs`）：`FilterByCategory` /
+  `FilterBySubCategories: Array<string>`（**OR**，表达"吸血鬼**或**奴仆"）/ `FilterByDomain: Array<MagicDomain>` /
+  `RequireNoDomain`（"**不具有**魔法领域图标"）/ `FilterByKeyword` / `FilterByAbilityIcon`（当前只认 `黑刀`，
+  未登记名 **fail-closed** 并打日志）。
+- **单一实现收口**：`IsSatisfiedBy`（白名单分支＝`CountViolations ≤ ExceptionMaxCount`，**与 `Comparison/RequiredCount` 无关**——
+  首版漏了这条分支，被新单测当场抓出）／`GetActualCount`（白名单＝违规张数）／`Describe`（两种句式：
+  "只能包含 黄色/中立 派系的牌，以及其他派系的：领域为 星空 的牌"／"非 红色 且非 中立 派系的牌不能超过 12 张"，
+  棕色在白名单语境显示为"中立"）。`CouncilCardData.ValidateDeckDetailed` 与大厅 `GameDeckValidator` **自动继承，无需改动**。
+- **生成脚本**：`_gen_restrictions.py`（幂等：先清上一次生成块，再写入 `[ext_resource] CouncilExceptionRule`
+  ＋ 各 `ExceptionRule` 子资源 ＋ `ResWhitelist`，最后在 `Cost = N` 后插入 `Restrictions`；可重复运行）。
+- **`.tres` 落地**：010~017 各自写入白名单 + 例外（见上）。
+- **构筑界面 `DeckBuilder`**：原先**完全没有**限制校验/展示 → 新增运行期创建的"秘社限制"面板（逐条 `Describe(实际张数)`，
+  满足=绿 / 不满足=红）＋ `OnSave` **不满足即拦截保存**并弹明细；切换秘社/加减牌/载入卡组都会重算。
+- 测试：`P5CouncilRestrictionTests` 16→**28 例**（白名单命中/只要含即合法/空卡组安全/每条例外单独通过与否/
+  额度 12 的边界/未登记图标 fail-closed/**不含先手战力**/Describe 两种句式/明细联动/010~017 线上 .tres 结构回归）。
+
+**90 秘社（MSJC）010~017 八张按卡文落地 ＋ 一批新机制（用户 2026-09 口径）**
+- **新增机制**（全部走"先扩机制再写卡"，卡脚本零特例）：
+  · **牌作代价 `CardCostSpec`**（`EffectData.CardCost`，与 K22 牺牲代价/K5 标志代价同款纪律：
+    **候选枚举与权威门禁共用同一实现**、**入堆叠前支付**、不足 N 张 → **拒绝发动且无副作用**）：
+    `FromZone`（封印区/墓地/手牌/场上争夺区）＋ `HostSelf`（封印区取"来源卡自己的封印牌"）＋ `Count` ＋
+    `Filter`（复用 `DeckSearchFilter`）＋ `UntappedOnly` ＋ `Mandatory` ＋ `CostAction`（复用既有动词）。
+    ⚠ 约定：**`CostAction` 的对象一律写 `"目标"`**——`PayCardCost` 把选中的牌作为 `target` 传入，
+    写 `"自身"` 会解析成来源卡（＝"把秘社自己塞进牌库"），实测踩到。新增
+    `ActivateAbility(..., cardCostUids)` 重载与 `ActivateEligibility` 同步门禁。
+  · **`DestroyWithMinCounters{标志名, N}`**（MSJC013②）：集合＝**全部争夺区**内（角色∪附属、不限敌我）
+    其上该标志 ≥N 的卡；先快照 → 逐张 `DestroyInstance`（走死亡统一出口）→ 按**实际消灭数** `Draw`
+    （卡文"**每有一个**…因此法被消灭，就抓一张牌"，用户口径＝按实际数；拆成两条动作无法携带该中间量，故合为一个动词）。
+  · **`MillTopToGraveyard{N}`**（MSJC016①）：牌库顶 N 张 → 墓地，**不是"消灭"、不触发死亡时机**。
+  · **`PlaceHandCardToArea{筛选, 朝向, 目的地, 附加}`**（MSJC015①）：从手牌选一张合格牌 → 可公开**展示** →
+    **以暗藏者状态**置于目标地区（FAQ：带【公开】关键词的角色同样可行）。
+  · **`UnsealToArea{来源区, 朝向, 宿主, 筛选, 归属}`**（MSJC010③ / MSJC016②）：从**封印区/墓地**取一张，
+    **先解除封印关系再进场**（否则卡会同时留在宿主 `SealedCards` 里形成双重归属），
+    `归属="由我操控"` 时改写控制者；联机走 `Kind.SelectZoneCard`（新 `UnsealToAreaViaGatewayAsync`）。
+  · **`PutCardOnDeckTop{对象}`**（MSJC017②）。
+  · **`TargetSpec.MinCounters`**（"其上有 N 个或更多某标志"）＋ `TargetSpec.AllAreas` 支持群体集合跨全部地区
+    （`MassTargetPool.Collect` 新增 `AllAreas` 分支、`Kind=None`＝不限大类；`锁定标志/锁定标记` 两种写法都认）。
+  · **`TargetRestriction.HasAbilityIcon`**（`Param="黑刀"`）：按**战力>0** 判定（**不含先手战力**，用户口径），
+    印刷值优先、再放宽到 `CurrentStrength`（含光环授予）。
+  · **`CouncilStaticGrant`**（`CouncilCardData.StaticEffectList`，MSJC012：印刷费用≤2 的本方人类获得【奴仆】类别）：
+    **秘社是 `CouncilCardData`（`PlayerTemplate == null`），光环机制结构上覆盖不到**，故按 `LeaderRule`/`PathRule`
+    同款建独立规则类，装配层 `ZoneManager.OnPostMove` → `EffectEngine.ReevaluateCouncilStaticGrants`（**逐秘社**遍历、
+    幂等差量补授/撤销、离场自动收回）。
+  · **`CouncilCardData.DrawFromBottom`**（MSJC017"从牌库底抓牌而非牌库顶"）：消费点＝抓牌**唯一收口**
+    `TurnManager.DrawCardsForPlayer`（初始发牌/阶段抓牌/效果抓牌统一改向），不是逐卡特例。
+  · **`CouncilCardData.OpeningEffectList`**（"每局游戏开始时…"，MSJC015 在秘社上放【隐秘】标志）：
+    由 `GameInitializer.StartMatch → ApplyCouncilOpeningEffects` 在秘社就位后、发牌前执行一次；
+    **`TurnStartEffectList`**（"**第一个回合的准备步骤开始时**…"，MSJC016 磨三张）由 `TurnManager.DoPrepare`
+    在 `TurnCount == 1` 时执行（**必须在起手发完之后**，否则磨掉的是未发完的牌库顶）。
+  · **`Seal{手牌}` 的候选筛选**（`Args[3]`，MSJC010①"从手中选一张【星】领域的牌"）＋
+    `DeckSearchFilter` 新增 `领域:星空` 段与 `费用=N`（等值）。
+  · **`Lose` 动词接通**（原为 TODO）：与 `Gain` 同一条属性通道的负数方向（`Revoke`），实现"失去灵体"。
+- **逐张**（`.tres` 构筑限制见 89）：
+  010 貘组 4 选项（①封印【星】领域手牌+抓1 / ②③置1张封印牌入牌库底+目标**获得/失去**灵体 /
+  ④置2张+封印角色牌正面进场由我操控）｜011 S．P．T执行部 2 选项（①目标角色获得杀伤1 / ②所选地区带［黑刀］的本方角色获得撤回，
+  群体集合在结算那一刻确定＝FAQ 口径）｜012 爱弗罗德家族 2 选项（①横置三个奴仆→抓1 / ②横置三个吸血鬼→目标敌方玩家弃1）
+  ＋静态授予（费用≤2 本方人类获得奴仆）｜013 计时者 2 选项（①放时间标志 / ②消灭所有具≥3时间标志者并按实际数抓牌）｜
+  014 哨兵 2 选项（①敌方暗藏者上放锁定标志 / ②目标本方角色移动到"锁定者所在地区"——`Move` 新增目的地写法
+  `锁定者所在地区`）｜015 隐士 1 选项（选地区，手牌≥4 时从手中暗藏派遣一张角色）＋开局放【隐秘】标志｜
+  016 颂亡者 2 选项（①磨1 / ②封印墓地七张 → 墓地【死】领域角色牌正面进场）＋首回合准备磨3｜
+  017 梦魇族群 2 选项（①若有先手标志则封印牌库顶一张到目标角色 / ②墓地灵体角色置于牌库顶）＋从牌库底抓牌。
+- **⚠ 与卡文的已知偏差（如实记账）**：**MSJC014②** 卡文"将其移动到**目标**具有锁定标志的角色或暗藏者所在的地区"
+  ——真正的口径可能要求玩家**同时**选"被移动的本方角色"与"那个锁定者"，而引擎当前没有"第二个参考目标"的目标槽。
+  本实现落地为：**玩家选被移动的角色，引擎按确定性规则取第一个锁定者所在地区**（无 UI/联机两端同解）。
+  若要玩家自选锁定者，需先扩『参考目标槽』机制。
+- **本批实测修掉的既有缺陷（5 处，均已加回归用例）**：
+  ① `CardInstance.MagicDomains` 原先只在**进场路径**从模板拷入、且**离场复位**会清空 ⇒ 卡离开争夺区后
+     "按领域筛牌库/手牌/墓地的牌"全部失效（MSJC016② 目标＝墓地【死】领域角色牌零候选）→ 构造时与复位时都按模板重建；
+  ② `_actionChainAborted` **跨 `ResolveEffect` 泄漏**（复位点只在效果入口，而代价动作/挂起续算/多目标路径直接调
+     `ExecuteActions`）⇒ 上一条效果的中止会让**后续无关效果的动作整段静默跳过**（现象：磨牌动词连日志都没有）
+     → 复位收口到 `ExecuteActionsFrom` 入口；
+  ③ `TurnManager.ReturnCardToDeck(uid,…)` 经 `GetInstance(uid)` 反查、查不到就**静默 no-op**
+     ⇒ 新增"以实例为准"的正式入口 `ReturnCardToDeck(CardInstance,…)`；
+  ④ `ZoneManager.MoveToDeck` 只改 `ControllerId` 不改 `OwnerId` ⇒ "把**对手拥有**的牌置于你的牌库底"会让双方
+     牌库计数错位（牌库是唯一必须两者一致的区域）→ 显式对齐拥有者；
+  ⑤ `DeckSearchFilter` 的 `类别:` 段对"尚未进过争夺区的实例"（牌库/手牌/墓地）永远匹配不上
+     ⇒ 补模板 `CategoryFlag` 回落（与"子类别"同款纪律）。
+- 测试：新建 `CouncilEffectBatch2Tests`（**14 例**）：逐张结构（选项数/费用/动词/筛选/条件/目标）＋
+  牌作代价（封印区候选与不足拒绝 / 置入**控制者**牌库底 / 横置三个角色的候选筛选含"人类变奴仆"联动）＋
+  `DestroyWithMinCounters` 按实际消灭数抓牌（含附属、含边界）＋磨牌（不触发死亡 / 多张）＋
+  `PlaceHandCardToArea`（暗藏进场 + 非角色留手牌）＋`UnsealToArea`（封印角色牌正面进场由我操控 / 墓地【死】领域筛选）＋
+  `PutCardOnDeckTop`（牌库顶）＋`CouncilStaticGrant`（费用/人类/敌方/离场四向）＋`DrawFromBottom`（秘社在场改向）＋
+  `HandAtLeast` 谓词边界＋开局效果＋`HasAbilityIcon`（**只算战力、不算先手战力**）＋Seal 手牌筛选；
+  另含 **3 个缺陷回归用例**（动作链不跨效果泄漏 / 领域在牌库手牌墓地仍可读 / 封印牌真正进入指定玩家牌库底）。
+- 账本：全量 headless **139 套件 1051 例 0 失败 0 错误**（上批 138/995）；Arena / ArenaOl 冒烟 **0 SCRIPT ERROR**。
+  **秘社不占 JC 效果行** ⇒ `JC卡牌效果进度表.md` 统计行 `280 = 260 + 1 + 0 + 19` **不变**（已用脚本逐行重算确认）。
+
+**88 一键联机三开脚本加固：杀旧进程 + 重编译 + 就绪校验 + 各进程独立用户目录（用户要求）**
+- **用户诉求**："LOG 没有什么变化，还是第一次都无法结算；检查 `一键联机三开.bat` 是否有关闭老进程/重新编译，没有就加上。"
+- **排查结论（跑的还是旧程序集）**：用户那次会话的进程 **9:47:37 启动**，而修复后的程序集
+  `.godot/mono/temp/bin/Debug/UWPro.dll` 构建于 **9:48:26** ⇒ 进程加载的是**修复前**的代码；
+  脚本原实现**只对端口占用告警、不杀旧进程**（`dotnet build` 本来就有，所以问题不在编译）。
+  已核对：修复代码在源码（`TurnManager.cs:2528` / `StackEntry.cs:150` / `EffectEngine.cs:6741`）且
+  DLL 时间戳晚于三个源文件 ⇒ 只要用新脚本重跑，跑到的就是修复版。
+- **另外发现两个"旧实例还在"的连锁故障**（都实测复现）：
+  ① 旧服务端占着 UDP 端口 ⇒ 新服务端起不来、客户端连**旧代码**服务端；
+  ② 多实例共用 `user://logs/uwpro.log`（`project.godot` 固定日志路径）时，Godot 启动的日志轮转
+     会 `Failed to open ... copy` → **signal 11 崩溃**（服务端/客户端都中过，崩溃栈里可见）。
+- **脚本改造（`start_online_3.ps1` + `.bat` 注释）**：
+  · **[1/5] 杀旧进程**：优先 `Get-CimInstance` 按**命令行含本工程目录**精确匹配（不误杀编辑器/其它工程）；
+    权限不足时退路＝"可执行文件 == 本脚本的 Godot"且**无主窗口**（只清 headless 旧服务端，保留用户正在看的窗口）；
+    杀完再查端口，占用者若是本工程 Godot 继续杀，若是**别的程序**则**报错退出**（不再"以为换新了其实没有"）；
+  · **[2/5] 编译**并打印构建产物路径 + 时间戳（并提示"时间不是刚刚 = 编译没写进去"）；
+  · **[3/5] 服务端独立用户目录**（`<proj>\.godot_userdata_runtime\server`，只在 Start-Process 瞬间改 APPDATA）
+    ＋ **以服务端日志为准的就绪校验**（等待 `[LobbyServerHost]`；异常/超时则打印日志尾部并退出，
+    不再让客户端连一个没起来的服务端）。注：早先把 `Get-NetUDPEndpoint` 当硬门禁会**误判**（部分权限/网表查不到属主），
+    已降级为"仅提示"；
+  · **[4/5][5/5] 两个客户端各自独立用户目录**（`clientA`/`clientB`）＋ 启动后存活校验（退出则打印警告）；
+  · 新增开关 `-NoKill` / `-NoBuild` / `-SharedUserData`；`.bat` 注释同步说明。
+  · **编码修复**：脚本存为 **UTF-8 with BOM**——原文件无 BOM，`powershell 5.1`（`.bat` 的退路分支）会把中文读成乱码
+    并**直接语法报错**（实测 6 处 parse error），加 BOM 后两种 PowerShell 都能正确解析。
+- 验证：以 `-Smoke -Headless` 完整跑通（杀进程 → 编译 → 服务端就绪校验 → 两客户端各自独立目录），
+  服务端日志出现 `[LobbyServerHost] 大厅服务端就绪`、`[Lobby] s1（玩家A）创建房间 r1`、
+  `卡组通过校验：默认对局卡组（57 张 / 秘社 1 张）`、`s2（玩家B）加入房间 r1`，三个进程无崩溃。
+- **给用户的操作提示**：用 `一键联机三开.bat` 重跑即可（现在会自动清理旧实例）；
+  若习惯用 **Godot 编辑器 F5** 跑，请先按【停止】(F8) 结束上一次运行——编辑器不会替你杀掉旧实例，
+  那同样会跑在旧程序集上。
+
+**87 激活类能力"次数上限"双重计数修复（用户实测：秘社效果第一次发动就被跳过）**
+- **症状（用户实测）**：`[Resolve] 触发/激活效果（EffectData）结算: MSJC001_2_SearchUniqueCard` →
+  `[Resolve] ⏹ 每局次数上限：MSJC001_2_SearchUniqueCard 本局已发动 1 次（上限 1）→ 跳过本次结算`
+  ⇒ 秘社"行动4 检索独有牌"**首次发动就什么都没发生**。
+- **根因（双重计数）**：激活类能力的次数上限有**两处**检查/登记——
+  ① **发动阶段** `EffectEngine.ActivateAbility`（2.0 / 2.0b 门禁 + 入堆栈前 `MarkAbilityUsedThisTurn/ThisGame`，
+     语义＝"发动被接受即计数，与结算成功与否无关"）；
+  ② **结算阶段** `TurnManager.ResolveEntry` 的 `ResolveKind.Trigger` 分支（K23/A57 检查+登记，本意只管**触发类**
+     "同一批次多条同源触发最多结算到上限"）。
+  而**激活条目入堆栈的 `Kind` 也是 `ResolveKind.Trigger`**（`PushActivationToStack`）⇒ 结算时看到"已发动 1 次"
+  正是**它自己刚登记的**，`1 ≥ MaxUses*` 成立 ⇒ 整条被跳过。
+- **影响面（不止秘社）**：`MaxUsesPerTurn=1` 的 **JC031 唤灵师 / JC032 血族长老 / JC069 警犬** 与 `=2` 的
+  **JC093 怨灵咒刃（第二次）**，**一直是"首次/第二次发动被跳过"**；既有 `P3UseLimitTests` 只驱动
+  `ActivateAbility` 断言"入堆栈 + 计数"，**从未推进堆栈结算**，所以这个 bug 长期没被发现（A57 才把它照亮）。
+- **修法**：`StackEntry` 新增 **`FromActivation`**（`PushActivationToStack` 置 `true`），
+  `ResolveEntry` 的 K23/A57 检查+登记**整段对激活条目跳过**；触发类条目照旧（其没有更早的登记点）。
+- **顺带修（测试侧真实暴露）**：`TestSacrifice2_JC093每回合两次上限` 原先把"宿主"排在牺牲候选首位——
+  牺牲代价在"未指定候选"时**确定性兜底取第一个合法候选** ⇒ 第 1 次发动就牺牲了宿主，怨灵咒刃随宿主进墓地，
+  第 2 次会因"来源不在生效区"被拒；旧实现靠"第 2 次先被（错误的）上限拒绝"掩盖了这一点。
+  现改为"牺牲品先上场、宿主最后"，并补断言"两次发动后咒刃仍结附（宿主未被牺牲）"。
+- 测试：`P3UseLimitTests` 新增 **`TestK23_激活类条目结算不得二次计数`**（激活 → 入堆栈 → 让过结算：
+  既要**真的结算**（临时费用 +2），又要计数**仍为 1**）；`CouncilEffectTests` 新增
+  **`TestCouncilMSJC001_首次激活即正常结算`**（激活 → 结算 → 检索落地：库顶那张「帷幕守望独有牌」进手牌；
+  计数仍为 1；第二次发动被拒）。`CouncilEffectTests` 9→**10 例**、`P3UseLimitTests` 8→**9 例**。
+- 账本：全量 headless **138 套件 997 例 全绿 0 失败 0 错误**；Arena / ArenaOl 冒烟 **0 SCRIPT ERROR**。
+- **勘误**：A57 里"`UniqueField` 全卡库 0 处赋值、数据待回填"**不成立**（首次 grep 漏检）——实测
+  **JC 卡包内已填 31 张**（如 JC010=`费南迪尔`、JC011=`德莫斯提尼`、JC012=`帷幕守望徽记`），
+  故秘社"检索【本方】独有牌"在现有数据下**已有真实候选**（实测 `独有;组织:帷幕守望` → 牌库内 10 张命中）。
+
 **86 秘社（MSJC）17 张 .tres 数据落地 ＋ 兜底秘社改为 MSJC009（用户指定）**
 - **17 张 `.tres` 全部就位**（`Cards/Data/CouncilCards/JC/MSJC0NN_<拼音>.tres`）：
   命名一律 **3 位编号** + 与既有卡图文件名一致的拼音（`MSJC001_weimushouwang` … `MSJC011_SPTzhixingbu` … `MSJC017_mengyanzuqun`），
-  内部 `UID = "MSJC0NN_<拼音>"`、`CardName` 去掉"MSJC0N "前缀、`Organization = CardName`。
-  字段来源（Card.xml → .tres）：`text`(简体段)→`CardText`、`prop/type`→`SubType`、`prop/colors`→`ColorText`、
+  内部 `UID = "MSJC0NN_<拼音>"`、`CardName` 去掉"MSJC0N "前缀。
+  字段来源（Card.xml → .tres）：`text`(简体段)→`CardText`、`prop/type`→`SubType`、
+  **`prop/colors`(复合串)→`Colors`(`Array[int]`,`·`前的色名映射 `CardColor` 枚举) ＋ `Organization`(`·`后的阵营名)**（原写单一字符串 `ColorText`，
+  **2026-10-02 已废弃**：`ColorText` 同步颜色+阵营两个语义，与玩家卡不同名不同构），
   `prop/pt`→`PT`、`related`→`RelatedCardUID`（**MSJC012 无**，其余均 `TK007`）、`tablerow`→`TableRow`(全为 2)、
   首个"行动N"→`Cost`、"初始手牌：N"→`StartingHandSize`、`maintype`→`MainType`(默认"秘社")。
 - **起始手牌**：001~008 / 010~015 / 017 = **6**；**016 颂亡者 = 5**（XML 原文，PT 也是 5，保留未改）；

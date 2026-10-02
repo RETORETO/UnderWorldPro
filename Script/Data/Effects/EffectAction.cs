@@ -78,6 +78,37 @@ namespace Script.Data.Effects
         PayOrSacrificeSelf,       // 【P3·K21·JC064】"**支付 N，否则牺牲本卡**"：Args: [金额]；
                                   // 可支付 → 弹 0/1 窗口由玩家选（支付 / 牺牲）；**不可支付 → 直接牺牲**（不询问）；
                                   // 无 UI → 兜底"能付就付"
+        UnsealToArea,             // 【秘社批次】从**封印区**（或墓地）取一张由玩家选定的牌，置入**本次结算的目标地区**。
+                                  // Args：[来源区（`"封印区"` 缺省 / `"墓地"`）, 朝向（`"正面"` 缺省 / `"暗藏"`）,
+                                  //        宿主（`"自身"` 缺省＝来源卡上的封印牌 / `"任意"`）, 筛选（`DeckSearchFilter` 语法，可空）,
+                                  //        归属（`"由我操控"` 可空）]
+                                  // 语义：候选＝"符合筛选的来源区卡"；由玩家选一张（单机 `IGameUIHooks.PromptPickCard`、
+                                  // 联机 `Kind.SelectZoneCard`、无 UI 确定性兜底取首候选）；选中后**先解除封印关系**
+                                  // （`SealedBy`/`SealedCards`/`IsSeal` 一并清），再走 `CardManager.MoveCardToArea`
+                                  // （照常广播进场触发），最后按"归属"改写控制者。
+                                  // 覆盖 MSJC010③（令一张封印在貘组上的角色牌正面进场到目标地区、由你操控）与
+                                  // MSJC016②（令你墓地中的目标【死】领域角色牌正面进场到目标地区）。
+        DestroyWithMinCounters,   // 【秘社批次·MSJC013②】"消灭**所有其上有三个或更多时间标志**的角色和附属，
+                                  // **然后每有一个…因此法被消灭，就抓一张牌**"（用户口径：按**实际**被消灭数）。
+                                  // Args：[标志名（缺省 `"时间标志"`）, 门槛N（缺省 3）]。
+                                  // 语义：集合＝**全部争夺区**内（角色∪附属，不限敌我）其上该标志 ≥ N 且未在死亡流程中的卡；
+                                  // 先快照集合 → 逐张 `CardManager.DestroyInstance`（走死亡统一出口）→ 按**实际消灭数** `Draw`。
+                                  // 与"动作序列逐个执行"分开成**一个**动词：卡文要求"消灭**然后**按数量抓牌"，
+                                  // 数量依赖消灭的实际结果，拆成两条动作无法携带该中间量。
+        PlaceHandCardToArea,      // 【秘社批次·MSJC015①】从**手牌**选一张符合条件的牌，**展示**后放进**目标地区**。
+                                  // Args：[筛选（`DeckSearchFilter` 语法，如 `"类别:角色"`）, 朝向（`"暗藏"` 缺省 / `"正面"`）,
+                                  //        目的地（`"目标地区"` 缺省，取 `targetAreaId`）, 附加（含 `"展示"` 时公开揭示）]
+                                  // 语义：候选＝该控制者手牌中命中的牌；由玩家选一张（单机 `IGameUIHooks.PromptPickCard`、
+                                  // 联机 `Kind.SelectHandCard`、无 UI 确定性兜底取首候选）；先 `RevealCardPublicly`（若声明展示）、
+                                  // 再 `SetCovert(朝向==暗藏)`、最后 `CardManager.MoveCardToArea`（照常广播进场触发）。
+                                  // 覆盖 MSJC015①"从手中展示一张角色牌，然后将其以暗藏者状态置于该地区"。
+        MillTopToGraveyard,       // 【秘社批次】把你**牌库顶的 N 张牌置于你的墓地**（**不是**"消灭"、不触发死亡）。
+                                  // Args：[数量（缺省 1）]。覆盖 MSJC016 颂亡者①"将你牌库顶的三张牌置于你的墓地"
+                                  // 与其"触发：第一个回合的准备步骤开始时…"、以及 016② 的"行动3…将牌库顶一张置于墓地"。
+                                  // 实现经 `TurnManager.RemoveCardFromDeckOf` + `ZoneManager.MoveToGraveyard`（唯一收口）。
+        PutCardOnDeckTop,         // 【秘社批次】把**某张牌**置于你**牌库顶**。Args：[对象（`"目标"` 缺省 / `"自身"`）]。
+                                  // 覆盖 MSJC017②"将你墓地中的目标灵体角色置于你的牌库顶"（目标＝`Kind=Graveyard` 锁定的牌）。
+                                  // 实现经 `TurnManager.ReturnCardToDeck(ownerId, uid, toTop: true)`。
     }
 
     /// <summary>单个动作原语及其参数。

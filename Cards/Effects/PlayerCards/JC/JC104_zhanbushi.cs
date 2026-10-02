@@ -11,10 +11,10 @@ namespace Cards.Effects.PlayerCards.JC
     /// 实现：`EnterTrigger` + `ActionVerb.Predict`（Args[0]=3）；
     /// 复用调查对抗的取/放通道与分配窗口，联机走 `ChoiceRequest.Kind.Prediction`（见 `PredictionRule`）。
     /// </summary>
-    public static class JC104_zhanboshi_Effects
+    public static class JC104_zhanbushi_Effects
     {
         public static void Register()
-            => CardEffectFactory.Register("JC104_zhanboshi", Build);
+            => CardEffectFactory.Register("JC104_zhanbushi", Build);
 
         private static void Build(PlayerCardData data)
         {

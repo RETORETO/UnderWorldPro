@@ -159,6 +159,50 @@ public partial class Arena
     }
 
     /// <summary>
+    /// 【秘社批次】重排**封印在秘社上**的牌（MSJC010 貘组 / MSJC016 颂亡者）。
+    /// 与 `ArrangeCouncilAttachments`（附属，向下）对称：封印牌 X 对齐秘社视觉中心、
+    /// Y 从秘社视觉**上缘向上**露出 2/5 张起、多张依次再上延 2/5 张；ZIndex 比秘社低但高于其它卡。
+    /// 必须在 `ArrangeCouncilCards`（已排好秘社 UI.Position）之后调用。
+    /// </summary>
+    private void ArrangeCouncilSeals()
+    {
+        for (int playerId = 1; playerId <= 2; playerId++)
+        {
+            var councilInst = GetCouncilInstance(playerId);
+            if (councilInst?.SealedCards == null || councilInst.SealedCards.Count == 0) continue;
+            var councilUI = FindCouncilUIByUID(councilInst.UID);
+            if (councilUI == null || !GodotObject.IsInstanceValid(councilUI)) continue;
+            var host = councilUI.GetParent() as Control;
+            if (host == null) continue;
+
+            float angle = Mathf.DegToRad(councilUI.IsTapped ? 90f : 0f);
+            Vector2 rotatedPivot = councilUI.PivotOffset.Rotated(angle);
+            float centerX = councilUI.Position.X + rotatedPivot.X;
+            float centerY = councilUI.Position.Y + rotatedPivot.Y;
+            float visHalfH = councilUI.IsTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+            float topY = centerY - visHalfH;
+
+            int i = 0;
+            foreach (var sealInst in councilInst.SealedCards)
+            {
+                // 只处理"封印于本秘社"的封印牌（SealedBy 指向秘社），与 ArrangeAllSeals 同款护栏。
+                if (sealInst == null || !ReferenceEquals(sealInst.SealedBy, councilInst)) continue;
+                var sealUI = FindCardUIByUID(sealInst.UID);
+                if (sealUI == null || sealUI.GetParent() != host) continue;
+
+                sealUI.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
+                sealUI.RotationDegrees = sealUI.IsTapped ? 90f : 0f;
+                float sealTopLeftX = centerX - CARD_WIDTH / 2f;
+                float sealTopLeftY = topY - CARD_HEIGHT + (i + 1) * (CARD_HEIGHT * 0.4f);
+                sealUI.Position = new Vector2(sealTopLeftX, sealTopLeftY);
+                sealUI.TargetPosition = sealUI.GlobalPosition;
+                sealUI.ZIndex = councilUI.ZIndex - 1 - i;
+                i++;
+            }
+        }
+    }
+
+    /// <summary>
     /// 重排结附于秘社的附属 UI：与 ArrangeAllAttachments（结附于角色的附属）完全对称实现。
     /// 差异仅在于：宿主 UI 是 CouncilCardUI（非 CardUI 子类），故用 FindCouncilUIByUID 而非 FindCardUIByUID。
     /// 偏移逻辑一致：X 对齐宿主视觉中心、Y 从宿主视觉下缘向下露 3/5 起、多张依次下延 2/5 张、ZIndex 递减。
@@ -266,6 +310,9 @@ public partial class Arena
         ArrangeCouncilCards(_councilContainer2);
         // 结附于秘社的附属：须在秘社排版（Position 已就绪）之后排布，否则坐标错乱偏移远处。
         ArrangeCouncilAttachments();
+        // 【秘社批次】封印在秘社上的牌（MSJC010/016 的"封印在貘组/颂亡者上"）：_areaCardUIs 不含秘社，
+        // 故 ArrangeAllSeals 覆盖不到，必须与"结附于秘社"同款单独排布，否则会与附属叠在同一位置。
+        ArrangeCouncilSeals();
     }
 
     private void ArrangeContainerCards(Control container)

@@ -137,6 +137,19 @@ namespace Script.Game.Entities
         public int SourceVersionId { get; set; } = -1;
 
         /// <summary>
+        /// 【K23/A57·激活类条目】true ＝ 本条目由**激活能力**入堆栈（`EffectEngine.PushActivationToStack`），
+        /// 而非触发收集。
+        ///
+        /// 为什么要有这个标记：激活类能力的**次数上限已在"发动被接受"那一刻登记**
+        /// （`EffectEngine.ActivateAbility`：`MarkAbilityUsedThisTurn/ThisGame`，语义＝"发动被接受即计数，
+        /// 与结算是否成功无关"），因此 `TurnManager.ResolveEntry` 的 Trigger 分支**不得再检查/再登记一次**——
+        /// 否则 `MaxUsesPerTurn/MaxUsesPerGame = 1` 的能力**首次结算就会被自己刚登记的计数判成"已达上限"而跳过**
+        /// （实测缺陷：MSJC001 行动4 首发动即被跳过；JC031/JC032/JC069/JC093 同样受影响）。
+        /// 触发类条目没有更早的登记点，故仍在结算前检查+登记（用于"同批次多条同源触发"只结算到上限）。
+        /// </summary>
+        public bool FromActivation { get; set; }
+
+        /// <summary>
         /// 可选钩子：结构化结算之外的特殊逻辑（预留接口，如复杂触发效果）。
         /// TurnManager.ResolveEntry 会优先执行本委托（若非空），否则走结构化分支。
         /// 注意：委托不可序列化，仅用于单机原型；联机时以结构化 Kind+负载为准。

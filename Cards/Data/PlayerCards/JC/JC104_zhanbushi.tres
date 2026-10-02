@@ -29,5 +29,5 @@ FirstStrikeStrength = 0
 FirstStrikePower = 0
 Defense = 1
 Effects = Array[String](["进场触发：预测3。（检视你牌库顶的三张牌，将其中任意数量的牌以任意顺序至于你的牌库顶，将其余的牌以任意顺序置于你的牌库底。）"])
-UID = "JC104_zhanboshi"
+UID = "JC104_zhanbushi"
 CardName = "占卜师"

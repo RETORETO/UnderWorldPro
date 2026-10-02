@@ -7,6 +7,27 @@
 [ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
 [ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
 
+[ext_resource type="Script" path="res://Script/Data/Cards/CouncilExceptionRule.cs" id="6_exc"]
+
+[sub_resource type="Resource" id="Exc_MSJC017_mengyanzuqun_017_SpiritChar"]
+script = ExtResource("6_exc")
+FilterByCategory = true
+TargetCategoryFlag = 1
+FilterByKeyword = true
+TargetKeyword = "灵体"
+
+[sub_resource type="Resource" id="Exc_MSJC017_mengyanzuqun_017_Dream"]
+script = ExtResource("6_exc")
+FilterBySubCategories = true
+TargetSubCategories = Array[String](["梦境"])
+
+[sub_resource type="Resource" id="Res_MSJC017_mengyanzuqun_Whitelist"]
+script = ExtResource("1_20xel")
+UseWhitelist = true
+AllowedColors = Array[int]([5, 0])
+ExceptionMaxCount = 0
+ExceptionRules = Array[Resource]([SubResource("Exc_MSJC017_mengyanzuqun_017_SpiritChar"), SubResource("Exc_MSJC017_mengyanzuqun_017_Dream")])
+
 [resource]
 script = ExtResource("1_msjc")
 CardText = "持续：构筑时你的牌组中只能包含【紫】和【中立】派系的牌，以及其他派系的灵体角色或梦境牌。
@@ -17,12 +38,13 @@ CardText = "持续：构筑时你的牌组中只能包含【紫】和【中立�
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC017_mengyanzuqun.jpg"
 StartingHandSize = 6
 SubType = "秘社-群体/梦境"
-ColorText = "紫·梦境行者"
+Colors = Array[int]([5])
 PT = "6"
 RelatedCardUID = "TK007"
 TableRow = 2
-Organization = "梦魇族群"
+Organization = "梦境行者"
 Cost = 3
+Restrictions = Array[Resource]([SubResource("Res_MSJC017_mengyanzuqun_Whitelist")])
 
 UID = "MSJC017_mengyanzuqun"
 CardName = "梦魇族群"

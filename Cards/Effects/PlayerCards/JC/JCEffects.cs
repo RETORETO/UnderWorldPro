@@ -157,7 +157,7 @@ namespace Cards.Effects.PlayerCards.JC
             JC102_yaohuo_Effects.Register();
             JC103_sangshilizhidehuajia_Effects.Register();
             // 【P4·预测X】占卜师：进场触发预测3（复用调查对抗分配窗口与联机字段）。
-            JC104_zhanboshi_Effects.Register();
+            JC104_zhanbushi_Effects.Register();
             // 【K14 或种类】崩塌的时空：行动，消灭目标附属**或**资产（单目标二选一）。
             JC107_bengtadeshikong_Effects.Register();
             JC108_qiaozhipazuozhimengren_Effects.Register();

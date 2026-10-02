@@ -263,6 +263,9 @@ public partial class GameInitializer : Node
             // 后者在"该玩家没有带前提的持续效果"时会提前返回，会**漏掉**这次重算（本轮实测踩到）。
             effectEngine.ReapplyGrantedAbilities();
             effectEngine.ReapplySuppressions();
+            // 【秘社批次】秘社的静态子类别授予（MSJC012"费用≤2 的本方人类获得奴仆类别"）也须随卡的进出场重算。
+            // 与光环同款：秘社是 `CouncilCardData`（`PlayerTemplate == null`），光环机制结构上覆盖不到 ⇒ 独立规则。
+            effectEngine.ReevaluateCouncilStaticGrants();
         };
         ZoneManager.OnPostMove -= _postMoveAuraHandler;
         ZoneManager.OnPostMove += _postMoveAuraHandler;
@@ -488,10 +491,42 @@ public partial class GameInitializer : Node
         // 【A57】开局清空"每局游戏"能力使用次数（`EffectData.MaxUsesPerGame`，如秘社 MSJC001 行动4）：
         // 实例虽按局重建，这里显式兜底"重开一局复用实例"的情形——**回合重置不清它**。
         CardManager?.ResetAllAbilityUsesThisGame();
+        // 【秘社批次】秘社"开局效果"（"持续：在每局游戏开始时…"，MSJC015 在本方秘社上放置【隐秘】标志）：
+        // 必须早于发牌（015 若声明了抓牌方向也会立刻生效），且**早于第一回合的准备步骤**。
+        ApplyCouncilOpeningEffects();
         DealOpeningHands();
 
         // 单机：直接开始第一回合（无联机调度步骤）。
         PlayerActionService.StartGame();
+    }
+
+    /// <summary>
+    /// 【秘社批次】执行双方秘社声明的**开局效果**（`CouncilCardData.OpeningEffectList`）。
+    /// 时机：秘社实例已就位（`SetupCouncils` 之后）、第一回合开始之前。
+    /// 覆盖 MSJC015「在每局游戏开始时，在本方秘社上放置一个【隐秘】标志」与
+    /// MSJC016「在第一个回合的准备步骤开始时，将你牌库顶的三张牌置于你的墓地」
+    /// （后者在 .cs 里同时也在准备步骤登记触发，本处只负责"第一回合"这一次的即时生效，
+    /// 避免开局流程与阶段机在"第一回合准备步骤"上的时序歧义）。
+    /// </summary>
+    public void ApplyCouncilOpeningEffects()
+    {
+        if (_effectEngine == null || ZoneManager == null || CardManager == null) return;
+        for (int pid = 1; pid <= 2; pid++)
+        {
+            var councils = ZoneManager.GetZoneCards(CardZone.CouncilZone, pid);
+            if (councils == null) continue;
+            foreach (var council in councils)
+            {
+                var list = council?.CouncilTemplate?.OpeningEffectList;
+                if (list == null || list.Count == 0) continue;
+                foreach (var e in list)
+                {
+                    if (e == null) continue;
+                    GD.Print($"[GameInitializer] 秘社开局效果：{council.CouncilTemplate.CardName} → {e.EffectId}");
+                    _effectEngine.ResolveEffect(e, council, null);
+                }
+            }
+        }
     }
 
     /// <summary>

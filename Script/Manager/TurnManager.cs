@@ -2519,22 +2519,31 @@ public partial class TurnManager : Node
                     GD.Print($"[Resolve] 触发/激活效果（EffectData）结算: {entry.EffectDataEffect.EffectId}, 来源={src?.PlayerTemplate?.CardName}, 来源UID={entry.SourceCardUid}, src是否为null={(src == null)}, src.OwnerId={src?.OwnerId}, 目标={tgt?.PlayerTemplate?.CardName}");
                     // 【K23】触发类能力的次数上限（每张卡·每回合·每能力）：在**结算前**检查并登记，
                     // 使"同一批次收集到多条同源触发（如同时死亡）"也最多只结算到上限。
-                    if (src != null && src.IsAbilityLimitReached(entry.EffectDataEffect.EffectId, entry.EffectDataEffect.MaxUsesPerTurn))
+                    //
+                    // ⚠【K23/A57·双重计数修复】**激活类条目（entry.FromActivation）必须跳过这一段**：
+                    // 激活能力的计数已在"发动被接受"那一刻由 `EffectEngine.ActivateAbility` 登记
+                    // （语义＝发动被接受即计数，与结算成功与否无关）。若这里再查一次，
+                    // `MaxUsesPerTurn/MaxUsesPerGame = 1` 的能力**首次结算就会被自己刚登记的 1 次判成"已达上限"而整条跳过**
+                    // （实测：MSJC001 行动4 首发动即被跳过；JC031/JC032/JC069/JC093 同样受影响）。
+                    if (!entry.FromActivation)
                     {
-                        GD.Print($"[Resolve] ⏹ 次数上限：{entry.EffectDataEffect.EffectId} 本回合已发动 " +
-                                 $"{src.GetAbilityUsesThisTurn(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerTurn}）→ 跳过本次结算");
-                        break;
+                        if (src != null && src.IsAbilityLimitReached(entry.EffectDataEffect.EffectId, entry.EffectDataEffect.MaxUsesPerTurn))
+                        {
+                            GD.Print($"[Resolve] ⏹ 次数上限：{entry.EffectDataEffect.EffectId} 本回合已发动 " +
+                                     $"{src.GetAbilityUsesThisTurn(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerTurn}）→ 跳过本次结算");
+                            break;
+                        }
+                        // 【A57】每局游戏次数上限（如 MSJC001 行动4"每局游戏只能发动一次"）：与每回合上限**同点先检查**
+                        // （必须在登记之前，否则"已达上限"仍会把本回合计数 +1）
+                        if (src != null && src.IsGameAbilityLimitReached(entry.EffectDataEffect.EffectId, entry.EffectDataEffect.MaxUsesPerGame))
+                        {
+                            GD.Print($"[Resolve] ⏹ 每局次数上限：{entry.EffectDataEffect.EffectId} 本局已发动 " +
+                                     $"{src.GetAbilityUsesThisGame(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerGame}）→ 跳过本次结算");
+                            break;
+                        }
+                        if (src != null) src.MarkAbilityUsedThisTurn(entry.EffectDataEffect.EffectId);
+                        if (src != null) src.MarkAbilityUsedThisGame(entry.EffectDataEffect.EffectId);
                     }
-                    // 【A57】每局游戏次数上限（如 MSJC001 行动4"每局游戏只能发动一次"）：与每回合上限**同点先检查**
-                    // （必须在登记之前，否则"已达上限"仍会把本回合计数 +1）
-                    if (src != null && src.IsGameAbilityLimitReached(entry.EffectDataEffect.EffectId, entry.EffectDataEffect.MaxUsesPerGame))
-                    {
-                        GD.Print($"[Resolve] ⏹ 每局次数上限：{entry.EffectDataEffect.EffectId} 本局已发动 " +
-                                 $"{src.GetAbilityUsesThisGame(entry.EffectDataEffect.EffectId)} 次（上限 {entry.EffectDataEffect.MaxUsesPerGame}）→ 跳过本次结算");
-                        break;
-                    }
-                    if (src != null) src.MarkAbilityUsedThisTurn(entry.EffectDataEffect.EffectId);
-                    if (src != null) src.MarkAbilityUsedThisGame(entry.EffectDataEffect.EffectId);
                     // entry.WinnerId：对抗获胜方玩家 ID（威名等"X对抗获胜"触发由 TriggerRegistry 收集时经
                     // StackEffectInstance.WinnerId → PushTriggerToStack 写入），透传给 ResolveEffect 供 WinnerIsSelf 判定。
                     // 【K24】entry.TargetPlayerId：入堆叠时锁定的目标玩家号（激活类玩家目标效果用）。
@@ -3970,6 +3979,17 @@ public partial class TurnManager : Node
     public void DrawCardsForPlayer(int playerId, int count)
     {
         if (_deckManager == null || _cardManager == null) return;
+
+        // 【秘社批次·MSJC017 梦魇族群】"持续：你从牌库底抓牌，而非牌库顶"——
+        // 本秘社在场时该玩家的**所有抓牌**统一改向。这是**唯一收口**处的重定向（初始发牌、阶段抓牌、
+        // 效果抓牌都经本方法），故不需要在每张卡的抓牌动作里各写一遍。
+        if (CouncilDrawsFromBottom(playerId))
+        {
+            GD.Print($"[TurnManager] 🔻 玩家{playerId} 秘社为梦魇族群 ⇒ 本次抓牌改从**牌库底**取（{count} 张）");
+            DrawFromBottomForPlayer(playerId, count);
+            return;
+        }
+
         CardInstance firstDrawn = null;
         int drawn = 0;
         for (int i = 0; i < count; i++)
@@ -3991,6 +4011,20 @@ public partial class TurnManager : Node
         // 【OnDraw 粒度·用户 2026-09 口径】一次调用＝一批：本批全部抓完后**只广播一次** `OnDraw`，
         // 并把本批张数作为 `ExtraInt` 带下去（供 JC080「X＝此次抓牌的数量」按批取数）。
         if (drawn > 0) _triggerEmitPoints?.OnDraw(firstDrawn, playerId, drawn);
+    }
+
+    /// <summary>
+    /// 【秘社批次·MSJC017】该玩家的秘社是否声明了"从牌库底抓牌"（`CouncilCardData.DrawFromBottom`）。
+    /// 读秘社区实例的模板；秘社缺失/未声明 ⇒ false（保持既有牌库顶口径）。
+    /// </summary>
+    public bool CouncilDrawsFromBottom(int playerId)
+    {
+        if (_zoneManager == null || playerId < 1) return false;
+        var councils = _zoneManager.GetZoneCards(CardZone.CouncilZone, playerId);
+        if (councils == null) return false;
+        foreach (var c in councils)
+            if (c?.CouncilTemplate != null && c.CouncilTemplate.DrawFromBottom) return true;
+        return false;
     }
 
     /// <summary>
@@ -4204,6 +4238,20 @@ public partial class TurnManager : Node
 
         GD.Print($"[TurnManager] ✅ 玩家{playerId} 建立资产成功：{instance.PlayerTemplate?.CardName}");
         return true;
+    }
+
+    /// <summary>
+    /// 【秘社批次】把**一张已有的卡实例**送回指定玩家的牌库（顶/底）。
+    /// 与下方按 UID 的调试入口并存：效果动词（`MoveToZone{牌库底}` / `PutCardOnDeckTop`）手里已经有实例，
+    /// 再经 `GetInstance(uid)` 绕一圈是**多余且脆弱**的（实例未必在 `CardManager` 的索引里，
+    /// 查不到就会静默什么都不做——实测：MSJC010②③"把封印牌置于牌库底"变成"卡留在封印区、日志卡名为空"）。
+    /// 故此处提供"以实例为准"的正式入口，`CardManager.GetInstance` 查不到时**不再阻断**。
+    /// </summary>
+    public void ReturnCardToDeck(CardInstance card, int playerId, bool toTop = false)
+    {
+        if (card == null) { GD.PrintErr("[TurnManager] ❌ ReturnCardToDeck: 卡实例为空"); return; }
+        _zoneManager?.MoveToDeckBottom(card, playerId, toTop);
+        GD.Print($"[TurnManager] ↩ {card.PlayerTemplate?.CardName}（{card.UID}）→ 玩家{playerId} 牌库{(toTop ? "顶" : "底")}");
     }
 
     /// <summary>
@@ -4525,6 +4573,29 @@ public partial class TurnManager : Node
         if (VerboseSteps) GD.Print("【准备步骤】广播 OnTurnStarted（双方准备阶段触发点）");
         // 准备阶段为双方共有步骤：不归属单一回合玩家（-1），由每张卡的 EffectData 按各自控制者判定"对手"。
         _triggerEmitPoints?.OnTurnStarted();
+        // 【秘社批次】MSJC016 颂亡者「触发：**在第一个回合的准备步骤开始时**，将你牌库顶的三张牌置于你的墓地」：
+        // 一次性时机（只第一回合），且必须发生在**发完起手之后**（否则磨掉的是未发完的牌库顶，
+        // 张数会与"起手已发完"的正式局不一致）——故不能用 `GameInitializer.ApplyCouncilOpeningEffects`
+        // （那时还没发牌），放在这里按 `TurnCount == 1` 一次性执行。
+        if (TurnCount == 1)
+        {
+            foreach (var pid in new[] { 1, 2 })
+            {
+                if (_zoneManager == null) break;
+                foreach (var council in _zoneManager.GetZoneCards(CardZone.CouncilZone, pid)
+                             ?? new System.Collections.Generic.List<CardInstance>())
+                {
+                    var list = council?.CouncilTemplate?.TurnStartEffectList;
+                    if (list == null) continue;
+                    foreach (var e in list)
+                    {
+                        if (e == null) continue;
+                        GD.Print($"[TurnManager] 秘社首个准备步骤触发：{council.CouncilTemplate.CardName} → {e.EffectId}");
+                        EE?.ResolveEffect(e, council, null);
+                    }
+                }
+            }
+        }
         // 步骤开始：当前优先玩家获得优先权，等待双方连续让过推进
         // 修复 A：OnTurnStarted 可能让 JC035 等触发同步入栈，若堆叠非空则保留堆叠结算流程设定的行动权，
         // 不再无条件覆盖（否则触发链搅乱 PriorityPlayerId，后续让过全部报错）。

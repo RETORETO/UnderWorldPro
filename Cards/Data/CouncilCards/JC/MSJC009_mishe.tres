@@ -14,11 +14,11 @@ CardText = "行动3，横置：若你具有【先手标志】，则抓一张牌�
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC009_mishe.jpg"
 StartingHandSize = 7
 SubType = "秘社"
-ColorText = "中立"
+Colors = Array[int]([0])
 PT = "6"
 RelatedCardUID = "TK007"
 TableRow = 2
-Organization = "秘社"
+Organization = "中立"
 Cost = 3
 
 UID = "MSJC009_mishe"

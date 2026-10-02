@@ -612,6 +612,12 @@ public partial class ZoneManager : Node
         EmitCardLeftIfLeavingField(card, card.CurrentZone, CardZone.Deck);   // 【P1】回牌库类离场触发（含地区赢取送库底）
         RemoveFromAllZones(card, CardZone.Deck);   // 若来自牌库，同步从数据层牌库移除
         TransferOwnership(card, playerId);
+        // 【秘社批次】牌库是**唯一必须让 OwnerId 与所在地一致**的区域（`DeckManager.RemoveFromDeck` 按 OwnerId
+        // 定位牌库、抓牌/判负也按玩家自己的牌库算）。原实现只改 ControllerId（`TransferOwnership` 的语义是
+        // "只改控制者、拥有者不变"），于是"把**对手拥有**的封印牌置于你的牌库底"会变成
+        // "牌进玩家1 的牌库、但 OwnerId 仍是玩家2"——玩家2 少一张库、玩家1 多一张，且此后按 OwnerId 的
+        // 任何操作都会错位。故此处显式把拥有者一并对齐到目标牌库的玩家。
+        card.OwnerId = playerId;
         card.ResetToBaseState();
         card.CurrentZone = CardZone.Deck;
         card.ZoneDetailId = null;
