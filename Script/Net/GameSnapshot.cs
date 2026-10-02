@@ -21,6 +21,10 @@ namespace Script.Net
         public int FirstPlayerId;
         public int PriorityPlayerId;
         public int CurrentPhase;   // 对应 TurnManager.TurnPhase（全局枚举），用 int 承载
+        /// <summary>对抗步骤的当前地区序号（1-based；0＝非对抗步骤）。客户端没有权威地区游标
+        /// （`TurnManager._combatAreaUids` / `AreaManager` 均为服务端构造），故由服务端算出随快照下行，
+        /// 供联机回合标签显示"1地区调查步骤"。</summary>
+        public int CombatAreaNo;
         public List<PlayerSnapshot> Players = new List<PlayerSnapshot>();
         public List<ZoneCardRef> Zones = new List<ZoneCardRef>();
         public List<StackEntrySnap> Stack = new List<StackEntrySnap>();

@@ -53,6 +53,7 @@ namespace Script.UI
         private readonly Dictionary<string, CardUI> _cardUIMap = new Dictionary<string, CardUI>();
         private readonly Dictionary<string, CouncilCardUI> _councilCardUIMap = new Dictionary<string, CouncilCardUI>();
         private Control _assetContainer1, _assetContainer2;   // 资产区（P1/P2）
+        private Label _assetLabel1, _assetLabel2;             // 费用池标签（费用/颜色忠诚/领域忠诚，对标单机）
         private Control _scoreContainer1, _scoreContainer2;   // 分数区（P1/P2）
         private Control _councilContainer1, _councilContainer2; // 秘社区（P1/P2）
         private Control _stackContainer;      // 堆叠区容器
@@ -142,6 +143,8 @@ namespace Script.UI
             _worldDeckZone = GetNodeOrNull<WorldDeckZone>("CenterArea/WorldDeckZone");
             _assetContainer1 = GetNodeOrNull<Control>("Player1Area/AssetContainer");
             _assetContainer2 = GetNodeOrNull<Control>("Player2Area/AssetContainer");
+            _assetLabel1 = GetNodeOrNull<Label>("Player1Area/AssetContainer/AssetLabel");
+            _assetLabel2 = GetNodeOrNull<Label>("Player2Area/AssetContainer/AssetLabel");
             _phaseLabel = GetNodeOrNull<Label>("ActionPanel/PhaseLabel");
             _p1ScoreLabel = GetNodeOrNull<Label>("Player1Area/ScoreZone/ScoreLabel");
             _p2ScoreLabel = GetNodeOrNull<Label>("Player2Area/ScoreZone/ScoreLabel");
@@ -344,12 +347,59 @@ namespace Script.UI
             }
             _choicePromptPanel.Init(request, ResolveChoiceLabel, result =>
             {
+                // 【乐观回显·快照架构内】手牌上限弃牌（SelectHandCards 且 NumberMin==NumberMax==N）：
+                // 玩家点确认那一刻先在本地把手牌 UI 摘掉、让"弃牌"立即可见，随后由服务端权威快照全量重建收敛。
+                // 这是"客户端预测 + 服务端权威"的常规做法：不改变快照驱动架构，只提前呈现"几乎必然成立"的本地结果。
+                TryOptimisticEchoHandLimitDiscard(request, result);
                 if (_matchClient != null)
                     _matchClient.SendChoiceResult(result);
             });
             var vpSize = GetViewport().GetVisibleRect().Size;
             _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
             _choicePromptPanel.Popup();
+        }
+
+        /// <summary>
+        /// 【联机·乐观回显】手牌上限弃牌确认瞬间，本地立即把所选卡的手牌 UI 移除（并同步监听到墓地区），
+        /// 让"弃牌"在服务端快照回来之前就可见。仅作用于视觉，不写任何 Model；服务端权威快照到达后
+        /// <see cref="ApplySnapshot"/> 的全量重建会覆盖本回显，二者最终一致（预测失败也会被纠正）。
+        /// 判定口径：<see cref="Script.Net.ChoiceRequest.Kind.SelectHandCards"/> 且 NumberMin==NumberMax（恰好 N 张的强制弃牌）。
+        /// </summary>
+        private void TryOptimisticEchoHandLimitDiscard(Script.Net.ChoiceRequest request, Script.Net.ChoiceResult result)
+        {
+            if (request == null || result == null || result.Cancelled) return;
+            if (request.RequestKind != Script.Net.ChoiceRequest.Kind.SelectHandCards) return;
+            if (request.NumberMax <= 0 || request.NumberMin != request.NumberMax) return;   // 仅"恰好 N 张"的强制弃牌
+            var selected = result.SelectedUids;
+            if (selected == null || selected.Count == 0) return;
+
+            // 仅当这些卡属于本地玩家手牌时才做本地回显（服务端不会让对手弃本方手牌）
+            var localHand = _localPlayerId == 1 ? _p1Hand : _p2Hand;
+            if (localHand == null) return;
+
+            int echoed = 0;
+            foreach (var uid in selected)
+            {
+                if (string.IsNullOrEmpty(uid)) continue;
+                if (!_cardUIMap.TryGetValue(uid, out var ui) || ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                if (ui.GetParent() != localHand) continue;   // 不在本方手牌容器内，跳过（避免误摘）
+                ui.GetParent()?.RemoveChild(ui);
+                _cardUIMap.Remove(uid);
+                ui.QueueFree();
+                echoed++;
+            }
+            if (echoed > 0)
+            {
+                ArrangeHandOnly();
+                GD.Print($"[ArenaOl] 乐观回显：手牌上限弃牌 {echoed} 张已本地移除（等待服务端快照收敛）");
+            }
+        }
+
+        /// <summary>仅重排双方手牌（乐观回显后的即时整理；不触发全量重建）。</summary>
+        private void ArrangeHandOnly()
+        {
+            ArrangeChildren(_p1Hand);
+            ArrangeChildren(_p2Hand);
         }
 
         // ==================== 对抗窗口（对齐单机：调查/战斗/破平） ====================
@@ -1073,22 +1123,19 @@ namespace Script.UI
             var turn = _matchClient.ClientTurnManager;
             if (_phaseLabel != null && turn != null)
             {
-                // 四行显示（与单机 Arena 同口径）：① 回合　② 优先权　③ 先手　④ 当前步骤中文名
-                // 第0回合＝开局调度步骤（TurnCount==0 → "第0回合"）
-                string turnText = $"第{turn.TurnCount}回合";
-                string priorityText = turn.PriorityPlayerId > 0
-                    ? $"优先权: P{turn.PriorityPlayerId}"
-                    : "优先权: 无";
-                string firstText = $"先手: P{turn.FirstPlayerId}";
-                string phaseName = turn.CurrentPhaseDisplayName;
-                _phaseLabel.Text = $"{turnText}\n{priorityText}\n{firstText}\n{phaseName}";
+                // 四行文案（回合/先手/步骤/行动权）唯一口径在 TurnManager.TurnStatusText（与单机 Arena 同口径）；
+                // 对抗步骤的地区前缀由服务端快照 CombatAreaNo 投影驱动（客户端无权威地区游标）。
+                _phaseLabel.Text = turn.TurnStatusText;
             }
 
-            // 分数显示：优先用快照里的胜利分数；旧快照无该字段时回退到法力显示
+            // 分数显示：只显示胜利分数（费用池已移到 PlayerXArea/AssetContainer/AssetLabel）
             if (_p1ScoreLabel != null && snap.Players.Count > 0)
-                _p1ScoreLabel.Text = snap.Players[0].ScoreTotal != 0 ? $"P1 分数 {snap.Players[0].ScoreTotal}" : $"P1 法力 {snap.Players[0].AvailableMana}";
+                _p1ScoreLabel.Text = $"P1 分数 {snap.Players[0].ScoreTotal}";
             if (_p2ScoreLabel != null && snap.Players.Count > 1)
-                _p2ScoreLabel.Text = snap.Players[1].ScoreTotal != 0 ? $"P2 分数 {snap.Players[1].ScoreTotal}" : $"P2 法力 {snap.Players[1].AvailableMana}";
+                _p2ScoreLabel.Text = $"P2 分数 {snap.Players[1].ScoreTotal}";
+
+            // 费用池（对标单机 Arena.RefreshAssetLabels）：费用：可用/总 + 颜色忠诚 + 领域忠诚
+            RefreshOnlineAssetLabels(snap);
 
             // 游戏结束展示（IsGameOver 由服务端 PlayerManager 权威广播）
             if (_resultLabel != null)
@@ -1113,6 +1160,39 @@ namespace Script.UI
 
             // 【第0回合·调度】进入第 0 回合且尚未上报 → 本地弹出调度框（客户端驱动，见 EnsureMulliganPrompt）
             EnsureMulliganPrompt();
+        }
+
+        /// <summary>
+        /// 联机费用池（对标单机 `Arena.RefreshOneAssetLabel`）：写入 `PlayerXArea/AssetContainer/AssetLabel` 三行
+        /// （费用：可用/总 + 颜色忠诚 + 领域忠诚）。
+        /// - 可用费用取快照权威值 `PlayerSnapshot.AvailableMana`（含 K19 临时费用；客户端重算只数未横置资产，会少算）；
+        /// - 总费用＝客户端投影资产区张数；
+        /// - 忠诚由客户端投影 `PlayerManager`（已注入 `ClientZoneManager`）按资产区实时计算，口径与单机一致。
+        /// </summary>
+        private void RefreshOnlineAssetLabels(GameSnapshot snap)
+        {
+            var zone = _matchClient?.ClientZoneManager;
+            var pm = _matchClient?.ClientPlayerManager;
+            if (zone == null || pm == null) return;
+
+            RefreshOneOnlineAssetLabel(_assetLabel1, 1, snap, zone, pm);
+            RefreshOneOnlineAssetLabel(_assetLabel2, 2, snap, zone, pm);
+        }
+
+        private void RefreshOneOnlineAssetLabel(Label label, int playerId, GameSnapshot snap,
+            ZoneManager zone, PlayerManager pm)
+        {
+            if (label == null) return;
+
+            int available = pm.GetAvailableMana(playerId);
+            if (snap?.Players != null)
+            {
+                var psnap = snap.Players.Find(p => p != null && p.PlayerId == playerId);
+                if (psnap != null) available = psnap.AvailableMana;   // 快照权威值优先（含临时费用）
+            }
+            int total = zone.GetZoneCards(CardZone.AssetZone, playerId).Count;
+            label.Text = Arena.FormatCostPoolText(available, total,
+                pm.GetColorLoyalty(playerId), pm.GetDomainLoyalty(playerId));
         }
 
         /// <summary>争夺区已渲染卡数（诊断日志用）。</summary>

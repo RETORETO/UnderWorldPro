@@ -82,6 +82,7 @@ namespace Script.Net
                 FirstPlayerId = full.FirstPlayerId,
                 PriorityPlayerId = full.PriorityPlayerId,
                 CurrentPhase = full.CurrentPhase,
+                CombatAreaNo = full.CombatAreaNo,
                 Players = full.Players,
                 Stack = full.Stack,
                 AreaMarks = full.AreaMarks,

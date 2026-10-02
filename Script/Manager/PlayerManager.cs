@@ -321,7 +321,8 @@ public partial class PlayerManager : Node
     {
         Player1.IsFirstPlayer = (playerId == 1);
         Player2.IsFirstPlayer = (playerId == 2);
-        GD.Print($"🏁 先手玩家设置为玩家{playerId}");
+        // playerId<=0：先手**未产生**（第0回合调度期间）→ 双方均无先手标志，日志同步避免"玩家0"误导
+        GD.Print(playerId > 0 ? $"🏁 先手玩家设置为玩家{playerId}" : "🏁 先手玩家：未产生（第0回合调度中）");
     }
 
     public bool IsFirstPlayer(int playerId)

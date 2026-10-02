@@ -10,7 +10,6 @@ public partial class DeckBuilder : Control
     private VBoxContainer _poolList;
     private VBoxContainer _deckList;
     private LineEdit _nameEdit;
-    private OptionButton _councilOption;
     private Label _countLabel;
     private OptionButton _loadOption;
     private LineEdit _searchBox;
@@ -28,9 +27,12 @@ public partial class DeckBuilder : Control
     /// <summary>秘社模式下过滤后的候选列表（用于渲染）。</summary>
     private List<string> _councilFilterPaths = new List<string>();
 
-    // 【秘社批次】构筑限制展示与拦截（"当前 X 张 / 需要 ≥N 张"）
+    // 【秘社批次】构筑限制展示与违规校验（"当前 X 张 / 需要 ≥N 张"）
     private VBoxContainer _restrictionBox;
     private Label _restrictionSummary;
+
+    /// <summary>卡组合法所需的最少卡牌张数（不含秘社卡，按份数累计）。不足则视为违规卡组。</summary>
+    private const int MinDeckSize = 50;
 
     // 分页
     private const int PageSize = 40;   // 单条结果现在是带五行数据的信息面板（约 26 个控件），比原来的一张卡图重得多
@@ -64,7 +66,6 @@ public partial class DeckBuilder : Control
         _poolList = GetNode<VBoxContainer>("PoolPanel/PoolScroll/PoolList");
         _deckList = GetNode<VBoxContainer>("DeckPanel/DeckScroll/DeckList");
         _nameEdit = GetNode<LineEdit>("BottomBar/NameEdit");
-        _councilOption = GetNode<OptionButton>("BottomBar/CouncilOption");
         _countLabel = GetNode<Label>("BottomBar/CountLabel");
         _loadOption = GetNode<OptionButton>("LoadOption");
         _searchBox = GetNode<LineEdit>("PoolPanel/SearchBox");
@@ -100,13 +101,11 @@ public partial class DeckBuilder : Control
 
         GetNode<Button>("BottomBar/SaveButton").Pressed += OnSave;
         GetNode<Button>("BottomBar/BackButton").Pressed += OnBack;
-        _councilOption.ItemSelected += OnCouncilSelected;
         _loadOption.ItemSelected += OnLoadSelected;
 
         ScanPool();
         ScanCouncils();
         BuildLoadOptions();
-        BuildCouncilOptions();
         RefreshPoolView();
 
         // 若从房间/主菜单带入了要编辑的卡组，则载入
@@ -272,19 +271,6 @@ public partial class DeckBuilder : Control
             if (DecksDir + "/" + _loadOption.GetItemText(i) == path)
                 return i;
         return 0;
-    }
-
-    private void BuildCouncilOptions()
-    {
-        _councilOption.Clear();
-        int sel = 0;
-        for (int i = 0; i < _councilPaths.Count; i++)
-        {
-            string fileName = System.IO.Path.GetFileNameWithoutExtension(_councilPaths[i]);
-            _councilOption.AddItem(fileName);
-            if (_councilPaths[i] == _workingCouncil) sel = i;
-        }
-        if (_councilPaths.Count > 0) _councilOption.Select(sel);
     }
 
     // ============================================================
@@ -720,7 +706,7 @@ public partial class DeckBuilder : Control
 
     /// <summary>
     /// 【秘社添加】把秘社放进卡组的**唯一入口**：卡组只保留一张秘社。
-    /// 若已有秘社则直接覆盖（不叠加、不报错、不产生重复项），并同步底部下拉框与限制进度。
+    /// 若已有秘社则直接覆盖（不叠加、不报错、不产生重复项），并重算构筑限制。
     /// </summary>
     private void SetCouncil(string path)
     {
@@ -728,9 +714,6 @@ public partial class DeckBuilder : Control
 
         bool replaced = !string.IsNullOrEmpty(_workingCouncil) && _workingCouncil != path;
         _workingCouncil = path;
-
-        int ci = _councilPaths.FindIndex(p => p == path);
-        if (ci >= 0) _councilOption.Select(ci);   // 同步底部"秘社"下拉框（Select 不触发 ItemSelected，无重入风险）
 
         RefreshDeckView();                        // 卡组侧展示 + 重算构筑限制
         if (_councilMode) RefreshPoolView();      // 刷新"当前秘社"标记
@@ -878,18 +861,8 @@ public partial class DeckBuilder : Control
         foreach (var e in deck.Cards) _workingCards[e.TemplatePath] = e.Copies;
         _nameEdit.Text = deck.DeckName;
         if (deck.Councils.Count > 0) _workingCouncil = deck.Councils[0].TemplatePath;
-        int ci = _councilPaths.FindIndex(p => p == _workingCouncil);
-        if (ci >= 0) _councilOption.Select(ci);
         RefreshDeckView();
         GD.Print($"【DeckBuilder】已载入卡组：{path}");
-    }
-
-    private void OnCouncilSelected(long index)
-    {
-        int i = (int)index;
-        // 无论从下拉框还是从秘社候选列表选择，都走同一个入口，保证只有一张秘社且状态一致
-        if (i >= 0 && i < _councilPaths.Count)
-            SetCouncil(_councilPaths[i]);
     }
 
     // ============================================================
@@ -920,7 +893,7 @@ public partial class DeckBuilder : Control
 
     /// <summary>
     /// 重算并渲染当前秘社的构筑限制进度。逐条显示 `Describe(actual)`；满足=绿色、不满足=红色。
-    /// 返回未满足的明细列表（空＝全部满足）——`OnSave` 用它做保存拦截。
+    /// 返回未满足的明细列表（空＝全部满足）——`CollectDeckViolations` 用它汇总违规原因。
     /// </summary>
     private List<(string text, bool ok, int actual, int required)> RefreshRestrictionView()
     {
@@ -964,29 +937,86 @@ public partial class DeckBuilder : Control
             _restrictionBox.AddChild(line);
         }
 
-        _restrictionSummary.Text = $"秘社「{council.CardName}」限制：{(allOk ? "已达成" : "未达成（无法保存）")}";
+        _restrictionSummary.Text = $"秘社「{council.CardName}」限制：{(allOk ? "已达成" : "未达成")}";
         _restrictionSummary.Modulate = allOk ? new Color(0.55f, 0.95f, 0.55f) : new Color(1f, 0.6f, 0.4f);
         return result;
+    }
+
+    /// <summary>卡组内卡牌的总张数（按份数累计，不含秘社卡）。</summary>
+    private int GetDeckCardCount()
+    {
+        int total = 0;
+        foreach (var kv in _workingCards)
+            total += kv.Value;
+        return total;
+    }
+
+    /// <summary>
+    /// 汇总当前卡组的违规原因（空列表＝完全合法）。
+    /// 违规仅用于提示，**不再直接拦截保存**：用户在确认框里点"确认"后仍可落盘。
+    /// </summary>
+    private List<string> CollectDeckViolations()
+    {
+        var reasons = new List<string>();
+
+        // ① 不符合秘社构筑规则：逐条列出未达成的限制明细
+        var failures = RefreshRestrictionView();
+        var bad = failures.FindAll(f => !f.ok);
+        if (bad.Count > 0)
+            reasons.Add("不符合秘社构筑规则：" + string.Join("；", bad.ConvertAll(f => f.text)));
+
+        // ② 卡组数量不足
+        int total = GetDeckCardCount();
+        if (total < MinDeckSize)
+            reasons.Add($"卡组数量不足：当前 {total} 张，至少需要 {MinDeckSize} 张");
+
+        return reasons;
     }
 
     private void OnSave()
     {
         string name = string.IsNullOrWhiteSpace(_nameEdit.Text) ? $"卡组{System.DateTime.Now:HHmmss}" : _nameEdit.Text.Trim();
 
-        // 【秘社批次·保存拦截】不满足当前秘社的构筑限制时**拒绝保存**，并把逐条明细打出来。
-        var failures = RefreshRestrictionView();
-        var bad = failures.FindAll(f => !f.ok);
-        if (bad.Count > 0)
+        // 【违规校验】非法卡组不再被直接拦截，而是先弹窗说明原因，由用户决定是否继续保存。
+        var violations = CollectDeckViolations();
+        if (violations.Count > 0)
         {
-            var detail = string.Join("；", bad.ConvertAll(f => f.text));
-            GD.PrintErr($"【DeckBuilder】⛔ 卡组不符合秘社构筑限制，已拦截保存：{detail}");
-            ShowMessage($"不符合秘社构筑限制，无法保存：\n{detail}");
+            GD.Print($"【DeckBuilder】⚠ 违规卡组待用户确认：{string.Join(" | ", violations)}");
+            ConfirmSaveViolation(name, violations);
             return;
         }
 
+        SaveDeck(name);
+    }
+
+    /// <summary>弹出"确认 / 取消"双按钮提示框，说明违规原因；确认才真正落盘。</summary>
+    private void ConfirmSaveViolation(string name, List<string> violations)
+    {
+        var detail = string.Join("\n", violations.ConvertAll(v => "· " + v));
+        var dlg = new ConfirmationDialog
+        {
+            Title = "卡组违规确认",
+            DialogText = $"该卡组存在以下问题：\n{detail}\n\n是否仍然保存？",
+            OkButtonText = "确认",
+            CancelButtonText = "取消",
+            Exclusive = true,
+            Unresizable = false,
+        };
+        AddChild(dlg);
+        dlg.Confirmed += () => { SaveDeck(name); dlg.QueueFree(); };
+        dlg.Canceled += () => dlg.QueueFree();
+        dlg.CloseRequested += () => dlg.QueueFree();
+        dlg.PopupCentered(new Vector2I(560, 240));
+    }
+
+    /// <summary>真正把编辑中的卡组写入 ../Decks。</summary>
+    private void SaveDeck(string name)
+    {
+        string display = string.IsNullOrWhiteSpace(name) ? $"卡组{System.DateTime.Now:HHmmss}" : name.Trim();
+
         var deck = new DeckList
         {
-            DeckName = name,
+            DeckName = display,
         };
         foreach (var kv in _workingCards)
             deck.Cards.Add(new DeckList.DeckEntry { TemplatePath = kv.Key, Copies = kv.Value });
@@ -994,7 +1024,7 @@ public partial class DeckBuilder : Control
         if (!string.IsNullOrEmpty(_workingCouncil))
             deck.Councils.Add(new DeckList.DeckEntry { TemplatePath = _workingCouncil, Copies = 1 });
 
-        string path = DecksDir + "/" + SanitizeFileName(name) + ".json";
+        string path = DecksDir + "/" + SanitizeFileName(display) + ".json";
         DeckListLoader.Save(deck, path);
         GameManager.Instance.SelectedDeckPath = path;
         GameManager.Instance.UseSelectedDeck = true;

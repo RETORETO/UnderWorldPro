@@ -177,15 +177,9 @@ public partial class Arena : Control
     {
         if (_phaseStatusLabel == null || _turnManager == null) return;
 
-        // 四行显示：① 回合　② 优先权　③ 先手　④ 当前步骤中文名（中文步骤名统一由 TurnManager 提供）
-        // 第0回合＝开局调度步骤（TurnCount==0 → "第0回合"）
-        string turnText = $"第{_turnManager.TurnCount}回合";
-        string priorityText = _turnManager.PriorityPlayerId > 0
-            ? $"优先权: P{_turnManager.PriorityPlayerId}"
-            : "优先权: 无";
-        string firstText = $"先手: P{_turnManager.FirstPlayerId}";
-        string phaseName = _turnManager.CurrentPhaseDisplayName;
-        _phaseStatusLabel.Text = $"{turnText}\n{priorityText}\n{firstText}\n{phaseName}";
+        // 四行文案（回合/先手/步骤/行动权）唯一口径在 TurnManager.TurnStatusText，单机与联机共用，
+        // 避免两处拼接漂移；对抗步骤的地区前缀也由它统一带上（如"1地区调查步骤"）。
+        _phaseStatusLabel.Text = _turnManager.TurnStatusText;
     }
 
     private void UpdateDeckCount() { }

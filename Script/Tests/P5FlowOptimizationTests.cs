@@ -45,16 +45,34 @@ namespace Script.Tests
                     $"步骤 {kv.Key} 的中文名应为「{kv.Value}」");
             }
 
-            // 对抗步骤带地区序号前缀
-            Assert.AreEqual("地区2 调查对抗步骤",
+            // 对抗步骤带地区序号前缀（数字在前，如"2地区调查步骤"）
+            Assert.AreEqual("2地区调查步骤",
                 global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.CombatInvestigation, 2),
-                "对抗步骤应带『地区N』前缀");
+                "对抗步骤应带『N地区』前缀");
             Assert.AreEqual("调查对抗步骤",
                 global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.CombatInvestigation, 0),
                 "无地区序号时不带前缀");
             Assert.AreEqual("重置步骤",
                 global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.StartReset, 3),
                 "非对抗步骤不带地区序号");
+            Assert.AreEqual("1地区战斗步骤",
+                global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.CombatStrength, 1),
+                "战斗对抗步骤带『1地区』前缀");
+            Assert.AreEqual("3地区势力步骤",
+                global::TurnManager.GetPhaseDisplayName(global::TurnManager.TurnPhase.CombatPower, 3),
+                "势力对抗步骤带『3地区』前缀");
+
+            // 回合状态标签四行口径（与 UI 共用唯一出口）
+            var tm = new global::TurnManager();
+            tm.TurnCount = 2;
+            tm.FirstPlayerId = 2;
+            tm.PriorityPlayerId = 1;
+            tm.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            Assert.AreEqual("第2回合\n先手：P2\n先手行动步骤\n行动权：P1", tm.TurnStatusText,
+                "四行顺序：回合 / 先手 / 步骤 / 行动权");
+            tm.PriorityPlayerId = 0;
+            Assert.AreEqual("第2回合\n先手：P2\n先手行动步骤\n行动权：无", tm.TurnStatusText,
+                "无人持有时第四行＝行动权：无");
         }
 
         public void TestIsAutoAdvanceStep_免让过步骤集合()
@@ -367,6 +385,38 @@ namespace Script.Tests
             game.TurnManager.ReportMulligan(1, TakeFirstUids(game, 1, 2));
             Assert.IsTrue(game.TurnManager.IsMulliganPhase, "仅一方上报不得推进（要等双方齐）");
             Assert.AreEqual(0, game.TurnManager.TurnCount, "仅一方上报时仍停在第0回合");
+        }
+
+        /// <summary>
+        /// 【先手产生时机】第0回合调度期间**不产生**先手玩家（`FirstPlayerId=0` → UI 显示"先手: 未产生"）；
+        /// 双方上报完成后（**依然在第0回合**）随机产生先手玩家（P1/P2），之后才进入第一回合。
+        /// </summary>
+        public void TestMulligan_调度期间未产生先手且完成后随机产生()
+        {
+            var game = NewGame();
+            game.PlayerActionService.DrawCards(1, 6);
+            game.PlayerActionService.DrawCards(2, 6);
+            game.TurnManager.InputGateway = new Script.Net.AutoInputGateway();
+            game.TurnManager.BeginMulligan();
+
+            Assert.AreEqual(0, game.TurnManager.FirstPlayerId, "第0回合调度期间不得产生先手玩家");
+            Assert.IsFalse(game.TurnManager.HasFirstPlayer, "第0回合：HasFirstPlayer=false");
+            Assert.AreEqual("先手：未产生", game.TurnManager.FirstPlayerDisplayText, "UI 先手行＝先手：未产生");
+            Assert.IsFalse(game.PlayerManager.IsFirstPlayer(1), "第0回合：玩家1 无先手标志");
+            Assert.IsFalse(game.PlayerManager.IsFirstPlayer(2), "第0回合：玩家2 无先手标志");
+
+            game.TurnManager.ReportMulligan(1, TakeFirstUids(game, 1, 1));
+            Assert.AreEqual(0, game.TurnManager.FirstPlayerId, "仅一方上报时仍不得产生先手");
+
+            game.TurnManager.ReportMulligan(2, TakeFirstUids(game, 2, 1));
+
+            Assert.AreEqual(1, game.TurnManager.TurnCount, "双方齐 → 已离开第0回合进入第一回合");
+            Assert.IsTrue(game.TurnManager.HasFirstPlayer, "双方调度完成后应已产生先手玩家");
+            int first = game.TurnManager.FirstPlayerId;
+            Assert.IsTrue(first == 1 || first == 2, $"先手必须是 P1/P2，实际 P{first}");
+            Assert.AreEqual($"先手：P{first}", game.TurnManager.FirstPlayerDisplayText, "产生后 UI 显示对应先手");
+            Assert.IsTrue(game.PlayerManager.IsFirstPlayer(first), "先手标志应落在随机出的玩家上");
+            Assert.IsFalse(game.PlayerManager.IsFirstPlayer(first == 1 ? 2 : 1), "对手不得持有先手标志");
         }
 
         // ==================== ⑥ 卡组构筑校验（张数） ====================

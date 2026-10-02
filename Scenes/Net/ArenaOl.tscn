@@ -1,9 +1,9 @@
 [gd_scene format=3 uid="uid://cb2irdstaf17r"]
 
 [ext_resource type="Script" uid="uid://bnur1w16jdanr" path="res://Script/UI/ArenaOl.cs" id="1_ol"]
-[ext_resource type="Script" path="res://Script/UI/OnlineDeckZone.cs" id="5_oldeck"]
 [ext_resource type="Script" uid="uid://bvdfchlwxfovv" path="res://Script/UI/GraveyardZone.cs" id="3_rremj"]
 [ext_resource type="Script" uid="uid://bfgeuvespoao7" path="res://Script/UI/WorldDeckZone.cs" id="4_odh8s"]
+[ext_resource type="Script" uid="uid://cj3em010pgipb" path="res://Script/UI/OnlineDeckZone.cs" id="5_oldeck"]
 
 [node name="ArenaOl" type="Control" unique_id=38646334]
 layout_mode = 3
@@ -336,11 +336,10 @@ mouse_filter = 1
 metadata/_edit_use_anchors_ = true
 
 [node name="PhaseLabel" type="Label" parent="ActionPanel" unique_id=408338303]
-custom_minimum_size = Vector2(100, 92)
-custom_maximum_size = Vector2(100, -1)
+custom_minimum_size = Vector2(140, 92)
+custom_maximum_size = Vector2(140, -1)
 layout_mode = 1
-offset_left = 20.0
-offset_right = 120.0
+offset_right = 140.0
 offset_bottom = 100.0
 mouse_filter = 1
 text = "当前阶段"
@@ -353,36 +352,18 @@ light_mask = 524289
 visibility_layer = 524289
 layout_mode = 1
 offset_left = 20.0
-offset_top = 110.0
+offset_top = 200.0
 offset_right = 120.0
-offset_bottom = 160.0
+offset_bottom = 250.0
 mouse_filter = 1
-text = "P1让过"
-
-[node name="OpponentPassButton" type="Button" parent="ActionPanel" unique_id=1860794695]
-layout_mode = 1
-offset_left = 20.0
-offset_top = 170.0
-offset_right = 120.0
-offset_bottom = 220.0
-mouse_filter = 1
-text = "P2让过"
-
-[node name="EndTurnButton" type="Button" parent="ActionPanel" unique_id=1571477633]
-layout_mode = 1
-offset_left = 20.0
-offset_top = 230.0
-offset_right = 120.0
-offset_bottom = 280.0
-mouse_filter = 1
-text = "回合结束"
+text = "让过"
 
 [node name="ConcedeButton" type="Button" parent="ActionPanel" unique_id=2099100001]
 layout_mode = 1
 offset_left = 20.0
-offset_top = 290.0
+offset_top = 400.0
 offset_right = 120.0
-offset_bottom = 340.0
+offset_bottom = 450.0
 mouse_filter = 1
 text = "投降"
 

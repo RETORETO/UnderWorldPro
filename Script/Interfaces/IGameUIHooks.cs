@@ -162,6 +162,20 @@ namespace Script.Interfaces
             Godot.GD.PrintErr("[IGameUIHooks] ⚠ PromptPlayTarget 未实现（该 View 未提供目标选择窗）→ 按取消处理（不打出该牌）");
             onPicked?.Invoke(null);
         }
+
+        /// <summary>
+        /// 【UI 立即刷新·帧同步点】请求 View **让出一帧、把当前已变更的 UI 真正渲染出来后再继续**。
+        /// 用途：恢复步骤手牌上限"先手弃牌 → UI 立即刷新 → 后手可见 → 后手弃牌"的严格顺序——
+        /// Controller 在一名玩家弃牌（已改 Model 且 View 已同步数据）后 <c>await</c> 本方法，
+        /// 保证 View 至少完成一次重绘/布局，后手弹窗前就能**看到**先手弃入墓地的牌。
+        ///
+        /// 说明（为什么给**默认实现**）：`IGameUIHooks` 既有成员为纯抽象，本方法新增时
+        /// 已有 20+ 处测试桩（`TestRunner`/各测试的 Stub）会因"未实现接口成员"而全量编译失败；
+        /// 而 headless/测试环境本就**无渲染需要**，故默认实现直接返回已完成任务（不引入任何帧等待），
+        /// 语义上等价于"无 UI 环境无需刷新"。生产实现见 `Arena.WaitForUIRefresh`（等待一帧 ProcessFrame）。
+        /// </summary>
+        System.Threading.Tasks.Task WaitForUIRefresh()
+            => System.Threading.Tasks.Task.CompletedTask;
     }
 
     /// <summary>【P4·遏制】一个"可移除地区"选项：地区 UID + 序号（1-based，显示用）+ 当前可移除数。</summary>

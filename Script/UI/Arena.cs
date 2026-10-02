@@ -714,6 +714,35 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【UI 立即刷新·帧同步点】实现 <see cref="IGameUIHooks.WaitForUIRefresh"/>：
+    /// 先把待刷新的容器立即重排一次（数据层已同步、UI 树已更新，立刻重排保证"本帧即刻可见"），
+    /// 再等待一个 <c>ProcessFrame</c> 让 Godot 真正完成一次绘制，然后交还控制权。
+    /// 用于恢复步骤"先手弃牌 → UI 立即刷新 → 后手可见 → 后手弃牌"的严格顺序：
+    /// Controller 在弃牌（Model 已改）后 await 本方法，回来后后手才弹窗，届时墓地已可见先手弃的牌。
+    /// </summary>
+    public async System.Threading.Tasks.Task WaitForUIRefresh()
+    {
+        // 1) 立即重排（同步）：把手牌/墓地/场上的数据变化立刻反映到节点位置，避免"等下一帧才归位"。
+        // 防御：本方法在 Controller 的异步续算里被 await，**任何异常都不允许外泄**——
+        // 否则 async void 的调用链（RunRecoverHandLimitAsync）会因未捕获异常静默中断，
+        // 表现为"弃牌完成但恢复步骤不推进"。故这里吞掉一切刷新异常（刷新失败不影响规则推进）。
+        try { SyncDerivedUI(); }
+        catch (System.Exception ex) { GD.PrintErr($"[Arena] WaitForUIRefresh 刷新异常（忽略，不影响推进）：{ex.Message}"); }
+
+        // 2) 等待一个渲染帧：保证 Godot 完成本次绘制，后手弹窗前画面已呈现先手的弃牌结果。
+        // 防御：节点已被释放（换局/重开）或不在树内时**不等待**——否则 ToSignal 永不完成，调用方永久挂起。
+        try
+        {
+            if (GodotObject.IsInstanceValid(this) && IsInsideTree())
+            {
+                var tree = GetTree();
+                if (tree != null) await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            }
+        }
+        catch (System.Exception ex) { GD.PrintErr($"[Arena] WaitForUIRefresh 等待帧异常（忽略，不影响推进）：{ex.Message}"); }
+    }
+
+    /// <summary>
     /// 【P2】通用选卡 UI：让 `chooserPlayerId` 从候选卡中选一张（封印取手牌 / 检索取牌 / 弃牌共用）。
     /// View 只负责"展示候选 + 收集选择"，实际动作由 Controller 经回调执行（View 不写 Model）。
     /// </summary>

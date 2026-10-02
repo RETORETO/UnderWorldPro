@@ -220,9 +220,16 @@ namespace Script.UI
         /// </summary>
         private void BuildHandCards(ChoiceRequest request)
         {
-            var hint = new Label { Text = "额外费用：勾选要展示给对手的手牌（不选＝不展示，按全额费用打出）" };
+            string hintText = string.IsNullOrEmpty(request.Prompt)
+                ? "额外费用：勾选要展示给对手的手牌（不选＝不展示，按全额费用打出）"
+                : request.Prompt;
+            var hint = new Label { Text = hintText };
             hint.MouseFilter = Control.MouseFilterEnum.Ignore;
             _buttonBox.AddChild(hint);
+
+            // 数量约束：未显式设置 NumberMax（=0）时按"不限制"处理，避免破坏既有展示/调度流程
+            int minSel = request.NumberMin;
+            int maxSel = request.NumberMax > 0 ? request.NumberMax : int.MaxValue;
 
             var checks = new List<(string uid, CheckBox box)>();
             if (request.OptionUids != null)
@@ -241,7 +248,29 @@ namespace Script.UI
                 }
             }
 
-            var confirm = new Button { Text = "确认（展示已勾选的手牌）" };
+            var confirm = new Button { Text = "确认" };
+            // 按数量约束启用确认键：至少 minSel、至多 maxSel 张
+            System.Action refreshConfirm = () =>
+            {
+                int n = 0;
+                foreach (var (_, cb) in checks) if (cb.ButtonPressed) n++;
+                confirm.Disabled = (n < minSel || n > maxSel);
+            };
+            foreach (var (_, cb) in checks)
+            {
+                cb.Toggled += (pressed) =>
+                {
+                    // 超过上限：自动取消本次勾选（防止多选）
+                    if (pressed)
+                    {
+                        int n = 0;
+                        foreach (var (_, b) in checks) if (b.ButtonPressed) n++;
+                        if (n > maxSel) cb.ButtonPressed = false;
+                    }
+                    refreshConfirm();
+                };
+            }
+
             confirm.Pressed += () =>
             {
                 var res = new ChoiceResult { Cancelled = false, Confirmed = true };
@@ -250,8 +279,9 @@ namespace Script.UI
                 Complete(res);
             };
             _buttonBox.AddChild(confirm);
+            refreshConfirm();
 
-            AddCancelIfAllowed(request, "取消（不打出）");
+            AddCancelIfAllowed(request, "取消");
         }
 
         /// <summary>

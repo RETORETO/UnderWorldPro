@@ -49,8 +49,17 @@ public partial class TurnManager : Node
     // ============================================================
     public int TurnCount { get; internal set; } = 0;
     public TurnPhase CurrentPhase { get; internal set; } = TurnPhase.StartReset;
+    /// <summary>先手玩家（1/2）。**0 = 尚未产生**：第0回合（调度步骤）期间双方未分先后手。</summary>
     public int FirstPlayerId { get; internal set; } = 1;
     public int PriorityPlayerId { get; internal set; } = 0;
+
+    /// <summary>是否已产生先手玩家（第0回合调度期间为 false）。</summary>
+    public bool HasFirstPlayer => FirstPlayerId == 1 || FirstPlayerId == 2;
+    /// <summary>
+    /// 先手行 UI 文案（View 只读）：未产生时显示"先手：未产生"，否则"先手：P1/P2"。
+    /// 单机/联机两处回合状态标签共用本属性，避免文案分叉。
+    /// </summary>
+    public string FirstPlayerDisplayText => HasFirstPlayer ? $"先手：P{FirstPlayerId}" : "先手：未产生";
 
     // ============================================================
     // 事件系统（供 UI 订阅）
@@ -225,6 +234,13 @@ public partial class TurnManager : Node
             return;
         }
 
+        // 恢复步骤：叠空即进入"手牌上限检查点"——若超上限则启动弃牌循环（门控，阻止提前离开）
+        if (CurrentPhase == TurnPhase.EndRecover && !RecoverCanLeave())
+        {
+            RunRecoverHandLimitAsync();
+            return;
+        }
+
         if (_autoAdvanceDepth >= MaxAutoAdvanceDepth)
         {
             GD.PrintErr($"⚠ [TurnManager] 免让过自动推进深度达上限（{MaxAutoAdvanceDepth}），停止自动推进，退回让过窗口（阶段={CurrentPhase}）");
@@ -257,18 +273,24 @@ public partial class TurnManager : Node
     /// <summary>当前对抗地区 UID（无地区时为空串）。</summary>
     public string CurrentCombatAreaUid =>
         (_combatAreaIndex >= 0 && _combatAreaIndex < _combatAreaUids.Count) ? _combatAreaUids[_combatAreaIndex] : "";
-    /// <summary>当前对抗地区序号（1-based，无地区时为 0），供 UI 显示"地区N 调查对抗"。
+    /// <summary>当前对抗地区序号（1-based，无地区时为 0），供 UI 显示"1地区调查步骤"。
     /// 取 AreaManager 注册的<b>真实槽位编号</b>（与 Arena UI 一致），避免游标序号错位。</summary>
     public int CurrentCombatAreaNo
     {
         get
         {
+            // 【联机投影】客户端 TurnManager 没有权威的地区游标（_combatAreaUids / _areaManager），
+            // 只能靠服务端快照下行的序号（ApplySnapshot 写入）；服务端本字段恒 0，行为不变。
+            if (_projectedCombatAreaNo > 0) return _projectedCombatAreaNo;
             string uid = CurrentCombatAreaUid;
             if (uid == "") return 0;
             int realNo = _areaManager != null ? _areaManager.GetSlotIndex(uid) : 0;
             return realNo > 0 ? realNo : _combatAreaIndex + 1;
         }
     }
+
+    /// <summary>【联机投影】快照下行的对抗地区序号（仅客户端写入；服务端恒 0）。</summary>
+    private int _projectedCombatAreaNo = 0;
 
     // ============================================================
     // 生命周期
@@ -413,6 +435,12 @@ public partial class TurnManager : Node
         if (discarded > 0 && firstDiscarded != null)
             _triggerEmitPoints?.OnDiscard(firstDiscarded, discarderId,
                 batchSize > 0 ? System.Math.Min(batchSize, discarded) : discarded);
+        // 【UI 刷新】弃牌是"模型已变、请刷新"的可见变更：显式广播 UI 通知总线。
+        // 单机 Arena 订阅 OnVisualDirty → OnAssetsChangedHandler + ArrangeAllCards（与出牌/激活等同一收口通道），
+        // 保证手牌/墓地 UI 与数据同步；不再依赖"ZoneManager.OnCardMoved→SyncCardUIToZone"这一单一路径，
+        // 避免在恢复步骤等异步流程中因时序问题导致界面滞后。
+        if (discarded > 0)
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
         return discarded;
     }
 
@@ -563,6 +591,7 @@ public partial class TurnManager : Node
         ResetPassWindow();
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
+        _projectedCombatAreaNo = 0;     // 【联机投影】未开局无对抗地区
         _extraPowerDoneAreas.Clear();   // 【P3·K18】新回合：追加势力对抗的去重集合复位
         _atomicLock = false;
         _openModalCount = 0;
@@ -572,7 +601,9 @@ public partial class TurnManager : Node
     public void StartGame()
     {
         TurnCount = 1;
-        FirstPlayerId = 1;
+        // 先手兜底：正常流程里先手已在"第0回合调度完成后"随机产生（或单机 Reset 后默认为 P1），
+        // 此处只在"未产生"（如跳过调度直接开局的异常路径）时补一次随机，避免把 0 带进第一回合。
+        if (!HasFirstPlayer) FirstPlayerId = RollFirstPlayer();
         ResetPassWindow();
         _combatAreaUids.Clear();
         _combatAreaIndex = 0;
@@ -618,6 +649,10 @@ public partial class TurnManager : Node
     //   注：发起手牌本身不需要此机制——快照可随时补帧（`LastSnapshot`），故第 1 回合的启动时机原样不动。
     // 结算口径：双方都上报后，把**高亮（所选）手牌**放到牌库底，再从**牌库顶**抽回等量张，最后洗牌。
     // 说明：仅联机（InputGateway 注入）启用；单机由 StartMatch 直接 StartGame，不走本步骤。
+    // 【先手产生时机（用户 2026-10 口径）】调度期间**不产生先手玩家**：
+    //   - 进入第 0 回合即把 `FirstPlayerId` 置 0（`HasFirstPlayer=false`），UI 显示"先手: 未产生"；
+    //   - 双方上报齐 → 结算置底/顶抽/洗牌 → **仍在第 0 回合（TurnCount=0）**随机产生先手玩家；
+    //   - 之后才离开第 0 回合并 `StartGame()`，先手结果随 `OnAsyncSettlementCompleted` 快照下发。
     // ============================================================
 
     /// <summary>是否处于第 0 回合（开局调度步骤）：供 UI 显示"调度步骤" / 冻结常规交互。</summary>
@@ -632,6 +667,15 @@ public partial class TurnManager : Node
     /// <summary>各玩家上报的"要换掉"的手牌 UID（已权威复检）。</summary>
     private readonly System.Collections.Generic.Dictionary<int, List<string>> _mulliganPicks
         = new System.Collections.Generic.Dictionary<int, List<string>>();
+
+    /// <summary>
+    /// 【先手产生】随机掷出先手玩家（1/2）。随机源沿用注入的 `_rng`（可复现，禁止 new Random()）；
+    /// 未注入随机源（部分测试/裸实例）时回退 P1，保持既有确定性。
+    /// </summary>
+    private int RollFirstPlayer() => _rng != null ? (_rng.Next(2) == 0 ? 1 : 2) : 1;
+
+    /// <summary>把当前先手写入 PlayerManager 的"先手标志"（0 = 未产生，双方均无先手加成）。</summary>
+    private void SyncFirstPlayerFlag() => _playerManager?.SetFirstPlayer(FirstPlayerId);
 
     /// <summary>
     /// 【第 0 回合·调度步骤】联机入口（客户端驱动）：先把阶段置为第 0 回合并下发一份快照，
@@ -656,11 +700,15 @@ public partial class TurnManager : Node
         TurnCount = 0;
         CurrentPhase = TurnPhase.Mulligan;
         PriorityPlayerId = 0;
+        // 【先手未产生】第 0 回合调度期间不分先后手：UI 显示"先手: 未产生"，
+        // 先手玩家在双方上报完成后（仍在第 0 回合）随机产生。
+        FirstPlayerId = 0;
+        SyncFirstPlayerFlag();
         ResetPassWindow();
         _mulliganReported.Clear();
         _mulliganPicks.Clear();
         OnPhaseChanged?.Invoke(CurrentPhase);
-        GD.Print("=== [TurnManager] 第0回合·调度步骤开始（等待双方主动上报调度选择）===");
+        GD.Print("=== [TurnManager] 第0回合·调度步骤开始（未产生先手玩家，等待双方主动上报调度选择）===");
         OnAsyncSettlementCompleted?.Invoke();   // 服务端据此下发一份「第0回合」快照，客户端据此弹调度框
     }
 
@@ -668,6 +716,7 @@ public partial class TurnManager : Node
     /// 【客户端驱动】接收某玩家的调度上报：`pickedUids` 为**要换掉**的手牌 UID（空 = 不调度）。
     /// 服务端按该玩家**当前真实手牌**权威复检（不在手牌里的 UID 一律丢弃）。
     /// 双方都上报后自动结算 + 进入第一回合；重复上报（重连重发）幂等忽略。
+    /// 结算口径：各自把选中的牌放回**牌库底**，再抽等量牌，最后洗牌。
     /// </summary>
     public void ReportMulligan(int playerId, List<string> pickedUids)
     {
@@ -696,6 +745,12 @@ public partial class TurnManager : Node
 
         // 双方齐 → 统一结算（先取出全部 UID 再动牌库，避免边遍历边改动）
         foreach (var kv in _mulliganPicks) ApplyMulligan(kv.Key, kv.Value);
+
+        // 【先手产生】双方完成调度后、**依然在第 0 回合（TurnCount=0）**随机产生先手玩家。
+        // 必须早于 `OnAsyncSettlementCompleted`（服务端据此下发快照），否则客户端首份快照里先手仍是"未产生"。
+        FirstPlayerId = RollFirstPlayer();
+        SyncFirstPlayerFlag();
+        GD.Print($"🎲 [TurnManager] 第0回合：双方调度完成，随机产生先手玩家 → P{FirstPlayerId}");
 
         CurrentPhase = TurnPhase.StartReset;   // 离开第 0 回合（StartGame 会置 TurnCount=1 并进入重置步骤）
         GD.Print("=== [TurnManager] 调度步骤完成，开始第一回合 ===");
@@ -819,6 +874,12 @@ public partial class TurnManager : Node
             // PriorityPlayerId=0 的窗口内同步尝试 Pass/行动，触发"行动权在玩家0"误报。
             // 直接 AdvancePhase → EnterPhase → DoXxx 内部以有效玩家(1/2) 复位并发出 OnPriorityChanged，
             // UI 不经历玩家0瞬间，彻底避免下游误触发。
+            // 恢复步骤：双方让过且堆叠空 → 先过"手牌上限检查点"再推进
+            if (CurrentPhase == TurnPhase.EndRecover && !RecoverCanLeave())
+            {
+                RunRecoverHandLimitAsync();
+                return;
+            }
             GD.Print("⏩ [TurnManager] 双方都让过，推进阶段");
             AdvancePhase();
         }
@@ -1393,16 +1454,37 @@ public partial class TurnManager : Node
     /// </summary>
     private void RunTriggerPhaseDispatch(List<Script.Data.Effects.StackEffectInstance> allTriggers, System.Action onAllCompleted = null)
     {
+        // 恢复步骤·双方都超上限：延迟收集弃牌触发，双方都弃完后再统一开窗（决策：defer）
+        if (_deferRecoverTriggers)
+        {
+            _deferredRecoverTriggers.AddRange(allTriggers);
+            return;
+        }
+        // 恢复步骤内触发的效应：标记挂起，阻止在窗口结束前提前离开恢复步骤
+        bool hold = (CurrentPhase == TurnPhase.EndRecover);
+        if (hold) _recoverTriggerHold = true;
+        System.Action completed = () =>
+        {
+            if (hold) _recoverTriggerHold = false;
+            onAllCompleted?.Invoke();
+            // 【恢复步骤·再驱动】触发窗口结束后，若仍在恢复步骤且手牌未清（弃牌循环先前因"窗口挂起"跳出）：
+            // 重新驱动手牌上限循环，避免"触发结算完却没人再推进恢复步骤"的死角（先手/后手弃牌触发的效应）。
+            if (hold && CurrentPhase == TurnPhase.EndRecover && !RecoverCanLeave()
+                && (_stackManager?.Entries.Count ?? 0) == 0)
+            {
+                RunRecoverHandLimitAsync();
+            }
+        };
         if (InputGateway != null)
         {
             _ = RunTriggerPhaseAsync(allTriggers, () =>
             {
-                onAllCompleted?.Invoke();
+                completed();
                 OnAsyncSettlementCompleted?.Invoke();
             });
             return;
         }
-        RunTriggerPhase(allTriggers, onAllCompleted);
+        RunTriggerPhase(allTriggers, completed);
     }
 
     /// <summary>联机触发排序窗口的上下文序号（用于生成 OrderContextId，客户端据此复用同一排序窗口）。</summary>
@@ -4697,7 +4779,7 @@ public partial class TurnManager : Node
 
     /// <summary>
     /// 阶段/步骤 → 中文显示名（单机 Arena 与联机 ArenaOl **共用唯一口径**，避免两处 switch 漂移）。
-    /// 12 个步骤全部中文；对抗三步骤带"地区N"前缀（areaNo &lt;= 0 时不带前缀）。
+    /// 12 个步骤全部中文；对抗三步骤带"{N}地区"前缀（如"1地区调查步骤"，areaNo &lt;= 0 时不带前缀）。
     /// </summary>
     public static string GetPhaseDisplayName(TurnPhase phase, int areaNo = 0)
         => phase switch
@@ -4708,9 +4790,9 @@ public partial class TurnManager : Node
             TurnPhase.ActionFirst          => "先手行动步骤",
             TurnPhase.ActionSecond         => "后手行动步骤",
             TurnPhase.PreCombat            => "机动轮",
-            TurnPhase.CombatInvestigation  => areaNo > 0 ? $"地区{areaNo} 调查对抗步骤" : "调查对抗步骤",
-            TurnPhase.CombatStrength       => areaNo > 0 ? $"地区{areaNo} 战斗对抗步骤" : "战斗对抗步骤",
-            TurnPhase.CombatPower          => areaNo > 0 ? $"地区{areaNo} 势力对抗步骤" : "势力对抗步骤",
+            TurnPhase.CombatInvestigation  => areaNo > 0 ? $"{areaNo}地区调查步骤" : "调查对抗步骤",
+            TurnPhase.CombatStrength       => areaNo > 0 ? $"{areaNo}地区战斗步骤" : "战斗对抗步骤",
+            TurnPhase.CombatPower          => areaNo > 0 ? $"{areaNo}地区势力步骤" : "势力对抗步骤",
             TurnPhase.EndCleanup           => "结束步骤",
             TurnPhase.EndRecover           => "恢复步骤",
             TurnPhase.EndPassTurn          => "移交先手",
@@ -4731,6 +4813,15 @@ public partial class TurnManager : Node
     /// <summary>供 UI 直接取"当前步骤中文名"（内部带上当前对抗地区序号）。</summary>
     public string CurrentPhaseDisplayName =>
         GetPhaseDisplayName(CurrentPhase, IsCombatPhase(CurrentPhase) ? CurrentCombatAreaNo : 0);
+
+    /// <summary>
+    /// 回合状态标签四行文案（单机 Arena 与联机 ArenaOl **共用唯一口径**）：
+    /// ① 第n回合　② 先手：P1/P2（未产生时"先手：未产生"）　③ 步骤中文名（含对抗地区）
+    /// ④ 行动权：P1/P2（无人持有时"行动权：无"）。View 只做 `Label.Text = turn.TurnStatusText`。
+    /// </summary>
+    public string TurnStatusText =>
+        $"第{TurnCount}回合\n{FirstPlayerDisplayText}\n{CurrentPhaseDisplayName}\n"
+        + (PriorityPlayerId > 0 ? $"行动权：P{PriorityPlayerId}" : "行动权：无");
 
     /// <summary>是否为按地区逐个结算的对抗步骤（需要带地区序号显示）。</summary>
     public static bool IsCombatPhase(TurnPhase phase)
@@ -4839,13 +4930,192 @@ public partial class TurnManager : Node
         BeginStepPriority("结束步骤");
     }
 
+    // ============================================================
+    // 恢复步骤：手牌上限检查点 + 弃牌循环
+    // ============================================================
+    /// <summary>手牌上限（可配置常量，默认 7）。超过此数的玩家在恢复步骤上限检查点必须弃到恰好该数。</summary>
+    public int HandLimit = 7;
+
+    // 恢复步骤内运行态
+    private bool _recoverTriggerHold;    // 恢复步骤内触发窗口挂起：阻止提前离开恢复步骤
+    private bool _recoverDiscardRunning; // 防止异步重入
+    private bool _deferRecoverTriggers;  // 双方都超上限时：延迟收集弃牌触发，双方都弃完再统一开窗
+    private System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance> _deferredRecoverTriggers
+        = new System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance>();
+
+    /// <summary>
+    /// 恢复步骤能否离开（推进到下一阶段）？
+    /// 仅当处于恢复步骤、双方手牌都 ≤ 手牌上限、且没有任何挂起的触发窗口时才允许离开。
+    /// </summary>
+    private bool RecoverCanLeave()
+    {
+        if (CurrentPhase != TurnPhase.EndRecover) return true;
+        if (_recoverTriggerHold) return false;
+        int h1 = GetHandOf(1).Count;
+        int h2 = GetHandOf(2).Count;
+        return h1 <= HandLimit && h2 <= HandLimit;
+    }
+
+    private void BeginDeferRecoverTriggers()
+    {
+        _deferRecoverTriggers = true;
+        _deferredRecoverTriggers.Clear();
+    }
+
+    private void EndDeferRecoverTriggersAndFlush()
+    {
+        _deferRecoverTriggers = false;
+        if (_deferredRecoverTriggers.Count == 0) return;
+        var batch = _deferredRecoverTriggers;
+        _deferredRecoverTriggers = new System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance>();
+        RunTriggerPhaseDispatch(batch);
+    }
+
+    /// <summary>
+    /// 恢复步骤手牌上限循环（核心循环）：
+    /// 每当堆叠清空（或恢复步骤首次进入）检查双方手牌；任一玩家超过上限则弃掉多余张数，
+    /// 弃牌触发的效应进入堆叠，结算后再次检查，直到双方都 ≤ 上限且堆叠为空。
+    /// 仅作用于恢复步骤内部（决策：scope＝仅恢复步骤内）。
+    /// </summary>
+    private async void RunRecoverHandLimitAsync()
+    {
+        if (_recoverDiscardRunning) return;
+        _recoverDiscardRunning = true;
+        try
+        {
+            while (!RecoverCanLeave())
+            {
+                // 有触发待结算或触发窗口挂起：交给既有让过/结算流程驱动，不在此重入
+                if ((_stackManager?.Entries.Count ?? 0) > 0 || _recoverTriggerHold)
+                    break;
+
+                int fp = FirstPlayerId;
+                int sp = (fp == 1) ? 2 : 1;
+                int overFp = System.Math.Max(0, GetHandOf(fp).Count - HandLimit);
+                int overSp = System.Math.Max(0, GetHandOf(sp).Count - HandLimit);
+                bool both = overFp > 0 && overSp > 0;
+
+                if (both) BeginDeferRecoverTriggers();
+                try
+                {
+                    if (overFp > 0) await DiscardToHandLimitAsync(fp, fp, overFp);
+                    if (overSp > 0) await DiscardToHandLimitAsync(sp, sp, overSp);
+                }
+                catch (System.Exception ex)
+                {
+                    // 防御：单次弃牌流程内任何异常都不允许中断"恢复步骤推进"（否则弃牌完成却不离开恢复步骤）。
+                    GD.PrintErr($"⚠ [TurnManager] 恢复步骤弃牌流程异常（继续尝试推进）：{ex.Message}");
+                }
+                finally { if (both) EndDeferRecoverTriggersAndFlush(); }
+
+                // 弃牌后若又有触发入堆叠/窗口挂起：跳出，交由既有流程驱动；否则回到循环顶部重新检查手牌
+            }
+
+            // 【推进判定】正常情况下双方都 ≤ 上限且堆叠为空 → 推进。
+            // 兜底：若因"堆叠非空/触发窗口挂起"跳出循环，则由既有让过/结算流程（Pass / RunTriggerPhase 完成回调）
+            // 再次驱动本循环或推进；此处仅在确实可离开时才调用 AdvancePhase。
+            if (RecoverCanLeave() && (_stackManager?.Entries.Count ?? 0) == 0 && !_recoverTriggerHold)
+            {
+                AdvancePhase();
+                // 【联机·立即下发快照】恢复步骤推进（EndRecover→EndPassTurn→下一回合）后主动通知服务端下发快照，
+                // 否则客户端阶段标签/战场会停留在"恢复步骤"（联机 UI 完全由快照驱动）。
+                NotifyResolutionSettled();
+            }
+        }
+        finally
+        {
+            _recoverDiscardRunning = false;
+        }
+    }
+
+    /// <summary>
+    /// 让某玩家恰好弃掉 requiredCount 张手牌（手牌上限弃牌）。
+    /// 联机：复用既有「一次选择 N 张」多选框（ChoiceRequest.Kind.SelectHandCards，ForceChoice＋NumberMin=NumberMax=requiredCount）。
+    /// 单机：复用既有选牌窗逐张确认，强制收集恰好 requiredCount 张。
+    /// </summary>
+    private async System.Threading.Tasks.Task DiscardToHandLimitAsync(int discarderId, int chooserPlayerId, int requiredCount)
+    {
+        var hand = GetHandOf(discarderId);
+        if (hand.Count <= HandLimit) return;
+        var candidates = new System.Collections.Generic.List<CardInstance>(hand);
+
+        if (InputGateway != null)
+        {
+            var req = new Script.Net.ChoiceRequest
+            {
+                PlayerId = discarderId,
+                RequestKind = Script.Net.ChoiceRequest.Kind.SelectHandCards,
+                Prompt = $"恢复步骤·手牌上限：你必须恰好弃掉 {requiredCount} 张手牌",
+                ForceChoice = true,
+                NumberMin = requiredCount,
+                NumberMax = requiredCount,
+            };
+            foreach (var c in candidates)
+            {
+                if (c == null) continue;
+                req.OptionUids.Add(c.UID);
+                req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? c.UID);
+                req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, CardZone.Hand, discarderId));
+            }
+            var result = await InputGateway.RequestChoice(discarderId, req);
+            if (result != null && result.SelectedUids.Count > 0)
+            {
+                var toDiscard = candidates.FindAll(c => c != null && result.SelectedUids.Contains(c.UID));
+                if (toDiscard.Count > requiredCount) toDiscard = toDiscard.GetRange(0, requiredCount);
+                if (toDiscard.Count > 0)
+                {
+                    DiscardCards(discarderId, toDiscard, toDiscard.Count);
+                    // 【联机·立即下发快照】弃牌改了 Model（手牌→墓地），必须主动通知服务端下发快照，
+                    // 否则客户端 UI（阶段标签/手牌/双方墓地）会一直停留在旧状态（＝"回合已推进但界面还在恢复步骤"）。
+                    // 这一步同时让"后手弹窗前能看到先手弃牌结果"成立。
+                    NotifyResolutionSettled();
+                    // 【顺序保证】弃牌已改 Model：等 UI 真正刷新（联机由客户端乐观回显 + 快照收敛呈现）后再继续。
+                    await WaitUIRefreshAsync();
+                }
+            }
+        }
+        else
+        {
+            var remaining = new System.Collections.Generic.List<CardInstance>(candidates);
+            var picked = new System.Collections.Generic.List<CardInstance>();
+            for (int i = 0; i < requiredCount && remaining.Count > 0; i++)
+            {
+                CardInstance chosen = null;
+                if (EE?.UIHooks != null)
+                {
+                    var tcs = new System.Threading.Tasks.TaskCompletionSource<CardInstance>();
+                    EE.UIHooks.PromptDiscard(discarderId, chooserPlayerId, remaining, (c) => tcs.TrySetResult(c));
+                    chosen = await tcs.Task;
+                }
+                if (chosen == null) chosen = remaining[0]; // 无 UI 或取消：强制取第一张（手牌上限为强制弃牌）
+                picked.Add(chosen);
+                remaining.Remove(chosen);
+            }
+            if (picked.Count > 0)
+            {
+                DiscardCards(discarderId, picked, picked.Count);
+                // 【统一通知】弃牌已改 Model：单机无订阅者（无副作用），联机由 MatchHost 据此下发快照。
+                NotifyResolutionSettled();
+                // 【顺序保证】单机：弃牌已改 Model，等一帧把墓地/手牌真正渲染出来，后手弹窗前即可见。
+                await WaitUIRefreshAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 等 UI 完成一次刷新（View 的帧同步点）。无 UI（headless/测试）时为已完成任务，不引入等待。
+    /// 收口所有"改完 Model 需让表现层追上一帧"的调用，避免散落各处直接摸 UI。
+    /// </summary>
+    private System.Threading.Tasks.Task WaitUIRefreshAsync()
+        => EE?.UIHooks != null ? EE.UIHooks.WaitForUIRefresh() : System.Threading.Tasks.Task.CompletedTask;
+
     private void DoRecover()
     {
-        if (VerboseSteps) GD.Print("【恢复步骤】清除所有伤害标记");
-        _cardManager?.ResetAllDamage();
-        // 步骤开始：当前优先玩家获得优先权（免让过：若堆叠为空则立即推进，不等让过）
+        if (VerboseSteps) GD.Print("【恢复步骤】");
+        _cardManager?.ResetAllDamage();                          // 1) 移除所有角色上的伤害
+        EffectEngine.Instance?.ExpireTurnEndEffects(TurnCount);  // 2) 所有注明"直到回合结束"的效果在此时结束
         BeginStepPriority("恢复步骤");
-        TryAutoAdvance();
+        TryAutoAdvance();                                        // 3) 上限检查点（首次）经门控接入弃牌循环
     }
 
     private void DoPassTurn()
@@ -4865,6 +5135,8 @@ public partial class TurnManager : Node
             FirstPlayerId = FirstPlayerId,
             PriorityPlayerId = PriorityPlayerId,
             CurrentPhase = (int)CurrentPhase,
+            // 【联机】对抗步骤的地区序号随快照下行（客户端没有权威地区游标，否则联机只显示"调查对抗步骤"）。
+            CombatAreaNo = IsCombatPhase(CurrentPhase) ? CurrentCombatAreaNo : 0,
             Zones = _zoneManager?.ToSnapshot() ?? new System.Collections.Generic.List<Script.Net.ZoneCardRef>(),
             Stack = StackManagerRef?.ToSnapshot() ?? new System.Collections.Generic.List<Script.Net.StackEntrySnap>(),
         };
@@ -4902,5 +5174,6 @@ public partial class TurnManager : Node
         CurrentPhase = (TurnPhase)snap.CurrentPhase;
         FirstPlayerId = snap.FirstPlayerId;
         PriorityPlayerId = snap.PriorityPlayerId;
+        _projectedCombatAreaNo = snap.CombatAreaNo;   // 对抗地区序号（联机显示"1地区调查步骤"用）
     }
 }

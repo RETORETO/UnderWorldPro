@@ -968,12 +968,22 @@ public partial class Arena
 
         int available = _playerManager.GetAvailableMana(playerId);
         int total = _zoneManager.GetZoneCards(CardZone.AssetZone, playerId).Count;
+        label.Text = FormatCostPoolText(available, total,
+            _playerManager.GetColorLoyalty(playerId), _playerManager.GetDomainLoyalty(playerId));
+    }
 
+    /// <summary>
+    /// 费用池三行文案（**单机 Arena 与联机 ArenaOl 共用唯一口径**）：
+    /// ① 费用：可用/总　② 颜色忠诚　③ 领域忠诚（均按枚举定义顺序罗列、仅正值、中文名+数量）。
+    /// </summary>
+    internal static string FormatCostPoolText(int available, int total,
+        Dictionary<CardColor, int> colors, Dictionary<MagicDomain, int> domains)
+    {
         // 颜色忠诚：按枚举定义顺序罗列，颜色不同用逗号隔开
         var colorParts = new List<string>();
         foreach (CardColor c in Enum.GetValues(typeof(CardColor)))
         {
-            int v = _playerManager.GetColorLoyalty(playerId).TryGetValue(c, out int val) ? val : 0;
+            int v = (colors != null && colors.TryGetValue(c, out int cv)) ? cv : 0;
             if (v > 0) colorParts.Add($"{(ColorCn.TryGetValue(c, out var cn) ? cn : c.ToString())}{v}");
         }
 
@@ -981,13 +991,13 @@ public partial class Arena
         var domainParts = new List<string>();
         foreach (MagicDomain d in Enum.GetValues(typeof(MagicDomain)))
         {
-            int v = _playerManager.GetDomainLoyalty(playerId).TryGetValue(d, out int val) ? val : 0;
+            int v = (domains != null && domains.TryGetValue(d, out int dv)) ? dv : 0;
             if (v > 0) domainParts.Add($"{(DomainCn.TryGetValue(d, out var cn) ? cn : d.ToString())}{v}");
         }
 
-        label.Text = $"费用：{available}/{total}\n" +
-                     $"颜色忠诚：{string.Join("，", colorParts)}\n" +
-                     $"领域忠诚：{string.Join("，", domainParts)}";
+        return $"费用：{available}/{total}\n" +
+               $"颜色忠诚：{string.Join("，", colorParts)}\n" +
+               $"领域忠诚：{string.Join("，", domainParts)}";
     }
 
     /// <summary>

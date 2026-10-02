@@ -164,9 +164,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "卡组名"
 
-[node name="CouncilOption" type="OptionButton" parent="BottomBar"]
-layout_mode = 2
-
 [node name="CountLabel" type="Label" parent="BottomBar"]
 layout_mode = 2
 text = "0 张"
