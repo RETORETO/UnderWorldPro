@@ -1,14 +1,163 @@
-# Godot 4+ specific ignores
+# =============================================================================
+# UWPro —— Git 忽略规则
+# -----------------------------------------------------------------------------
+# 项目技术栈：Godot 4.7.1 (.NET / C#) + MSBuild，跨平台目标 Windows / Android
+# 说明：本文件按「为什么忽略」分组，每组都写明判断依据。
+#      res:// 下的项目资源（*.cs / *.tscn / *.tres / *.import / *.jpg 等）
+#      属于游戏源码与素材，必须纳入版本控制，不在此处忽略。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 一、Godot 引擎自动生成物（可 100% 由编辑器重新生成，绝不能入库）
+# -----------------------------------------------------------------------------
+# 说明：资源导入缓存、临时编译产物、编辑器缓存。
+#      首次用 Godot 打开工程时会依据 *.import 自动重建，入库只会造成
+#      巨大的二进制噪音与无意义冲突。
 .godot/
 /android/
 
-# 一键联机脚本产出的进程日志（每次运行生成，不入库）
-logs/
+# 导出/发布产物（export 出来的可执行包，体积大且可由 export_presets.cfg 重现）
+/build/
+/export/
+*.tmp
+*.translation
 
-# 本地临时诊断日志
-_dsh*.log
+# -----------------------------------------------------------------------------
+# 二、C# / .NET 构建与包管理（可 restore / rebuild 再生）
+# -----------------------------------------------------------------------------
+# 说明：本项目 UWPro.csproj 设置了 <RestorePackagesPath>./packages</RestorePackagesPath>，
+#      因此 NuGet 包被还原到仓库内的 packages/ 目录。
+#      该目录是纯依赖缓存（331MB / 2616 个文件），已实测可由
+#      `dotnet restore` 从 nuget.org 完整还原，属于「依赖清单入库、依赖本体不入库」
+#      的标准实践（等价于 node_modules / vendor 目录）。
+/packages/
+
+# MSBuild / IDE 中间产物
+[Bb]in/
+[Oo]bj/
+*.user
+*.userprefs
+*.suo
+*.userosscache
+*.sln.docstates
+*.nupkg
+*.snupkg
+
+# 构建输出与日志（见第四节）
+*.binlog
+
+# -----------------------------------------------------------------------------
+# 三、IDE 与本地工具状态（与本机环境强绑定，换机器即失效）
+# -----------------------------------------------------------------------------
+# Visual Studio：.suo / *.sqlite / FileContentIndex / DocumentLayout 等
+# 二进制状态文件，每次开 IDE 都会变动，是最大的「虚假 diff」来源。
+/.vs/
 .vs/
-/.vs
-/.codebuddy
-/.vs
-/.vs
+*.vsidx
+*.wsuo
+
+# .NET SDK 本地 HOME（哨兵文件，记录本机 SDK 首次运行状态）
+/.dotnet_home/
+
+# AI 辅助工具的历史计划缓存
+/.codebuddy/
+
+# VS Code / JetBrains Rider
+.vscode/
+.idea/
+*.sln.iml
+
+# 编辑器/系统级临时文件
+*~
+*.swp
+*.swo
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# -----------------------------------------------------------------------------
+# 四、运行时日志、联机测试数据与临时产物（每次运行都会重新生成）
+# -----------------------------------------------------------------------------
+# 一键联机脚本（一键联机三开.bat / start_online_3.ps1）产出的进程日志。
+# Godot 自身 file_logging 也写入 user://logs/（即下方 godot_userdata 目录）。
+/logs/
+
+# Godot user:// 目录的本地重定向（联机三开用的 clientA / clientB 独立用户目录）。
+# 内含 online_client.cfg（本机昵称/IP）、shader_cache（着色器缓存）等
+# 每台机器、每次运行都不同的内容。
+.godot_userdata_runtime/
+.godot_userdata_server/
+.godot_userdata/
+
+# 构建/运行日志转储（曾误入库的最大单体垃圾文件 test_out.txt 达 4MB）
+*_log.txt
+*_log[0-9].txt
+*_log[0-9][0-9].txt
+run_log.txt
+test_out.txt
+build_chk.txt
+build_out.txt
+_analyze_out.txt
+_trigger_out.txt
+_tres_report.txt
+
+# 一次性调试/迁移脚本（生成或校验用，不属于构建流程）
+_gen_restrictions.py
+_gen_cs.ps1
+_rebind_tres.ps1
+_fix_cs.py
+_analyze_full.py
+_analyze_trigger.py
+analyze_effects.py
+_strip_council_ext.py
+_strip_json_keys.py
+_validate_tres.py
+fix_tres_scriptclass.ps1
+AnalyzeEffects.ps1
+
+# 手动复制的备份副本（Godot 不会加载 "* - 副本.godot" 这类文件）
+* - 副本.godot
+*副本*
+
+# -----------------------------------------------------------------------------
+# 五、Python 缓存（本仓库用少量 Python 做数据校验/生成）
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# -----------------------------------------------------------------------------
+# 六、敏感信息（安全红线：任何情况下都不得入库）
+# -----------------------------------------------------------------------------
+# 本项目 UWPro.csproj 引用了 Ater.DeepSeek.Core，若后续接入 LLM / 联机服务，
+# API Key、令牌、证书、本地数据库一律走这些规则，只提交 *.sample 模板。
+.env
+.env.*
+!.env.sample
+*.key
+*.pem
+*.pfx
+*.p12
+secrets.json
+appsettings.*.local.json
+*.local.json
+.credentials/
+
+# -----------------------------------------------------------------------------
+# 七、压缩包与临时交换文件
+# -----------------------------------------------------------------------------
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.zip
+*.bak
+*.orig
+*.rej
+*.log
+
+# 例外：保留 GitHub 约定文件与说明文档
+!/.gitignore
+!/.gitattributes
+!/.editorconfig

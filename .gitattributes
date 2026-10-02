@@ -1,2 +1,89 @@
-# Normalize EOL for all files that Git considers text files.
+# =============================================================================
+# UWPro —— Git 属性
+# -----------------------------------------------------------------------------
+# 作用：① 统一文本文件换行符，避免跨平台（Windows 开发 / Android+CI 构建）
+#          产生整文件级别的「假 diff」；
+#       ② 显式标注二进制文件，禁止 Git 做行尾转换与文本 diff
+#          （否则 jpg / dll 等二进制一旦被当作文本处理会被损坏）。
+# 判断依据：Godot 资源导入依赖文件字节，二进制素材与 NuGet 包必须原样保存。
+# =============================================================================
+
+# 默认：由 Git 自动判定文本文件，并在仓库内统一使用 LF
 * text=auto eol=lf
+
+# -----------------------------------------------------------------------------
+# 文本文件：统一 LF（便于 diff / merge / 跨平台协作）
+# -----------------------------------------------------------------------------
+*.cs        text eol=lf
+*.csproj    text eol=lf
+*.sln       text eol=lf
+*.props     text eol=lf
+*.targets   text eol=lf
+*.gd        text eol=lf
+*.godot     text eol=lf
+*.tscn      text eol=lf
+*.tres      text eol=lf
+*.cfg       text eol=lf
+*.import    text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.xml       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.py        text eol=lf
+*.ps1       text eol=lf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+.editorconfig  text eol=lf
+
+# -----------------------------------------------------------------------------
+# 二进制文件：禁止任何转换（游戏素材 / 图像 / 库 / 压缩包 / IDE 二进制）
+# -----------------------------------------------------------------------------
+# 卡图与 UI 素材（Cards/Image 下约 794 张 jpg，约 653MB）
+*.jpg   binary
+*.jpeg  binary
+*.png   binary
+*.gif   binary
+*.bmp   binary
+*.tga   binary
+*.webp  binary
+*.svg   binary
+*.ico   binary
+
+# Godot 编译/导入产物与音频、字体
+*.ctex  binary
+*.stex  binary
+*.res   binary
+*.scn   binary
+*.ogg   binary
+*.mp3   binary
+*.wav   binary
+*.ttf   binary
+*.otf   binary
+
+# .NET 程序集与 NuGet 包
+*.dll   binary
+*.exe   binary
+*.pdb   binary
+*.nupkg binary
+*.snupkg binary
+*.p7s   binary
+*.sha512 binary
+
+# 其他二进制
+*.bin   binary
+*.zip   binary
+*.7z    binary
+*.rar   binary
+*.pdf   binary
+
+# -----------------------------------------------------------------------------
+# 语言统计：把自动生成/第三方内容排除出 GitHub Linguist 统计
+# -----------------------------------------------------------------------------
+packages/**     linguist-vendored
+.vs/**          linguist-vendored
+.godot/**       linguist-generated
+*.import        linguist-generated
