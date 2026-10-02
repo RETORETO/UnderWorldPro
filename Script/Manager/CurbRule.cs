@@ -178,14 +178,18 @@ namespace Script.Manager
             };
 
             ChoiceResult result = null;
-            try
+            // 【2026-09·原子操作期间的玩家选择】等待被遏制者回包期间持原子锁（服务端无 View）
+            await ee.HoldDecisionAsync(async () =>
             {
-                result = await ee.InputGateway.RequestChoice(curbed, req);
-            }
-            catch (System.Exception ex)
-            {
-                GD.PrintErr($"[遏制] ⚠ 联机分配请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
-            }
+                try
+                {
+                    result = await ee.InputGateway.RequestChoice(curbed, req);
+                }
+                catch (System.Exception ex)
+                {
+                    GD.PrintErr($"[遏制] ⚠ 联机分配请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
+                }
+            });
 
             // 服务端权威复检：逐地区按上限钳制，总量不超过 X；非法/缺失一律按剩余量确定性补齐。
             var plan = new List<(string, int)>();

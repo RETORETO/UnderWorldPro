@@ -834,17 +834,49 @@ namespace Script.Manager
             public CardInstance Target;
             public string Duration;
             public string AreaId;
+            /// <summary>【2026-09】本次挂起是否持有"决策持锁"（用于配对释放；见 `SuspendChainForInput`）。</summary>
+            public bool HoldsLock;
         }
 
         private PendingChain _pendingChain;
 
         /// <summary>【K11】请求玩家输入（如"是否支付 N"）：登记挂起链，回调中调 `ContinuePendingChain()` 续算。
         /// 【A55】不覆盖"**已记录续算点**"的挂起链：嵌套场景（在玩家回包的回调里又发起一次决策）下，
-        /// 覆盖会把外层尚未执行的动作整段丢掉。</summary>
+        /// 覆盖会把外层尚未执行的动作整段丢掉。
+        ///
+        /// 【2026-09·原子操作期间的玩家选择】挂起＝**等待玩家选择**：此处同时进入 `TurnManager` 的
+        /// **决策持锁**（计数式）——等待期间 `IsAtomicLocked == true`，只有持续效果可以影响游戏，
+        /// 不会再有新的行动/触发效果进入堆叠。这是与 View 侧"选择窗持锁"的**双保险**
+        /// （服务端/headless 无 View 时靠它兜底；写测试也可直接断言）。
+        /// 释放点：`ContinuePendingChain()`（含同步回调、续算中再次挂起的情形），严格配对。</summary>
         private void SuspendChainForInput()
         {
             if (_pendingChain != null && _pendingChain.Actions != null) return;
-            _pendingChain = new PendingChain();
+            if (_pendingChain == null)
+            {
+                _pendingChain = new PendingChain();
+                if (TurnManagerRef != null)
+                {
+                    TurnManagerRef.BeginDecisionHold();
+                    _pendingChain.HoldsLock = true;
+                }
+            }
+        }
+
+        /// <summary>【2026-09】释放某挂起链持有的决策持锁（幂等：`HoldsLock` 置位后只释放一次）。</summary>
+        private void ReleasePendingChainHold(PendingChain chain)
+        {
+            if (chain == null || !chain.HoldsLock) return;
+            chain.HoldsLock = false;
+            TurnManagerRef?.EndDecisionHold();
+        }
+
+        /// <summary>【2026-09】丢弃挂起登记并释放其决策持锁（用于"流程同步完成/异常"的提前收口）。</summary>
+        private void DiscardPendingChainHold()
+        {
+            var chain = _pendingChain;
+            _pendingChain = null;
+            ReleasePendingChainHold(chain);
         }
 
         /// <summary>【K11】玩家输入完成 → 从他中断处继续执行剩余动作（含"支付失败/不支付 → 后续整段跳过"的语义）。
@@ -855,9 +887,15 @@ namespace Script.Manager
         {
             var chain = _pendingChain;
             _pendingChain = null;
-            if (chain?.Actions == null) return;   // 无续算点（同步回调场景）：不做任何事（含不触发收尾）
+            if (chain?.Actions == null)
+            {
+                // 无续算点（同步回调场景）：不做续算，但要释放本次挂起取得的决策持锁
+                ReleasePendingChainHold(chain);
+                return;
+            }
             ExecuteActionsFrom(chain.Actions, chain.NextIndex, chain.Source, chain.Target, chain.Duration, chain.AreaId);
-            // 链上仍有等待（续算中又发起了一次决策）→ 等它的回调，不在此收尾
+            // 链上仍有等待（续算中又发起了一次决策）→ 等它的回调，不在此收尾（旧持锁已由新挂起接替）
+            ReleasePendingChainHold(chain);
             if (_pendingChain == null) TurnManagerRef?.OnEngineChainSettled();
         }
 
@@ -1157,6 +1195,22 @@ namespace Script.Manager
         public bool HasPendingInput => _pendingChain != null;
 
         /// <summary>
+        /// 【2026-09·原子操作期间的玩家选择】联机"等待玩家回包"期间的**决策持锁**包装（服务端无 View）：
+        /// 期间 `TurnManager.IsAtomicLocked == true` ⇒ 对手不能出牌/让过/激活，也不会有新触发入堆叠；
+        /// 回包（含异常/超时）后配对释放。规则类（领袖/道途/遏制/预测）与 JC119 免费打出取目标共用本入口。
+        /// `TurnManagerRef` 未注入（部分测试装配）时退化为直接执行，不引入行为差异。
+        /// </summary>
+        public async System.Threading.Tasks.Task HoldDecisionAsync(System.Func<System.Threading.Tasks.Task> flow)
+        {
+            if (flow == null) return;
+            var tm = TurnManagerRef;
+            if (tm == null) { await flow(); return; }
+            tm.BeginDecisionHold();
+            try { await flow(); }
+            finally { tm.EndDecisionHold(); }
+        }
+
+        /// <summary>
         /// 把一段"需要玩家决策"的异步网关流程接到动作链上（挂起-续算）：
         ///  · 流程**尚未完成**（真实网络等待）→ 挂起动作链，回包落地后 `ContinuePendingChain()` 续算；
         ///  · 流程**已同步完成**（测试/自动网关/回包即刻到达）→ 清掉挂起登记，调用方继续执行剩余动作；
@@ -1174,19 +1228,20 @@ namespace Script.Manager
             catch (System.Exception ex)
             {
                 GD.PrintErr($"[EffectEngine] ⚠ 联机决策流程异常：{ex.GetType().Name}: {ex.Message} → 就地继续后续动作");
-                _pendingChain = null;
+                DiscardPendingChainHold();
                 return true;
             }
             if (t == null || t.IsCompleted)
             {
-                // 同步完成（含异常/取消）：无需挂起，剩余动作照常执行
-                _pendingChain = null;
+                // 同步完成（含异常/取消）：无需挂起，剩余动作照常执行（释放挂起登记取得的决策持锁）
+                DiscardPendingChainHold();
                 return true;
             }
-            // 【A55】真正等待客户端回包：服务端没有 View 帮忙 `NotifyModalOpened`，故由引擎**显式持住原子锁**，
-            // 否则等待窗口内对手仍可行动；回包续算后的"结算收尾"（`ContinuePendingChain` → `OnEngineChainSettled`）
-            // 会按常规把锁放掉。
-            TurnManagerRef?.EnterAtomic();
+            // 【A55/2026-09】真正等待客户端回包：服务端没有 View 帮忙 `NotifyModalOpened`，故由引擎
+            // **显式进入"决策持锁"**（计数式，可嵌套且不会被某个模态窗关闭误放），否则等待窗口内对手仍可
+            // 出牌/让过/激活；回包续算后的"结算收尾"（`ContinuePendingChain` → `OnEngineChainSettled`）
+            // 会按常规把锁放掉——故必须在 `AwaitGatewayFlowAsync` 的 finally 里 `EndDecisionHold` 配对释放。
+            TurnManagerRef?.BeginDecisionHold();
             GD.Print($"[EffectEngine] 🌐 联机决策请求已下发，动作链挂起等待回包（保持原子锁）");
             _ = AwaitGatewayFlowAsync(t);
             return true;   // 已挂起：ExecuteActionsFrom 记录续算点并返回
@@ -1198,6 +1253,10 @@ namespace Script.Manager
             catch (System.Exception ex)
             {
                 GD.PrintErr($"[EffectEngine] ⚠ 联机决策流程异常（续算前）：{ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                TurnManagerRef?.EndDecisionHold();   // 【2026-09】与 BeginGatewayFlow 的决策持锁配对
             }
             ContinuePendingChain();   // 内部完成"结算收尾"（见 ContinuePendingChain）
         }
@@ -2689,10 +2748,16 @@ namespace Script.Manager
         {
             if (remaining <= 0 || TurnManagerRef == null) return;
             var acc = new System.Collections.Generic.List<CardInstance>();
+            // 【2026-09·原子操作期间的玩家选择】弃牌需玩家逐张选 ⇒ 首张选择窗打开即**挂起动作链**，
+            // 整批选完再续算。此前只开窗不挂起 ⇒ 本效果的后续动作会**先于玩家选择**执行（顺序违规）。
+            // 桩/无窗口的同步回调场景：回调内立即 ContinuePendingChain 清掉挂起标记 ⇒ 不产生挂起（行为不变）。
+            bool suspended = UIHooks != null;
+            if (suspended) SuspendChainForInput();
             CollectDiscardPicks(discarderId, chooserPlayerId, remaining, acc,
                 () =>
                 {
                     if (acc.Count > 0) TurnManagerRef.DiscardCards(discarderId, acc, batchSize);
+                    if (suspended) ContinuePendingChain();   // 本批全部选完 → 从断点续算（只续算一次）
                 });
         }
 
@@ -2922,8 +2987,15 @@ namespace Script.Manager
                     }
                     if (UIHooks != null)
                     {
+                        // 【2026-09·原子操作期间的玩家选择】封印"取手牌"要玩家选 ⇒ 挂起动作链，
+                        // 选完（SealAndReport 落地）再续算；否则后续动作会先于玩家选择执行。
+                        SuspendChainForInput();
                         UIHooks.PromptPickCard(chooser, $"选择一张手牌封印（{ArgAt(action, 3, "任意")}）", eligible,
-                            allowCancel: false, picked => SealAndReport(picked, host, faceDown));
+                            allowCancel: false, picked =>
+                            {
+                                SealAndReport(picked, host, faceDown);
+                                ContinuePendingChain();
+                            });
                         break;
                     }
                     GD.Print($"[EffectEngine] ⚠ Seal 无 UI：确定性兜底封印手牌第一张合格牌（{eligible[0].PlayerTemplate?.CardName}）");
@@ -3307,6 +3379,9 @@ namespace Script.Manager
                 return;
             }
 
+            // 【2026-09】本次检索是否走了"单机窗口"分支（需要挂起-续算）：走窗口才需要续算一次。
+            bool resumeChain = false;
+
             System.Action<CardInstance> takeAndShuffle = picked =>
             {
                 if (picked == null)
@@ -3314,6 +3389,8 @@ namespace Script.Manager
                     // 强制检索（allowCancel=false）下不应出现；防御性兜底＝按"没找到"处理（卡文"然后洗牌"仍成立）
                     GD.PrintErr("[EffectEngine] ⚠ 检索回调收到 null（强制检索本不应发生）→ 按『没找到』处理：洗牌");
                     TurnManagerRef.ShuffleDeckOf(searcher);
+                    // 【2026-09】取消/异常路径同样要续算（否则动作链永久悬空）
+                    if (resumeChain) ContinuePendingChain();
                     return;
                 }
                 TurnManagerRef.RemoveCardFromDeckOf(picked.OwnerId, picked);
@@ -3324,12 +3401,18 @@ namespace Script.Manager
                     // 卡文"展示该牌后置于你的手中"：`附加` 含"展示"时公开展示（JC007/JC025）
                     if (HasArg(action, "展示")) RevealCardPublicly(picked, searcher);
                     TurnManagerRef.ShuffleDeckOf(searcher);
+                    // 【2026-09·原子操作期间的玩家选择】整段检索（含可能的"选宿主"窗）已完成 →
+                    // 从断点续算一次（此前只开窗不挂起 ⇒ 后续动作先于玩家选择执行）。
+                    if (resumeChain) ContinuePendingChain();
                 };
                 ApplySearchDestination(picked, dest, extra, source, target, targetAreaId, finish);
             };
 
             if (UIHooks != null)
             {
+                // 【2026-09】检索要玩家选牌 ⇒ 挂起动作链（续算点见 `finish`）
+                SuspendChainForInput();
+                resumeChain = true;
                 // 【A53】强制检索：`allowCancel: false`（窗口不给"取消"，必须选一张）
                 UIHooks.PromptPickCard(searcher, $"从牌库中寻找：{DescribeSearchFilter(filter)}", matches,
                     allowCancel: false, takeAndShuffle);
@@ -7930,6 +8013,15 @@ namespace Script.Manager
                 }
             }
 
+            // 【2026-09·原子操作期间的玩家选择】"**宣布使用效果**"是原子操作（见《触发效果相关需求》第 172 行）：
+            // 从**开始改变游戏状态**（付费 / 横置 / 牺牲 / 从区域取牌作代价 / 入堆叠）起持原子锁，
+            // 直到本次发动入堆叠完成——期间拒绝新的出牌/让过/激活，也不会有新的行动/触发效果进入堆叠。
+            // 注意：入站门禁（含第 0 步 `IsAtomicLocked` 拒绝）必须在 EnterAtomic **之前**，否则会自锁。
+            // 用 try/finally 收口，保证所有早退分支（费用不足/代价不可付/牺牲失败…）都释放锁。
+            TurnManagerRef?.EnterAtomic();
+            try
+            {
+
             // 3) 费用校验与扣除（控制权语义 / D29：由控制者付费，与 CanActivate 高亮判定对齐）
             int cost = data.Cost;
             var pm = TurnManagerRef?.PlayerManagerRef;
@@ -8031,6 +8123,12 @@ namespace Script.Manager
             {
                 // 无堆叠管理器时回退直接结算（降级路径，不推荐）
                 ResolveEffect(data, source, target);
+            }
+            }
+            finally
+            {
+                // 【2026-09】"宣布使用效果"原子段结束（触发排序/选目标窗仍打开时由模态计数维持锁）
+                TurnManagerRef?.ExitAtomicWhenIdle();
             }
         }
     }

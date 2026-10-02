@@ -163,11 +163,21 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     // ============================================================
     // 【MVC 修复 M-08】ModalWindow 枚举已提取至 Script.UI.ModalWindow（共享类型），
     // Arena 处于同命名空间 Script.UI，可直接引用。
-    private readonly System.Collections.Generic.HashSet<ModalWindow> _openModalWindows = new();
-    private bool IsInteractionLocked => _openModalWindows.Count > 0;
+    // 【2026-09】由 HashSet 改为**按类型计数**：同一类型多窗重叠（JC081 多选、多目标逐槽、
+    // 多玩家逐位牺牲）时不再互相抵消，避免"内层窗关闭把外层持锁掀掉"。
+    private readonly System.Collections.Generic.Dictionary<ModalWindow, int> _openModalCounts = new();
+    private bool IsInteractionLocked
+    {
+        get
+        {
+            foreach (var kv in _openModalCounts) if (kv.Value > 0) return true;
+            return false;
+        }
+    }
     private void LockModal(ModalWindow m)
     {
-        _openModalWindows.Add(m);
+        _openModalCounts.TryGetValue(m, out int n);
+        _openModalCounts[m] = n + 1;
         // 通知 Controller 维护规则层原子锁（核心需求 7.3）：模态窗口打开期间不给响应权
         _turnManager?.NotifyModalOpened();
         // 原子锁置位后立即刷新激活高亮：清除窗口打开前（锁外）残留的 CanActivate=true 缓存，
@@ -176,10 +186,60 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
     private void UnlockModal(ModalWindow m)
     {
-        _openModalWindows.Remove(m);
+        _openModalCounts.TryGetValue(m, out int n);
+        if (n > 0) _openModalCounts[m] = n - 1;
+        else _openModalCounts[m] = 0;
         _turnManager?.NotifyModalClosed();
         // 原子锁解除后刷新激活高亮：恢复窗口关闭后的合法激活高亮。
         RefreshActivateHighlights();
+    }
+
+    // ============================================================
+    // 【2026-09·原子操作期间的玩家选择】通用"玩家决策窗"持锁守卫
+    // ------------------------------------------------------------
+    // 用户口径：一个原子操作期间如果需要玩家选择，**玩家选择完成之前阻塞进程**；此期间只有
+    // 持续效果可以影响游戏，不得有新的行动/触发效果进入堆叠。因此单机的每个选择窗都必须与
+    // 规则层原子锁联动——此前只有"触发排序/选目标/对抗"三类窗口联动，选卡/数值/模式/多目标/
+    // 额外费用/激活代价/准备维护等窗口都不联动 ⇒ 结算中途还能再出牌/再激活/让过（架构级缺陷）。
+    //
+    // 配对纪律（按**窗口实例**成对，可嵌套）：
+    //   · 开窗 → LockChoiceWindow(win)（持锁 + 监听 TreeExiting 兜底）；
+    //   · 玩家选定 → 交付回调**之前** UnlockChoiceWindow(win)（先解锁再续算，否则回调里
+    //     PlayCard/ActivateAbility 会被入站原子锁拒绝——与 TriggerInteractionCoordinator 同款）；
+    //   · 取消/点窗外关闭（不交付选择）→ 由 TreeExiting 兜底释放。
+    // ============================================================
+    private readonly System.Collections.Generic.HashSet<ulong> _lockedChoiceWindows = new();
+
+    private void LockChoiceWindow(Window w)
+    {
+        if (w == null) return;
+        if (!_lockedChoiceWindows.Add(w.GetInstanceId())) return;
+        LockModal(ModalWindow.ChoiceBox);
+        // 无选择即关闭（取消/点窗外）时兜底释放，杜绝持锁泄漏
+        w.TreeExiting += () => UnlockChoiceWindow(w);
+    }
+
+    private void UnlockChoiceWindow(Window w)
+    {
+        if (w == null) return;
+        if (!_lockedChoiceWindows.Remove(w.GetInstanceId())) return;
+        UnlockModal(ModalWindow.ChoiceBox);
+    }
+
+    /// <summary>
+    /// 【2026-09】把选择窗的条目回调统一包成"**先解锁、再交付选择**"（决策持锁配对纪律，见上方注释）。
+    /// 必须在 `win.PopupCentered()` 之前调用；`ActivationChoiceWindow` 在按下时读取 `item.OnChosen`，
+    /// 故此处就地替换条目回调即可覆盖**所有**调用方（含 JC081 多选、多目标逐槽、激活代价分配等循环窗）。
+    /// </summary>
+    private void BindChoiceUnlock(Window win, System.Collections.Generic.List<ActivationChoiceItem> items)
+    {
+        if (win == null || items == null) return;
+        foreach (var it in items)
+        {
+            if (it == null) continue;
+            var orig = it.OnChosen;
+            it.OnChosen = () => { UnlockChoiceWindow(win); orig?.Invoke(); };
+        }
     }
 
     // 按钮引用
@@ -667,6 +727,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             win.ForceChoice = true;
             win.Init(items);
             AddChild(win);
+            // 【2026-09】决策窗持锁：选择完成前冻结响应权（只能靠持续效果影响游戏）
+            LockChoiceWindow(win);
+            BindChoiceUnlock(win, items);
             win.PopupCentered();
         }
         else
@@ -783,6 +846,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         win.CustomTitle = string.IsNullOrEmpty(prompt) ? null : prompt;
         win.Init(items);
         AddChild(win);
+        if (allowCancel && win.OnCancelled == null)
+            win.OnCancelled = () => { UnlockChoiceWindow(win); onPicked?.Invoke(null); };   // 取消＝不选（回调唯一性，见 ActivationChoiceWindow.OnCancelled）
+        LockChoiceWindow(win);
+        BindChoiceUnlock(win, items);
         win.PopupCentered();
     }
 
@@ -826,6 +893,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         win.CustomTitle = $"遏制{remaining}：请选择要移除本方势力标志的地区";
         win.Init(items);
         AddChild(win);
+        LockChoiceWindow(win);
+        BindChoiceUnlock(win, items);
         win.PopupCentered();
     }
 
@@ -848,13 +917,17 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             return;
         }
         AddChild(win);
+        // 【2026-09】预测窗也是"玩家决策窗"：等待期间持原子锁（选完先解锁再交回 Controller）
+        LockChoiceWindow(win);
         var vpSize = GetViewport().GetVisibleRect().Size;
         win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
         win.Popup();
         win.Configure(predictorId, 0, cards,
-            (pid, toTop, toBottom) => onConfirmed?.Invoke(toTop, toBottom),
+            (pid, toTop, toBottom) => { UnlockChoiceWindow(win); onConfirmed?.Invoke(toTop, toBottom); },
             (pid, n) => { /* 预测不是抽牌：不执行任何抽牌 */ },
             $"预测{count}：将任意数量置于牌库顶（其余置于牌库底）");
+        // 未确认即关闭（点窗外/关闭按钮）→ 按"原序全部留在牌库顶"兜底交付一次（回调唯一性）
+        win.CloseRequested += () => { UnlockChoiceWindow(win); onConfirmed?.Invoke(null, cards); };
     }
 
     /// <summary>
@@ -958,8 +1031,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     {
         var win = new NumberInputWindow();
         win.Init(prompt, min, max, defaultValue, confirmLabel, cancelLabel);
-        win.OnConfirmed = value => onChosen?.Invoke(value);
+        // 【2026-09】先解锁、再交回 Controller（配对纪律；取消亦会回调 -1，见 NumberInputWindow.Cancel）
+        win.OnConfirmed = value => { UnlockChoiceWindow(win); onChosen?.Invoke(value); };
         AddChild(win);
+        LockChoiceWindow(win);
         win.PopupCentered();
     }
 
@@ -997,6 +1072,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         win.CustomTitle = title;
         win.Init(items);
         AddChild(win);
+        // 【2026-09】通用决策窗持锁（覆盖：多目标逐槽/确认面板、模式选择、激活代价分配、额外费用多选、
+        // 暗藏者行动选择、玩家目标…）。当前所有调用方均为 force=true（必须选一项才关闭），
+        // 故不会出现"无回调关闭"；仍由 LockChoiceWindow 的 TreeExiting 兜底防泄漏。
+        LockChoiceWindow(win);
+        BindChoiceUnlock(win, items);
         win.PopupCentered();
     }
 
@@ -1705,8 +1785,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             var win = _councilActivateWindowScene.Instantiate<CouncilActivateWindow>();
             AddChild(win);
+            // 【2026-09】秘社"宣布使用效果"的选择窗同样属决策等待 → 持锁（取消不发动时由 TreeExiting 兜底释放）
+            LockChoiceWindow(win);
             win.Init(councilTmpl.ActivationOptions, (opt) =>
             {
+                UnlockChoiceWindow(win);
                 if (opt?.EffectDataList == null || opt.EffectDataList.Count == 0) return;
                 // 取第一个 EffectData 发动（本秘社两选项均单一 EffectData、无目标）
                 BeginActivate(inst, opt.EffectDataList[0], null, -1);

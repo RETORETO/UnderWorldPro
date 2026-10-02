@@ -132,6 +132,7 @@ namespace Script.Tests
                 new P3HourglassTests(),                // 准备步骤放标志 + 按地区标志数群体伤害 + ≥3 牺牲自身：JC048
                 new P3AttachSelfTests(),               // P3·K12 附属进场自选结附目标（Attach 执行器）：JC121①
                 new P3MultiSacrificeTests(),           // K22 多玩家/对手侧自选牺牲（先手先选→一起牺牲）：JC046/113/134/065
+                new P3AtomicDecisionLockTests(),       // 原子操作期间的玩家选择：决策持锁（单机窗口/引擎挂起/联机回包/打出/激活/恢复步骤）
                 new P3EmbraceTests(),                  // P3·K4 持续夺控 + 子类别改写 + 「宿主翻面⇒附属被消灭」：JC036 初拥
                 new P4ExtraCostTests(),                // P3·K10 额外费用（牺牲/支付X费）：JC049① / JC135① ②
                 new P4ChooseNumberTests(),             // K1「玩家选择」型动态值 + JC083 睿智的斯芬克司

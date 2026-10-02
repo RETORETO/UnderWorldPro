@@ -566,6 +566,7 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 | A53 | **检索一律强制（不可取消）＋ JC051 宿主改由玩家选（2026-09，用户裁定；撤销 §7.4b 第 5 条）** | 用户两项裁定：**①"收紧为强制：单机也去掉取消，与卡文和联机一致"**（8 张 JC 检索卡 JC007/025/026/032/033/051/109/131 的卡文**都没有"你可以寻找"**）⇒ 单机 `EffectEngine.ResolveSearch` 改 `allowCancel: false`；联机 `SearchViaGatewayAsync` 改 `ForceChoice = true`，且回包**取消/非法**不再等于"不取牌"（**原口径"玩家放弃 = 检索未发生 → 不洗牌"作废**）⇒ **fail-safe 兜底取第一张匹配**再落地 + 洗牌，否则异常客户端可用一次取消/越权回包**规避强制检索**；安全属性不变（候选只来自"检索者牌库 ∧ 通过筛选"）。**②"改成开窗选宿主"**（JC051『结附于合理的目标』）⇒ 宿主**候选来源不变**（＝被检索卡自身 `TargetRules` 的合法宿主，判定与打出阶段同一实现 `CardManager.MatchesRule`），但**候选 ≥2 时由玩家选**：单机 `IGameUIHooks.PromptPickCard`（不可取消）/ 联机 `Kind.SelectTarget`（服务端 `OptionLabels`，`ForceChoice=true`，回包权威复检）；回包非法/取消 → **确定性兜底取第一个合法宿主**（强制结附不可被规避）；**候选 = 1 时不弹窗**（无可决策空间）、无 UI 时确定性兜底取第一个。实现细节：去向落地改为**续算式** `ApplySearchDestination(..., onDone)`（选宿主窗挂起期间不洗牌，宿主落定后才"揭示 + 洗牌"）；卡数据 `Args[2]` 由 `"自动"` 改 `"按目标规则"`。**留档**：若将来出现"你可以寻找…"的卡，需先在 `Args` 加可选标记再恢复取消分支 |
 | A54 | **秘社重放幂等 ＋ 联机"秘社目标"可点（2026-09，用户裁定"现在就修／补上"）** | 用户对两项"顺手发现"的裁定：**"现在就修"＋"补上"**。① **`SetupCouncils` 幂等化**（`ZoneManager.ClearCouncilZone` 新方法：旧秘社按 `CardZone.Exiled` 移出游戏 + 广播 `OnCardMoved` + 注销持续效果登记）——原先 `DealOpeningHands` 的"重放秘社"会累积 **2 张/玩家**，导致起手数读旧卡（回退 6）与"结附本方秘社"类效果重复候选；**秘社恒 1 张**后两者同时消失。② **秘社 UI 三态化**（`Arena.Layout.SyncCouncilCardUI`）：不在秘社区→摘除、在秘社区但无 UI→**补建**、已有→确保容器，配套秘社重放；`SyncCardUIToZone` 秘社判定放宽为"当前在秘社区 **或** 曾有 UI"。③ **联机选目标补秘社通道**：`OpenOnlineTargetSelectionWindow` 外加高亮 `_councilCardUIMap` 合法目标、`PickLegalActivationTargetAt` 纳入秘社同款 ZIndex 命中（新增 `CouncilCardUI.GetVisualGlobalRect`）、清理同款；动机＝JC051 宿主候选含秘社（否则联机只能等超时走兜底）。④ 顺手修：`PromptPickCard` 候选名兜底 `CouncilTemplate?.CardName`（原显示原始 UID）；`MakePlayableCard` 补 `_effectsInjected`（否则 `EnsureEffects` 清空效果表 ⇒ 探针 `PlayTiming.Response` 被抹掉、静默退化 A 档 = 既有失败真因） |
 | A55 | **联机"需要玩家选择"的效果必须真问玩家（2026-09，用户裁定"这一批全补齐"）** | 用户实测反馈：服务端日志出现 `⚠ Search 无 UI：确定性兜底取第一张匹配` ⇒ 选卡只能自动选择。**根因（架构级）**：生产链路是 `TurnManager.ResolveStackTop`（同步）→ `ResolveEntry` → **同步** `EffectEngine.ResolveEffect`，而网关分支只写在 `ResolveEffectAsync`/`ExecuteVerbAsync`/`*ViaGatewayAsync` 那套"可挂起续算"实现里——**全项目调用 `ResolveEffectAsync` 的只有测试** ⇒ 服务端（无 `UIHooks`、有 `InputGateway`）下所有决策都静默走无 UI 兜底。**修法**：① 在**同步**执行体里接入网关：`ExecuteVerb` 对 `Inspect/PayOptional/PrepareUpkeep/Discard/Seal(手牌)/RevealSealedAndQueueFreePlay/Search` 改走既有异步执行体，并用 `SuspendChainForInput`/`ContinuePendingChain` 挂起-续算（服务端不阻塞线程；**有 UIHooks 时仍优先本机窗口**）；② 补齐原本**没有**网关分支的 5 处：JC083「选择一个数字」`ValueExpr=玩家选择`（原先服务端**整条不发动**）、JC064 `PayOrSacrificeSelf`、JC114 `SacrificeSelfOptional`、JC128 `BribeOrSacrifice`、`SacrificeChoice`（JC046/113/134/65 逐位牺牲）；③ 统一收口 `BeginGatewayFlow`（同步/异步回包都正确接管链）+ `AskZeroOrOneViaGatewayAsync`（0/1 二选一）+ `AskPlayerValueViaGatewayAsync`（数字）；④ 等待回包期间由引擎**显式 `EnterAtomic`**（服务端没有 View 帮忙 `NotifyModalOpened`），续算后经新 `TurnManager.OnEngineChainSettled` 补做"地区赢取检查 / 解原子锁 / JC119 免费打出队列"（挂起时 `ResolveStackTop` 已提前 return）；⑤ `SuspendChainForInput` 加"不覆盖已记录续算点"护栏（嵌套决策不再丢动作）。**顺带修复**：JC128 单机窗口原先**未挂起动作链**（窗口异步，代码同帧按"牺牲"分叉 ⇒ 玩家选择被丢弃；旧测试用同步桩掩盖）。 |
+| A59 | **原子操作期间的玩家选择必须阻塞（2026-09，用户补充口径·框架级）** | 用户口径原文见 `需求实现对照.md` §7.3.1：**一个原子操作期间如果需要玩家选择，玩家选择完成之前阻塞进程；完成前只有持续效果可以影响游戏，不得有新的行动/触发效果进入堆叠**；"打出卡（含支付费用/额外费用/确认忠诚）"与"结算卡/结算效果"都属原子操作。**排查发现的 4 类不合规（本次全部修复）**：① 单机**所有通用选择窗**在等待期间不持锁（只有触发排序/选目标/对抗三类窗口联动 `LockModal`）⇒ 结算中途还能再出牌/再激活/让过；② 4 处"只开窗不挂起动作链"（`Discard`/`Seal{手牌}`/`Search`＋其回调内的"选结附宿主"）⇒ 效果后续动作**先于**玩家选择执行，且 `allowCancel:true` 取消时窗口不回调 ⇒ 链永久悬空；③ 联机 5 处等待回包不持锁（领袖/道途/遏制/预测/JC119 免费打出取目标）；④ `PlayCard` 的锁原先在"费用支付"处才置位、`ActivateAbility` 全链路无持锁（而"宣布使用效果"按规范是原子操作）。**修法**：`TurnManager.BeginDecisionHold/EndDecisionHold`（计数式、可嵌套；解锁条件＝"模态计数与持锁深度双 0"，修掉"模态窗关闭掀掉外层持锁"）＋ `HoldAtomicDuringDecisionAsync`；`Arena.LockChoiceWindow/UnlockChoiceWindow`（`ModalWindow.ChoiceBox`，按窗口实例成对；交付选择前先解锁再续算；取消由 `TreeExiting` 兜底）；`EffectEngine.SuspendChainForInput` 挂起即持锁、`ContinuePendingChain` 配对释放，并补齐 4 处挂起-续算；`PlayCard` 原子段上移到"确认忠诚"之前；`ActivateAbility` 全程持锁；恢复步骤弃牌整段持锁。**配套**：`ActivationChoiceWindow.OnCancelled` 保证"每个选择窗恰好一次回调"（持锁不泄漏、挂起链不悬空的前提）。**覆盖范围**：所有"强制玩家决策"（含恢复步骤弃牌；**调度步骤除外**——联机专用且 `PriorityPlayerId=0` 已封死行动）。详见 §7.10 91 与 `制作指南/原子性规则.md`。测试 `P3AtomicDecisionLockTests`(18)。 |
 | A58 | **激活类能力"次数上限"的双重计数修复（2026-09，用户实测反馈）** | 用户实测：**"秘社效果第一次发动就被跳过了"**（`[Resolve] ⏹ 每局次数上限：MSJC001_2_SearchUniqueCard 本局已发动 1 次（上限 1）→ 跳过本次结算`）。**根因**：激活类能力的次数上限有**两处登记/检查**——① 发动阶段 `EffectEngine.ActivateAbility`（语义＝"发动被接受即计数，与结算成功与否无关"，`MarkAbilityUsedThisTurn/ThisGame`）；② 结算阶段 `TurnManager.ResolveEntry` 的 `ResolveKind.Trigger` 分支（本意只管**触发类**"同批次多条同源触发只结算到上限"）。而**激活条目也是 `Kind=ResolveKind.Trigger`**（`PushActivationToStack`）⇒ 首次结算就被自己刚登记的 1 次判成"已达上限"而整条跳过。**影响面**：不止秘社——`MaxUsesPerTurn=1` 的 **JC031/JC032/JC069** 与 `=2` 的 **JC093** 第二次，**一直是首发动即被跳过**（既有单测只驱动 `ActivateAbility` 断言入堆栈/计数，从未推进堆栈结算，故长期未暴露）。**修法**：`StackEntry` 新增 **`FromActivation`**（`PushActivationToStack` 置 true），`ResolveEntry` 的 K23/A57 检查+登记**整段对激活条目跳过**（触发条目照旧在结算前检查+登记）。**顺带修**：`P3SacrificeCost2Tests.TestSacrifice2_JC093每回合两次上限` 原先把"宿主"排在牺牲候选首位（牺牲代价确定性兜底取第一个 ⇒ 第 1 次就牺牲掉宿主、咒刃进墓地），旧实现靠"第 2 次被上限误拒"掩盖；现改为"牺牲品先上场、宿主最后"，并补断言"咒刃仍在场"。 |
 | A57 | **秘社（MSJC）效果机制：每局游戏一次 ＋ 独有检索 ＋ 先手标志谓词（2026-09，用户裁定）** | 用户三项裁定/口径：**①"每局游戏只能发动一次"做成通用机制**＝新增 `EffectData.MaxUsesPerGame`（用户选定"按卡×能力"粒度，与 K23 `MaxUsesPerTurn` 平行，但**不随回合重置、离场/换区/版本号变动也不清零**，只有重开一局才恢复；客户端随 `ZoneCardRef.UsedAbilityIdsGame/CountsGame` 同解投影）；**②"独有牌"＝`PlayerCardData.UniqueField`（独有卡名）非空**（用户："UniqueField 不为空就为独有卡"）——`DeckSearchFilter` 新增无值标志段 **`独有`**；**③【先手标志】谓词**：新增 `EvaluateCondition("具有先手标志"/"先手标志")`，基准＝来源控制者是否为本回合先手（`PlayerManager.IsFirstPlayer`，由 `TurnManager.FirstPlayerId` 派生）。附：`UniqueField` 历史注释（"唯一键（如UID）"）是**错的**，已勘误为"独有卡名/独有标识"。**⚠ 勘误（后续实测纠正）**：早先记的"该字段全卡库 0 处赋值 / 数据待回填"**是错的**（首查漏检）——实测 **JC 卡包内已填 31 张**（JC010=`费南迪尔`、JC011=`德莫斯提尼`、JC012=`帷幕守望徽记`…；全库 698 张 .tres 中的 31 张），其余卡包/卡待继续回填。**⚠ 实现陷阱（已修）**：`EffectData.Target` 默认是**非 null 的 `TargetSpec`**，秘社"无目标能力"若忘了 `Target = null`，`CanActivateCouncil` 会误判"需要选目标"⇒ 该能力**永远不可激活**；已在门禁补 `Target.Kind != None` 前置（fail-open，不放过真需求）。 |
 | A56 | **服务端"异步续算"落地后必须立即下发快照（2026-09，用户实测反馈）** | 用户反馈：**"效果能正常结算，但 UI 刷新有延迟，卡片加入手牌，玩家让过后才能看到手牌"**。服务器日志（18:25 实测）逐行定位：`🌐 联机决策请求已下发，动作链挂起等待回包` → `[MatchHost] 下行快照 手牌数=13` → （客户端回包）`检索：逆转异界之门 加入玩家1 手牌` → **直到 `玩家1 让过` 才又出现 `下行快照 手牌数=14`**。根因＝**快照只在"意图流程结束"时推送**（`MatchHost` 订阅 `TurnManager.OnAsyncSettlementCompleted`），而引擎侧"挂起-续算"（A55 新接的网关路径）与规则类异步流程（领袖/道途/遏制/预测）落地时**没人通知** ⇒ 客户端 UI 滞后到下一次上行。修法：新增公开通知口 `TurnManager.NotifyResolutionSettled()`，在 `OnEngineChainSettled()`（引擎续算收尾）与四个规则类的异步流程末尾调用 ⇒ `MatchHost` 立即 `PushSnapshot()`。单机不受影响（单机 UI 走 `OnCardMoved`/`OnPostMove` 事件总线，见 `事件总线使用说明.md` §三 收口原则）。 |
@@ -907,6 +908,50 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   这类时机下"所有在该时机登记的承诺都在事件出现时兑现"，不再按玩家过滤 → JC024「潜伏…在**下一个**准备步骤开始时令其现身」
   （因该能力在准备步骤后发动时事件已过，兑现必然落在下一回合的准备步骤）。
 - 其余"步骤级"需求（如"结束步骤触发"）走既有 `OnTurnEnded` 时机，无需再扩机制。
+
+**91 原子操作期间的玩家选择：决策持锁（用户 2026-09 补充口径，框架级修复，无新增效果行）**
+- **用户口径原文**：「一个原子操作期间如果需要玩家选择，**玩家选择完成之前会阻塞进程**，直到玩家选择完成。
+  完成前**只有持续效果可以影响游戏**，**无法加入新的行动效果/触发效果进入堆叠**。而**卡的打出（包括支付费用、
+  额外费用、确认忠诚等待）属于原子操作**，**卡的结算/效果的结算也属于原子操作**，都需要遵守上面的规则。」
+  （权威落点：`需求实现对照.md` §7.3.1；实现者清单：`制作指南/原子性规则.md`）
+- **排查结论（修复前的 4 类框架级不合规，均已修）**：
+  ① **单机所有通用选择窗在等待期间不持锁**——`Arena` 的 `LockModal` 只用于"触发排序/选目标/对抗"三类窗口，
+     选卡/数值/模式/多目标/玩家目标/额外费用/激活代价/准备维护/预测等窗口开窗不通知规则层 ⇒
+     `ResolveStackTop` 段末 `ExitAtomicWhenIdle` 见 `_openModalCount==0` 立即解锁 ⇒ 等待期间
+     `Pass`/`PlayCard`/`ActivateAbility` **全部放行**（可真的在结算中途再打一张牌）。
+  ② **4 处"只开窗不挂起动作链"**（效果的后续动作先于玩家选择执行）：`Discard` 动词 / `Seal{手牌}` /
+     `ResolveSearch`（含回调内"选结附宿主"再开一次窗）；且 `allowCancel:true` 取消时窗口**不回调** ⇒ 动作链永久悬空。
+  ③ **联机 5 处决策等待不持锁**：领袖 / 道途 / 遏制 / 预测 / JC119 免费打出取目标（A55 只覆盖了引擎侧
+     `BeginGatewayFlow` 与回合侧若干入口）。
+  ④ **激活/出牌的前置步骤早于 `EnterAtomic`**：`PlayCard` 的锁原先在"费用支付"处才置位（忠诚/模式/多目标/
+     额外费用/取目标都在锁外）；`EffectEngine.ActivateAbility` **全链路无持锁**（仅入站拒绝），
+     而"宣布使用效果"按规范是原子操作。
+- **修复实现**：
+  · `TurnManager` 新增**计数式决策持锁** `BeginDecisionHold`/`EndDecisionHold`（`_decisionHoldDepth`，可嵌套；
+    解锁条件统一为"模态计数与持锁深度**双 0**"——修掉"某个模态窗关闭把外层持锁掀掉"的隐患；`Reset()` 归零）
+    ＋ 联机等待入口 `HoldAtomicDuringDecisionAsync`。
+  · `Arena` 新增 `ModalWindow.ChoiceBox` 与 **按窗口实例成对**的 `LockChoiceWindow`/`UnlockChoiceWindow`
+    （`_openModalCounts` 改为按类型计数，多窗重叠不再互相抵消），覆盖 10 类提示方法；
+    **交付选择之前先解锁再续算**（否则回调里的 `PlayCard`/`ActivateAbility` 会被入站锁拒绝）；
+    无选择被关闭（取消/点窗外）由 `TreeExiting` 兜底释放。
+  · `EffectEngine`：`SuspendChainForInput()` 挂起＝**同时进入决策持锁**，`ContinuePendingChain()` 严格配对释放
+    （含"续算中再次发起决策"的接替）；补齐 4 处挂起-续算；新增 `HoldDecisionAsync` 供规则类联机等待复用。
+  · `PlayCard` 原子段**上移到"确认忠诚"之前**（入站门禁仍留在锁外，防自锁）；`ActivateAbility` 从"开始改状态"
+    起到入堆叠止持锁（`try/finally` 收口）；恢复步骤手牌上限弃牌（`DiscardToHandLimitAsync`）整段持锁（含帧等待）。
+  · **回调唯一性**：`ActivationChoiceWindow` 新增 `OnCancelled`（取消/点窗外/关闭窗口都补交付一次回调）、
+    数值窗取消 → `-1`、预测窗未确认关闭 → 原序置顶。这是"持锁不泄漏 + 挂起链不悬空"的前提。
+- **覆盖清单（联机等待持锁）**：`EffectEngine.BeginGatewayFlow`、`RunTriggerPhaseAsync`、
+  `ResolveCurrentAreaCombatAsync`、`ActivateAbilityWithChoicesAsync`、`PlayMultiTargetCardAsync`、
+  `PlayWithExtraCostAsync`、`PlayModeCardAsync`、`RevealCovertWithExtraCostAsync`、
+  `LeaderRule` / `PathRule` / `CurbRule` / `PredictionRule` / `TurnManager.RequestFreePlayTargetAsync`。
+- **不改的边界**：不修改 `核心需求.txt`（用户原始文本）；不改窗口默认取消 UX（不新设 `Exclusive=true`，
+  冻结依靠规则层锁 + `Arena.IsInteractionLocked` 拖拽/Pass/激活高亮拦截）；地区赢取"归库顺序选择"仍是 TODO
+  （偏离 D1），仅在指南中写明"实现该 UI 时必须持锁"；调度步骤为联机专用且 `PriorityPlayerId=0` 已封死行动，判定为已满足。
+- 测试：新增 **`P3AtomicDecisionLockTests`（18 例）**——锁原语（嵌套/模态不误放/`Reset` 归零/持锁期拒绝让过·出牌）、
+  引擎挂起即持锁与挂起-续算顺序（弃牌/封印/检索/可选支付/多玩家逐位牺牲）、联机等待持锁（领袖/道途/遏制/预测/
+  JC119 免费打出取目标）、打出原子段（`OnCardPlayed` 时刻可观测 + 早退不泄漏）、激活原子段（入堆叠时刻可观测 +
+  早退不泄漏）、恢复步骤弃牌持锁。
+- 账本：全量 headless **140 套件 / 1070 用例 全绿 0 失败 0 错误**；构建 **0 警告 0 错误**。
 
 **89 秘社构筑限制模型扩展：白名单 ＋ 例外 ＋ 额度（用户 2026-09 逐条口径）**
 - **背景**：`CouncilRestriction` 原模型只有"正向 AND 筛选 ＋ 数量比较"，**表达不了** 010~017 的

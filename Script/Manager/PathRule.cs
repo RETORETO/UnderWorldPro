@@ -133,22 +133,26 @@ namespace Script.Manager
             List<CardInstance> paths, CardInstance newest)
         {
             ChoiceResult result = null;
-            try
+            // 【2026-09·原子操作期间的玩家选择】等待玩家回包期间持原子锁（与 LeaderRule 同款）
+            await ee.HoldDecisionAsync(async () =>
             {
-                result = await ee.InputGateway.RequestChoice(controllerId, new ChoiceRequest
+                try
                 {
-                    PlayerId = controllerId,
-                    RequestKind = ChoiceRequest.Kind.SelectTarget,
-                    SourceUid = newest?.UID,
-                    OptionUids = paths.ConvertAll(c => c.UID),
-                    Prompt = "道途：同一玩家至多操控 1 个道途，请选择一个牺牲",
-                    ForceChoice = true,
-                });
-            }
-            catch (System.Exception ex)
-            {
-                GD.PrintErr($"[道途] ⚠ 联机决策请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
-            }
+                    result = await ee.InputGateway.RequestChoice(controllerId, new ChoiceRequest
+                    {
+                        PlayerId = controllerId,
+                        RequestKind = ChoiceRequest.Kind.SelectTarget,
+                        SourceUid = newest?.UID,
+                        OptionUids = paths.ConvertAll(c => c.UID),
+                        Prompt = "道途：同一玩家至多操控 1 个道途，请选择一个牺牲",
+                        ForceChoice = true,
+                    });
+                }
+                catch (System.Exception ex)
+                {
+                    GD.PrintErr($"[道途] ⚠ 联机决策请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
+                }
+            });
 
             // 服务端权威复检：回包必须落在已下发的候选内；取消/超时/越权 → 确定性兜底。
             CardInstance picked = null;

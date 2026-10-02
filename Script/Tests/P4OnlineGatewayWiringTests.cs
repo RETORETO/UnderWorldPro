@@ -95,7 +95,7 @@ namespace Script.Tests
             public bool Defer;
             public string AnswerUid;        // null＝取第一个候选
             public int AnswerAmount = -1;   // <0＝取 NumberDefault
-            public bool Cancel;
+            public bool Cancel = false;     // true＝回包按"取消"处理（当前用例未使用，保留扩展位）
 
             public int PendingCount => _pending.Count;
 

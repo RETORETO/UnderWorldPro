@@ -126,22 +126,28 @@ namespace Script.Manager
             List<CardInstance> leaders, CardInstance newest)
         {
             ChoiceResult result = null;
-            try
+            // 【2026-09·原子操作期间的玩家选择】等待玩家回包期间必须持原子锁
+            // （服务端无 View 帮忙 NotifyModalOpened）⇒ 期间对手不能出牌/让过/激活；
+            // 由 `HoldDecisionAsync` 配对释放（含异常路径）。
+            await ee.HoldDecisionAsync(async () =>
             {
-                result = await ee.InputGateway.RequestChoice(controllerId, new ChoiceRequest
+                try
                 {
-                    PlayerId = controllerId,
-                    RequestKind = ChoiceRequest.Kind.SelectTarget,
-                    SourceUid = newest?.UID,
-                    OptionUids = leaders.ConvertAll(c => c.UID),
-                    Prompt = "领袖：同控制者场上至多 1 个领袖，请选择一个牺牲",
-                    ForceChoice = true,
-                });
-            }
-            catch (System.Exception ex)
-            {
-                GD.PrintErr($"[领袖] ⚠ 联机决策请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
-            }
+                    result = await ee.InputGateway.RequestChoice(controllerId, new ChoiceRequest
+                    {
+                        PlayerId = controllerId,
+                        RequestKind = ChoiceRequest.Kind.SelectTarget,
+                        SourceUid = newest?.UID,
+                        OptionUids = leaders.ConvertAll(c => c.UID),
+                        Prompt = "领袖：同控制者场上至多 1 个领袖，请选择一个牺牲",
+                        ForceChoice = true,
+                    });
+                }
+                catch (System.Exception ex)
+                {
+                    GD.PrintErr($"[领袖] ⚠ 联机决策请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
+                }
+            });
 
             // 服务端权威复检：回包必须落在已下发的候选内；取消/超时/越权 → 确定性兜底。
             CardInstance picked = null;

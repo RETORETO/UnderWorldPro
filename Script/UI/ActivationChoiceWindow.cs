@@ -38,6 +38,18 @@ namespace Script.UI
         /// 默认 false：保持原行为（可取消、点窗外即关闭），不影响其他非强制效果。</summary>
         public bool ForceChoice = false;
 
+        /// <summary>
+        /// 【2026-09·回调唯一性】取消/无选择关闭时的回调（`ForceChoice=false` 且玩家未选中任何项：
+        /// 点"取消"按钮、点窗口外、点关闭按钮）。
+        /// 背景：此前取消路径**不触发任何回调**，而调用方（引擎"挂起-续算"、JC119 的
+        /// `allowCancel:true` 免费打出）在等待回调——于是动作链永久悬空，并且新增的
+        /// "决策窗持锁"会因此泄漏。口径：**每个选择窗恰好交付一次回调**（选中→`OnChosen`；取消→本回调）。
+        /// </summary>
+        public System.Action OnCancelled;
+
+        /// <summary>是否已交付选择（选中过任一项）——决定关闭时是否走 <see cref="OnCancelled"/>。</summary>
+        private bool _chosen;
+
         /// <summary>【P2】自定义窗口标题（如"从牌库中寻找一张法术"）。空 = 用默认标题"选择激活效果"。</summary>
         public string CustomTitle;
 
@@ -78,15 +90,18 @@ namespace Script.UI
             if (_dismissed) return;
             // 强制选择模式：点击窗口外不关闭，玩家必须选一项（选项/取消之外无关闭途径）
             if (ForceChoice) return;
-            _dismissed = true;
-            QueueFree();
+            // 【2026-09】统一走 Dismiss：点窗外＝取消，同样补交付一次 OnCancelled（回调唯一性）
+            Dismiss();
         }
 
-        /// <summary>正常关闭窗口（选项/取消触发），先置标志防止 FocusExited 重复释放。</summary>
+        /// <summary>正常关闭窗口（选项/取消触发），先置标志防止 FocusExited 重复释放。
+        /// 【2026-09】若本次关闭**没有交付任何选择**（取消/点窗外），补交付一次 `OnCancelled`
+        /// ——保证"每个选择窗恰好一次回调"，避免调用方的挂起链与决策持锁泄漏。</summary>
         private void Dismiss()
         {
             if (_dismissed) return;
             _dismissed = true;
+            if (!_chosen) OnCancelled?.Invoke();
             QueueFree();
         }
 
@@ -97,6 +112,7 @@ namespace Script.UI
         {
             EnsureButtonBox();
             _items = items ?? new List<ActivationChoiceItem>();
+            _chosen = false;   // 【2026-09】同一窗口实例再次 Init（复用）时重置"已交付选择"标志
 
             // 先移除旧选项按钮（保留最后的取消按钮）
             for (int i = _buttonBox.GetChildCount() - 2; i >= 0; i--)
@@ -115,6 +131,7 @@ namespace Script.UI
                 btn.Pressed += () =>
                 {
                     if (_items[captured].Disabled) return; // 置灰项不可发动
+                    _chosen = true;                        // 【2026-09】已交付选择 → 关闭时不走 OnCancelled
                     _items[captured].OnChosen?.Invoke();
                     Dismiss();
                 };

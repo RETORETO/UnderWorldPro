@@ -128,21 +128,60 @@ public partial class TurnManager : Node
     public void EnterAtomic() => _atomicLock = true;
     public void ExitAtomic()
     {
-        // 仅当没有任何模态窗口仍打开时才解锁；Arena 会在最后一个窗口关闭时调用
-        if (_openModalCount <= 0) _atomicLock = false;
+        // 仅当没有任何模态窗口仍打开、且没有"决策持锁"未释放时才解锁
+        if (_openModalCount <= 0 && _decisionHoldDepth <= 0) _atomicLock = false;
     }
     private int _openModalCount;   // 由 Arena 在 LockModal/UnlockModal 时维护
+
+    // ------------------------------------------------------------
+    // 【2026-09·原子操作期间的玩家选择】计数式"决策持锁"（用户口径）：
+    //   一个原子操作期间若需要玩家选择，**在玩家选择完成之前必须阻塞进程**——
+    //   此期间只有持续效果可以影响游戏，不得有新的行动/触发效果进入堆叠。
+    //   该持锁可嵌套（多层窗口/多处等待），用计数而非布尔，且**绝不因某个模态窗
+    //   关闭而误放**（旧实现里 `NotifyModalClosed` 会直接解锁，把外层持锁一并掀掉）。
+    //   持有者：① 单机 View 的每个选择窗（Arena.LockChoiceWindow）；
+    //           ② 引擎/规则类等待玩家回包的联机决策（EffectEngine.BeginGatewayFlow、
+    //              领袖/道途/遏制/预测规则、JC119 免费打出取目标、恢复步骤弃牌循环）。
+    // ------------------------------------------------------------
+    private int _decisionHoldDepth;
+    public int DecisionHoldDepth => _decisionHoldDepth;
+
+    /// <summary>【2026-09】进入"等待玩家决策"的原子持锁段（可嵌套，必须与 <see cref="EndDecisionHold"/> 成对）。</summary>
+    public void BeginDecisionHold()
+    {
+        _decisionHoldDepth++;
+        _atomicLock = true;
+    }
+
+    /// <summary>【2026-09】退出"等待玩家决策"的原子持锁段；计数归零且无模态窗时才真正解锁。</summary>
+    public void EndDecisionHold()
+    {
+        if (_decisionHoldDepth > 0) _decisionHoldDepth--;
+        if (_decisionHoldDepth <= 0 && _openModalCount <= 0) _atomicLock = false;
+    }
+
+    /// <summary>
+    /// 【2026-09】联机"等待玩家回包"期间的统一持锁入口：把整段异步决策包在决策持锁内
+    /// （服务端没有 View 帮忙 <see cref="NotifyModalOpened"/>）。与单机窗口持锁语义一致。
+    /// </summary>
+    public async System.Threading.Tasks.Task<T> HoldAtomicDuringDecisionAsync<T>(System.Func<System.Threading.Tasks.Task<T>> flow)
+    {
+        BeginDecisionHold();
+        try { return await flow(); }
+        finally { EndDecisionHold(); }
+    }
+
     public void NotifyModalOpened() { _openModalCount++; EnterAtomic(); }
     public void NotifyModalClosed()
     {
         _openModalCount = Math.Max(0, _openModalCount - 1);
-        if (_openModalCount == 0) _atomicLock = false;
+        if (_openModalCount <= 0 && _decisionHoldDepth <= 0) _atomicLock = false;
     }
 
-    /// <summary>同步原子段结束时调用：若没有任何模态窗口仍打开，则原子操作已完整结束，解除规则层锁。</summary>
+    /// <summary>同步原子段结束时调用：若没有任何模态窗口仍打开、也没有决策持锁，则原子操作已完整结束，解除规则层锁。</summary>
     public void ExitAtomicWhenIdle()
     {
-        if (_openModalCount <= 0) _atomicLock = false;
+        if (_openModalCount <= 0 && _decisionHoldDepth <= 0) _atomicLock = false;
     }
 
     /// <summary>
@@ -595,6 +634,7 @@ public partial class TurnManager : Node
         _extraPowerDoneAreas.Clear();   // 【P3·K18】新回合：追加势力对抗的去重集合复位
         _atomicLock = false;
         _openModalCount = 0;
+        _decisionHoldDepth = 0;   // 【2026-09】决策持锁随换局/复位一并归零（杜绝跨局泄漏）
         GD.Print("[TurnManager] Reset: 回合状态已复位到未开局");
     }
 
@@ -981,8 +1021,9 @@ public partial class TurnManager : Node
     /// 决策路径（与引擎既有口径完全一致）：
     ///  · **单机**（`EE.UIHooks != null`）→ `IGameUIHooks.PromptPlayTarget` 弹**目标选择窗**
     ///    （卡目标＝场上高亮 + 点击；地区目标＝地区槽高亮 + 点击；实现见 `Arena.PromptPlayTarget`）；
-    ///  · **联机**（`InputGateway != null`，服务端无 View）→ **本批不代打**：留在手牌并告警
-    ///    （联机要走 `ChoiceRequest.Kind.SelectTarget` 回环，属既有联机缺口，不在本批范围）；
+    ///  · **联机**（`EE.InputGateway != null`，服务端无 View）→ 经 `RequestFreePlayTargetAsync` 下发
+    ///    `ChoiceRequest.Kind.SelectTarget` 回环（回包权威复检；取消/超时 → 留在手牌），
+    ///    **等待回包期间持原子锁**（`HoldAtomicDuringDecisionAsync`，见 §7.3.1）；
     ///  · **两者皆无**（纯 headless 规则内核/测试）→ **确定性兜底取第一个候选**（与触发路径"无 UI 取首候选"同口径）；
     ///  · **无任何候选** → 留在手牌并告警（fail-closed，绝不静默代打）。
     ///
@@ -1310,7 +1351,8 @@ public partial class TurnManager : Node
             }
         }
 
-        var res = await gateway.RequestChoice(playerId, req);
+        // 【2026-09·原子操作期间的玩家选择】等待玩家选目标回包期间持原子锁（服务端无 View）
+        var res = await HoldAtomicDuringDecisionAsync(() => gateway.RequestChoice(playerId, req));
         if (res == null || res.Cancelled || string.IsNullOrEmpty(res.SelectedUid))
         {
             GD.Print($"[TurnManager] 免费打出（联机）：玩家{playerId} 未选目标/超时 → {cardName} 留在手牌");
@@ -3483,6 +3525,16 @@ public partial class TurnManager : Node
             return false;
         }
 
+        // 【2026-09·原子操作期间的玩家选择】"**打出卡牌**"整段都是原子操作（核心需求 7.1/7.3）：
+        // 从原子序的**第一步（确认忠诚）**起持锁，覆盖 选目标/额外费用/付费/入堆叠，
+        // 确保打出过程中（含任何"要玩家选择"的前置窗）都不给响应权、也不会有新的行动/触发效果入堆叠。
+        // 注意：**入站门禁**（游戏结束/熔断/原子锁拒绝/优先权/来源区/时机/阶段/费用可打出/隐匿/戒严）
+        // 必须留在 EnterAtomic **之前**——否则会被自己的锁拒绝（自锁）。
+        // 用 try/finally 收口，保证本段内所有早退分支都释放锁。
+        EnterAtomic();
+        try
+        {
+
         // 5. 忠诚校验（6.1）：颜色 + 领域需求必须同时满足（允许冗余）
         if (!_playerManager.CanPayLoyalty(playerId, tmpl))
         {
@@ -3560,9 +3612,9 @@ public partial class TurnManager : Node
 
 
     // 6. 费用支付（6.2）：横置资产区卡牌产生无色费用
-        // 进入原子操作：从实际开始改变游戏状态（费用支付/入堆叠）起加锁；
-        // 之前的阶段/行动权/费用校验等失败均不占用原子锁（修复：StartReset 拖拽误锁导致双方无法让过）。
-        EnterAtomic();   // 标记本次打出为原子操作；若随后触发窗口打开，Arena 的 NotifyModalOpened 会维持锁
+        // 【2026-09】原子锁已在"确认忠诚"之前置位（见上方 try 段），此处不再重复 EnterAtomic；
+        // 原有的"从实际开始改变游戏状态起加锁"口径已被用户口径取代：**打出卡的原子操作包含
+        // 确认忠诚 / 选目标 / 额外费用 / 付费 全部前置步骤**。
         // P2：先减玩家级时效费用修正（如 JC012 的"下一张帷幕守望牌费用-1"）
         // 【P1】改传实例：使"子类别:/域:/有域图标"类过滤串（如 JC042/JC112）能正确命中。
         EE.CurrentTurn = TurnCount;
@@ -3743,6 +3795,13 @@ public partial class TurnManager : Node
         // 同步段结束：若无模态窗口（触发排序/选目标）保持打开，则原子操作已完整结束，解除规则层锁
         ExitAtomicWhenIdle();
         return true;
+        }
+        finally
+        {
+            // 【2026-09】"打出卡牌"原子段结束（触发排序/选目标窗仍打开时由模态计数维持锁；
+            // 本段内早退分支已各自调用过 ExitAtomicWhenIdle，此处再调为幂等兜底，杜绝锁泄漏）
+            ExitAtomicWhenIdle();
+        }
     }
 
     // ============================================================
@@ -5037,8 +5096,24 @@ public partial class TurnManager : Node
     {
         var hand = GetHandOf(discarderId);
         if (hand.Count <= HandLimit) return;
-        var candidates = new System.Collections.Generic.List<CardInstance>(hand);
+        // 【2026-09·原子操作期间的玩家选择】恢复步骤「手牌上限弃牌」是**强制玩家决策**：
+        // 玩家选完之前必须阻塞进程——期间只有持续效果可以影响游戏，不得有新的行动/触发效果进入堆叠
+        // （单机窗口等待与 `WaitUIRefreshAsync` 帧等待都在本持锁段内）。用 try/finally 保证异常也释放。
+        BeginDecisionHold();
+        try
+        {
+            await DiscardToHandLimitCoreAsync(discarderId, chooserPlayerId, requiredCount, hand);
+        }
+        finally
+        {
+            EndDecisionHold();
+        }
+    }
 
+    /// <summary>`DiscardToHandLimitAsync` 的实体（决策持锁由外层包住，便于 try/finally 配对释放）。</summary>
+    private async System.Threading.Tasks.Task DiscardToHandLimitCoreAsync(int discarderId, int chooserPlayerId,
+        int requiredCount, System.Collections.Generic.List<CardInstance> candidates)
+    {
         if (InputGateway != null)
         {
             var req = new Script.Net.ChoiceRequest

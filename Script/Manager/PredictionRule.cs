@@ -108,14 +108,18 @@ namespace Script.Manager
             };
 
             ChoiceResult result = null;
-            try
+            // 【2026-09·原子操作期间的玩家选择】等待预测者回包期间持原子锁（服务端无 View）
+            await ee.HoldDecisionAsync(async () =>
             {
-                result = await ee.InputGateway.RequestChoice(predictor, req);
-            }
-            catch (System.Exception ex)
-            {
-                GD.PrintErr($"[预测] ⚠ 联机分配请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
-            }
+                try
+                {
+                    result = await ee.InputGateway.RequestChoice(predictor, req);
+                }
+                catch (System.Exception ex)
+                {
+                    GD.PrintErr($"[预测] ⚠ 联机分配请求异常：{ex.GetType().Name}: {ex.Message}（按确定性兜底落地）");
+                }
+            });
 
             // 服务端权威复检：回包里的 UID 必须属于本次取出的 X 张（非法一律忽略）；
             // 未列出的卡按原序置于牌库底（与调查对抗同一口径）。
