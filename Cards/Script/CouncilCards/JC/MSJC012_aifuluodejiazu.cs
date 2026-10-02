@@ -57,7 +57,7 @@ namespace Cards.Script.CouncilCards.JC
             };
 
             // —— 选项1：行动1，横置；横置三个本方奴仆角色 → 抓一张牌 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·1费·横置三个本方奴仆角色·抓1", Cost = 1 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·1费·横置三个本方奴仆角色·抓1" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC012_1_TapThreeServantsDraw",
@@ -78,7 +78,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动2，横置；横置三个本方吸血鬼角色 → 目标敌方玩家弃一张牌 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·2费·横置三个本方吸血鬼角色·目标敌方玩家弃1", Cost = 2 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·2费·横置三个本方吸血鬼角色·目标敌方玩家弃1" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC012_2_TapThreeVampiresDiscard",

@@ -3,7 +3,7 @@
 [ext_resource type="Texture2D" uid="uid://dgcrvcko2s5tf" path="res://Cards/Image/CardBack.jpg" id="1_back"]
 [ext_resource type="Script" uid="uid://bia5yry0osyuf" path="res://Script/UI/CouncilCardUI.cs" id="1_coun"]
 
-[node name="CouncilCardUI" type="Control" unique_id=66649873 node_paths=PackedStringArray("_cardImage", "_nameLabel", "_subTypeLabel", "_textLabel", "_ptLabel", "_costLabel", "_frontface", "_backface")]
+[node name="CouncilCardUI" type="Control" unique_id=66649873 node_paths=PackedStringArray("_cardImage", "_nameLabel", "_subTypeLabel", "_textLabel", "_frontface", "_backface")]
 custom_minimum_size = Vector2(100, 140)
 layout_mode = 3
 anchors_preset = 0
@@ -16,8 +16,6 @@ _cardImage = NodePath("CardImage")
 _nameLabel = NodePath("Display/NameLabel")
 _subTypeLabel = NodePath("Display/SubTypeLabel")
 _textLabel = NodePath("Display/TextLabel")
-_ptLabel = NodePath("Display/PTLabel")
-_costLabel = NodePath("Display/CostLabel")
 _frontface = NodePath("Frontface")
 _backface = NodePath("Backface")
 
@@ -67,34 +65,6 @@ mouse_filter = 2
 offset_top = 20.0
 offset_right = 140.0
 offset_bottom = 40.0
-
-[node name="CostLabel" type="Label" parent="Display" unique_id=968610018]
-layout_mode = 1
-mouse_filter = 2
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -40.0
-offset_top = -40.0
-grow_horizontal = 0
-grow_vertical = 0
-
-[node name="PTLabel" type="Label" parent="Display" unique_id=1168389887]
-layout_mode = 1
-mouse_filter = 2
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -49.0
-offset_top = -54.0
-offset_right = -9.0
-offset_bottom = -31.0
-grow_horizontal = 0
-grow_vertical = 0
 
 [node name="TextLabel" type="RichTextLabel" parent="Display" unique_id=964785210]
 layout_mode = 1

@@ -8,6 +8,7 @@ namespace Script.UI
     /// <summary>
     /// 秘社双击激活弹窗：列出该秘社的多个激活选项（ActivationOptions），供玩家选择其一发动或取消。
     /// 由 Arena.OnCouncilDoubleClicked 实例化并调用 Init(options, onPick)。
+    /// 各选项的费用展示沿用 opt.OptionName 中的"N费"文案（其数值来源为 EffectData.Cost）。
     /// </summary>
     [GlobalClass]
     public partial class CouncilActivateWindow : Window

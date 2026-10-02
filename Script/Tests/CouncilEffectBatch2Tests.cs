@@ -106,10 +106,10 @@ namespace Script.Tests
             var c = Load("MSJC010_mozu");
             Assert.IsNotNull(c, "MSJC010 应可加载");
             Assert.AreEqual(4, c.ActivationOptions.Count, "4 个选项（①封印+抓牌 / ②获得灵体 / ③失去灵体 / ④角色牌进场）");
-            Assert.AreEqual(2, c.ActivationOptions[0].Cost, "①费用 2");
-            Assert.AreEqual(2, c.ActivationOptions[1].Cost, "②费用 2");
-            Assert.AreEqual(2, c.ActivationOptions[2].Cost, "③费用 2");
-            Assert.AreEqual(4, c.ActivationOptions[3].Cost, "④费用 4");
+            Assert.AreEqual(2, Opt(c, 0).Cost, "①费用 2");
+            Assert.AreEqual(2, Opt(c, 1).Cost, "②费用 2");
+            Assert.AreEqual(2, Opt(c, 2).Cost, "③费用 2");
+            Assert.AreEqual(4, Opt(c, 3).Cost, "④费用 4");
 
             var e1 = Opt(c, 0);
             Assert.AreEqual(ActionVerb.Seal, e1.Actions[0].Verb, "①第一个动作＝封印");

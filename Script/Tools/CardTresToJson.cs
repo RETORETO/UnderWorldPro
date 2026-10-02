@@ -101,26 +101,13 @@ namespace Script.Tools
                     StartingHandSize = template.StartingHandSize,
                     CardText = template.CardText,
                     CardImagePath = template.CardImagePath,
-                    MainType = template.MainType,
                     SubType = template.SubType,
-                    ColorIdentity = template.ColorIdentity,
-                    Layout = template.Layout,
-                    Side = template.Side,
-                    PT = template.PT,
-                    RelatedCardUID = template.RelatedCardUID,
-                    TableRow = template.TableRow,
                     Organization = template.Organization,
-                    Cost = template.Cost,
                 };
                 // 颜色与玩家卡共用 CardTemplateData.Colors（同语义同字段），不再单独导出 ColorText
                 foreach (var c in template.Colors ?? new Godot.Collections.Array<CardColor>()) d.Colors.Add(c.ToString());
-                foreach (var e in template.Effects ?? new Godot.Collections.Array<string>()) d.CouncilEffects.Add(e);
                 foreach (var r in template.Restrictions ?? new Godot.Collections.Array<CouncilRestriction>())
                     if (r != null) d.Restrictions.Add(r.Describe());
-                foreach (var r in template.ColorLoyaltyRequirements ?? new Godot.Collections.Array<ColorLoyaltyRequirement>())
-                    if (r != null) d.ColorLoyaltyRequirements.Add(new LoyaltyRequirementData { Name = r.Color.ToString(), Amount = r.Amount });
-                foreach (var r in template.DomainLoyaltyRequirements ?? new Godot.Collections.Array<DomainLoyaltyRequirement>())
-                    if (r != null) d.DomainLoyaltyRequirements.Add(new LoyaltyRequirementData { Name = r.Domain.ToString(), Amount = r.Amount });
                 templates.Add(d);
             }
         }

@@ -32,8 +32,7 @@ namespace Cards.Script.CouncilCards.JC
             // —— 选项1：行动3，横置本秘社；若你具有【先手标志】→ 抓一张牌 ——
             var opt1 = new CouncilActivationOption
             {
-                OptionName = "横置·3费·若有先手标志则抽1张",
-                Cost = 3,
+                OptionName = "横置·3费·若有先手标志则抽1张"
             };
             opt1.EffectDataList.Add(new EffectData
             {
@@ -55,8 +54,7 @@ namespace Cards.Script.CouncilCards.JC
             // —— 选项2：行动4，横置本秘社；从牌库寻找一张【梦境行者】独有牌，展示后入手并洗牌；每局一次 ——
             var opt2 = new CouncilActivationOption
             {
-                OptionName = "横置·4费·检索梦境行者独有牌（每局一次）",
-                Cost = 4,
+                OptionName = "横置·4费·检索梦境行者独有牌（每局一次）"
             };
             opt2.EffectDataList.Add(new EffectData
             {

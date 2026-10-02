@@ -356,49 +356,102 @@ public partial class DeckBuilder : Control
             if (tex == null) { fail++; GD.PrintErr($"【DeckBuilder】秘社卡图加载失败: {data?.UID} ({path})"); }
 
             bool isCurrent = path == _workingCouncil;
-            string displayName = string.IsNullOrEmpty(data?.CardName)
-                ? System.IO.Path.GetFileNameWithoutExtension(path)
-                : data.CardName;
-
-            var row = new HBoxContainer();
-            row.AddThemeConstantOverride("separation", 6);
-
-            var tr = MakeCardThumb(tex);
-            tr.GuiInput += (InputEvent e) =>
-            {
-                if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
-                    SetCouncil(path);
-            };
-            row.AddChild(tr);
-
-            var info = new VBoxContainer();
-            info.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-            info.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
-            var nameLabel = new Label { Text = displayName, VerticalAlignment = VerticalAlignment.Center };
-            nameLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-            nameLabel.Modulate = isCurrent ? new Color(0.55f, 0.95f, 0.55f) : Colors.White;
-            var subLabel = new Label
-            {
-                Text = System.IO.Path.GetFileNameWithoutExtension(path),
-                VerticalAlignment = VerticalAlignment.Top,
-                Modulate = new Color(0.75f, 0.75f, 0.75f),
-            };
-            info.AddChild(nameLabel);
-            info.AddChild(subLabel);
-            row.AddChild(info);
-
-            var addBtn = new Button { Text = isCurrent ? "当前秘社" : "添加" };
-            addBtn.Disabled = isCurrent;
-            addBtn.CustomMinimumSize = new Vector2(64, 0);
-            addBtn.Pressed += () => SetCouncil(path);
-            row.AddChild(addBtn);
-
-            _poolList.AddChild(row);
+            _poolList.AddChild(BuildCouncilPanel(path, data, tex, isCurrent));
         }
 
         if (_pageLabel != null) _pageLabel.Text = $"共 {_councilFilterPaths.Count} 个秘社";
         GD.Print($"【DeckBuilder】刷新秘社候选：{_councilFilterPaths.Count} 个 / 加载失败 {fail} 张");
     }
+
+    // ============================================================
+    // 秘社展示面板（仅在勾选"秘社"时出现，UI 与玩家卡牌信息面板同一套）
+    // ============================================================
+
+    /// <summary>
+    /// 秘社面板：与玩家卡牌面板完全同一风格（同一份 StyleBox 外框 + 100x140 卡图 + 数据列 + 操作按钮）。
+    /// 三行布局：①秘社名 / 起始手牌数量　②颜色 / 组织　③编号。
+    /// </summary>
+    private PanelContainer BuildCouncilPanel(string path, CouncilCardData data, Texture2D tex, bool isCurrent)
+    {
+        var panel = new PanelContainer();
+        panel.AddThemeStyleboxOverride("panel", GetPoolRowStyle());
+
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 8);
+        panel.AddChild(row);
+
+        var thumb = MakeCardThumb(tex);
+        thumb.GuiInput += (InputEvent e) =>   // 卡图可点击设为当前秘社
+        {
+            if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+                SetCouncil(path);
+        };
+        row.AddChild(thumb);
+
+        row.AddChild(BuildCouncilDetailColumn(path, data, isCurrent));
+
+        var actBtn = new Button { Text = isCurrent ? "当前秘社" : "添加" };
+        actBtn.Disabled = isCurrent;
+        actBtn.CustomMinimumSize = new Vector2(56, 0);
+        actBtn.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        actBtn.Pressed += () => SetCouncil(path);
+        row.AddChild(actBtn);
+
+        return panel;
+    }
+
+    /// <summary>
+    /// 秘社数据列（固定三行）：
+    /// ①秘社名（恒显示）｜起始手牌数量（恒显示）
+    /// ②颜色（恒显示）｜组织（恒显示）
+    /// ③编号（恒显示）
+    /// 与玩家卡牌共用 <see cref="MakeInfoLine"/>，因此字号、配色、换行规则天然一致。
+    /// </summary>
+    private static VBoxContainer BuildCouncilDetailColumn(string path, CouncilCardData data, bool isCurrent)
+    {
+        var col = new VBoxContainer();
+        col.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        col.AddThemeConstantOverride("separation", 2);
+
+        // ① 秘社名｜起始手牌数量
+        col.AddChild(MakeInfoLine(
+            new List<string> { "秘社名：" + CouncilNameText(data, path), "起始手牌数量：" + StartingHandText(data) },
+            isCurrent ? new Color(0.55f, 0.95f, 0.55f) : new Color(1f, 0.92f, 0.72f),
+            16));
+
+        // ② 颜色｜组织
+        col.AddChild(MakeInfoLine(
+            new List<string> { "颜色：" + CouncilColorText(data), "组织：" + CouncilOrganizationText(data) }));
+
+        // ③ 编号
+        col.AddChild(MakeTextLine("编号：" + CouncilUidText(data, path), new Color(0.75f, 0.75f, 0.8f)));
+
+        return col;
+    }
+
+    private static string CouncilNameText(CouncilCardData data, string path)
+    {
+        var name = data?.CardName;
+        return string.IsNullOrWhiteSpace(name) ? System.IO.Path.GetFileNameWithoutExtension(path) : name.Trim();
+    }
+
+    private static string CouncilUidText(CouncilCardData data, string path)
+    {
+        var uid = data?.UID;
+        return string.IsNullOrWhiteSpace(uid) ? System.IO.Path.GetFileNameWithoutExtension(path) : uid.Trim();
+    }
+
+    /// <summary>起始手牌数量：数据缺失时以卡表默认值 6 兜底。</summary>
+    private static string StartingHandText(CouncilCardData data)
+        => data == null ? "—" : data.StartingHandSize.ToString();
+
+    /// <summary>秘社颜色：与玩家卡同样取自 Colors 枚举数组（无有效值时回落"棕（中立）"）。</summary>
+    private static string CouncilColorText(CouncilCardData data)
+        => data == null ? "—" : ColorsText(data.Colors);
+
+    /// <summary>秘社组织（缺失时以"—"占位以保证三行结构完整）。</summary>
+    private static string CouncilOrganizationText(CouncilCardData data)
+        => string.IsNullOrWhiteSpace(data?.Organization) ? "—" : data.Organization.Trim();
 
     // ============================================================
     // 搜索结果的结构化信息面板（五行数据）
@@ -420,7 +473,7 @@ public partial class DeckBuilder : Control
 
     /// <summary>
     /// 一张搜索结果面板：PanelContainer（边框+底色）内为「卡图 | 详细数据列 | 添加按钮」。
-    /// 详细数据固定五行：<c>卡名/独有卡名</c>、<c>费用/颜色/魔法领域</c>、<c>类别/子类别</c>、<c>能力</c>、<c>编号</c>。
+    /// 详细数据固定五行：<c>卡名/独有卡名</c>、<c>费用/颜色/魔法领域/组织</c>、<c>类别/子类别</c>、<c>能力图标</c>、<c>编号</c>。
     /// </summary>
     private PanelContainer BuildCardPanel(string path, PlayerCardData data, Texture2D tex)
     {
@@ -530,10 +583,17 @@ public partial class DeckBuilder : Control
 
     /// <summary>颜色（恒显示；无有效值按默认棕色/中立兜底）。</summary>
     private static string ColorsText(PlayerCardData data)
+        => data == null ? "棕（中立）" : ColorsText(data.Colors);
+
+    /// <summary>秘社颜色：与玩家卡共用同一份枚举→中文映射，保证展示口径一致。</summary>
+    private static string ColorsText(CouncilCardData data)
+        => data == null ? "棕（中立）" : ColorsText(data.Colors);
+
+    private static string ColorsText(System.Collections.Generic.IEnumerable<CardColor> colors)
     {
         var parts = new List<string>();
-        if (data?.Colors != null)
-            foreach (var c in data.Colors)
+        if (colors != null)
+            foreach (var c in colors)
             {
                 if (!System.Enum.IsDefined(typeof(CardColor), c)) continue;   // 过滤脏数据（如哨兵值）
                 var cn = ColorCn.TryGetValue(c, out var v) ? v : c.ToString();

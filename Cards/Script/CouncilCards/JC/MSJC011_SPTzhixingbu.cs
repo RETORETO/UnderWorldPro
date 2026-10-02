@@ -33,7 +33,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC011_SPTzhixingbu()
         {
             // —— 选项1：行动3，横置；目标角色获得杀伤1直到回合结束 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·目标角色获得杀伤1", Cost = 3 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·目标角色获得杀伤1" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC011_1_GrantKill1",
@@ -53,7 +53,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动3，横置；选择目标地区，该地区带［黑刀］图标的本方角色获得撤回直到回合结束 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·所选地区带［黑刀］的本方角色获得撤回", Cost = 3 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·所选地区带［黑刀］的本方角色获得撤回" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC011_2_GrantWithdrawInArea",

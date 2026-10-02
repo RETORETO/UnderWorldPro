@@ -32,7 +32,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC017_mengyanzuqun()
         {
             // —— 选项1：行动3，横置；若你具有【先手标志】，则将牌库顶一张牌封印在目标角色上 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·若有先手标志则封印牌库顶一张到目标角色", Cost = 3 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·若有先手标志则封印牌库顶一张到目标角色" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC017_1_SealDeckTopOnTarget",
@@ -53,7 +53,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动4，横置；将你墓地中的目标灵体角色置于你的牌库顶 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·4费·将墓地中的目标灵体角色置于牌库顶", Cost = 4 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·4费·将墓地中的目标灵体角色置于牌库顶" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC017_2_SpiritGraveyardToDeckTop",

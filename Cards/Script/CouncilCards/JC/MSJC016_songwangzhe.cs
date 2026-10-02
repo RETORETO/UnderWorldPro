@@ -36,7 +36,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC016_songwangzhe()
         {
             // —— 选项1：行动3，横置；将你牌库顶的一张牌置于你的墓地 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·磨1张（牌库顶→墓地）", Cost = 3 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·磨1张（牌库顶→墓地）" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC016_1_MillTopOne",
@@ -54,7 +54,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动6，横置，将墓地中的七张牌封印在颂亡者上；令墓地中目标【死】领域角色牌正面进场 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·6费·封印墓地七张·令墓地【死】领域角色牌正面进场", Cost = 6 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·6费·封印墓地七张·令墓地【死】领域角色牌正面进场" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC016_2_SealSevenThenReanimate",

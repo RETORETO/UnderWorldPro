@@ -24,8 +24,6 @@ namespace Script.UI
         [Export] private Label _nameLabel;             // 名称
         [Export] private Label _subTypeLabel;          // 子类型（如"秘社-法师结社"）
         [Export] private RichTextLabel _textLabel;     // 牌面完整文本（持续/行动效果说明）
-        [Export] private Label _ptLabel;               // 战力/防御展示（如"6"）
-        [Export] private Label _costLabel;             // 激活费用（默认激活，无选项时显示）
         [Export] private TextureRect _frontface;       // 正面容器（卡图+文本所在层）
         [Export] private TextureRect _backface;        // 背面卡图
 
@@ -171,13 +169,6 @@ namespace Script.UI
                 _textLabel.AppendText(string.IsNullOrEmpty(data.CardText) ? "（暂无效果文本）" : data.CardText);
             }
 
-            // 战力/防御
-            if (_ptLabel != null) _ptLabel.Text = string.IsNullOrEmpty(data.PT) ? "" : $"PT {data.PT}";
-
-            // 激活费用（默认激活）
-            if (_costLabel != null)
-                _costLabel.Text = data.Cost >= 0 ? $"行动{data.Cost}" : "";
-
             // 卡图（用 CouncilCardData.CardImagePath 字符串路径，非 ResolveCardImagePath）
             if (_cardImage == null)
             {
@@ -211,8 +202,6 @@ namespace Script.UI
             if (_nameLabel != null) _nameLabel.Visible = isFaceUp;
             if (_subTypeLabel != null) _subTypeLabel.Visible = isFaceUp;
             if (_textLabel != null) _textLabel.Visible = isFaceUp;
-            if (_ptLabel != null) _ptLabel.Visible = isFaceUp;
-            if (_costLabel != null) _costLabel.Visible = isFaceUp;
         }
 
         private void ClearLabels()
@@ -220,8 +209,6 @@ namespace Script.UI
             if (_nameLabel != null) _nameLabel.Text = "";
             if (_subTypeLabel != null) _subTypeLabel.Text = "";
             if (_textLabel != null) _textLabel.Clear();
-            if (_ptLabel != null) _ptLabel.Text = "";
-            if (_costLabel != null) _costLabel.Text = "";
         }
 
         /// <summary>触发激活请求（由双击信号在 Arena 中订阅，弹出激活选项窗口）。</summary>

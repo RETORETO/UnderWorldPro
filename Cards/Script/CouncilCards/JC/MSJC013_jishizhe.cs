@@ -31,7 +31,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC013_jishizhe()
         {
             // —— 选项1：行动2，横置；在目标角色或附属上放置一个时间标志 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·2费·目标角色或附属上放置一个时间标志", Cost = 2 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·2费·目标角色或附属上放置一个时间标志" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC013_1_PlaceTimeCounter",
@@ -54,7 +54,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动3，横置；消灭所有其上有 ≥3 个时间标志的角色和附属，每消灭一个抓一张牌 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·消灭所有具≥3时间标志的角色与附属并等量抓牌", Cost = 3 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·消灭所有具≥3时间标志的角色与附属并等量抓牌" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC013_2_DestroyTimeMarked",

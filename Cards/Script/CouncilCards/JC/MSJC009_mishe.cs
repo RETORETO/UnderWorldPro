@@ -20,8 +20,7 @@ namespace Cards.Script.CouncilCards.JC
         {
             var opt1 = new CouncilActivationOption
             {
-                OptionName = "横置·3费·若有先手标志则抽1张",
-                Cost = 3,
+                OptionName = "横置·3费·若有先手标志则抽1张"
             };
             opt1.EffectDataList.Add(new EffectData
             {

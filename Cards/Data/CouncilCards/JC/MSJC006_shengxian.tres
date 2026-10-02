@@ -1,11 +1,7 @@
 [gd_resource type="Resource" script_class="MSJC006_shengxian" format=3]
 
-[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
 [ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
 [ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC006_shengxian.cs" id="1_msjc"]
-[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
-[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
-[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
 
 [sub_resource type="Resource" id="CouncilRestriction_colorMSJC006"]
 script = ExtResource("1_20xel")
@@ -23,11 +19,7 @@ CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC006_shengxian.jpg"
 StartingHandSize = 6
 SubType = "秘社-群体"
 Colors = Array[int]([2])
-PT = "6"
-RelatedCardUID = "TK007"
-TableRow = 2
 Organization = "圣贤"
-Cost = 3
 Restrictions = [SubResource("CouncilRestriction_colorMSJC006")]
 UID = "MSJC006_shengxian"
 CardName = "圣贤"

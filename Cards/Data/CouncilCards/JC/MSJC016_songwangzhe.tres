@@ -1,11 +1,9 @@
 [gd_resource type="Resource" script_class="MSJC016_songwangzhe" format=3]
 
-[ext_resource type="Script" uid="uid://bxj237xdgbi1a" path="res://Script/Data/Cards/CouncilActivationOption.cs" id="1_8jx2b"]
 [ext_resource type="Script" uid="uid://xs8hb4ufbu1l" path="res://Script/Data/Cards/CouncilRestriction.cs" id="1_20xel"]
 [ext_resource type="Script" path="res://Cards/Script/CouncilCards/JC/MSJC016_songwangzhe.cs" id="1_msjc"]
-[ext_resource type="Script" uid="uid://xd7ofi8osnwc" path="res://Script/Data/Cards/ColorLoyaltyRequirement.cs" id="2_mla2l"]
-[ext_resource type="Script" uid="uid://d34ck0uin1w6e" path="res://Script/Data/Cards/DomainLoyaltyRequirement.cs" id="3_qwoys"]
-[ext_resource type="Script" uid="uid://taouepkebf4b" path="res://Script/Data/Effects/TargetRule.cs" id="5_lkynd"]
+
+
 
 [ext_resource type="Script" path="res://Script/Data/Cards/CouncilExceptionRule.cs" id="6_exc"]
 
@@ -35,11 +33,7 @@ CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC016_songwangzhe.jpg"
 StartingHandSize = 5
 SubType = "秘社-法师结社/分支"
 Colors = Array[int]([7])
-PT = "5"
-RelatedCardUID = "TK007"
-TableRow = 2
 Organization = "方碑序列"
-Cost = 3
 Restrictions = Array[Resource]([SubResource("Res_MSJC016_songwangzhe_Whitelist")])
 
 UID = "MSJC016_songwangzhe"

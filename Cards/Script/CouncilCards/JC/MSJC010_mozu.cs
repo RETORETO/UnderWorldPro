@@ -33,7 +33,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC010_mozu()
         {
             // —— 选项1：行动2，横置；从手中选一张【星】领域的牌封印在貘组上，然后抓一张牌 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·2费·封印一张【星】领域手牌并抓1", Cost = 2 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·2费·封印一张【星】领域手牌并抓1" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC010_1_SealStarFromHand",
@@ -72,7 +72,7 @@ namespace Cards.Script.CouncilCards.JC
             };
             var targetAnyCharacter = new TargetSpec { Kind = TargetKind.Character };
 
-            var opt2a = new CouncilActivationOption { OptionName = "横置·2费·置1张封印牌入牌库底·目标获得灵体", Cost = 2 };
+            var opt2a = new CouncilActivationOption { OptionName = "横置·2费·置1张封印牌入牌库底·目标获得灵体" };
             opt2a.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC010_2a_GrantSpirit",
@@ -91,7 +91,7 @@ namespace Cards.Script.CouncilCards.JC
                 FaqNote = "代价＝把 1 张封印在貘组上的牌置于你的牌库底（无牌则不能发动）；目标角色获得灵体直到回合结束。",
             });
 
-            var opt2b = new CouncilActivationOption { OptionName = "横置·2费·置1张封印牌入牌库底·目标失去灵体", Cost = 2 };
+            var opt2b = new CouncilActivationOption { OptionName = "横置·2费·置1张封印牌入牌库底·目标失去灵体" };
             opt2b.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC010_2b_RemoveSpirit",
@@ -112,7 +112,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项4：行动4，横置，将两张封印在貘组上的牌置于牌库底；令一张封印在貘组上的角色牌正面进场 ——
-            var opt3 = new CouncilActivationOption { OptionName = "横置·4费·置2张封印牌入牌库底·封印角色牌正面进场", Cost = 4 };
+            var opt3 = new CouncilActivationOption { OptionName = "横置·4费·置2张封印牌入牌库底·封印角色牌正面进场" };
             opt3.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC010_3_UnsealCharacterToArea",

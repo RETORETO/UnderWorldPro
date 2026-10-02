@@ -60,8 +60,6 @@ namespace Script.Tests
             Assert.AreEqual("秘社-法师结社", tmpl.SubType, "子类型＝秘社-法师结社");
             Assert.AreEqual(1, tmpl.Colors.Count, "派系色单一");
             Assert.AreEqual(CardColor.Yellow, tmpl.Colors[0], "派系色＝【黄】（与玩家卡同名字段 Colors）");
-            Assert.AreEqual("6", tmpl.PT, "PT");
-            Assert.AreEqual("TK007", tmpl.RelatedCardUID, "关联卡＝TK007 先手标志");
             Assert.AreEqual("帷幕守望", tmpl.Organization, "组织");
             Assert.AreEqual(6, tmpl.StartingHandSize, "**初始手牌：6**（现已在 .tres 中显式声明，不再靠默认值）");
             Assert.IsTrue(tmpl.HasRestrictions, "应声明构筑限制");
@@ -69,8 +67,8 @@ namespace Script.Tests
             Assert.IsTrue(tmpl.Restrictions[0].FilterByColor, "按颜色筛选");
             Assert.AreEqual(25, tmpl.Restrictions[0].RequiredCount, "需要 ≥25 张");
             Assert.AreEqual(2, tmpl.ActivationOptions.Count, "两个激活选项（行动3 / 行动4）");
-            Assert.AreEqual(3, tmpl.ActivationOptions[0].Cost, "选项①费用 3");
-            Assert.AreEqual(4, tmpl.ActivationOptions[1].Cost, "选项②费用 4");
+            Assert.AreEqual(3, tmpl.ActivationOptions[0].EffectDataList[0].Cost, "选项①费用 3");
+            Assert.AreEqual(4, tmpl.ActivationOptions[1].EffectDataList[0].Cost, "选项②费用 4");
         }
 
         public void TestCouncilMSJC001_选项1带先手标志前提()
@@ -160,7 +158,7 @@ namespace Script.Tests
 
             // 单选项探针秘社（0 费，隔离"每局上限"这一个自变量）
             var tmpl = new CouncilCardData { CardName = "探针秘社", UID = "TS_c57_council" };
-            var opt = new CouncilActivationOption { OptionName = "0费·每局一次", Cost = 0 };
+            var opt = new CouncilActivationOption { OptionName = "0费·每局一次" };
             opt.EffectDataList.Add(new EffectData
             {
                 EffectId = "TS_c57_council_e",

@@ -13,10 +13,6 @@
 |---|---|---|---|---|
 | 颜色 | `Colors` : `Array[CardColor]`，`.tres` 写作 `Colors = Array[int]([1])` | `ColorText` : `String`，复合 `"黄·帷幕守望"` | ❌ **命名+类型+职责三重不一致** | 拆分：删 `ColorText`，新增 `Colors` |
 | 阵营 | `Organization` : `String` | `Organization` : `String`（同名），但 **009~017 取值错误** | ❌ **值口径不一致** | 改值（9 张） |
-| 早凉-tier（左右同理） | `Cost` : `Int`（默认 -1） | `Cost` : `Int`（默认 -1） | ✅ | — |
-| 门槛：颜色忠诚 | `ColorLoyaltyRequirements` : `Array[ColorLoyaltyRequirement]` | 同名同型 | ✅ | — |
-| 门槛：领域忠诚 | `DomainLoyaltyRequirements` | 同名同型 | ✅ | — |
-| 结构化效果/目标规则 | `Effects` / `TargetRules` | 同名同型 | ✅ | — |
 | 基类三件套 | `UID` / `CardName` / `Score`（`BaseCardData`） | 同名同型 | ✅ | — |
 
 ### 颜色枚举对照（`Script/Enums/Enums.cs` → `CardColor`）
@@ -95,7 +91,7 @@
 ## 5. 观察项（判定为**不违反**判据，本次不改）
 
 ### 5.1 秘社卡独有语义（玩家卡无对应物，不存在"同名冲突"）
-`StartingHandSize`、`Restrictions`(子资源)、`CardText`、`CardImagePath`、`ColorIdentity`、`Layout`、`Side`、`PT`、`TableRow`、`DrawFromBottom`、`MainType`、`SubType`、`RelatedCardUID`。
+`StartingHandSize`、`Restrictions`(子资源)、`CardText`、`CardImagePath`、`DrawFromBottom`、`SubType`。
 
 ### 5.2 玩家卡独有语义（秘社不适用）
 `SubCardName`、`UniqueField`、`CategoryFlag`、`SubCategories`、`MagicDomains`、`Investigation`、`Strength`、`Power`、`FirstStrike*`、`Defense`、`ExtraCost*`、`AllowedTargets`、`TargetRequirement`、`LimitToActionPhaseOnly`、`PlayableFromGraveyard`。
@@ -104,12 +100,9 @@
 | 秘社 | 玩家 | 结论 |
 |---|---|---|
 | `SubType` : `String`（`"秘社-法师结社/吸血鬼"`，单值复合串） | `SubCategories` : `Array[String]` | 名称与类型均不同，但秘社的子类型是一整串带斜杠的层级路径，拆成数组会丢失语义；且两者上层（`AreaCardData`）也用 `SubCategories`。**暂不改** |
-| `MainType` : `String`（`"秘社"`） | `CategoryFlag` : `CardCategory` 位掩码枚举 | `CategoryFlag` 是**行为开关**（Character/Attachment…），秘社不是其中任何一类，强套会误判。**暂不改** |
-| `PT` : `String`（`"6"`） | `Strength`/`Power`/`Defense` : `Int` | PT 是秘社的"势力/标记上限"展示值，与战斗数值不同语义。**暂不改** |
 
 ### 5.4 格式瑕疵（低优先，非本次范围）
 - 部分秘社 `.tres` 缺少 `gd_resource` 头部的 `uid=`（009/012 等），Godot 会在重新导入时自行补写。
-- `MSJC012` 无 `RelatedCardUID`（符合 XML：该卡 `related` 为空）。
 
 ---
 

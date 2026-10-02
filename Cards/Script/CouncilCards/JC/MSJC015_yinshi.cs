@@ -35,7 +35,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC015_yinshi()
         {
             // —— 选项1：行动3，横置；选目标地区，若手牌 ≥4 则从手中展示一张角色牌并以暗藏者状态置于该地区 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·手牌≥4时从手中暗藏派遣一张角色到目标地区", Cost = 3 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·手牌≥4时从手中暗藏派遣一张角色到目标地区" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC015_1_DeployHandCharacterCovert",

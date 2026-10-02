@@ -37,7 +37,7 @@ namespace Cards.Script.CouncilCards.JC
         public MSJC014_shaobing()
         {
             // —— 选项1：行动3，横置；在目标敌方暗藏者上放置一个锁定标志 ——
-            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·目标敌方暗藏者上放置锁定标志", Cost = 3 };
+            var opt1 = new CouncilActivationOption { OptionName = "横置·3费·目标敌方暗藏者上放置锁定标志" };
             opt1.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC014_1_LockEnemyCovert",
@@ -61,7 +61,7 @@ namespace Cards.Script.CouncilCards.JC
             });
 
             // —— 选项2：行动3，横置；选目标本方角色，移动到"具有锁定标志的角色或暗藏者"所在地区 ——
-            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·移动目标本方角色到具锁定标志者所在地区", Cost = 3 };
+            var opt2 = new CouncilActivationOption { OptionName = "横置·3费·移动目标本方角色到具锁定标志者所在地区" };
             opt2.EffectDataList.Add(new EffectData
             {
                 EffectId = "MSJC014_2_MoveToLockedArea",

@@ -9,3 +9,6 @@ logs/
 _dsh*.log
 .vs/
 /.vs
+/.codebuddy
+/.vs
+/.vs

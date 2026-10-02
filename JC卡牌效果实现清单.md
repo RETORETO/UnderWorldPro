@@ -1074,8 +1074,7 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   字段来源（Card.xml → .tres）：`text`(简体段)→`CardText`、`prop/type`→`SubType`、
   **`prop/colors`(复合串)→`Colors`(`Array[int]`,`·`前的色名映射 `CardColor` 枚举) ＋ `Organization`(`·`后的阵营名)**（原写单一字符串 `ColorText`，
   **2026-10-02 已废弃**：`ColorText` 同步颜色+阵营两个语义，与玩家卡不同名不同构），
-  `prop/pt`→`PT`、`related`→`RelatedCardUID`（**MSJC012 无**，其余均 `TK007`）、`tablerow`→`TableRow`(全为 2)、
-  首个"行动N"→`Cost`、"初始手牌：N"→`StartingHandSize`、`maintype`→`MainType`(默认"秘社")。
+  "初始手牌：N"→`StartingHandSize`。
 - **起始手牌**：001~008 / 010~015 / 017 = **6**；**016 颂亡者 = 5**（XML 原文，PT 也是 5，保留未改）；
   **009 秘社 = 7**（用户指定："XML 里是 6，测试需要改成 7"）。
 - **构筑限制**：001~008 = `FilterByColor + TargetColor=<派系色> + GreaterOrEqual + RequiredCount=25`（黄1/白2/绿3/灰4/紫5/蓝6/黑7/红8）；
@@ -1095,7 +1094,7 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   （① 构筑限制接入 ② 秘社检索为暂代 ③ 待做 17 张秘社）。
 - **核对结论（本轮）**：`.tres` 静态字段**除 3 处外齐备**——`StartingHandSize` 原先靠默认值 6（已显式写入）、
   `CardText` 是占位文本（已按卡文改写）、`set num`（卡集/编号）**数据模型无对应字段**（不影响对局，暂记）；
-  其余 `type/maintype/colors/coloridentity/pt/tablerow/related/organization/layout/side` 均有字段且已填。
+  其余 `type/colors/organization` 均有字段且已填。
   `.cs` 结构够用（`ActivationOptions` + `EffectData`，激活窗/费用/横置链路已通），但**两条效果原先都没按卡文实现**。
 - **MSJC001 落地（按卡文）**：
   · 行动3横置：**若你具有【先手标志】**则抓一张牌 ⇒ 新谓词 `具有先手标志`；
