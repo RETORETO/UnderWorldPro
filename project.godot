@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="UWPro"
-run/main_scene="uid://tbieb8lu27mv"
+run/main_scene="uid://dta6t737243d2"
 config/features=PackedStringArray("4.7", "C#", "GL Compatibility")
 config/icon="res://icon.svg"
 

@@ -30,7 +30,10 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,
                     Filter = "或暗藏者",
                     NeedsSelection = true,
-                    IncludeCovert = true
+                    IncludeCovert = true,
+                    // 【2026-09 修复·A62】卡文"横置目标角色或暗藏者"**未排除自身** ⇒ 可指定自身
+                    // （与 JC008/JC069 同款约定）；否则帷幕护卫是场上的唯一角色/暗藏者时该能力无法发动。
+                    CanTargetSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {

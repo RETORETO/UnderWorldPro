@@ -31,7 +31,9 @@ namespace Script.Manager
                 if (c == null || c.ControllerId != controllerId) continue;
                 var tmpl = c.PlayerTemplate;
                 if (tmpl == null || (tmpl.CategoryFlag & CardCategory.Character) == 0) continue;
-                if (c.HasKeyword("声望") || tmpl.HasInherentKeyword("声望")) n++;
+                // 【2026-09 用户口径·通用】"声望"是**持续关键字**：背面朝上的角色（暗藏者）**不提供**其词条
+                // （＝不算"声望角色"），故走"当前有效"判定（运行期授予 ∪ 非暗藏时的卡面固有）。
+                if (c.HasActiveKeyword("声望")) n++;
             }
             return n;
         }

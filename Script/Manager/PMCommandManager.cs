@@ -65,8 +65,26 @@ public partial class PMCommandManager : Node
         _stackManager = stackManager;
     }
 
+    /// <summary>
+    /// 【2026-09】只注入**模型侧依赖**（卡/牌库/区域管理器）：由 Composition Root（`GameInitializer`）在创建时
+    /// 就地接线，使 PM 命令在**没有 View** 的场景（headless 测试 / 纯服务端）同样可用；
+    /// View 侧的 UI 回调（抽牌回调、刷新回调等）仍由 `Initialize` 注入，且 `Initialize` 会覆盖这里设的值。
+    /// </summary>
+    public void InjectModelRefs(CardManager cardManager, DeckManager deckManager, ZoneManager zoneManager)
+    {
+        _cardManager ??= cardManager;
+        _deckManager ??= deckManager;
+        _zoneManager ??= zoneManager;
+    }
+
     /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
     public Script.Manager.EffectEngine EffectEngineRef { get; set; }
+
+    /// <summary>显式注入的 TurnManager 引用（`jumpto` 跳转步骤 / 定向取牌从牌库移出用）。</summary>
+    public TurnManager TurnManagerRef { get; set; }
+
+    /// <summary>定向取牌（`draw &lt;数量&gt; &lt;卡牌编号&gt;`）挑选"多张同名同编号"用的随机源。</summary>
+    private readonly System.Random _rng = new System.Random();
 
     /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
     private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
@@ -150,6 +168,8 @@ public partial class PMCommandManager : Node
             case "kill": ExecuteKill(parts); break;
             case "heal": ExecuteHeal(parts); break;
             case "draw": ExecuteDraw(parts); break;
+            // 【2026-09 新增】直接跳转步骤（中间经过的步骤一律不结算）
+            case "jumpto": case "jump": ExecuteJumpTo(parts); break;
             case "move": ExecuteMove(parts); break;
             case "tap": ExecuteTap(parts); break;
             case "untap": ExecuteUntap(parts); break;
@@ -302,16 +322,138 @@ public partial class PMCommandManager : Node
         }
     }
 
+    /// <summary>
+    /// `draw` —— 两种用法（**旧语法完全兼容**）：
+    ///  ① **旧**：`draw &lt;玩家 1|2&gt; [数量]`（两个参数都是数字）→ 该玩家从牌库顶抽牌（走 UI 注入的抽牌回调）。
+    ///  ② **新**：`draw &lt;数量&gt; &lt;卡牌编号&gt; [玩家 1|2]` → **定向取牌**：从该玩家（缺省 P1）**卡组**里
+    ///     找到**该编号**的牌加入其手牌。编号＝UID 里**第一个下划线之前**的部分、不区分大小写
+    ///     （如 `JC001` 命中 `JC001_shenmibunan`）；卡组里没有该编号的牌 → **什么都不做**（只打日志）；
+    ///     有多张 → **随机**挑一张。`数量` 表示最多取几张（取满/取不到即停）。
+    ///     简写 `draw &lt;卡牌编号&gt;`（省略数量）＝取 1 张。
+    /// </summary>
     private void ExecuteDraw(string[] parts)
     {
-        if (parts.Length < 2 || !int.TryParse(parts[1], out int playerId) || (playerId != 1 && playerId != 2))
-        { GD.Print("❌ 用法: draw <玩家 1|2> [数量]"); return; }
+        if (parts.Length < 2) { GD.Print("❌ 用法: draw <玩家 1|2> [数量] / draw <数量> <卡牌编号> [玩家 1|2]"); return; }
 
-        int count = 1;
-        if (parts.Length >= 3 && int.TryParse(parts[2], out int n) && n > 0)
-            count = n;
-        _onDraw?.Invoke(playerId, count);
-        GD.Print($"✅ 玩家{playerId} 抽牌 {count} 张（已加入手牌区）");
+        // 旧语法：`draw <玩家> [数量]`（第一个参数是玩家号；第二个参数缺省或是数字）
+        bool oldForm = int.TryParse(parts[1], out _)
+                       && (parts.Length < 3 || int.TryParse(parts[2], out _));
+        if (oldForm)
+        {
+            if (!int.TryParse(parts[1], out int playerId) || (playerId != 1 && playerId != 2))
+            { GD.Print("❌ 用法: draw <玩家 1|2> [数量]"); return; }
+            int count = 1;
+            if (parts.Length >= 3 && int.TryParse(parts[2], out int n) && n > 0) count = n;
+            _onDraw?.Invoke(playerId, count);
+            GD.Print($"✅ 玩家{playerId} 抽牌 {count} 张（已加入手牌区）");
+            return;
+        }
+
+        // 新语法：`draw <数量> <卡牌编号> [玩家]`（或简写 `draw <卡牌编号>`）
+        int take = 1;
+        string code;
+        int player = 1;
+        if (parts.Length == 2)
+        {
+            code = parts[1];                                   // 简写：draw JC001
+        }
+        else
+        {
+            if (!int.TryParse(parts[1], out take) || take <= 0)
+            { GD.Print("❌ 用法: draw <数量> <卡牌编号> [玩家 1|2]"); return; }
+            code = parts[2];
+            if (parts.Length >= 4 && int.TryParse(parts[3], out int p) && (p == 1 || p == 2)) player = p;
+        }
+        DrawSpecificCards(player, take, code);
+    }
+
+    /// <summary>卡牌编号归一化：取 UID 中**第一个下划线之前**的部分（不区分大小写比较）。</summary>
+    private static string NormalizeCardCode(string uid)
+    {
+        if (string.IsNullOrEmpty(uid)) return "";
+        int idx = uid.IndexOf('_');
+        return (idx > 0 ? uid.Substring(0, idx) : uid).Trim();
+    }
+
+    /// <summary>`draw &lt;数量&gt; &lt;卡牌编号&gt;` 的实体：从玩家卡组定向取牌加入其手牌。</summary>
+    private void DrawSpecificCards(int playerId, int count, string code)
+    {
+        if (TurnManagerRef == null || _deckManager == null || _zoneManager == null)
+        { GD.Print("❌ 定向取牌失败：TurnManager/DeckManager/ZoneManager 未注入"); return; }
+        string want = NormalizeCardCode(code);
+        if (string.IsNullOrEmpty(want)) { GD.Print("❌ 卡牌编号为空"); return; }
+
+        int moved = 0;
+        var names = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            var deck = playerId == 1 ? _deckManager.GetDeckPlayer1() : _deckManager.GetDeckPlayer2();
+            var matches = new List<CardInstance>();
+            foreach (var c in deck)
+                if (c != null && string.Equals(NormalizeCardCode(c.PlayerTemplate?.UID), want,
+                        StringComparison.OrdinalIgnoreCase))
+                    matches.Add(c);
+            if (matches.Count == 0) break;
+            var pick = matches.Count == 1 ? matches[0] : matches[_rng.Next(matches.Count)];
+            TurnManagerRef.RemoveCardFromDeckOf(playerId, pick);   // 先从牌库数据层移出（牌库不在区域桶里）
+            _zoneManager.MoveToHand(pick, playerId);               // 再加入手牌（照常广播移动事件）
+            names.Add(pick.PlayerTemplate?.CardName ?? pick.UID);
+            moved++;
+        }
+
+        if (moved == 0)
+        {
+            GD.Print($"ℹ️ 玩家{playerId} 卡组中没有编号「{want}」的牌 → 什么都不做");
+            return;
+        }
+        GD.Print($"✅ 定向取牌：玩家{playerId} 卡组 → 手牌 {moved} 张（编号「{want}」）：{string.Join("、", names)}");
+        _onZoneChanged?.Invoke();
+    }
+
+    // ==================== 步骤跳转（调试） ====================
+
+    /// <summary>
+    /// `jumpto &lt;步骤名&gt;[地区号]` —— 直接跳到指定步骤，**中间经过的步骤一律不结算**（其触发/效果都不结算），
+    /// 只进入目标步骤并执行它正常的进入逻辑（该步骤照常可结算，后续流程照常推进）。
+    ///  · 步骤名＝`TurnManager.TurnPhase` 枚举名（不区分大小写）：`StartReset`/`StartPrepare`/`StartDraw`/
+    ///    `ActionFirst`/`ActionSecond`/`PreCombat`/`CombatInvestigation`/`CombatStrength`/`CombatPower`/
+    ///    `EndCleanup`/`EndRecover`/`EndPassTurn`；
+    ///  · **对抗类步骤带地区号**（紧贴在名字后）：`jumpto CombatInvestigation1` ＝跳到 **1 地区**调查对抗，
+    ///    同理 `CombatStrength2` / `CombatPower3`（省略地区号＝地区 1；`PreCombat` 不带地区号）。
+    /// </summary>
+    private void ExecuteJumpTo(string[] parts)
+    {
+        if (parts.Length < 2) { GD.Print("❌ 用法: jumpto <步骤名>[地区号]，如 jumpto EndRecover / jumpto CombatInvestigation1"); return; }
+        if (TurnManagerRef == null) { GD.Print("❌ jumpto 失败：TurnManager 未注入"); return; }
+
+        string raw = parts[1].Trim();
+        int areaNo = 0;
+        string name = raw;
+        // 拆"名字 + 结尾数字"（对抗类步骤的地区号）
+        int cut = raw.Length;
+        while (cut > 0 && char.IsDigit(raw[cut - 1])) cut--;
+        if (cut < raw.Length && cut > 0)
+        {
+            name = raw.Substring(0, cut);
+            int.TryParse(raw.Substring(cut), out areaNo);
+        }
+
+        if (!Enum.TryParse<TurnManager.TurnPhase>(name, ignoreCase: true, out var phase))
+        {
+            GD.Print($"❌ 未识别的步骤名「{raw}」。可用：StartReset/StartPrepare/StartDraw/ActionFirst/ActionSecond/" +
+                     "PreCombat/CombatInvestigation[地区号]/CombatStrength[地区号]/CombatPower[地区号]/" +
+                     "EndCleanup/EndRecover/EndPassTurn");
+            return;
+        }
+
+        if (!TurnManagerRef.JumpToPhase(phase, areaNo, out string error))
+        {
+            GD.Print($"❌ jumpto {raw} 失败：{error}");
+            return;
+        }
+        GD.Print($"✅ jumpto：已跳到 {TurnManagerRef.CurrentPhase}" +
+                 (areaNo > 0 ? $"，地区 {areaNo}" : "") + $"（中间步骤未结算）");
+        _onZoneChanged?.Invoke();
     }
 
     /// <summary>player1draw / player2draw 别名：固定玩家号，仅数量可变。</summary>
@@ -792,7 +934,16 @@ public partial class PMCommandManager : Node
   list                        - 列出所有卡牌状态
   kill card <UID>             - 强制杀死卡牌
   heal card <UID> [数值]      - 清除伤害（不填则完全清除）
-  draw <玩家 1|2> [数量]      - 指定玩家抽牌（默认1张）
+  draw <玩家 1|2> [数量]      - 指定玩家抽牌（默认1张，从牌库顶）
+  draw <数量> <卡牌编号> [玩家] - 【定向取牌】从该玩家（缺省P1）卡组取指定编号的牌加入其手牌
+                               编号＝UID 下划线前的部分，不区分大小写（如 JC001）；
+                               卡组里没有 → 什么都不做；有多张 → 随机一张；数量＝最多取几张
+                               简写 draw JC001 ＝取 1 张
+  jumpto <步骤名>[地区号]     - 【跳转步骤】直接跳到该步骤，**中间经过的步骤一律不结算**
+                               步骤名用枚举名：StartReset/StartPrepare/StartDraw/ActionFirst/ActionSecond/
+                               PreCombat/CombatInvestigation/CombatStrength/CombatPower/EndCleanup/
+                               EndRecover/EndPassTurn；对抗类可带地区号：
+                               jumpto CombatInvestigation1 ＝跳到 1 地区调查对抗（省略＝地区1）
   player1draw [数量]          - 玩家1抽牌（默认1张）
   player2draw [数量]          - 玩家2抽牌（默认1张）
   move <UID> <玩家> <目标>    - 移动卡牌: 1..N(地区编号)/hand/grave/deck[top|bottom]/score/asset
@@ -833,6 +984,9 @@ public partial class PMCommandManager : Node
   damage hand 0 1
   player1draw
   player2draw 2
+  draw 1 JC001               - 从P1卡组取一张 JC001 加入P1手牌（没有则不加）
+  jumpto CombatInvestigation1 - 跳到1地区调查对抗
+  jumpto EndRecover          - 跳到恢复步骤（中间步骤不结算）
 =================================");
     }
 }

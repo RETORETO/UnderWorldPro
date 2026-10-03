@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -25,6 +25,21 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 修复·灵体同类排查】卡文以**灵体**开头，但脚本此前没有授予【灵体】关键词
+            // ⇒ `DamageRules.IsSpirit` 为假 ⇒ 灵体的"我方魔法领域图标更多则防止伤害"永不生效。
+            // 现按 JC077/JC111 同款"持续关键字授予"补齐（消费点＝`CardManager.DamagePreventer`）。
+            data.EffectDataList.Add(new EffectData
+            {
+                EffectId = "JC105_S_Spirit",
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "灵体",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "灵体", Amount = 1 },
+                },
+            });
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC105_A_AuraWhiteStarToSpirits",
@@ -55,7 +70,9 @@ namespace Cards.Effects.PlayerCards.JC
                 Timing = EffectTiming.OnCardDied,
                 Condition = new EffectCondition { Predicate = "DiedAllySpiritCharacter" },
                 Forced = false,                        // 卡文"你可以支付2"
-                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true },
+                // 【2026-09 修复】"将该角色封印在**目标角色**上"未排除自身 ⇒ 可指定自身
+                // （与 JC008/JC069 同款约定）；否则它是本地区唯一角色时该触发被静默跳过（JC004 同类）。
+                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true, CanTargetSelf = true },
                 Actions = new Array<EffectAction>
                 {
                     new EffectAction

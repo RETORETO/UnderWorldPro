@@ -392,6 +392,39 @@ namespace Script.Game.Entities
         public bool HasIcon(string icon) => _grantedIcons.Contains(icon);
         public int GetAttribute(string attr) => _grantedAttributes.TryGetValue(attr, out var v) ? v : 0;
 
+        // ============================================================
+        // 【2026-09 用户口径·通用红线】"效果只在场上（正面）提供"
+        // ------------------------------------------------------------
+        // 用户原话要点：「效果除非明确描述了在其他地方生效，比如暗藏者触发、墓地行动等，
+        // 才能在不是场上的情况触发；其他情况都只能在场上触发。」
+        // 推论（与既有 D27「暗藏者的持续/静止效果不生效」同一条）：**背面朝上的卡不提供任何效果**——
+        // 既不提供关键字/图标/属性，也不提供印刷规则（它们由 `RegisterPersistent` 注销，
+        // 但"读卡面印刷"的判定点绕过了注册表，因此必须显式走下面两个入口）。
+        // ============================================================
+
+        /// <summary>
+        /// 【2026-09】该卡此刻**是否正在发挥其效果**（＝在场上且正面朝上）：
+        ///  · 争夺区 / 附属区 且 `!IsCovert` → true；
+        ///  · 背面朝上（暗藏者，其效果休眠）→ false；
+        ///  · 不在场上（手牌/牌库/墓地/封印区/堆叠）→ false——这些区域的生效必须由效果**显式声明**
+        ///    （`ZoneScope.HandZone`/`Graveyard`/`DeckZone`/`SealedZone`、`PlayableFromGraveyard`、
+        ///    构筑级 `DeckLevelTriggerRule` 等），不是默认行为。
+        /// 用途：印刷规则（如"不能移动"）、词条计数（领袖/道途/声望）等**离线判定点**的"在场"门禁。
+        /// </summary>
+        public bool IsExertingEffects
+            => !IsCovert && (CurrentZone == CardZone.AreaZone || CurrentZone == CardZone.AttachedZone);
+
+        /// <summary>
+        /// 【2026-09】该卡此刻**实际提供**的关键字判定：运行期授予 ∪ 卡面固有声明——
+        /// 但**背面朝上（暗藏）时不提供卡面固有**（暗藏者的效果休眠，见 D27 / `IsExertingEffects`）。
+        /// 与 <see cref="HasPublicKeyword"/>（手牌期必须按卡面判定）区分：
+        ///  · 场上卡（含对抗/词条计数/目标筛选）用本方法；
+        ///  · 手牌/牌库等**跨区语义**（派遣暗藏拦"公开"、检索按关键字筛选、构筑限制）继续直读
+        ///    `PlayerTemplate.HasInherentKeyword`（那些是卡文显式声明的跨区判定）。
+        /// </summary>
+        public bool HasActiveKeyword(string kw)
+            => HasKeyword(kw) || (!IsCovert && (PlayerTemplate?.HasInherentKeyword(kw) ?? false));
+
         /// <summary>当前实际是否具有某子类型（含静态 + 运行时授予）。规则/UI 统一入口。</summary>
         public bool HasSubCategory(string sub) => CurrentSubCategories.Contains(sub);
 
@@ -706,7 +739,15 @@ namespace Script.Game.Entities
             RebuildDomains();
         }
 
-        public bool HasDefense => PlayerTemplate != null && PlayerTemplate.Defense >= 0;
+        /// <summary>
+        /// 是否有防御力＝**能否受伤 / 能否被分配伤害**的统一判据（`CardManager.DealDamageToInstance`、
+        /// `CombatManager.IsLegalStrengthTarget`、强度窗口候选都用它把关）。
+        /// 【2026-09 修复·JC027】原先只看**印刷**防御（`Defense >= 0`）⇒ 形态赋予 "1 防御力" 的附属角色
+        /// （印刷无防御＝-1 哨兵）**完全无法受伤**（连"对地区所有角色造成伤害"也打不到它）。
+        /// 现同时认"实例当前有防御力"（`CurrentDefense >= 0`，含 `Gain{"防御"}` 授予）——
+        /// 与"原本无防御的卡获得 +N 防御力后就能承伤"的直觉一致。
+        /// </summary>
+        public bool HasDefense => PlayerTemplate != null && (PlayerTemplate.Defense >= 0 || CurrentDefense >= 0);
 
         /// <summary>【P3·K20】**魔法领域图标被抑制**（"失去所有魔法领域图标"：JC099 / JC101）：
         /// 抑制期间实例的 `MagicDomains` 为空，且 `ResetToBaseValues` 重建时也会**跳过**领域重填

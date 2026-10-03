@@ -42,6 +42,23 @@ namespace Script.UI.Online
         /// <summary>冒烟角色：true=房主（创建房间）；false=加入者。</summary>
         public static bool SmokeIsHost = true;
 
+        /// <summary>
+        /// 【建立主机 · 增量 D】**一次性**"主机自动流程"标志：房主点首页「建立主机」时置位，
+        /// 大厅页在 `_Ready` 里**消费**它（见 `ConsumeHostAutoFlow`）→ 自动连接本机内嵌服务端 → Hello 应答后自动创建房间。
+        ///
+        /// 为什么必须一次性：房主点「离开房间」会回到大厅页；若标志常驻，会被立刻重新拖进房间（等于无法离开）。
+        /// 与既有语义的关系：本标志**不改动** `AutoConnect` / `SmokeMode`，`--lobby` 与冒烟流程行为完全不变。
+        /// </summary>
+        public static bool HostAutoFlow;
+
+        /// <summary>消费"主机自动流程"标志（读取并清零；只会返回一次 true）。</summary>
+        public static bool ConsumeHostAutoFlow()
+        {
+            bool v = HostAutoFlow;
+            HostAutoFlow = false;
+            return v;
+        }
+
         /// <summary>接管一个已连接/正在连接的会话（大厅页调用）。</summary>
         public static void SetSession(ClientSession session) => _session = session;
 

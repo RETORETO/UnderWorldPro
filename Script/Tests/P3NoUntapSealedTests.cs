@@ -69,6 +69,31 @@ namespace Script.Tests
             return null;
         }
 
+        // ==================== 重置步骤：秘社卡也必须竖置（2026-09 修复） ====================
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测】重置步骤必须同时竖置**秘社卡**：`CardManager.UntapAll` 原先只遍历
+        /// 争夺区/手牌/资产/结附区，**漏了 CouncilZone** ⇒ 秘社发动能力把自己横置后，回合开始的重置步骤
+        /// 不会把它竖置回来（表现为"秘社能力无法再次发动 / 秘社一直横置"）。
+        /// </summary>
+        public void TestNoUntap_重置步骤竖置秘社()
+        {
+            var game = NewGame();
+            var p1 = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, 1);
+            var p2 = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, 2);
+            Assert.IsTrue(p1 != null && p1.Count > 0, "前置：P1 有秘社实例");
+            Assert.IsTrue(p2 != null && p2.Count > 0, "前置：P2 有秘社实例");
+
+            p1[0].SetTapped(true);
+            p2[0].SetTapped(true);
+            Assert.IsTrue(p1[0].IsTapped && p2[0].IsTapped, "前置：双方秘社均已横置");
+
+            game.CardManager.UntapAll();   // 重置步骤唯一解横置出口
+
+            Assert.IsFalse(p1[0].IsTapped, "P1 秘社应在重置步骤被竖置");
+            Assert.IsFalse(p2[0].IsTapped, "P2 秘社同样应被竖置（GetZoneCards(zone, 0) 取双方）");
+        }
+
         /// <summary>把一张探针卡封印到宿主上（走 `SealCard` 同一收口）。</summary>
         private static void SealOnto(GameInitializer game, CardInstance host, string uid, int ownerId)
         {

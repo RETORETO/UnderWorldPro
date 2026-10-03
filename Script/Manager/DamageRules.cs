@@ -24,9 +24,9 @@ namespace Script.Manager
     /// </summary>
     public static class DamageRules
     {
-        /// <summary>该卡是否为灵体：运行期授予的关键字 ∪ 卡面固有声明（与"公开/撤回"同款双层判定）。</summary>
-        public static bool IsSpirit(CardInstance card)
-            => card != null && (card.HasKeyword("灵体") || (card.PlayerTemplate?.HasInherentKeyword("灵体") ?? false));
+        /// <summary>该卡是否为灵体（**当前有效**）：运行期授予的关键字 ∪ 卡面固有声明。
+        /// 【2026-09 用户口径·通用】背面朝上的卡（暗藏者）不提供其效果 ⇒ `灵体` 休眠（走 `HasActiveKeyword`）。</summary>
+        public static bool IsSpirit(CardInstance card) => card != null && card.HasActiveKeyword("灵体");
 
         /// <summary>
         /// 灵体伤害防止判定：true = 本次伤害被防止（不落伤害、不判死、不触发死亡）。

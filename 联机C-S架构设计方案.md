@@ -14,6 +14,7 @@
 3. **纯托管 `ServerCore/` 路线已整体移除**（2026-09-05，决策 (a)）：原骨架只编译 Enums+Net+随机源、意图路由是桩，无法承载规则；去 Godot 化的成本与"不写第二套规则"冲突（`ZoneManager`/`CardManager`/`TurnManager` 均为 `Node`；`EffectEngine` 97 处 `GD.*`、`TurnManager` 132 处；`EffectData` 依赖 `Godot.Collections`）。若将来出现 §1.2 的部署约束，按 §8.3 路径重启。
 4. **客户端延迟掩盖"预留已落地"**：`SnapshotApplicationQueue`（同帧合并 + 可延后 + 与上一份快照配对）+ `ArenaOl.RouteRenderCommands`（表现层事件源）已实现；动画本体与乐观执行留待 Phase C（§9）。
 5. **信息隔离已不再是缺口**：Phase B 已完成——客户端只看到自己的手牌/牌库内容，对手手牌/牌库与地区牌堆只发占位（数量保留、身份隐藏，见 §7.2）。
+6. **本机「建立主机」= 同进程内嵌服务端（listen server）**【已实现，2026-10-03】：首页「建立主机」在**本进程内**装配 `LobbyServerHost`（与 headless 服务端**同一个类**，故规则只有一份），本进程客户端再连自己并自动建房，对手用局域网 IP 直连加入（决策见 `联机大厅房间与开局流程.md` D12–D14）。**这不改变本节 2 与 §8 的结论**：专用服务器/多机部署仍是 D1 的独立 headless 进程，listen server 只是"房主在自己机器上开一局"的便捷入口。
 
 ---
 

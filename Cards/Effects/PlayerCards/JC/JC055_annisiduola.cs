@@ -43,6 +43,9 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,
                     KindAlt = TargetKind.Attachment,     // 【K14】"目标角色或附属"
                     NeedsSelection = true,
+                    // 【2026-09 修复】"在目标角色或附属上"未排除自身 ⇒ 可指定自身（JC008/JC069 同款约定）；
+                    // 否则它是本地区唯一角色时该准备步骤触发被静默跳过（JC004 同类缺陷）。
+                    CanTargetSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {

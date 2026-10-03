@@ -262,11 +262,10 @@ public partial class AreaManager : Node
     /// 步骤1（响应窗口）已由堆叠机制在结算前处理；此处执行步骤2~5。
     /// </summary>
     /// <summary>
-    /// 【P3·撤回】判定一张卡是否"拥有撤回能力"：运行期授予的 `撤回` 关键字 ∪ 卡面固有声明（`HasInherentKeyword`）。
-    /// 与"公开"（`HasPublicKeyword`）同款双层判定——离场/效果失效时授予被移除，判定自然转 false。
+    /// 【P3·撤回】判定一张卡是否"拥有撤回能力"（**当前有效**）：运行期授予的 `撤回` 关键字 ∪ 卡面固有声明；
+    /// 【2026-09 用户口径·通用】背面朝上的卡（暗藏者）不提供其效果 ⇒ `撤回` 同样休眠，故走 `HasActiveKeyword`。
     /// </summary>
-    private static bool HasWithdraw(CardInstance card)
-        => card != null && (card.HasKeyword("撤回") || (card.PlayerTemplate?.HasInherentKeyword("撤回") ?? false));
+    private static bool HasWithdraw(CardInstance card) => card != null && card.HasActiveKeyword("撤回");
 
     /// <summary>【P3·K3·去处替代】地区被赢取时，若该卡声明了"赢取后的去处替代"（`WinAreaDestination`）且条件成立，
     /// 就地把该卡按声明去处改判并返回 true（调用方据此跳过"送库底"）。判定/条件复用

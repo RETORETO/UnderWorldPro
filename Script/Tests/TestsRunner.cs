@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot;
 
 namespace Script.Tests
@@ -94,7 +94,8 @@ namespace Script.Tests
                 new P3StepPledgeTests(),               // P3：步骤级承诺（下个准备步骤免费现身）+ JC024 S.P.T董事局②
                 new P3ControlTransferTests(),          // P3：控制权转移 + 到期归还 + JC129 操控心智
                 new P3ActionOutcomeTests(),            // P3：动作成果判定（"若你如此做"）+ JC009 远东六号科研所 / JC087 格鲁尼的走私客
-                new P3DestroyOnTargetTests(),           // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
+                new P3DestroyOnTargetTests(),
+                new P3SpiritKeywordTests(),           // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
                 new P3RuntimeKeywordTests(),           // P3·K13：运行期授予的触发类关键词参与收集 + 群体 Gain 主体 + JC024①/ JC089
                 new P3CompositeTargetTests(),          // P3：复合目标限制（SpecAlt 两条声明 OR）+ HostIsCouncil + JC043 纵火狂
                 new P3LatentTests(),                   // P3：新时机「被潜伏/翻面时」(OnLatent) + 群体伤害 + JC054 蒙古死亡蠕虫①
@@ -133,6 +134,8 @@ namespace Script.Tests
                 new P3AttachSelfTests(),               // P3·K12 附属进场自选结附目标（Attach 执行器）：JC121①
                 new P3MultiSacrificeTests(),           // K22 多玩家/对手侧自选牺牲（先手先选→一起牺牲）：JC046/113/134/065
                 new P3AtomicDecisionLockTests(),       // 原子操作期间的玩家选择：决策持锁（单机窗口/引擎挂起/联机回包/打出/激活/恢复步骤）
+                new P3FieldZoneGateTests(),            // 通用红线：效果只在场上（正面）提供（声望/撤回/灵体/屏障/关键字筛选/JC121不能移动/去处替代/激活G0）
+                new PMCommandTests(),
                 new P3EmbraceTests(),                  // P3·K4 持续夺控 + 子类别改写 + 「宿主翻面⇒附属被消灭」：JC036 初拥
                 new P4ExtraCostTests(),                // P3·K10 额外费用（牺牲/支付X费）：JC049① / JC135① ②
                 new P4ChooseNumberTests(),             // K1「玩家选择」型动态值 + JC083 睿智的斯芬克司
@@ -154,6 +157,7 @@ namespace Script.Tests
                 new P5CouncilRestrictionTests(),       // 秘社构筑限制：CouncilRestriction.Describe / ValidateDeckDetailed / MSJC001 需 ≥25 张黄色牌
                 new CouncilEffectTests(),              // 秘社效果：MSJC001 按卡文落地（先手标志前提 / 独有检索 / 每局一次）＋【A57】每局上限 + 独有筛选
                 new CouncilEffectBatch2Tests(),        // 秘社效果批次2：MSJC010~017 按卡文落地 + 牌作代价/卡上标志门槛/磨牌/抓牌方向/静态子类别授予/开局效果
+                new LocalHostTests(),                  // 增量 D：首页「建立主机」内嵌服务端（起/连自己/自动建房、端口顺延、Stop 同步释放端口）
             };
 
             var redlines = new List<string>();

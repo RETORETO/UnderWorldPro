@@ -33,9 +33,9 @@ metadata/_edit_use_anchors_ = true
 layout_mode = 1
 anchors_preset = -1
 anchor_left = 0.39479166
-anchor_top = 0.37592593
+anchor_top = 0.34
 anchor_right = 0.60520834
-anchor_bottom = 0.6240741
+anchor_bottom = 0.66
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 20
@@ -50,6 +50,10 @@ text = "开始游戏"
 [node name="OnlineButton" type="Button" parent="ButtonContainer"]
 layout_mode = 2
 text = "联机对战"
+
+[node name="HostButton" type="Button" parent="ButtonContainer"]
+layout_mode = 2
+text = "建立主机"
 
 [node name="DeckButton" type="Button" parent="ButtonContainer" unique_id=1953962482]
 custom_minimum_size = Vector2(0, 50)

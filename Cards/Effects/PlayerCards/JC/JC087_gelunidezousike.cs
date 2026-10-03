@@ -43,6 +43,9 @@ namespace Cards.Effects.PlayerCards.JC
                     NeedsSelection = true,
                     IsLocalZone = true,             // "本地区的目标本方角色"
                     Restrictions = new Array<TargetRestriction> { TargetRestriction.Friendly },
+                    // 【2026-09 修复】"本地区的目标本方角色"未排除自身（走私客本身就是本地区的本方角色）
+                    // ⇒ 可指定自身；否则它是本地区唯一角色时该触发会被当作"无合法目标"静默跳过（JC004 同类）。
+                    CanTargetSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {

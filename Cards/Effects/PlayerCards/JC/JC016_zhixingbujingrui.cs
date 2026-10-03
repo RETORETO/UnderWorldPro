@@ -36,9 +36,17 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousPrereq = "所在地区没有敌方角色",
                 PrereqSpec = new ContinuousPrereqSpec { Kind = PrereqKind.NoEnemyCharacterInArea },
                 ContinuousEffect = "所在地区没有敌方角色 → 获得［白眼］［黑星］",
+                // 【2026-09 修复·用户实测"持续效果给自己增加能力图标（先手调查/势力）没有生效"】
+                // 持续授予必须写**属性**通道（`Attribute` + 属性名：白眼=先手调查 / 黑星=先手势力），
+                // 与 JC001（白眼）/JC085（白星）同款；此前只写 `Icon`（图标存在性）⇒ `HasIcon` 为真但
+                // **数值完全没加**（先手调查/先手势力仍为 0）。现两条通道都写：
+                //  · `Attribute` → 真正改数值（`AreaStatsCalculator` 读 `GetAttribute("先手调查"/"先手势力")`）；
+                //  · `Icon` → 图标存在性（UI 展示 /"有图标"类判定）。
                 ContinuousGrants = new Array<EffectGrant>
                 {
+                    new EffectGrant { Kind = "Attribute", Value = "先手调查", Amount = 1 },   // 白眼＝先手调查
                     new EffectGrant { Kind = "Icon", Value = "白眼", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手势力", Amount = 1 },   // 黑星＝先手势力
                     new EffectGrant { Kind = "Icon", Value = "黑星", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },

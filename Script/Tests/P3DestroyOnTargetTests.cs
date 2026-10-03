@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -78,6 +78,70 @@ namespace Script.Tests
             game.ZoneManager.MoveToArea(card, host.ZoneDetailId ?? Areas(game)[0], ownerId);
             game.TurnManager.SealCard(card, host, false);
             return card;
+        }
+
+        // ==================== ③ JC017 可指定**其他地区**的角色（2026-09 修复） ====================
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测"JC017 效果可以指定其他地区的角色，现在不能指定"】
+        /// 卡文"消灭**目标角色**上的所有敌方附属"**没有"本地区"限定** ⇒ 候选＝全场角色。
+        /// 触发路径默认只枚举"来源卡所在地区"，必须显式 `AllAreas = true`；
+        /// 本用例从**真实触发链路**取"服务端下发的候选"，断言另一地区的角色在候选里。
+        /// </summary>
+        public void TestDestroyOnTarget_JC017可指定其他地区的角色()
+        {
+            var game = NewGame(2);
+            var areas = Areas(game);
+            var view = new CapturingTriggerView();
+            game.TurnManager.SetTriggerView(view);
+
+            // 另一地区（地区2）放一个对手角色
+            var far = game.CardManager.CreateCardInstance(Probe("TS_dot_far"), 2);
+            game.ZoneManager.MoveToArea(far, areas[1], 2);
+
+            // JC017 进入地区1（进场触发收集 → 取目标窗口）
+            var caster = game.CardManager.CreateCardInstance(Load("JC017_chuzhoushi"), 1);
+            game.ZoneManager.MoveToArea(caster, areas[0], 1);
+
+            Assert.IsTrue(view.SelectionCalls > 0, "前置：JC017 进场触发进入取目标窗口");
+            Assert.IsTrue(view.LastValidUids.Contains(far.UID),
+                $"候选必须包含**另一地区**的角色（AllAreas=true；实际候选 {view.LastValidUids.Count} 个）");
+        }
+
+        /// <summary>结构：JC017 的目标声明必须显式"不限本地区"。</summary>
+        public void TestDestroyOnTarget_JC017目标不限本地区()
+        {
+            var tmpl = Load("JC017_chuzhoushi");
+            var spec = FindEffect(tmpl, "JC017_1_DestroyEnemyAttachmentsThenBarrier")?.Target;
+            Assert.IsNotNull(spec, "JC017 应声明目标");
+            Assert.IsTrue(spec.AllAreas, "必须 `AllAreas = true`（卡文无『本地区』限定）");
+            Assert.IsFalse(spec.IsLocalZone, "不得声明 `IsLocalZone`");
+            Assert.IsTrue(spec.CanTargetSelf, "卡文未排除自身 ⇒ 可指定自身（A62）");
+        }
+
+        /// <summary>把触发**全部入堆叠**并记录"服务端下发的取目标候选"的触发视图（目标选择＝放弃）。</summary>
+        private sealed class CapturingTriggerView : Script.Interfaces.ITriggerView
+        {
+            public int SelectionCalls;
+            public List<string> LastValidUids = new List<string>();
+
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                List<Script.Data.Effects.StackEffectInstance> triggers,
+                System.Action<List<Script.Data.Effects.StackEffectInstance>> onEnterStack, System.Action onDone)
+            {
+                onEnterStack?.Invoke(triggers);   // 全部入堆叠（不排序/不放弃）→ 才会走到"取目标"
+                onDone?.Invoke();
+            }
+
+            public void RequestTargetSelection(Script.Data.Effects.StackEffectInstance trigger,
+                List<string> validTargetUids, System.Action<string> onPicked)
+            {
+                SelectionCalls++;
+                LastValidUids = validTargetUids != null ? new List<string>(validTargetUids) : new List<string>();
+                onPicked?.Invoke(null);           // 放弃选择（本用例只看候选集合）
+            }
+
+            public void RemoveOrderEntries(List<Script.Data.Effects.StackEffectInstance> pushed) { }
         }
 
         private sealed class AbandonTriggerView : Script.Interfaces.ITriggerView

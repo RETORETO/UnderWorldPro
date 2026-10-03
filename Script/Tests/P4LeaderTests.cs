@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot.Collections;
 using Script.Data.Cards;
@@ -150,6 +150,15 @@ namespace Script.Tests
         private static CardInstance OnField(GameInitializer game, PlayerCardData tmpl, int controllerId, string areaUid)
         {
             var card = game.CardManager.CreateCardInstance(tmpl, controllerId);
+            game.ZoneManager.MoveToArea(card, areaUid, controllerId);
+            return card;
+        }
+
+        /// <summary>以**暗藏者（背面朝上）**状态进入争夺区（与"派遣暗藏者"同序：先翻面、再移动）。</summary>
+        private static CardInstance OnFieldCovert(GameInitializer game, PlayerCardData tmpl, int controllerId, string areaUid)
+        {
+            var card = game.CardManager.CreateCardInstance(tmpl, controllerId);
+            card.SetCovert(true);
             game.ZoneManager.MoveToArea(card, areaUid, controllerId);
             return card;
         }
@@ -352,6 +361,105 @@ namespace Script.Tests
             var b2 = OnField(game2, LeaderProbe("T_ldr_can2"), 1, area2);
             Assert.AreEqual(CardZone.AreaZone, a2.CurrentZone, "取消回包不应误伤先在场的领袖");
             Assert.AreEqual(CardZone.Graveyard, b2.CurrentZone, "取消回包 → 按确定性兜底牺牲最新进场者");
+        }
+
+        // ==================== 唯一性：暗藏（背面）领袖不占名额（2026-09 用户口径） ====================
+
+        /// <summary>
+        /// 【2026-09 用户口径】"至多 1 个领袖"**只统计正面在场的领袖**：暗藏者（背面朝上）不占领袖名额，
+        /// 因此"1 个正面领袖 + N 个暗藏领袖"（以及多个暗藏领袖）可以共存，**不需要牺牲**。
+        /// </summary>
+        public void TestP4_领袖_暗藏领袖不占名额可共存()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+
+            var faceUp = OnField(game, LeaderProbe("T_ldr_cv1"), 1, area);
+            var covert1 = OnFieldCovert(game, LeaderProbe("T_ldr_cv2"), 1, area);
+            var covert2 = OnFieldCovert(game, LeaderProbe("T_ldr_cv3"), 1, area);
+
+            Assert.AreEqual(CardZone.AreaZone, faceUp.CurrentZone, "正面领袖保留");
+            Assert.AreEqual(CardZone.AreaZone, covert1.CurrentZone, "暗藏领袖不占名额 → 不被牺牲");
+            Assert.AreEqual(CardZone.AreaZone, covert2.CurrentZone, "多个暗藏领袖可同时在场");
+            Assert.IsTrue(covert1.IsCovert && covert2.IsCovert, "两张暗藏领袖仍处于暗藏态");
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count,
+                "领袖数只统计正面在场者（暗藏不计）");
+        }
+
+        /// <summary>暗藏领袖进出不弹"选择牺牲"窗（无超限，规则不启动）。</summary>
+        public void TestP4_领袖_暗藏领袖共存时不弹窗()
+        {
+            var game = NewGame();
+            var picker = new PickerStub();
+            EffectEngine.Instance.UIHooks = picker;
+            string area = FirstArea(game);
+
+            OnField(game, LeaderProbe("T_ldr_cv6"), 1, area);
+            OnFieldCovert(game, LeaderProbe("T_ldr_cv7"), 1, area);
+            OnFieldCovert(game, LeaderProbe("T_ldr_cv8"), 1, area);
+
+            Assert.AreEqual(0, picker.Prompts.Count, "暗藏领袖不占名额 → 不应弹『选择牺牲』窗");
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count, "正面领袖仍为 1");
+            EffectEngine.Instance.UIHooks = null;
+        }
+
+        /// <summary>暗藏领袖**翻为正面**（原地现身）时才重新计入 → 立刻收敛到 1（规则性牺牲，
+        /// 无 UI/网关时确定性兜底牺牲"本次现身"的那张）。</summary>
+        public void TestP4_领袖_暗藏领袖现身时才超限收敛()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+
+            var faceUp = OnField(game, LeaderProbe("T_ldr_cv4"), 1, area);
+            var covert = OnFieldCovert(game, LeaderProbe("T_ldr_cv5"), 1, area);
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count, "前置：暗藏不计入领袖数");
+
+            game.CardManager.RevealCard(covert);   // 原地翻为正面（不经过"回地区"路径）
+
+            Assert.IsFalse(covert.IsCovert, "已现身（正面朝上）");
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count,
+                "现身即计入领袖数 → 超限立刻收敛到 1");
+            Assert.AreEqual(CardZone.Graveyard, covert.CurrentZone, "无 UI 兜底：牺牲『本次现身』的那张领袖");
+            Assert.AreEqual(CardZone.AreaZone, faceUp.CurrentZone, "先在场的正面领袖保留");
+        }
+
+        /// <summary>生产"现身"路径（`TurnManager.RevealCovert`：入堆叠 → 结算回地区）：
+        /// 回地区时经 `ZoneManager.OnCardEnteredArea` 重新计入领袖数 → 超限立刻收敛。</summary>
+        public void TestP4_领袖_现身路径回地区时收敛()
+        {
+            var game = NewGame();
+            var tm = game.TurnManager;
+            string area = FirstArea(game);
+
+            var faceUp = OnField(game, LeaderProbe("T_ldr_cv9"), 1, area);
+            var covert = OnFieldCovert(game, LeaderProbe("T_ldr_cv10"), 1, area);
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count, "前置：暗藏不计入领袖数");
+
+            // 现身费用 1：横置一张资产
+            var assetTmpl = new PlayerCardData
+            {
+                UID = "TS_ldr_mana", CardName = "探针资产", Cost = 0, Defense = -1,
+                CategoryFlag = CardCategory.Attachment,
+            };
+            assetTmpl._effectsInjected = true;
+            game.ZoneManager.MoveToAsset(game.CardManager.CreateCardInstance(assetTmpl, 1), 1);
+
+            tm.FirstPlayerId = 1;
+            tm.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            tm.PriorityPlayerId = 1;
+
+            Assert.IsTrue(tm.RevealCovert(1, covert.UID), "前置：现身成功（先进堆叠）");
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count,
+                "入堆叠期间（尚未回到地区）不计入领袖数");
+
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+                tm.Pass(tm.PriorityPlayerId);
+
+            Assert.AreEqual(1, LeaderRule.LeadersOnField(game.CardManager, 1).Count, "回地区后立刻收敛到 1 个正面领袖");
+            Assert.IsTrue(covert.CurrentZone == CardZone.Graveyard || faceUp.CurrentZone == CardZone.Graveyard,
+                "两名正面领袖超限 → 牺牲其中一个（无 UI 兜底：本次现身者）");
+            Assert.AreEqual(CardZone.Graveyard, covert.CurrentZone, "无 UI 兜底牺牲『刚现身』的那张");
+            Assert.AreEqual(CardZone.AreaZone, faceUp.CurrentZone, "先在场的正面领袖保留");
         }
 
         // ==================== 结构：10 张领袖卡 ====================

@@ -301,6 +301,10 @@ public partial class GameInitializer : Node
         PMCommandManager = new PMCommandManager();
         AddChild(PMCommandManager);
         PMCommandManager.EffectEngineRef = effectEngine;   // 静态单例治理：显式注入 EffectEngine
+        PMCommandManager.TurnManagerRef = TurnManager;     // 【2026-09】jumpto 跳转步骤 / 定向取牌（draw <数量> <编号>）用
+        // 【2026-09】模型侧依赖就地接线：使 PM 命令在无 View 场景（headless 测试 / 纯服务端）也可用；
+        // View 的 UI 回调仍由 Arena/MatchHost 调 `Initialize` 注入（并覆盖此处）。
+        PMCommandManager.InjectModelRefs(CardManager, DeckManager, ZoneManager);
         if (VerboseSetup) GD.Print("  ✅ PMCommandManager");
 
         // 8.5【MVC 收口】EffectEngine 的管理器引用注入收归本 Composition Root，不再由 View（Arena）装配。

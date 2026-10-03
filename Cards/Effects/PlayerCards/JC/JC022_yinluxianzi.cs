@@ -24,6 +24,23 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 修复·用户实测"JC022 灵体没有生效"】卡文以**灵体**开头，但脚本此前只写了
+            // OnCombatWon 触发、**没有授予【灵体】关键词** ⇒ `DamageRules.IsSpirit` 为假 ⇒
+            // `IsSpiritPrevention`（我方魔法领域图标 > 对方时防止伤害）永不成立，战斗伤害照常落地。
+            // 现按 JC077/JC111 同款"持续关键字授予"补齐（消费点＝`CardManager.DamagePreventer`）。
+            data.EffectDataList.Add(new EffectData
+            {
+                EffectId = "JC022_S_Spirit",
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "灵体",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "灵体", Amount = 1 },
+                },
+            });
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC022_A_DrawOnCombatWonInSameArea",

@@ -41,7 +41,8 @@ namespace Script.Manager
         private static bool IsOnField(CardInstance card)
             => card != null && (card.CurrentZone == CardZone.AttachedZone || card.CurrentZone == CardZone.AreaZone);
 
-        /// <summary>某控制者**场上**的全部道途，按确定性顺序（`GetAllInstances` 顺序＝实例创建顺序）返回。</summary>
+        /// <summary>某控制者**场上正面**的全部道途，按确定性顺序（`GetAllInstances` 顺序＝实例创建顺序）返回。
+        /// 【2026-09 A60/A61】背面朝上的卡不提供其效果 ⇒ 暗藏道途**不占**"至多 1 个道途"名额（与领袖同口径）。</summary>
         public static List<CardInstance> PathsOnField(CardManager cm, int controllerId)
         {
             var list = new List<CardInstance>();
@@ -52,6 +53,7 @@ namespace Script.Manager
                 if (c == null || c.IsDying) continue;
                 if (c.ControllerId != controllerId) continue;
                 if (!IsOnField(c)) continue;
+                if (c.IsCovert) continue;
                 if (!IsPath(c)) continue;
                 list.Add(c);
             }

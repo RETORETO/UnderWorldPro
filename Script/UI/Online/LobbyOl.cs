@@ -33,9 +33,12 @@ namespace Script.UI.Online
             _statusLabel = GetNodeOrNull<Label>("Panel/StatusLabel");
             _roomListBox = GetNodeOrNull<VBoxContainer>("Panel/Scroll/RoomList");
 
-            // 回填：优先用命令行 `--lobby` 指定的值（OnlineClientContext 已置位），否则用本地偏好
+            // 回填：优先用命令行 `--lobby` 指定的值（OnlineClientContext 已置位），否则用本地偏好。
+            // 【建立主机·增量 D】HostAutoFlow 必须在回填**之前**消费：房主流程没有 `--lobby`，靠它判定"用内存里的地址/昵称回填"。
             Script.IO.OnlineClientPrefs.EnsureLoaded();
-            bool fromCli = OnlineClientContext.AutoConnect;
+            bool hostFlow = OnlineClientContext.ConsumeHostAutoFlow();
+            _hostFlow = hostFlow;
+            bool fromCli = OnlineClientContext.AutoConnect || hostFlow;
             if (_hostInput != null) _hostInput.Text = fromCli ? OnlineClientContext.LastHost : Script.IO.OnlineClientPrefs.LastHost;
             if (_portInput != null) _portInput.Text = (fromCli ? OnlineClientContext.LastPort : Script.IO.OnlineClientPrefs.LastPort).ToString();
             if (_nameInput != null) _nameInput.Text = fromCli ? OnlineClientContext.LastName : Script.IO.OnlineClientPrefs.LastName;
@@ -56,9 +59,16 @@ namespace Script.UI.Online
                 {
                     _helloAcked = true;
                     SetRoomActionsEnabled(true);
+                    if (TryHostAutoCreateRoom()) return;   // 主机流程：已登录 → 直接建房（一次性）
                     SetStatus($"已登录大厅（会话 {_session.MySessionId}），正在获取房间列表…");
                     RequestRoomList();
                 }
+            }
+            else if (hostFlow)
+            {
+                // 【建立主机·增量 D】本进程已起内嵌服务端，自动连它（地址/端口/昵称已由上一步回填到输入框）
+                GD.Print("[LobbyOl] 建立主机：自动连接本机内嵌服务端");
+                OnConnectPressed();
             }
             else if (OnlineClientContext.AutoConnect)
             {
@@ -183,8 +193,33 @@ namespace Script.UI.Online
         {
             _helloAcked = false;
             SetRoomActionsEnabled(false);
+            // 【建立主机·增量 D】房主与**本进程内嵌服务端**断开时，顺手把服务端关掉：
+            // 否则会留下"绑着端口却无人使用"的僵尸服务端，且首页的「建立主机」看起来仍在运行（实际谁也没连上）。
+            if (LocalHostServer.IsRunning)
+            {
+                LocalHostServer.StopIfRunning();
+                OnlineClientContext.HostAutoFlow = false;
+                SetStatus("本机主机已停止：无法连接自身内嵌服务端（请重新点「建立主机」）。");
+                return;
+            }
             SetStatus("与服务端断开连接：请确认服务端仍在运行，然后点「连接」重连。");
         }
+
+        /// <summary>
+        /// 【建立主机·增量 D】主机自动流程的一次性"建房"动作（Hello 就绪后调用）。
+        /// 消费即清零：房主「离开房间」回到本页时不会被再次拖进房间。
+        /// </summary>
+        private bool TryHostAutoCreateRoom()
+        {
+            if (!_hostFlow) return false;
+            _hostFlow = false;
+            SetStatus("主机模式：正在创建房间…");
+            OnCreateRoomPressed();
+            return true;
+        }
+
+        /// <summary>本页是否处于"建立主机"自动流程中（从 `_Ready` 消费 `HostAutoFlow` 得到，一次性）。</summary>
+        private bool _hostFlow;
 
         /// <summary>登录大厅（Hello）是否已成功应答（据此才允许列表/建房等请求）。</summary>
         private bool _helloAcked;
@@ -213,6 +248,7 @@ namespace Script.UI.Online
             {
                 _helloAcked = true;
                 SetRoomActionsEnabled(true);
+                if (TryHostAutoCreateRoom()) return;   // 主机流程：登录完成 → 自动建房（一次性）
                 SetStatus($"已登录大厅（会话 {res.SessionId}），正在获取房间列表…");
                 RequestRoomList();
                 return;

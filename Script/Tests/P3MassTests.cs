@@ -293,6 +293,18 @@ namespace Script.Tests
             Assert.IsFalse(mine.IsTapped, "本方角色不受影响（卡文限『敌方』）");
         }
 
+        /// <summary>
+        /// 【2026-09 用户口径·修复】JC011 现身触发**不是强制触发**：卡文只写"现身触发：横置…"，
+        /// 没有"必须"语义 ⇒ `Forced=false`（玩家可在触发排序窗口把它拖入放弃区）。
+        /// </summary>
+        public void TestK2_JC011非强制触发()
+        {
+            var tmpl = Load("JC011_demositinidamofashi");
+            var e = FindEffect(tmpl, "JC011_1_TapAllEnemyInArea");
+            Assert.IsNotNull(e, "JC011 应有『横置所有敌方角色』效果");
+            Assert.IsFalse(e.Forced, "JC011 现身触发不是强制触发（Forced=false，可放弃）");
+        }
+
         /// <summary>JC056 进场触发：横置本地区所有**暗藏者**（角色不受影响）。</summary>
         public void TestK2_JC056_横置本地区所有暗藏者()
         {

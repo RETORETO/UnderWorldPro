@@ -1977,12 +1977,14 @@ namespace Script.UI
             if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离
             var inst = cardUI.Instance;
+            // 【2026-09 修复·JC019/JC024（与单机 Arena 同款）】候选＝**模板 ∪ 运行期授予**
+            // （`GetAllActivateAbilities`）：JC019 授予宿主的激活能力不在宿主模板里，
+            // 旧写法（只读 `EffectDataList`）会判成"无可激活能力"直接忽略双击。
             var abilities = new List<EffectData>();
-            if (inst.PlayerTemplate is PlayerCardData tmpl)
+            foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
             {
-                foreach (var e in tmpl.EffectDataList)
-                    if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
-                        abilities.Add(e);
+                if (e != null && e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
+                    abilities.Add(e);
             }
             if (abilities.Count == 0)
             {

@@ -313,7 +313,11 @@ public partial class CardManager : Node
         // 【P3·K4】"不能移动"静止规则（JC121 空鸣御守前缀；用户口径 A18/A19）：
         //  · 仅**未结附于角色**时生效（结附后本卡随宿主一起移动，本条不适用）；
         //  · 覆盖机动 / 效果移动 / 置换（它们全部经本方法这一个收口）。
+        // 【2026-09 用户口径·通用】印刷规则**只在场上提供**：该卡必须**此刻在场**（争夺区/附属区且正面），
+        // 否则不拦——例如"从墓地/手牌放置进场"（JC085 墓地行动、检索"进场"、`PutToArea`）不是"移动"，
+        // 且卡不在场时其印刷规则本就不生效（此前无此门禁 ⇒ 在墓地/手牌里的 JC121 会被误拦）。
         if (instance != null
+            && instance.IsExertingEffects
             && EffectEngine.Instance?.HasPrintedStaticKind(instance, Script.Data.Effects.StaticKind.CannotMoveWhileUnattached) == true
             && instance.AttachedTo == null)
         {
@@ -367,6 +371,11 @@ public partial class CardManager : Node
         // 现身 = 复用进场触发链 + 广播现身触发（D39 薄封装）
         _triggerEmitPoints?.EnterTrigger(instance, instance.ControllerId, areaId);
         _triggerEmitPoints?.UncoverTrigger(instance, instance.ControllerId, areaId);
+        // 【2026-09·领袖口径】在**原地翻为正面**（非"回地区"路径，故不会经过 `OnCardEnteredArea`）时，
+        // 该卡的"正面在场"状态刚成立 ⇒ 由领袖唯一性规则重新收敛：
+        // "至多 1 个领袖"只统计正面领袖（`LeadersOnField` 跳过暗藏），因此此刻才需要检查是否超限。
+        if (instance.CurrentZone == CardZone.AreaZone)
+            LeaderRule.EnforceOnEntry(instance, this, EE);
     }
 
     public void MoveCardToGraveyard(CardInstance instance)
@@ -653,14 +662,17 @@ public partial class CardManager : Node
         GD.Print("✅ 所有角色伤害标记已重置 (逻辑层)");
     }
 
-    /// <summary>重置步骤：解除所有区域（争夺区/手牌/资产/结附卡）卡牌的横置。
+    /// <summary>重置步骤：解除所有区域（争夺区/手牌/资产/结附卡/**秘社**）卡牌的横置。
     /// 结附卡（AttachedZone，含结附于角色与结附于秘社的附属、封印卡）此前漏重置，
-    /// 现统一纳入，使已横置的附属卡（如 JC012 帷幕守望徽记）在回合开始随其他卡一起还原。</summary>
+    /// 现统一纳入，使已横置的附属卡（如 JC012 帷幕守望徽记）在回合开始随其他卡一起还原。
+    /// 【2026-09 修复·用户实测】**秘社区（CouncilZone）此前也漏了** ⇒ 秘社卡发动能力时自己横置后，
+    /// 回合开始的重置步骤不会竖置它（表现为"秘社能力用不了第二次 / 秘社一直处于横置状态"）；
+    /// 现补 `CardZone.CouncilZone`（`GetZoneCards(zone, 0)` 取双方）。</summary>
     public void UntapAll()
     {
         if (_zoneManager == null) return;
         int count = 0, blocked = 0;
-        foreach (var zone in new[] { CardZone.AreaZone, CardZone.Hand, CardZone.AssetZone, CardZone.AttachedZone })
+        foreach (var zone in new[] { CardZone.AreaZone, CardZone.Hand, CardZone.AssetZone, CardZone.AttachedZone, CardZone.CouncilZone })
             foreach (var c in _zoneManager.GetZoneCards(zone, 0))
             {
                 if (!c.IsTapped) continue;
@@ -674,7 +686,7 @@ public partial class CardManager : Node
                 }
                 c.SetTapped(false); count++;   // SetTapped 发 TappedChanged（阿格斯IV竖置恢复封锁）
             }
-        GD.Print($"🔓 重置步骤：解除 {count} 张卡牌横置（含资产、结附卡，费用恢复）" +
+        GD.Print($"🔓 重置步骤：解除 {count} 张卡牌横置（含资产、结附卡、秘社，费用恢复）" +
                  (blocked > 0 ? $"；{blocked} 张因『其上有牌封印』被锁定未重置" : ""));
     }
 

@@ -204,7 +204,10 @@ namespace Script.Manager
                 // 【P3】激活类效果声明的**结算条件**（`EffectCondition.Predicate`）同样是发动前提：
                 // 不满足 → 不可发动（与 `EffectEngine.ActivateAbility` 的付费前门禁同源，UI 据此置灰）。
                 if (!ConditionAllowsActivation(e, card)) continue;
-                if (e.Target != null && e.Target.NeedsSelection && !HasLegalTarget(card, e, cm, pm)) continue;
+                // 【2026-09·A57 同款防呆】"无目标能力"（`Kind == None`）不参与"是否有合法目标"门禁：
+                // `EffectData.Target` 默认值是非 null 的 TargetSpec，若忘了清空会被误判成"需要选目标"⇒永不可发动。
+                if (e.Target != null && e.Target.Kind != TargetKind.None && e.Target.NeedsSelection
+                    && !HasLegalTarget(card, e, cm, pm)) continue;
                 return true;
             }
             return false;
@@ -285,6 +288,30 @@ namespace Script.Manager
             return result;
         }
 
+        /// <summary>
+        /// 【2026-09 修复·JC019/JC024】**"双击请求激活"的来源判定**（View 与测试共用的单一实现）：
+        ///  · 附属（`IsAttached`）：JC012 类；
+        ///  · **争夺区正面角色**（非暗藏）：其能力可能来自①运行期授予（JC019 给宿主）②无目标自指激活
+        ///    （JC024"快速行动2：将自身潜伏"）——这两类都无法用"拖到目标上"表达，只能靠双击进入；
+        ///  · 手牌中的"手牌行动"卡（声明 `Scope=HandZone` 的激活能力，如 JC110）。
+        /// 注：本判定只说"这一类来源允许双击进入激活流程"，**是否真的可发动**仍由 `CanActivate` 把关。
+        /// </summary>
+        public static bool IsDoubleClickActivationSource(CardInstance card)
+        {
+            if (card == null) return false;
+            if (card.IsAttached) return true;
+            if (card.CurrentZone == CardZone.AreaZone) return !card.IsCovert;
+            if (card.CurrentZone == CardZone.Hand && card.PlayerTemplate is PlayerCardData t)
+            {
+                if (t.EffectDataList == null) return false;
+                foreach (var e in t.EffectDataList)
+                    if (e != null && e.Scope == ZoneScope.HandZone
+                        && e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return true;
+                return false;
+            }
+            return false;
+        }
+
         /// <summary>秘社激活门禁：遍历 ActivationOptions 各选项的 EffectDataList，任一可发动即返回 true。</summary>
         private static bool CanActivateCouncil(CardInstance card, CouncilCardData councilTmpl, TurnManager tm,
             PlayerManager pm, CardManager cm, bool ignoreAtomicLock = false)
@@ -342,7 +369,13 @@ namespace Script.Manager
         public static bool IsLegalActivateTarget(CardInstance source, EffectData ability, CardInstance target, CardManager cm,
             PlayerManager pm = null)
         {
-            if (source == null || ability == null || target == null || source == target) return false;
+            if (source == null || ability == null || target == null) return false;
+            // 【2026-09 修复·A62（与 JC004 同类）】声明"目标含自身"（`Target.CanTargetSelf`）的激活能力，
+            // **来源卡本身也可以是合法目标**；此前无条件 `source == target → false` ⇒ 当本地区唯一合法对象
+            // 就是自己时（如 JC003 帷幕护卫、JC019 授予宿主的能力），该能力恒判"无合法目标" → 高亮/候选/
+            // 双击都被拦（表现为"能力永远不可发动"）。候选枚举侧（`TurnManager.GetTargetUidsForSpec`）
+            // 一直是按 `CanTargetSelf` 放行的，此处必须与之一致。
+            if (source == target && ability.Target?.CanTargetSelf != true) return false;
             if (ability.Target == null || !ability.Target.NeedsSelection) return false;
             // 本地区限定（TargetSpec.IsLocalZone）：目标须与来源卡同地区。统一基准=source.ZoneDetailId，
             // 对三种情况均成立：角色激活=角色所在地区；结附地区的附属=结附的地区；
@@ -420,13 +453,16 @@ namespace Script.Manager
                     cm.ZoneManagerRef, pm, source.ZoneDetailId);
                 return pile.Count > 0;
             }
+            // 【2026-09·JC027】形态角色经 `ZoneManager.MoveFormZone` 迁入争夺区，本身就在 `_area` 里
+            // ⇒ 这里用常规的争夺区成员集合即可（不需要候选侧补丁）。
             var all = ability.Target != null && ability.Target.IsLocalZone
                 ? cm.GetAreaInstancesBySlot(source.ZoneDetailId)
                 : cm.GetAreaCards();
             if (all == null) return false;
             foreach (var c in all)
             {
-                if (c == source) continue;
+                // 【2026-09·A62】"目标含自身"的声明不再跳过来源卡（与候选枚举同口径）
+                if (c == source && ability.Target?.CanTargetSelf != true) continue;
                 if (IsLegalActivateTarget(source, ability, c, cm, pm)) return true;
             }
             return false;

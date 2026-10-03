@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -23,6 +23,21 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 修复·灵体同类排查】卡文以**灵体**开头，但脚本此前没有授予【灵体】关键词
+            // ⇒ `DamageRules.IsSpirit` 为假 ⇒ 灵体的"我方魔法领域图标更多则防止伤害"永不生效。
+            // 现按 JC077/JC111 同款"持续关键字授予"补齐（消费点＝`CardManager.DamagePreventer`）。
+            data.EffectDataList.Add(new EffectData
+            {
+                EffectId = "JC013_A_Spirit",
+                Timing = EffectTiming.Continuous,
+                Scope = ZoneScope.AreaZone,
+                ContinuousPrereq = "常驻",
+                ContinuousEffect = "灵体",
+                ContinuousGrants = new Array<EffectGrant>
+                {
+                    new EffectGrant { Kind = "Keyword", Value = "灵体", Amount = 1 },
+                },
+            });
             var cannotAttach = KeywordEffects.CannotBeAttached();
             cannotAttach.EffectId = "JC013_B_CannotBeAttached";
             data.EffectDataList.Add(cannotAttach);

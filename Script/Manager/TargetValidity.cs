@@ -155,8 +155,7 @@ namespace Script.Manager
             if (sourceController <= 0) return false;                     // 来源控制者未知 → 不判
             if (target.ControllerId == sourceController) return false;    // 己方来源不受屏障限制
             bool guarded = target.HasGuard
-                || target.HasKeyword("屏障")
-                || (target.PlayerTemplate?.HasInherentKeyword("屏障") ?? false);
+                || target.HasActiveKeyword("屏障");   // 【2026-09】背面朝上的卡不提供屏障（暗藏者效果休眠）
             return guarded;
         }
 
@@ -310,8 +309,9 @@ namespace Script.Manager
                         break;
                     }
                     case TargetRestriction.HasKeyword:
-                        // 双层语义（与 CardInstance.HasPublicKeyword 一致）：运行时授予 ∪ 模板固有声明。
-                        if (!t.HasKeyword(param) && !(t.PlayerTemplate?.HasInherentKeyword(param) ?? false)) return false;
+                        // 【2026-09】"当前有效"判定：运行时授予 ∪ 非暗藏时的模板固有声明
+                        // （背面朝上的卡不提供其词条 —— 见用户口径「效果只在场上提供」）。
+                        if (!t.HasActiveKeyword(param)) return false;
                         break;
                     case TargetRestriction.HasAbilityIcon:
                     {

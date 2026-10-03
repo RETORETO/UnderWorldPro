@@ -530,6 +530,47 @@ public partial class ZoneManager : Node
             _triggerEmitPoints?.OnMove(card, playerId, areaDetailId, fromAreaDetail);
     }
 
+    /// <summary>
+    /// 【2026-09·用户口径】**形态转换引起的区迁移**：附属（结附于地区）↔ 角色（争夺区）。
+    /// 用途＝JC027 花园地精像「**快速行动2：花园地精像成为一个地精角色**…（它仍然是附属）」：
+    ///  · 形态使其成为"角色"⇒ **迁入争夺区**：此后天然参与地区角色统计、**"对地区所有角色"的伤害**、
+    ///    以及与"目标角色"相关的**全部**候选枚举（无需在取目标侧写任何补丁）；
+    ///  · 回合结束形态撤销 ⇒ **迁回附属区**（`AttachedTo == null`＝结附于地区的附属，身份不变）。
+    ///
+    /// 与 `MoveToArea` / `MoveToAttachedZone` 的区别（**务必不要用那两个替代本方法**）：
+    ///  · 卡**没有进出场**——它一直在场上，只是形态变了 ⇒ **不发** `EnterTrigger` / `OnMove`，
+    ///    避免"当一个角色进入本地区时"类效果被形态转换误触发（也不触发领袖进场检查）；
+    ///  · 仍然**刷新版本号**（用户 2026-09 口径）并广播 `Moved` ⇒ 以它为目标的效果按 D16 重新校验；
+    ///  · 形态改变了**有效类别** ⇒ 迁移后按常规重新注册持续/静止效果（`RegisterPersistent` 内部去重）。
+    /// </summary>
+    public void MoveFormZone(CardInstance card, CardZone target, int playerId = 0)
+    {
+        if (card == null) return;
+        if (target != CardZone.AreaZone && target != CardZone.AttachedZone) return;
+        if (card.CurrentZone == target) return;
+
+        int player = playerId > 0 ? playerId : card.ControllerId;
+        string area = card.ZoneDetailId ?? "";      // 所属地区不变（结附地区 / 角色所在地区同一处）
+        // 说明：`RemoveFromAllZones` 会按目标区处理"离开争夺区/离开附属区"的连带逻辑——
+        // 本卡没有自己的附属（形态角色是附属本身），故这些分支对它都是空操作。
+        RemoveFromAllZones(card, target);
+        TransferOwnership(card, player, bumpVersion: true);
+        card.CurrentZone = target;
+        card.ZoneDetailId = area;
+        // 迁入争夺区的"形态角色"**保持附属身份**（卡文『它仍然是附属』）：结附区/结附关系字段不动，
+        // 只补一次 `IsAttached`（若调用方漏设），保证"本质是附属"的判定一致（见 `EffectEngine.SyncFormZone`）。
+        if (target == CardZone.AreaZone && card.PlayerTemplate != null
+            && (card.PlayerTemplate.CategoryFlag & CardCategory.Attachment) != 0)
+            card.IsAttached = true;
+        if (target == CardZone.AreaZone) _area.Add(card);
+        else _attached.Add(card);
+
+        GD.Print($"[ZoneManager] 🧬 形态迁移：{card.PlayerTemplate?.CardName}(UID={card.UID}) → {target}" +
+                 $"（地区 {area}，玩家{player}，刷新版本号；不触发进场/移动触发）");
+        FireMoved(card, target, player, area, bumpVersion: true);   // UI 归位 + 派生重算 + 版本号 + Moved 广播
+        EE?.RegisterPersistent(card);                              // 有效类别已变 ⇒ 重新注册持续/静止效果
+    }
+
     /// <summary>进入附属子区域：不进 _area 桶，挂在宿主实例(AttachedTo)上，ZoneDetailId 记录所属地区。
     /// 与 MoveToArea 区分：附属卡不再被战力统计/伤害分配误当作普通地区卡（除非显式纳入）。
     /// 双向引用 AttachedTo 由调用方（ExecuteAttach）先建立。</summary>

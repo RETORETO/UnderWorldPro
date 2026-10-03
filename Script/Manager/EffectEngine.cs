@@ -289,22 +289,36 @@ namespace Script.Manager
             // 条件不满足时走 ElseBranch
             // 【P3·门禁 + 分支】`Predicate`＝触发/结算门禁；`BranchPredicate`（可空）＝门禁满足后的分支选择。
             // 两者任一不满足都走 ElseBranch（JC031："另一个本方角色死亡"为门禁，"死亡的是吸血鬼角色"为分支）。
-            if (data.Condition != null && data.Condition.Predicate != "Always")
+            // 【2026-09 修复·JC004】`Predicate == "Always"`（无门禁）时**仍要**求值 `BranchPredicate`：
+            //   此前整段被 `Predicate != "Always"` 跳过 ⇒ 声明"门禁恒真 + 纯分支"的效果（JC004）**分支永不生效**。
+            if (data.Condition != null
+                && (data.Condition.Predicate != "Always" || !string.IsNullOrEmpty(data.Condition.BranchPredicate)))
             {
                 // winnerId 透传给条件判定（供 WinnerIsSelf 使用）；targetAreaId 透传（供 WinnerInSameArea 使用）。
                 // 【K3·死亡类·A10】条件判定的**上下文卡**：优先用"触发上下文卡"（＝引发本次触发的卡，
                 // 如死亡触发里刚死亡的角色）——触发条件的语义对象是它，不是玩家选定的目标；
                 // 非触发路径（激活/打出）无上下文卡 → 维持既有口径（回落 `target`）。
                 var condCtx = TriggerContextCard ?? target;
-                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
+                bool met = true;
+                string failed = null;
+                bool noGate = string.IsNullOrEmpty(data.Condition.Predicate) || data.Condition.Predicate == "Always";
+                if (!noGate)
+                {
+                    met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
+                    if (!met) failed = data.Condition.Predicate;
+                }
                 if (met && !string.IsNullOrEmpty(data.Condition.BranchPredicate))
                 {
                     met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
-                    if (!met) GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
+                    if (!met)
+                    {
+                        failed = data.Condition.BranchPredicate;
+                        GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
+                    }
                 }
                 if (!met)
                 {
-                    GD.Print($"[EffectEngine] 条件不满足「{data.Condition.Predicate}」，走 ElseBranch");
+                    GD.Print($"[EffectEngine] 条件不满足「{failed}」，走 ElseBranch");
                     ExecuteActions(data.Condition.ElseBranch, source, target, data.Duration, targetAreaId);
                     return;
                 }
@@ -946,20 +960,33 @@ namespace Script.Manager
                 return;
             }
 
-            if (data.Condition != null && data.Condition.Predicate != "Always")
+            // 【2026-09 修复·JC004】同同步路径：`Predicate == "Always"` 时仍要求值 `BranchPredicate`。
+            if (data.Condition != null
+                && (data.Condition.Predicate != "Always" || !string.IsNullOrEmpty(data.Condition.BranchPredicate)))
             {
                 // 【K3·死亡类·A10】同同步路径：上下文卡优先用"触发上下文卡"（见同步路径注释）。
                 var condCtx = TriggerContextCard ?? target;
-                bool met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
-                // 【P3·门禁 + 分支】同同步路径：BranchPredicate 不满足也走 ElseBranch（JC031）
+                bool met = true;
+                string failed = null;
+                bool noGate = string.IsNullOrEmpty(data.Condition.Predicate) || data.Condition.Predicate == "Always";
+                if (!noGate)
+                {
+                    met = EvaluateCondition(data.Condition.Predicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
+                    if (!met) failed = data.Condition.Predicate;
+                }
+                // 【P3·门禁 + 分支】同同步路径：BranchPredicate 不满足也走 ElseBranch（JC031/JC004）
                 if (met && !string.IsNullOrEmpty(data.Condition.BranchPredicate))
                 {
                     met = EvaluateCondition(data.Condition.BranchPredicate, source, target, condCtx, winnerId, targetAreaId, data.Condition.Param);
-                    if (!met) GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
+                    if (!met)
+                    {
+                        failed = data.Condition.BranchPredicate;
+                        GD.Print($"[EffectEngine] 门禁满足但分支条件不满足「{data.Condition.BranchPredicate}」，走 ElseBranch");
+                    }
                 }
                 if (!met)
                 {
-                    GD.Print($"[EffectEngine] 条件不满足「{data.Condition.Predicate}」，走 ElseBranch");
+                    GD.Print($"[EffectEngine] 条件不满足「{failed}」，走 ElseBranch");
                     await ExecuteActionsAsync(data.Condition.ElseBranch, source, target, data.Duration, targetAreaId);
                     return;
                 }
@@ -2122,6 +2149,10 @@ namespace Script.Manager
                         if (subject.CurrentZone == CardZone.AreaZone || subject.CurrentZone == CardZone.AttachedZone)
                             RegisterPersistent(subject);
                     }
+                    // 【2026-09·用户口径】形态使其"成为角色" ⇒ **迁入争夺区**（JC027）。
+                    // 迁区后它天然参与地区角色统计、**"对地区所有角色"的伤害**、以及所有"目标角色"类候选枚举
+                    // （此前靠取目标侧补丁才能被取到，现由区归属天然保证）。反向形态（不再含角色）则迁回附属区。
+                    SyncFormZone(subject);
                     if (term.Contains("回合结束"))
                         RegisterTimedMod(new TimedMod
                         {
@@ -3874,13 +3905,21 @@ namespace Script.Manager
             switch (what)
             {
                 case "防御":
-                    // 防御属性：直接改 CurrentDefense（已有 HasDefense 语义），时效项记录还原量
-                    if (subject.CurrentDefense < 0) subject.CurrentDefense = 0; // 原本无防御则临时获得
-                    subject.CurrentDefense += amt;
-                    // 下限钳制：防御不得低于"无防御"哨兵 -1（避免出现 -2 之类非法值）
-                    if (subject.CurrentDefense < -1) subject.CurrentDefense = -1;
-                    GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 防御 {amt:+#;-#;0}（当前 {subject.CurrentDefense}）");
-                    if (timed) RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Defense", Value = "防御", Amount = amt, ExpireTurn = CurrentTurn });
+                    // 【2026-09 修复·JC027"属性不可叠加（再次使用效果不会获得更多属性）"】
+                    // 防御授予必须走**属性通道**（`Grant/Revoke("Attribute","防御")`，与白眼/黑刀同构）：
+                    // `ResetToBaseValues` 重算防御时的基准＝模板防御 + `GetAttribute("防御")`，
+                    // 而本分支此前**只直接改字段**、时效项登记 `Kind="Defense"` ⇒ 任何一次属性重算
+                    // （先手重算/光环重算/形态重算）都会把已授予的防御**冲掉**（只剩模板值），
+                    // 于是"第二次发动效果 → 防御不会更多"（先手调查/战力走属性通道故不受影响）。
+                    // 说明：**正负都走 `Grant`**——负值（"获得 -N 防御力"，如 JC100）若走 `Revoke`
+                    // 会因"没有既有授予记录"被 `CardInstance.Revoke` 直接跳过而失效（纯减益场景）；
+                    // `Grant` 对负 amount 会记入负的授予累计并同步下调字段，重算时也能正确重建。
+                    subject.Grant("Attribute", "防御", amt);
+                    GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 防御 {amt:+#;-#;0}（当前 {subject.CurrentDefense}，" +
+                             $"授予累计 {subject.GetAttribute("防御")}）");
+                    // 时效项同样按**属性**登记（到期经属性通道撤销，字段与授予同时回退且可被重算正确重建）
+                    if (timed)
+                        RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Attribute", Value = "防御", Amount = amt, ExpireTurn = CurrentTurn });
                     break;
 
                 case "屏障":
@@ -4113,6 +4152,28 @@ namespace Script.Manager
         }
 
         /// <summary>卡级时效修正登记（P2）。</summary>
+        /// <summary>
+        /// 【2026-09·用户口径】形态转换后按**有效类别**校正所在区（JC027「成为一个地精角色（它仍然是附属）」）：
+        ///  · 有效类别含**角色** ＋ 当前在附属区 ⇒ 迁入**争夺区**（`ZoneManager.MoveFormZone`）；
+        ///  · 有效类别**不含角色** ＋ 当前在争夺区 ＋ 本卡是附属 ⇒ 迁回**附属区**（形态撤销 / JC028 反向形态）。
+        /// 迁移不改所属地区、不发进场触发，但会刷新版本号并重新注册持续效果（见 `MoveFormZone` 注释）。
+        /// </summary>
+        private void SyncFormZone(CardInstance card)
+        {
+            if (card == null) return;
+            var zm = CM?.ZoneManagerRef;
+            if (zm == null) return;
+            bool isCharacter = (card.EffectiveCategoryFlag & CardCategory.Character) != 0;
+            // "本质是附属"的判据：`IsAttached`（结附时由结附路径置位）**或**印刷类别含附属
+            // （避免调用方漏设 `IsAttached` 时把卡遗留在争夺区）。
+            bool isAttachmentByNature = card.IsAttached
+                || (card.PlayerTemplate != null && (card.PlayerTemplate.CategoryFlag & CardCategory.Attachment) != 0);
+            if (isCharacter && card.CurrentZone == CardZone.AttachedZone)
+                zm.MoveFormZone(card, CardZone.AreaZone, card.ControllerId);
+            else if (!isCharacter && isAttachmentByNature && card.CurrentZone == CardZone.AreaZone)
+                zm.MoveFormZone(card, CardZone.AttachedZone, card.ControllerId);
+        }
+
         private void RegisterTimedMod(TimedMod m) => _timedModStack.Add(m);
 
         /// <summary>
@@ -4194,6 +4255,9 @@ namespace Script.Manager
                             if (!string.IsNullOrWhiteSpace(sub)) fc.Revoke("SubCategory", sub.Trim(), 1);
                         fc.ClearFormOverride();
                         fc.ResetToBaseValues(false);
+                        // 【2026-09·用户口径】形态撤销后若它不再是"角色"（JC027 回到附属）⇒ **迁回附属区**；
+                        // 迁区同样刷新版本号（`MoveFormZone`）。注意顺序：先撤形态（有效类别复位），再迁区。
+                        SyncFormZone(fc);
                         if (fc.CurrentZone == CardZone.AreaZone || fc.CurrentZone == CardZone.AttachedZone)
                             RegisterPersistent(fc);
                         GD.Print($"[EffectEngine] ⌛ 时效还原：{fc.PlayerTemplate?.CardName} 的实例级形态到期（回合结束）");
@@ -4735,8 +4799,7 @@ namespace Script.Manager
                     if (source == null || contextCard == null || contextCard == source) return false;
                     bool isChar = (contextCard.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0;
                     bool ally = contextCard.ControllerId == source.ControllerId;
-                    bool spirit = contextCard.HasKeyword("灵体")
-                                  || (contextCard.PlayerTemplate?.HasInherentKeyword("灵体") ?? false);
+                    bool spirit = contextCard.HasActiveKeyword("灵体");
                     bool ok = isChar && ally && spirit;
                     GD.Print($"[EffectEngine] 条件「DiedAllySpiritCharacter」：死亡卡={contextCard.PlayerTemplate?.CardName} " +
                              $"是否角色={isChar} 同控制者={ally}（P{contextCard.ControllerId}/P{source.ControllerId}）" +
@@ -4827,6 +4890,10 @@ namespace Script.Manager
                     GD.Print($"[EffectEngine] 条件「RenownMajority」：地区{triggeringAreaId} 我方声望角色={mine}，对手={opp} → {(majority ? "满足" : "不满足")}");
                     return majority;
                 }
+                // 【2026-09】显式"无门禁"谓词（JC004/JC011 等 `Predicate = "Always"` 的恒真门禁）：
+                // 直接返回 true——原先落到 `default` 会打"未知条件"日志（语义正确但日志误导）。
+                case "Always":
+                    return true;
                 default:
                     GD.Print($"[EffectEngine] 未知条件「{predicate}」暂默认满足");
                     return true;
@@ -4967,6 +5034,9 @@ namespace Script.Manager
         public string ResolveWinAreaDestination(CardInstance card, string areaUid, int winnerId)
         {
             if (card == null) return "";
+            // 【2026-09 用户口径·通用】背面朝上的卡（暗藏者）不提供其效果 ⇒ "赢取时去处替代"同样休眠
+            // （与 `RegisterPersistent` 的暗藏门禁、`LeaderRule`/`RenownRule` 的暗藏口径一致）。
+            if (card.IsCovert) return "";
             foreach (var e in EffectsOf(card))
             {
                 if (e == null || string.IsNullOrEmpty(e.WinAreaDestination)) continue;
@@ -6980,8 +7050,21 @@ namespace Script.Manager
             ZoneScope scope = (e.Scope == ZoneScope.Specified) ? GetDefaultScope(card) : e.Scope;
             if (ScopeMatchesZone(scope, card.CurrentZone)) return true;                       // 实时区域
             if (zoneOverride.HasValue && ScopeMatchesZone(scope, zoneOverride.Value)) return true; // 触发时区域
+            // 【2026-09·JC027 形态】"它仍然是附属"的**形态角色**（`MoveFormZone` 迁入争夺区，本质仍是附属）：
+            // 其**附属生效区**（`AttachTarget`）的能力/持续效果必须继续生效——否则变形后连它自己的
+            // "快速行动2：成为一个地精角色"都发动不了（形态下无法叠加/再次发动）。
+            if (scope == ZoneScope.AttachTarget && IsFormCharacterInArea(card)) return true;
             return false;
         }
+
+        /// <summary>
+        /// 【2026-09·JC027】**"形态角色"** ＝ **已结附**（`IsAttached`）却以角色身份待在**争夺区**
+        /// （`ZoneManager.MoveFormZone` 迁入；迁入时会把"本质是附属"的卡补上 `IsAttached`）。
+        /// 用于让它的"附属生效区"能力/持续效果继续生效。
+        /// 注：**未结附**的附属卡被移到争夺区时**不**算形态角色（既有语义：附属在争夺区未结附 ⇒ 其效果不生效）。
+        /// </summary>
+        private static bool IsFormCharacterInArea(CardInstance card)
+            => card != null && card.CurrentZone == CardZone.AreaZone && card.IsAttached;
 
         /// <summary>某生效区声明是否匹配给定区域（`Specified` 视为不匹配，由调用方先解析默认区）。</summary>
         private static bool ScopeMatchesZone(ZoneScope scope, CardZone zone)
@@ -7807,6 +7890,19 @@ namespace Script.Manager
             {
                 GD.PrintErr($"[EffectEngine] ⛔ 来源生效区不符：{tmpl?.CardName} 在 {source.CurrentZone}，" +
                             $"能力 {data.EffectId} 的生效区 {data.Scope} → 拒绝激活");
+                return;
+            }
+
+            // 0.9)【2026-09·通用红线 G0 权威侧】背面朝上（暗藏者）的卡**不得发动任何激活能力**
+            //   ——唯一例外＝该能力显式声明"暗藏者限定"（`RequireSourceCovert`，如 JC041 禁婆的
+            //   "暗藏者专用激活"）。此前该门禁只写在候选侧（`ActivateEligibility.CanActivate`，
+            //   而候选枚举 `GetEligibleAbilities` 对暗藏者是放行的）⇒ 经 PM 命令/服务端意图可直接
+            //   让一张背面卡发动其普通能力（与 D24 的"UI + 权威双层"纪律不符）。
+            //   与 `MeetsSourcePrereqs` 的反向约束互补：RequireSourceCovert ⇒ 必须在暗藏态。
+            if (source.IsCovert && data.RequireSourceCovert != true)
+            {
+                GD.PrintErr($"[EffectEngine] ⛔ 来源卡处于暗藏（背面朝上）状态，且能力 {data.EffectId} " +
+                            "未声明『只有作为暗藏者时才能发动』→ 拒绝激活（背面卡不提供效果）");
                 return;
             }
 

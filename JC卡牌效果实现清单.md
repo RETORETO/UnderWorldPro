@@ -566,6 +566,14 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 | A53 | **检索一律强制（不可取消）＋ JC051 宿主改由玩家选（2026-09，用户裁定；撤销 §7.4b 第 5 条）** | 用户两项裁定：**①"收紧为强制：单机也去掉取消，与卡文和联机一致"**（8 张 JC 检索卡 JC007/025/026/032/033/051/109/131 的卡文**都没有"你可以寻找"**）⇒ 单机 `EffectEngine.ResolveSearch` 改 `allowCancel: false`；联机 `SearchViaGatewayAsync` 改 `ForceChoice = true`，且回包**取消/非法**不再等于"不取牌"（**原口径"玩家放弃 = 检索未发生 → 不洗牌"作废**）⇒ **fail-safe 兜底取第一张匹配**再落地 + 洗牌，否则异常客户端可用一次取消/越权回包**规避强制检索**；安全属性不变（候选只来自"检索者牌库 ∧ 通过筛选"）。**②"改成开窗选宿主"**（JC051『结附于合理的目标』）⇒ 宿主**候选来源不变**（＝被检索卡自身 `TargetRules` 的合法宿主，判定与打出阶段同一实现 `CardManager.MatchesRule`），但**候选 ≥2 时由玩家选**：单机 `IGameUIHooks.PromptPickCard`（不可取消）/ 联机 `Kind.SelectTarget`（服务端 `OptionLabels`，`ForceChoice=true`，回包权威复检）；回包非法/取消 → **确定性兜底取第一个合法宿主**（强制结附不可被规避）；**候选 = 1 时不弹窗**（无可决策空间）、无 UI 时确定性兜底取第一个。实现细节：去向落地改为**续算式** `ApplySearchDestination(..., onDone)`（选宿主窗挂起期间不洗牌，宿主落定后才"揭示 + 洗牌"）；卡数据 `Args[2]` 由 `"自动"` 改 `"按目标规则"`。**留档**：若将来出现"你可以寻找…"的卡，需先在 `Args` 加可选标记再恢复取消分支 |
 | A54 | **秘社重放幂等 ＋ 联机"秘社目标"可点（2026-09，用户裁定"现在就修／补上"）** | 用户对两项"顺手发现"的裁定：**"现在就修"＋"补上"**。① **`SetupCouncils` 幂等化**（`ZoneManager.ClearCouncilZone` 新方法：旧秘社按 `CardZone.Exiled` 移出游戏 + 广播 `OnCardMoved` + 注销持续效果登记）——原先 `DealOpeningHands` 的"重放秘社"会累积 **2 张/玩家**，导致起手数读旧卡（回退 6）与"结附本方秘社"类效果重复候选；**秘社恒 1 张**后两者同时消失。② **秘社 UI 三态化**（`Arena.Layout.SyncCouncilCardUI`）：不在秘社区→摘除、在秘社区但无 UI→**补建**、已有→确保容器，配套秘社重放；`SyncCardUIToZone` 秘社判定放宽为"当前在秘社区 **或** 曾有 UI"。③ **联机选目标补秘社通道**：`OpenOnlineTargetSelectionWindow` 外加高亮 `_councilCardUIMap` 合法目标、`PickLegalActivationTargetAt` 纳入秘社同款 ZIndex 命中（新增 `CouncilCardUI.GetVisualGlobalRect`）、清理同款；动机＝JC051 宿主候选含秘社（否则联机只能等超时走兜底）。④ 顺手修：`PromptPickCard` 候选名兜底 `CouncilTemplate?.CardName`（原显示原始 UID）；`MakePlayableCard` 补 `_effectsInjected`（否则 `EnsureEffects` 清空效果表 ⇒ 探针 `PlayTiming.Response` 被抹掉、静默退化 A 档 = 既有失败真因） |
 | A55 | **联机"需要玩家选择"的效果必须真问玩家（2026-09，用户裁定"这一批全补齐"）** | 用户实测反馈：服务端日志出现 `⚠ Search 无 UI：确定性兜底取第一张匹配` ⇒ 选卡只能自动选择。**根因（架构级）**：生产链路是 `TurnManager.ResolveStackTop`（同步）→ `ResolveEntry` → **同步** `EffectEngine.ResolveEffect`，而网关分支只写在 `ResolveEffectAsync`/`ExecuteVerbAsync`/`*ViaGatewayAsync` 那套"可挂起续算"实现里——**全项目调用 `ResolveEffectAsync` 的只有测试** ⇒ 服务端（无 `UIHooks`、有 `InputGateway`）下所有决策都静默走无 UI 兜底。**修法**：① 在**同步**执行体里接入网关：`ExecuteVerb` 对 `Inspect/PayOptional/PrepareUpkeep/Discard/Seal(手牌)/RevealSealedAndQueueFreePlay/Search` 改走既有异步执行体，并用 `SuspendChainForInput`/`ContinuePendingChain` 挂起-续算（服务端不阻塞线程；**有 UIHooks 时仍优先本机窗口**）；② 补齐原本**没有**网关分支的 5 处：JC083「选择一个数字」`ValueExpr=玩家选择`（原先服务端**整条不发动**）、JC064 `PayOrSacrificeSelf`、JC114 `SacrificeSelfOptional`、JC128 `BribeOrSacrifice`、`SacrificeChoice`（JC046/113/134/65 逐位牺牲）；③ 统一收口 `BeginGatewayFlow`（同步/异步回包都正确接管链）+ `AskZeroOrOneViaGatewayAsync`（0/1 二选一）+ `AskPlayerValueViaGatewayAsync`（数字）；④ 等待回包期间由引擎**显式 `EnterAtomic`**（服务端没有 View 帮忙 `NotifyModalOpened`），续算后经新 `TurnManager.OnEngineChainSettled` 补做"地区赢取检查 / 解原子锁 / JC119 免费打出队列"（挂起时 `ResolveStackTop` 已提前 return）；⑤ `SuspendChainForInput` 加"不覆盖已记录续算点"护栏（嵌套决策不再丢动作）。**顺带修复**：JC128 单机窗口原先**未挂起动作链**（窗口异步，代码同帧按"牺牲"分叉 ⇒ 玩家选择被丢弃；旧测试用同步桩掩盖）。 |
+| A67 | **形态使其"成为角色" ⇒ **迁入争夺区**；撤销时迁回附属区（2026-09 用户口径，取代早前的"取目标候选并入"补丁）** | ① **JC027 成为角色后不能被以角色为目标的效果取为目标**。用户口径（最终实现）：**形态转换直接迁区**——`ZoneManager.MoveFormZone(card, AreaZone)`：迁入争夺区（`_area` 桶）后，**一切自然成立**：作为"目标角色"的候选、地区角色统计、"**对地区所有角色**"的伤害（`GetAreaInstancesBySlot`）全部覆盖它，**不需要**在取目标侧写补丁（早前的 `GetAreaCandidatesForTargeting` 已删除）。形态撤销（回合结束）⇒ `MoveFormZone(card, AttachedZone)` **迁回附属区**。要点：**刷新版本号**（用户明确要求 ⇒ 以它为目标的效果按 D16 重新校验）＋ 广播 `Moved`；**不发** `EnterTrigger`/`OnMove`（它一直在场上，只是形态变了，避免"当某角色进入本地区时"类效果被误触发）；所属地区（`ZoneDetailId`）不变；**保持附属身份**（`IsAttached=true`，卡文"它仍然是附属"）。② **附属生效区例外**：迁入争夺区后，它声明为 `AttachTarget`（附属区）的**激活能力/持续效果必须继续生效**，否则变形后连它自己的"快速行动2"都发动不了（`EffectEngine.IsEffectActiveInZone` 增加"形态角色"判据：`CurrentZone==AreaZone && IsAttached`；**未结附**的附属被移到争夺区不算，既有语义不变）。③ **`HasDefense` 认"实例当前防御"**：`DealDamageToInstance`/战斗伤害分配都用它把关，原先只看**印刷**防御 ⇒ 印刷无防御（-1 哨兵）的卡即使被授予 +1 防御力也**完全无法受伤**（形态角色也吃不到群伤）；现为 `印刷防御≥0 || CurrentDefense≥0`。④ A62 在激活路径的收口（见 A62）。 |
+| A66 | **"双击请求激活"的来源与能力来源（2026-09，用户实测）** | 用户实测：**JC019 给宿主能力后，宿主高亮但点击/拖拽都无反馈**。根因：单机双击转发器 `if (!IsAttached) return;` ⇒ **争夺区正面角色**（宿主角色）双击进不来；且能力收集只读 `PlayerTemplate.EffectDataList`（运行期授予项不在里面）。口径（用户 2026-09 确认）：来源判定＝`ActivateEligibility.IsDoubleClickActivationSource`（**附属 / 争夺区正面角色 / 手牌行动卡**）；能力收集＝`GetAllActivateAbilities`（**模板 ∪ 运行期授予**，授予项追加在模板项之后 ⇒ 宿主原有激活效果时窗口自动多一条）；**只有 1 条能力 ⇒ 直接发动、不弹窗**（沿用既有"少一次点击"规则，用户确认）；是否需要取目标由 `Target.NeedsSelection` 决定。**同一根因还救活了 JC024**（见 A63）。 |
+| A65 | **能力图标/属性授予必须写"属性通道"；`防御` 授予尤其（2026-09，用户实测）** | 用户实测：**JC016 持续效果给自己增加能力图标（先手调查/势力）没有生效**。根因：`ContinuousGrants` 只写了 `Kind="Icon"`（图标存在性）⇒ `HasIcon` 为真但**数值恒 0**（`AreaStatsCalculator` 读的是 `GetAttribute("先手调查"/"先手势力")`）。口径：**要改数值就必须写 `Kind="Attribute"` ＋ 属性名**（白眼=先手调查 / 黑刀=战斗 / 黑眼=调查 / 白刀=先手战斗 / 黑星=势力 / 白星=先手势力 / 防御），需要"图标存在性/展示"时**再补一条 `Kind="Icon"`**（`Gain` 动词本来就是两条通道都写，持续授予也必须同款）。② **`防御` 授予一律走属性通道**：`Gain{"防御"}` 原先只直接改 `CurrentDefense`（时效项 `Kind="Defense"`），而 `ResetToBaseValues` 重建防御的基准＝模板防御 ＋ `GetAttribute("防御")` ⇒ 任何一次属性重算都会把授予的防御冲掉（**JC027"再次使用效果不会获得更多属性"**）。现正值/负值都走 `Grant("Attribute","防御")`（**负值必须走 `Grant`**：`Revoke` 在没有既有授予记录时直接跳过 ⇒ 纯减益如 JC100"获得 -1 防御力"会失效），时效项登记 `Kind="Attribute"`。 |
+| A64 | **卡文前缀必须由脚本授予对应关键词：以「灵体」为例（2026-09，用户实测＋同类排查）** | 用户实测：**JC022 灵体没有生效**——本地区我方只有 JC022（1 个魔法领域图标）、对方只有 JC016（无领域图标），战斗失败被分配伤害却照常落地。根因：卡文以「灵体」开头，但脚本**没有授予【灵体】关键词** ⇒ `DamageRules.IsSpirit` 为假 ⇒ `IsSpiritPrevention`（对手领域图标 **严格少于** 本方则防止）永不成立。同类排查发现 6 张：**JC013 / JC022 / JC100 / JC105 / JC110 / JC113**（用户确认一并修复）；写法＝JC077/JC111 同款 `Continuous{Scope=AreaZone, ContinuousPrereq="常驻", ContinuousGrants=[Keyword:灵体]}`。**纪律**：卡文里的每个前缀（灵体/撤回/杀伤/领袖/公开/隐匿/不能被装备结附…）都必须在脚本里有对应的授予或引擎级实现，否则会出现"卡面有、规则层没有"的静默失效。 |
+| A63 | **无目标的自指激活必须有可用手势（2026-09，用户实测）** | 用户实测：**JC024「快速行动2：将 S．P．T 董事局潜伏」需要取目标**。核对效果数据：`Target{Kind=None, NeedsSelection=false}` ＋ `Latent{"自身"}` **本来就是自我指代、不需要目标**——真实原因是**交互层没有可用手势**：单机争夺区角色的激活只能"拖到目标上"（`CardDragController.EndActivateDrag` 要求 `target != null && target != source`），无目标能力因此**完全发不动**；而双击入口又被 `!IsAttached` 挡掉。口径：**无目标（或自指）的激活能力由双击入口直接发动**（单条能力 ＋ `NeedsSelection=false` ⇒ `BeginActivate(inst, ability, null, -1)`，不弹选目标窗）。 |
+| A62 | **"目标角色"是否含自身：卡文未排除即含自身（2026-09，用户实测触发）** | 用户实测：**JC004 力场法师进场后没有产生任何效果**。根因＝`TargetSpec.CanTargetSelf` 默认 `false`，而卡文"选择本地区的目标角色"**未排除自身** ⇒ 当它是我方本地区**唯一的角色**时候选为空 ⇒ 该触发被当作"**无合法目标**"**静默跳过**（不进堆叠、界面无提示）。**口径**（与本项目既有实现一致，见 JC008/JC069 注释）：**卡文没写"另一个"、也没用"敌方/其他"限定 ⇒ 目标角色含自身**（`CanTargetSelf = true`）。**本批修复 7 张**：JC004 / JC017（"目标角色"）/ JC087（"本地区的目标本方角色"）/ JC105（"将…封印在目标角色上"）/ JC055（"目标角色或附属"）/ **JC003（"横置目标角色或暗藏者"）** / **JC019（授予宿主的"位于本地区的目标非人类角色"）**。**有意不动**：① 源卡本身**不是角色**的声明（附属/事务源）——`CanTargetSelf` 对它们无意义（事务卡的目标候选来自 `CardManager.IsLegalPlayTarget`，源卡是事务本身，不参与角色候选；附属源同理）；② 卡文明确排除自身或语义上不能指向自己（JC121 双类别卡不能结附到自己、JC110"将自身封印在目标角色上"、JC028 吸血鬼限定、JC013 自身为代价）。**实现约定**：新增"选择目标角色"类效果时，先看卡文有没有"另一个/敌方/其他"——没有就**必须**设 `CanTargetSelf = true`，否则该效果在"独自在场"时静默失效（判据与修复位置见 `制作指南/取单目标效果.md`）。 |
+| A61 | **"效果只在场上（正面）提供"通用红线（2026-09，用户口径）** | 用户原话要点：**"效果除非明确描述了在其他地方生效，比如暗藏者触发、墓地行动等，才能在不是场上的情况触发，其他情况都只能在场上触发。"** 落地＝两条不可绕过的判定：① **背面朝上（暗藏者）不提供任何效果**——关键字/词条（领袖/道途/声望/灵体/屏障/撤回/杀伤/隐匿…）、印刷静止规则（"不能移动"等）、去处替代、激活能力一律休眠；要"由暗藏者发动/触发"必须**显式声明**（`TriggerCovertMode.CovertOnly`＝暗藏者触发、`EffectData.RequireSourceCovert`＝暗藏者专用激活，如 JC041）。② **不在场上**（手牌/牌库/墓地/封印区/堆叠）**不默认提供效果**——跨区必须显式声明（`ZoneScope.HandZone` 手牌行动 JC110、`ZoneScope.Graveyard`/`PlayableFromGraveyard` 墓地行动 JC085、`ZoneScope.SealedZone` 被封印时 JC100/JC110、构筑级 `DeckLevelTriggerRule` JC124、手牌期"公开"约束）。**统一入口**：`CardInstance.IsExertingEffects`（在场上且正面）与 `CardInstance.HasActiveKeyword(kw)`（运行期授予 ∪ **非暗藏时**的卡面固有），引擎侧 `EffectEngine.IsEffectActiveInZone`（触发/激活/持续注册的生效区判定，含"触发时区域"例外）。**排查并修复 8 处**（声望/撤回/灵体/屏障与关键字目标筛选/JC121"不能移动"缺在场门禁/赢取去处替代/激活权威侧 G0 缺失/领袖·道途名额）；明细与边界见 `需求实现对照.md` §7.3.2，测试 `P3FieldZoneGateTests`(10)。 |
+| A60 | **领袖唯一性只统计"正面在场"的领袖（2026-09，用户口径）** | 用户原话要点：**"领袖效果只有在角色正面在场才生效，需要允许多个领袖暗藏者同时在场上存在；一个领袖正面和多个领袖暗藏者同时在场是允许的，不需要牺牲。"** 落地＝`LeaderRule.LeadersOnField` **跳过背面（`IsCovert`）的领袖**：暗藏领袖**不占领袖名额**（因此 1 正面 + N 暗藏、或多个暗藏可共存）；暗藏领袖**翻为正面**时才重新计入 ⇒ 由两条钩子再次收敛：`CardManager.RevealCard`（原地现身；其不走 `OnCardEnteredArea`）与 `ZoneManager.OnCardEnteredArea`（现身结算回地区）。`EnforceOnEntry` 对暗藏者早退（暗藏进场不做规则性牺牲）。**语义依据**：暗藏者尚未"在场成立"（其持续/静止效果亦不生效，见 D27）。测试 `P4LeaderTests`（含生产现身路径 `RevealCovert` 端到端）。 |
 | A59 | **原子操作期间的玩家选择必须阻塞（2026-09，用户补充口径·框架级）** | 用户口径原文见 `需求实现对照.md` §7.3.1：**一个原子操作期间如果需要玩家选择，玩家选择完成之前阻塞进程；完成前只有持续效果可以影响游戏，不得有新的行动/触发效果进入堆叠**；"打出卡（含支付费用/额外费用/确认忠诚）"与"结算卡/结算效果"都属原子操作。**排查发现的 4 类不合规（本次全部修复）**：① 单机**所有通用选择窗**在等待期间不持锁（只有触发排序/选目标/对抗三类窗口联动 `LockModal`）⇒ 结算中途还能再出牌/再激活/让过；② 4 处"只开窗不挂起动作链"（`Discard`/`Seal{手牌}`/`Search`＋其回调内的"选结附宿主"）⇒ 效果后续动作**先于**玩家选择执行，且 `allowCancel:true` 取消时窗口不回调 ⇒ 链永久悬空；③ 联机 5 处等待回包不持锁（领袖/道途/遏制/预测/JC119 免费打出取目标）；④ `PlayCard` 的锁原先在"费用支付"处才置位、`ActivateAbility` 全链路无持锁（而"宣布使用效果"按规范是原子操作）。**修法**：`TurnManager.BeginDecisionHold/EndDecisionHold`（计数式、可嵌套；解锁条件＝"模态计数与持锁深度双 0"，修掉"模态窗关闭掀掉外层持锁"）＋ `HoldAtomicDuringDecisionAsync`；`Arena.LockChoiceWindow/UnlockChoiceWindow`（`ModalWindow.ChoiceBox`，按窗口实例成对；交付选择前先解锁再续算；取消由 `TreeExiting` 兜底）；`EffectEngine.SuspendChainForInput` 挂起即持锁、`ContinuePendingChain` 配对释放，并补齐 4 处挂起-续算；`PlayCard` 原子段上移到"确认忠诚"之前；`ActivateAbility` 全程持锁；恢复步骤弃牌整段持锁。**配套**：`ActivationChoiceWindow.OnCancelled` 保证"每个选择窗恰好一次回调"（持锁不泄漏、挂起链不悬空的前提）。**覆盖范围**：所有"强制玩家决策"（含恢复步骤弃牌；**调度步骤除外**——联机专用且 `PriorityPlayerId=0` 已封死行动）。详见 §7.10 91 与 `制作指南/原子性规则.md`。测试 `P3AtomicDecisionLockTests`(18)。 |
 | A58 | **激活类能力"次数上限"的双重计数修复（2026-09，用户实测反馈）** | 用户实测：**"秘社效果第一次发动就被跳过了"**（`[Resolve] ⏹ 每局次数上限：MSJC001_2_SearchUniqueCard 本局已发动 1 次（上限 1）→ 跳过本次结算`）。**根因**：激活类能力的次数上限有**两处登记/检查**——① 发动阶段 `EffectEngine.ActivateAbility`（语义＝"发动被接受即计数，与结算成功与否无关"，`MarkAbilityUsedThisTurn/ThisGame`）；② 结算阶段 `TurnManager.ResolveEntry` 的 `ResolveKind.Trigger` 分支（本意只管**触发类**"同批次多条同源触发只结算到上限"）。而**激活条目也是 `Kind=ResolveKind.Trigger`**（`PushActivationToStack`）⇒ 首次结算就被自己刚登记的 1 次判成"已达上限"而整条跳过。**影响面**：不止秘社——`MaxUsesPerTurn=1` 的 **JC031/JC032/JC069** 与 `=2` 的 **JC093** 第二次，**一直是首发动即被跳过**（既有单测只驱动 `ActivateAbility` 断言入堆栈/计数，从未推进堆栈结算，故长期未暴露）。**修法**：`StackEntry` 新增 **`FromActivation`**（`PushActivationToStack` 置 true），`ResolveEntry` 的 K23/A57 检查+登记**整段对激活条目跳过**（触发条目照旧在结算前检查+登记）。**顺带修**：`P3SacrificeCost2Tests.TestSacrifice2_JC093每回合两次上限` 原先把"宿主"排在牺牲候选首位（牺牲代价确定性兜底取第一个 ⇒ 第 1 次就牺牲掉宿主、咒刃进墓地），旧实现靠"第 2 次被上限误拒"掩盖；现改为"牺牲品先上场、宿主最后"，并补断言"咒刃仍在场"。 |
 | A57 | **秘社（MSJC）效果机制：每局游戏一次 ＋ 独有检索 ＋ 先手标志谓词（2026-09，用户裁定）** | 用户三项裁定/口径：**①"每局游戏只能发动一次"做成通用机制**＝新增 `EffectData.MaxUsesPerGame`（用户选定"按卡×能力"粒度，与 K23 `MaxUsesPerTurn` 平行，但**不随回合重置、离场/换区/版本号变动也不清零**，只有重开一局才恢复；客户端随 `ZoneCardRef.UsedAbilityIdsGame/CountsGame` 同解投影）；**②"独有牌"＝`PlayerCardData.UniqueField`（独有卡名）非空**（用户："UniqueField 不为空就为独有卡"）——`DeckSearchFilter` 新增无值标志段 **`独有`**；**③【先手标志】谓词**：新增 `EvaluateCondition("具有先手标志"/"先手标志")`，基准＝来源控制者是否为本回合先手（`PlayerManager.IsFirstPlayer`，由 `TurnManager.FirstPlayerId` 派生）。附：`UniqueField` 历史注释（"唯一键（如UID）"）是**错的**，已勘误为"独有卡名/独有标识"。**⚠ 勘误（后续实测纠正）**：早先记的"该字段全卡库 0 处赋值 / 数据待回填"**是错的**（首查漏检）——实测 **JC 卡包内已填 31 张**（JC010=`费南迪尔`、JC011=`德莫斯提尼`、JC012=`帷幕守望徽记`…；全库 698 张 .tres 中的 31 张），其余卡包/卡待继续回填。**⚠ 实现陷阱（已修）**：`EffectData.Target` 默认是**非 null 的 `TargetSpec`**，秘社"无目标能力"若忘了 `Target = null`，`CanActivateCouncil` 会误判"需要选目标"⇒ 该能力**永远不可激活**；已在门禁补 `Target.Kind != None` 前置（fail-open，不放过真需求）。 |
@@ -595,11 +603,15 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 ### 7.7 P4 交付明细（2026-09，按用户指定顺序四步）
 
 **① 领袖（10 张：JC010/011/023/024/037/038/051/052/067/095）** —— `KeywordEffects.Leader()` + `Script/Manager/LeaderRule.cs`
-- 规则：**同一控制者在场上至多 1 个拥有【领袖】的角色**；进场超限 → **立刻**由该控制者选一个（含刚进场的那个）**牺牲**，
-  该牺牲是**规则性结算（不入堆叠、不可响应）**；**进场触发照常生效**；牺牲走 `CardManager.ResolveDeath(Sacrifice)`（照常广播死亡触发）。
+- 规则：**同一控制者场上至多 1 个正面在场的【领袖】角色**（**2026-09 用户口径 A60**：**背面/暗藏的领袖不占名额**
+  ⇒ 1 个正面 + N 个暗藏、或多个暗藏可共存、不需要牺牲）；**正面**进场超限 → **立刻**由该控制者选一个
+  （含刚进场的那个）**牺牲**，该牺牲是**规则性结算（不入堆叠、不可响应）**；**进场触发照常生效**；
+  牺牲走 `CardManager.ResolveDeath(Sacrifice)`（照常广播死亡触发）。
 - 触点：`ZoneManager.OnCardEnteredArea`（`MoveToArea` 的"非场地区→争夺区"分支，在 `EnterTrigger` 广播与 `RegisterPersistent` **之后**），
-  由 `GameInitializer` 装配。
-- 决策：单机复用 `IGameUIHooks.PromptPickCard`（不可取消）；联机 `ChoiceRequest.Kind.SelectTarget`（候选=该控制者场上全部领袖，强制选择，
+  由 `GameInitializer` 装配；**暗藏者进场不做规则性牺牲**（`EnforceOnEntry` 早退）。
+  **暗藏领袖翻为正面**时才重新计入 ⇒ 追加触点 `CardManager.RevealCard`（**原地**现身，该路径不发 `OnCardEnteredArea`）；
+  用 `TurnManager.RevealCovert` 现身时，改由"结算回地区"的 `MoveCardToArea` 经同一进场钩子收敛。
+- 决策：单机复用 `IGameUIHooks.PromptPickCard`（不可取消）；联机 `ChoiceRequest.Kind.SelectTarget`（候选=该控制者场上全部**正面**领袖，强制选择，
   服务端对回包做权威复检，越权/取消/超时 → 确定性兜底）；无 UI/网关兜底＝牺牲最新进场者，并循环收敛到 1 个。
 
 **② 遏制X** —— `AreaManager.RemovePowerMark` + `Script/Manager/CurbRule.cs` + `ActionVerb.Curb`
@@ -643,7 +655,7 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 |---|---|---|---|
 | ④ 声望机制 | ✅ 已交付 | `RenownRule.ApplyIfMajority`（消费点 `CombatManager` 势力对抗结束分支）+ `EffectEngine` 条件谓词 `RenownMajority` + 新时机 `OnPowerCombatEnded`（`TriggerEmitPoints.PowerCombatEnded`）| 卡面写"声望"时用 `KeywordEffects.RenownKeyword()`（纯关键字）——用卡级 `Renown()` 会与引擎级规则**各放一次**势力标志 |
 | 遏制（K6，原排在 P5 却随 P2 一起延后） | ✅ 已交付（本轮 P4） | `AreaManager.RemovePowerMark` + `CurbRule` + `ActionVerb.Curb`；单机 `IGameUIHooks.PromptCurbMarks`／联机 `ChoiceRequest.Kind.CurbMarks` | X≥总数自动全清不弹窗；X<总数按地区分配且每地区上限＝该地区标记数；被遏制者默认＝施术者对手 |
-| 领袖（词条规则） | ✅ 已交付（本轮 P4） | `KeywordEffects.Leader()` + `LeaderRule` + `ZoneManager.OnCardEnteredArea`（`GameInitializer` 装配） | 同控制者场上至多 1 个；进场超限立刻选一个牺牲、不入堆叠；进场触发照常 |
+| 领袖（词条规则） | ✅ 已交付（本轮 P4；**2026-09 口径补充见 A60**） | `KeywordEffects.Leader()` + `LeaderRule` + `ZoneManager.OnCardEnteredArea`（`GameInitializer` 装配）+ `CardManager.RevealCard`（翻为正面时重算） | 同控制者场上至多 1 个**正面在场**的领袖（**暗藏不占名额**）；正面进场超限立刻选一个牺牲、不入堆叠；进场触发照常；暗藏领袖翻为正面时才收敛 |
 | 预测X（原 K8/交互延后项） | ✅ 已交付（本轮 P4） | `ActionVerb.Predict` + `PredictionRule`（复用 `TakeTopForInvestigation`/`ReturnAfterInvestigation` + `InvestigationWindow` + `Kind.Prediction`） | 检视牌库顶 X 张、任意数量置顶/底；不抓牌 |
 | ① 额外费用（K10） | ✅ **已全行交付（2026-09）** | 卡级 `ExtraCostSpec` ＋ `TurnManager.PlayCard` 付费阶段：JC049①（牺牲一个角色）/ JC135① ②（支付 X 费 + 消灭目标）/ **JC081（展示任意数量手牌减费＝手牌多选交互）** 均已交付（见 §7.10 65）；**联机路径的两条缺口已闭合**（JC049 的牺牲选择＝`Kind.SelectTarget` 回环、JC081 的手牌多选＝新 `Kind.SelectHandCards`，见 §7.10 75 / §7.4b A43） |
 | ② 形态/类别转换（K4） | ✅ **已全行交付（2026-09）** | **实例级形态转换已交付**（`EffectData.FormChange` ＋ `ActionVerb.TransformForm{对象,期限}`）：类别覆盖（`CategoryFlagOverride`，附属↔角色可组合）／卡名覆盖（`CardNameOverride`）／**印刷效果失活 + 形态效果表**（`PrintedEffectsSuppressed` ＋ `EffectEngine.EffectsOf` 统一收口）／印刷图标与防御清零（`ResetToBaseValues` 共同尊重）／追加子类别；到期由 `TimedMod{Kind="Form"}` 撤销 → **JC027 / JC028 全行 ✅**（见 §7.10 69）。**`CategoryOverride`（印刷类别改写）经 A32 确认"不做"**（用户口径：没有任何效果改变卡的印刷类别） |
@@ -908,6 +920,161 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   这类时机下"所有在该时机登记的承诺都在事件出现时兑现"，不再按玩家过滤 → JC024「潜伏…在**下一个**准备步骤开始时令其现身」
   （因该能力在准备步骤后发动时事件已过，兑现必然落在下一回合的准备步骤）。
 - 其余"步骤级"需求（如"结束步骤触发"）走既有 `OnTurnEnded` 时机，无需再扩机制。
+
+**96 用户报 7 个 BUG 修复批次：JC016 / JC017 / JC019 / JC022 / JC024 / JC027（框架级＋卡数据，无新增效果行）**
+- 见 §7.4b 新增口径 **A63~A67**（无目标自指激活的手势 / 「灵体」前缀必须授予关键词 / 能力图标与防御必须走属性通道 /
+  双击激活的来源与能力来源 / 取目标候选含形态角色且"目标含自身"在激活路径同样生效）。逐条根因与修复：
+  1. **JC016 持续效果给自己增加能力图标没有生效**：`ContinuousGrants` 只写 `Icon` ⇒ `HasIcon` 真而数值恒 0。
+     修复：`Attribute:先手调查` ＋ `Attribute:先手势力` ＋ 两条 `Icon`。
+  2. **JC017 不能指定其他地区的角色**：卡文无「本地区」限定 ⇒ 补 `AllAreas = true`（触发路径默认只枚举来源所在地区）。
+  3. **JC019 宿主高亮但点击/拖拽无反馈**：双击转发器只认附属 ＋ 能力收集只读模板；另 `IsLegalActivateTarget`/
+     `HasLegalTarget` 无条件排除来源卡（与 `CanTargetSelf` 口径分叉 ⇒ 独自在场恒判"无合法目标"）。修复见 A66/A67。
+  4. **JC022 灵体没有生效＋同类排查**：6 张卡（JC013/JC022/JC100/JC105/JC110/JC113）漏授【灵体】关键词，已补齐（A64）。
+  5. **JC024「将董事局潜伏」被要求取目标**：效果数据本已是自指无目标，真实原因是交互层无可用手势（A63）。
+  6. **JC027 属性不可叠加**：`Gain{"防御"}` 只改字段、被属性重算冲掉；改走属性通道（A65②）。
+  7. **JC027 成为角色后不能被以角色为目标的效果取为目标** ⇒ **用户口径：形态转换直接迁区**（`ZoneManager.MoveFormZone`）：
+     形态使其成为角色时**迁入争夺区**（刷新版本号、不发进场/移动触发、保持附属身份），形态撤销时**迁回附属区**；
+     于是"目标角色"候选、地区统计、"**对地区所有角色**"的伤害全部天然覆盖它（早前的取目标候选补丁**已删除**）。
+     配套两点：① 附属生效区（`AttachTarget`）的能力/持续效果在形态角色身上继续生效（否则变形后连自己的"快速行动2"
+     都发动不了）；② `HasDefense` 改认"实例当前防御"（印刷无防御但被授予 +1 防御力的卡必须能受伤/能被分配伤害）。
+- 测试：新增 `P3SpiritKeywordTests`(6)（6 张灵体卡的结构＋进场生效＋"我方图标更多才防止"正/反/增援/暗藏休眠），
+  `P3DestroyOnTargetTests` +2（JC017 真实触发链路里"另一地区的角色在候选内"＋结构），
+  `P3GrantedAbilityTests` +4（宿主角色可双击 / JC024 无目标自指可发动 / `CanTargetSelf` 可取自身并能发动 / 对照未声明则不能取自身），
+  `P4FormChangeTests` +3（属性叠加＋重算不丢 / **形态迁入争夺区并可被取为目标＋版本号刷新＋统计不重复计入** /
+  **地区群体伤害命中形态角色** / 形态到期迁回附属区且已离场者不被迁回），
+  `P3PrereqKindTests` +1（JC016 图标存在＋数值同时生效）。
+- 账本：全量 headless **144 套件 1126 例 0 失败 0 错误**（上批 143/1109），构建 0 警告 0 错误。
+  **红测**：① 回退 4 处引擎修复（防御属性通道 / `CanTargetSelf` 激活目标 / 双击来源判定 / 形态角色候选）→ **8 例失败**；
+  ② 回退"形态迁区"（`TransformForm` 不调 `SyncFormZone`）→ **4 例失败**，逐条命中本批新用例。
+
+**95 重置步骤竖置秘社卡（缺陷修复）＋ 两个新 PM 调试命令（`draw` 定向取牌 / `jumpto` 跳转步骤）**
+- **① 缺陷修复·重置阶段横置的秘社卡没有被重置（用户实测）**：
+  `CardManager.UntapAll`（重置步骤**唯一**解横置出口）的解横置**区列表**原先为
+  `{ AreaZone, Hand, AssetZone, AttachedZone }`——**漏了 `CardZone.CouncilZone`** ⇒ 秘社卡发动能力时
+  （代价"横置本秘社"）把自己横置后，回合开始的重置步骤不会把它竖置回来，表现为"秘社能力无法再次发动 /
+  秘社一直横置"。修复：区列表补 `CouncilZone`（`GetZoneCards(zone, 0)` 取双方），并更新日志文案。
+  回归：`P3NoUntapSealedTests.TestNoUntap_重置步骤竖置秘社`（双方秘社横置 → `UntapAll` → 均竖置；
+  红测：去掉 `CouncilZone` → 该用例失败）。口径文档同步：`需求实现对照.md` §4.1 重置步骤（原 🟡 → ✅）
+  与 D44 行。
+- **② 新 PM 命令 `draw <数量> <卡牌编号> [玩家]`（定向取牌）**：
+  从该玩家（缺省 **P1**）**卡组**找到**该编号**的牌加入其手牌。编号＝UID **第一个下划线之前**的部分、
+  **不区分大小写**（如 `JC001` 命中 `JC001_shenmibunan`）；**卡组里没有 → 什么都不做**（仅日志）；
+  **有多张 → 随机一张**；`数量` ＝最多取几张。简写 `draw JC001` ＝取 1 张。**旧语法
+  `draw <玩家 1|2> [数量]`（两个参数都是数字）完全兼容**（仍走 UI 注入的抽牌回调）。
+  实现：`PMCommandManager.ExecuteDraw` / `DrawSpecificCards`（`RemoveCardFromDeckOf` + `MoveToHand`，
+  与检索取牌的收口一致；随机源 `System.Random` 字段）。
+- **③ 新 PM 命令 `jumpto <步骤名>[地区号]`（跳转步骤）**：
+  **中间经过的步骤一律不结算**（不逐个 `EnterPhase`，故中间步骤的触发/效果都不结算），只进入目标步骤并执行
+  它**正常的进入逻辑**（目标步骤照常结算、后续流程照常推进）。
+  · 步骤名＝`TurnManager.TurnPhase` 枚举名（不区分大小写）：`StartReset`/`StartPrepare`/`StartDraw`/
+    `ActionFirst`/`ActionSecond`/`PreCombat`/`CombatInvestigation`/`CombatStrength`/`CombatPower`/
+    `EndCleanup`/`EndRecover`/`EndPassTurn`；
+  · **对抗类步骤带地区号**（紧贴名字后）：`jumpto CombatInvestigation1` ＝跳到 **1 地区**调查对抗，
+    同理 `CombatStrength2`/`CombatPower3`（省略地区号＝地区 1）；
+  · 非对抗步骤：`jumpto EndRecover` 等；进入后由既有 `TryAutoAdvance`/回合流程正常推进
+    （例：恢复步骤照常做手牌上限弃牌并换回合）。
+  实现：`TurnManager.JumpToPhase(phase, areaNo, out error)`（Controller 侧单一实现）＝
+  校验（游戏结束/原子锁/调度步骤/无地区/地区越界）→ 对抗步骤先确保**地区游标快照**并定位到 areaNo →
+  `ResetPassWindow()` → `EnterPhase(target)`；`PMCommandManager.ExecuteJumpTo` 只做名字解析。
+  拒绝情形：游戏已结束、**原子操作进行中**（结算未完，跳转会撕开状态机）、调度步骤、对抗步骤但当前无地区。
+- **顺带**：`PMCommandManager` 新增 `TurnManagerRef`（`GameInitializer` 注入）与 `InjectModelRefs(...)`
+  （模型侧依赖就地接线，使 PM 命令在**无 View** 场景（headless 测试 / 纯服务端）也可用；View 的 UI 回调仍由
+  `Arena`/`MatchHost` 调 `Initialize` 注入并覆盖）；帮助文本（`help`）同步补齐两条新命令与示例。
+  联机侧同样可用（`ArenaOl` 的 Shift+Enter → `PlayerIntent.Kind.DebugCommand` → 服务端权威执行）。
+- 测试：新增 **`PMCommandTests`（12 例）**——定向取牌（命中/真实卡组编号校验/大小写/没有则不动/多张随机 1 张/
+  数量 2/简写与 P2/旧语法兼容）+ `jumpto`（跳到行动步骤/跳到指定地区三种对抗/中间步骤不结算（机动触发未被收集）/
+  `EndRecover` 照常结算并继续/非法名与地区越界不改状态）；另 `P3NoUntapSealedTests` +1。
+- 账本：全量 headless **143 套件 1109 例 0 失败 0 错误**（上批 142/1095），构建 0 警告 0 错误；
+  不新增效果行、不改任何行的 ✅/⛔ 判定。
+
+**94 "目标角色含自身"约定排查与修复（用户实测：JC004 进场后没有产生任何效果）**
+- **现象与根因**：JC004 力场法师进场的触发**已能收集**（上一批修好），但结算**什么都没发生**。
+  实测日志：`EnterTrigger 扫描=1`（＝场上**只有它自己**）→ 选目标候选为空 → `EnsureTargetThenPush*` 走
+  "**无合法目标，跳过入栈**"分支 ⇒ 触发被**静默丢弃**（既不进堆叠、界面也没有提示）。
+  根因＝`TargetSpec.CanTargetSelf` 默认 `false`，而卡文"选择本地区的**目标角色**"**未排除自身**。
+- **本项目既有约定**（JC008/JC069 的代码注释即为先例）：**卡文没写"另一个"、也没用"敌方/其他"限定 ⇒ 目标角色含自身**。
+  判据实现：`TurnManager.GetTargetUidsForSpec`（`if (inst == source && !canTargetSelf) continue;`）——
+  `CanTargetSelf=false` 时源卡被排除出候选；源卡若是本地区唯一的角色 ⇒ 候选为空。
+- **本批修复 7 张**：**JC004**（"选择本地区的目标角色"）、**JC017 除咒师**（"目标角色"）、
+  **JC087 格鲁尼的走私客**（"本地区的目标本方角色"）、**JC105 噩梦领主**（"将该角色封印在目标角色上"）、
+  **JC055 安妮斯朵拉**（"在目标角色或附属上放置一个时间标志"）、**JC003 帷幕护卫**（"横置目标角色或暗藏者"）、
+  **JC019 弥尔顿的镇魔枪**（授予宿主的"位于本地区的目标非人类角色"）——各自补 `CanTargetSelf = true`。
+- **有意不动（避免越权/荒唐目标）**：
+  ① 源卡本身**不是角色**的声明：事务卡（JC006/JC021/JC063/JC074/JC078/JC091/JC102/JC106/JC129 等）——
+     其目标候选走 `CardManager.IsLegalPlayTarget`，源卡是事务本身、不参与角色候选，`CanTargetSelf` 无意义；
+     附属源（JC009/JC012/JC020/JC039/JC117）同理（自身上场形态不是角色）；
+  ② 语义上不能指向自己的：JC121（双类别卡不能结附到自己）、JC110（"将**自身**封印在目标角色上"）、
+     JC028（限定吸血鬼，自身不属于）、JC013（自身即代价）。
+- **实现约定（新增效果时）**：写"选择目标角色/某类角色"的效果前，先核对卡文有没有**"另一个 / 敌方 / 其他"**——
+  没有 ⇒ **必须** `CanTargetSelf = true`；否则该效果在"独自在场（或没有其他合法角色）"时会**静默失效**，
+  且这类缺陷只会在该卡**孤身在场**时暴露（常规对局与既有单测都容易漏掉）。
+- 测试：`P3ConditionalBranchTests` 新增 3 例——**网关（联机/本地主机权威）路径**下"独自在场 → 候选含自身 →
+  选自己 → 横置自己"、网关路径按回包选择外部目标、以及上述 4 张卡的 `CanTargetSelf` 声明断言。
+  **红测**：把 JC004 的 `CanTargetSelf` 改回 `false` → 2 例失败（含"应下发选目标请求"），确认用例抓住该缺陷。
+- 账本：全量 headless **142 套件 1095 例 0 失败 0 错误**（上批 142/1092），构建 0 警告 0 错误；
+  不新增效果行、不改任何行的 ✅/⛔ 判定（仅修正 JC004 行的实现描述）。
+
+**93 生效位置/朝向门禁排查："效果只在场上（正面）提供"（用户口径 A61，框架级修复，无新增效果行）**
+- **用户口径原文**：「效果除非明确描述了在其他地方生效，比如暗藏者触发、墓地行动等，才能在不是场上的情况
+  触发，其他情况都只能在场上触发。」（权威落点：`需求实现对照.md` §7.3.2 / 通用红线 **G0-b**）
+- **排查方法**：穷举"读取卡面/词条/印刷规则"的消费点（`HasInherentKeyword` / `HasPrintedStaticKind` /
+  `HasKeyword` / `StaticFlag` / `EffectsOf` 的调用方），逐个核对是否有"在场且正面"门禁；已合规的保持不动
+  （触发收集 `IsEffectActiveInZone`＋`TriggerCovertMode`、持续/静止注册 `RegisterPersistent` 的暗藏早退、
+  光环 `ReevaluateAuras`、激活候选 `ActivateEligibility`、结附白名单 `GetAttachSubCategoryWhitelist`、
+  检视授权 `HasPrintedLocalCovertInspect`、区域静止登记表 `_areaCombatSkips` 等）。
+- **本轮修复 8 处**：
+  ① `RenownRule.CountRenownCharacters`：暗藏角色曾被算作"声望角色" → 改 `HasActiveKeyword("声望")`；
+  ② `AreaManager.HasWithdraw`：暗藏的【撤回】卡在地区被赢取时曾被误救回手牌 → 改 `HasActiveKeyword("撤回")`；
+  ③ `DamageRules.IsSpirit` 与 `EffectEngine` 的 `DiedAllySpiritCharacter`：暗藏卡曾被当作"灵体" → 改 `HasActiveKeyword("灵体")`；
+  ④ `TargetValidity` 的**屏障**与 `关键字:X` 目标限制：暗藏目标曾被当作"有屏障/有该词条" → 改 `HasActiveKeyword(...)`；
+  ⑤ `CardManager.MoveCardToArea` 的印刷「不能移动」（JC121）：**原先完全没有在场门禁** ⇒ 墓地/手牌里的 JC121
+     被"放置进场"时被误拦；现加 `IsExertingEffects` 门禁（在场未结附时仍拦，A18/A19 不变）；
+  ⑥ `EffectEngine.ResolveWinAreaDestination`（JC079/JC120 去处替代）：暗藏卡曾仍生效 → 暗藏时休眠；
+  ⑦ `EffectEngine.ActivateAbility`：暗藏门禁原先只在**候选侧**（`ActivateEligibility.CanActivate`），
+     经 PM 命令/服务端意图可让背面卡发动普通能力 → 补**权威侧 G0**（`source.IsCovert && !RequireSourceCovert` 拒绝；
+     JC041 的"暗藏者专用激活"照常放行）；
+  ⑧ `LeaderRule` / `PathRule`：暗藏卡曾占"至多 1 个"名额（用户实测，A60）→ 计数跳过 `IsCovert`。
+- **新增统一入口**（`CardInstance`）：`IsExertingEffects`（＝在场上且正面）与
+  `HasActiveKeyword(kw)`（＝运行期授予 ∪ **非暗藏时**的卡面固有声明）；规范写法：**凡"读卡面/词条"的判定点
+  必须过这两个入口之一**，不得直读 `PlayerTemplate.HasInherentKeyword`——除非该处语义本身就是跨区
+  （检索筛选 / 构筑限制 / 手牌期公开与隐匿 / 死亡卡身份判定 / 暗藏数值由 `AreaStatsCalculator` 单算）。
+- **有意保留的边界**：印刷**数值与身份**（类别/子类别/战力/MagicDomains/`UniqueField`）在暗藏时仍按卡面读取
+  （身份 ≠ 效果）；"暗藏者免疫一切伤害"（`DealDamageToInstance`）使灵体暗藏的影响在实践中不可达，但仍按红线对齐。
+- 测试：新增 **`P3FieldZoneGateTests`（10 例）**——暗藏不提供声望（含 `ApplyIfMajority` 不误放标志）/撤回/灵体/屏障、
+  暗藏不被 `关键字:X` 目标筛选选中、JC121 在场仍不能移动 vs 不在场不拦放置进场、暗藏去处替代不生效、
+  暗藏卡不能发动普通激活能力 vs 可发动"暗藏者限定"能力。
+  **红测验证**：临时回退"声望 / JC121 在场门禁 / 激活 G0"三处 → 3 例失败（含 `TestZoneGate_暗藏者不提供声望`
+  的"期望 1 实际 2"），恢复后全绿。
+- 账本：全量 headless **142 套件 1092 例 0 失败 0 错误**（上批 141/1082），构建 0 警告 0 错误；
+  本批**不新增效果行、不改任何行的 ✅/⛔ 判定**。
+
+**92 三处缺陷修复：领袖只算正面在场 / JC004 进场触发连堆叠都进不去 / JC011 非强制触发（用户实测反馈）**
+- **① 领袖效果只在角色正面在场才生效（用户口径）**：`LeaderRule.LeadersOnField` 原先把**背面（暗藏）**的领袖
+  也计入"至多 1 个"⇒ 两个领袖暗藏者同时在场会被误判超限而规则性牺牲；用户要求允许多个领袖暗藏者共存，
+  且"1 个正面领袖 + N 个暗藏领袖"也允许、不需要牺牲。
+  修复：`LeadersOnField` 跳过 `IsCovert`（**暗藏不占名额**）；`EnforceOnEntry` 对暗藏者早退；
+  **暗藏领袖翻为正面**时才重新计入，故补两条钩子——`CardManager.RevealCard`（**原地**现身；该路径不经过
+  `OnCardEnteredArea`）与既有 `ZoneManager.OnCardEnteredArea`（用 `RevealCovert` 现身 → 入堆叠 → 结算回地区时触发）。
+  测试：`P4LeaderTests` 新增 4 例（暗藏不占名额可共存、共存时**不弹"选择牺牲"窗**、原地现身即收敛、
+  生产现身路径 `RevealCovert` 回地区时收敛）。
+- **② JC004 力场法师"进程以后进场触发效果连进堆叠都没有"（用户实测）**：
+  根因＝把**分支条件**"已横置"写在了 `EffectCondition.Predicate` 上，而 `Predicate` 的语义是
+  **触发/结算门禁**（`TriggerRegistry` 在**收集阶段**就先按它过滤一遍）——收集时**还没有目标**
+  （传入的上下文卡是 JC004 自己、未横置）⇒ 条件不满足 ⇒ **该进场触发在收集阶段就被丢掉**，永远进不了堆叠。
+  （既有的 `P3ConditionalBranchTests` 是**直接** `ResolveEffect` 验证动作链，绕过了收集阶段，因此长期掩盖该缺陷。）
+  修复两处：**卡片**改 `Predicate="Always"` + **`BranchPredicate="已横置"`**（分支语义＝对**已选定目标**求值，
+  与 JC031 同款）；**引擎**同步与异步两条结算路径支持"门禁恒真 + 纯分支"——原先 `Predicate == "Always"` 会把
+  整段条件判定跳过 ⇒ 分支永不生效；另在 `EvaluateCondition` 显式认 `"Always"`（原先落到 `default` 打"未知条件"日志）。
+  测试：`P3ConditionalBranchTests` 新增 **2 例真实链路端到端**（进场 → 收集 → 排序窗 → 选本地区目标 →
+  **入堆叠** → 双方让过结算 → 未横置则横置 / 已横置则移回拥有者手牌），并同步修正结构断言。
+- **③ JC011 德莫斯提尼"效果不是强制触发"（用户口径）**：卡片 `Forced=true` → **`false`**
+  （卡文只写"现身触发：横置…"，无"必须"语义 ⇒ 玩家可在触发排序窗口拖入放弃区）。
+  测试：`P3MassTests` 新增结构断言（`Forced == false`）。
+- **账本**：本批**不新增效果行、不改任何行的 ✅/⛔ 状态**（`280 = 260 + 1 + 0 + 19` 不变），
+  但修正了 **JC004 / JC011（领袖、现身触发）三行的实现描述**（`JC卡牌效果进度表.md`）。
+  全量 headless **141 套件 1082 例 0 失败 0 错误**（上批 140/1070），构建 0 警告 0 错误。
+  **红测验证**：临时回退"暗藏过滤 / Always 门禁"两行后重跑 ⇒ **7 例失败**（含两例 JC004 端到端的
+  "必须进入堆叠"与四例领袖断言），确认用例确实抓住缺陷；恢复后全绿。
 
 **91 原子操作期间的玩家选择：决策持锁（用户 2026-09 补充口径，框架级修复，无新增效果行）**
 - **用户口径原文**：「一个原子操作期间如果需要玩家选择，**玩家选择完成之前会阻塞进程**，直到玩家选择完成。

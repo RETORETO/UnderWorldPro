@@ -537,31 +537,23 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             RevealCovertWithExtraCost(_turnManager.PriorityPlayerId, c.Instance);
         };
-        // 附属卡双击激活：与秘社双击一致，单击不再弹窗（JC012 交互修正）。
+        // 双击请求激活：与秘社双击一致，单击不弹窗（JC012 交互修正）。
+        // 【2026-09 修复·JC019/JC024】可双击激活的来源**不止附属**：
+        //  · 附属（IsAttached）：模板的 AttachmentActivated/CharacterActivated；
+        //  · **争夺区正面角色**：其激活能力可能来自①**运行期授予**（JC019 弥尔顿的镇魔枪给宿主的
+        //    "快速行动，横置：造成 1 点不可伤害"）②**无目标的自指激活**（JC024 董事局"快速行动2：将自身潜伏"）
+        //    ——这两类都无法用"拖到目标上"表达（宿主/自身没有可拖的目标，或根本没有目标），
+        //    旧代码在此 `!IsAttached → return` 把它们全挡掉了（表现为"宿主高亮但点击/拖拽都无反馈"）。
+        //  · 「手牌行动」卡（JC110）由 `CanDrag` 之前的双击分支放行（同款）。
         _onAttachmentDoubleClickedForward = (c) =>
         {
             if (c?.Instance == null) return;
-            if (!c.Instance.IsAttached) return;
-            // 仅当该附属具备可激活能力时才弹窗（无能力则视为普通双击，忽略）。
-            // 能力判定与 OpenAttachmentActivateChoice 一致：模板 EffectDataList 中 Timing 为
-            // AttachmentActivated / CharacterActivated 的条目；避免依赖不存在的 GetAbilities 接口。
-            if (c.Instance.PlayerTemplate is PlayerCardData tmpl)
-            {
-                bool hasActivatable = false;
-                foreach (var e in tmpl.EffectDataList)
-                {
-                    if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
-                    {
-                        hasActivatable = true;
-                        break;
-                    }
-                }
-                if (!hasActivatable) return;
-            }
-            else
-            {
-                return;
-            }
+            var inst = c.Instance;
+            // 来源判定（附属 / 争夺区正面角色 / 手牌行动卡）＝`ActivateEligibility.IsDoubleClickActivationSource`
+            // （单一实现，见其注释；修复 JC019 宿主角色与 JC024 无目标自指激活双击无反应）。
+            if (!ActivateEligibility.IsDoubleClickActivationSource(inst)) return;
+            // 能力判定＝**模板 ∪ 运行期授予**（与候选枚举/门禁同一入口）；无任何可激活能力则忽略双击。
+            if (ActivateEligibility.GetAllActivateAbilities(inst).Count == 0) return;
             OpenAttachmentActivateChoice(c);
         };
 
@@ -1798,9 +1790,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         }
 
         /// <summary>
-        /// 附属卡（如 JC012 帷幕守望徽记）的激活弹出选择框：列出所有 AttachmentActivated 效果供玩家选其一发动。
-        /// 与秘社 OnCouncilDoubleClicked 对称，但使用泛用 ActivationChoiceWindow（后续秘社也将迁移到此）。
-        /// 选项①（减费，无目标）：直接 ActivateAbility；选项②（牺牲横置角色，有目标）：先弹选目标窗再发动。
+        /// 激活能力选择框（附属 / **争夺区正面角色**）：列出所有可激活的 AttachmentActivated/CharacterActivated
+        /// 效果供玩家选其一发动（多条＝弹窗，单条＝直接发动）。
+        /// 【2026-09 修复·JC019】候选改为 `ActivateEligibility.GetAllActivateAbilities`＝**模板 ∪ 运行期授予**：
+        /// 此前只读 `PlayerTemplate.EffectDataList` ⇒ JC019 授予宿主的激活能力（模板里没有）永远列不出来，
+        /// 宿主高亮却双击无反应。授予项由该入口**追加在模板项之后**（宿主原有激活效果时窗口自动多出这一条）。
         /// </summary>
         public void OpenAttachmentActivateChoice(CardUI cardUI)
         {
@@ -1810,13 +1804,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 return;
 
             var abilities = new List<EffectData>();
-            if (inst.PlayerTemplate is PlayerCardData tmpl)
+            foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
             {
-                foreach (var e in tmpl.EffectDataList)
-                {
-                    if (e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
-                        abilities.Add(e);
-                }
+                if (e != null && e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
+                    abilities.Add(e);
             }
             if (abilities.Count == 0)
                 return;
@@ -2342,14 +2333,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability)
         {
             var set = new HashSet<string>();
-            for (int pid = 0; pid <= 1; pid++)
+            // 【2026-09 修复】候选＝争夺区成员（形态角色经 `MoveFormZone` 已迁入争夺区 ⇒ 天然在内），
+            // 并按 `Target.CanTargetSelf` 决定是否把**来源卡自身**纳入候选（A62：JC003/JC019"目标角色"）。
+            bool canSelf = ability.Target?.CanTargetSelf == true;
+            foreach (var t in _cardManager.GetAreaCards())
             {
-                foreach (var t in _zoneManager.GetZoneCards(CardZone.AreaZone, pid))
-                {
-                    if (t == inst) continue;
-                    if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
-                        set.Add(t.UID);
-                }
+                if (t == inst && !canSelf) continue;
+                if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
+                    set.Add(t.UID);
             }
             // 仅角色（AreaZone 中的正面角色；暗藏者由 IncludeCovert=false 已在 IsLegalActivateTarget 内排除）
             var validUids = new System.Collections.Generic.List<string>(set);

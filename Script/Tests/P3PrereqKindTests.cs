@@ -72,7 +72,37 @@ namespace Script.Tests
             Assert.AreEqual(EffectTiming.Continuous, e.Timing, "时机＝持续");
             Assert.IsNotNull(e.PrereqSpec, "必须声明结构化前提");
             Assert.AreEqual(PrereqKind.NoEnemyCharacterInArea, e.PrereqSpec.Kind, "前提＝所在地区没有敌方角色");
-            Assert.AreEqual(2, e.ContinuousGrants.Count, "授予白眼 + 黑星");
+            // 【2026-09 修复】此前只授予 `Icon`（图标存在性）⇒ 卡面显示有图标但**数值没加**（先手调查/先手势力恒 0）。
+            // 现两条通道都写：`Attribute`（白眼=先手调查 / 黑星=先手势力，真正改数值）+ `Icon`（图标存在性）。
+            Assert.AreEqual(4, e.ContinuousGrants.Count, "授予：白眼/黑星 的 属性 + 图标 两条通道（共 4 条）");
+            bool hasAttr = false;
+            foreach (var g in e.ContinuousGrants)
+                if (g.Kind == "Attribute" && g.Value == "先手调查" && g.Amount == 1) hasAttr = true;
+            Assert.IsTrue(hasAttr, "必须授予属性『先手调查』（白眼＝先手调查+1，否则数值不生效）");
+            bool hasPower = false;
+            foreach (var g in e.ContinuousGrants)
+                if (g.Kind == "Attribute" && g.Value == "先手势力" && g.Amount == 1) hasPower = true;
+            Assert.IsTrue(hasPower, "必须授予属性『先手势力』（黑星＝先手势力+1）");
+        }
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测】JC016 的前提满足时，**数值**必须真的加上：
+        /// 白眼＝先手调查 +1、黑星＝先手势力 +1（此前只写 `Icon` 通道 ⇒ `HasIcon` 为真但 `GetAttribute` 为 0）。
+        /// </summary>
+        public void TestPrereq_JC016获得图标同时数值生效()
+        {
+            var game = NewGame();
+            var elite = game.CardManager.CreateCardInstance(Load("JC016_zhixingbujingrui"), 1);
+            game.ZoneManager.MoveToArea(elite, Areas(game)[0], 1);
+            Register(game, elite);
+            EffectEngine.Instance.ReevaluatePrereqs(1);
+
+            Assert.IsTrue(elite.HasIcon("白眼"), "前提满足 → 图标［白眼］存在");
+            Assert.IsTrue(elite.HasIcon("黑星"), "前提满足 → 图标［黑星］存在");
+            Assert.AreEqual(1, elite.GetAttribute("先手调查"), "白眼＝先手调查 +1（数值生效）");
+            Assert.AreEqual(1, elite.GetAttribute("先手势力"), "黑星＝先手势力 +1（数值生效）");
+            Assert.AreEqual(elite.PlayerTemplate.FirstStrikeInvestigation + 1, elite.CurrentFirstStrikeInvestigation,
+                "实例先手调查 = 模板先手调查 + 授予（＋重算也不会丢）");
         }
 
         /// <summary>无敌方角色 → 获得白眼/黑星；敌方角色进入 → 收回；敌方角色离开 → 重新获得。</summary>

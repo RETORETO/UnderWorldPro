@@ -65,6 +65,9 @@ namespace Cards.Effects.PlayerCards.JC
                         IsLocalZone = true,               // "位于本地区"
                         Restrictions = new Array<TargetRestriction> { TargetRestriction.NotCurrentSubCategory },
                         Param = "人类",                    // "非人类角色"（实例当前类别；用户 2026-09 口径）
+                        // 【2026-09 修复·A62】卡文"位于本地区的目标非人类角色"**未排除自身** ⇒ 可指定自身
+                        // （用户确认）；宿主若本身是"人类"会被上面的 `NotCurrentSubCategory` 过滤掉，不会自伤。
+                        CanTargetSelf = true,
                     },
                     Actions = new Array<EffectAction>
                     {

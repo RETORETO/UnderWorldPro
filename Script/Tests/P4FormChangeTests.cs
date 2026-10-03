@@ -78,6 +78,17 @@ namespace Script.Tests
             return null;
         }
 
+        /// <summary>把一张附属结附到**地区**（与生产路径 `attacharea`/结附地区同款：IsAttached=true ＋ 附属区落地 ＋ 持续登记）。</summary>
+        private static CardInstance AttachToArea(GameInitializer game, string uid, string areaUid, int playerId = 1)
+        {
+            var card = game.CardManager.CreateCardInstance(Load(uid), playerId);
+            card.IsAttached = true;
+            card.AttachedTo = null;                       // 结附于地区（无宿主）
+            game.ZoneManager.MoveToAttachedZone(card, areaUid, playerId);
+            EffectEngine.Instance.RegisterPersistent(card);
+            return card;
+        }
+
         private static void ResolveStackOnce(GameInitializer game)
         {
             for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
@@ -115,9 +126,7 @@ namespace Script.Tests
         {
             var game = NewGame();
             GiveMana(game, 1, 4);
-            var goblin = game.CardManager.CreateCardInstance(Load("JC027_huayuandijingxiang"), 1);
-            game.ZoneManager.MoveToAttachedZone(goblin, FirstArea(game), 1);   // 结附于地区
-            game.EffectEngine.RegisterPersistent(goblin);
+            var goblin = AttachToArea(game, "JC027_huayuandijingxiang", FirstArea(game));   // 结附于地区
             var ability = FindEffect(goblin.PlayerTemplate, "JC027_A_BecomeGoblinCharacter");
             game.TurnManager.PriorityPlayerId = 1;
 
@@ -134,6 +143,8 @@ namespace Script.Tests
             Assert.IsTrue(goblin.HasStaticSubCategory("雕像"), "**印刷子类别不变**（只改实例）");
             Assert.AreEqual(TargetKind.Character, CardManager.MapInstanceToTargetKind(goblin),
                 "**参与『目标角色』类判定**（用户口径）");
+            Assert.AreEqual(CardZone.AreaZone, goblin.CurrentZone,
+                "【2026-09 用户口径】成为角色 ⇒ **迁入争夺区**（形态撤销时迁回附属区）");
             // 注：本卡印刷"无防御"（-1 哨兵）→ 授予 1 点后按引擎既有语义从 0 起算，结果为 1
 
             Assert.AreEqual(1, goblin.CurrentDefense, "获得 1 防御力");
@@ -154,8 +165,170 @@ namespace Script.Tests
             Assert.IsFalse(goblin.HasIcon("黑刀"), "图标还原");
         }
 
-        // ==================== ③ JC028 结构 ====================
+        // ==================== ②b JC027：属性可叠加 + 重算不丢（2026-09 修复） ====================
 
+        /// <summary>
+        /// 【2026-09 修复·用户实测"JC027 效果给的属性不可叠加，成为角色后再次使用效果不会获得更多属性"】
+        /// 根因：`Gain{"防御"}` 原先**只直接改 `CurrentDefense`**（时效项 `Kind="Defense"`），而属性重算
+        /// （`ResetToBaseValues`）重建防御的基准是"模板防御 + `GetAttribute("防御")`" ⇒ 一重算就把授予的
+        /// 防御冲掉（白眼/黑刀走属性通道故不受影响）。修复：防御也走属性通道（`Grant/Revoke("Attribute","防御")`）。
+        /// </summary>
+        public void TestForm_JC027属性可叠加且重算不丢()
+        {
+            var game = NewGame();
+            GiveMana(game, 1, 8);
+            var goblin = AttachToArea(game, "JC027_huayuandijingxiang", FirstArea(game));
+            var ability = FindEffect(goblin.PlayerTemplate, "JC027_A_BecomeGoblinCharacter");
+            game.TurnManager.PriorityPlayerId = 1;
+
+            // ① 第一次发动
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(1, goblin.GetAttribute("先手调查"), "第 1 次：白眼＝先手调查 +1");
+            Assert.AreEqual(1, goblin.GetAttribute("战斗"), "第 1 次：黑刀＝战斗 +1");
+            Assert.AreEqual(1, goblin.GetAttribute("势力"), "第 1 次：黑星＝势力 +1");
+            Assert.AreEqual(1, goblin.GetAttribute("防御"), "第 1 次：获得 1 防御力（走属性通道）");
+            Assert.AreEqual(1, goblin.CurrentDefense, "第 1 次：当前防御＝1");
+
+            // 强制一次属性重算（模拟先手/光环/形态引起的 Recompute）：授予必须靠属性通道重建而不被冲掉
+            goblin.ResetToBaseValues(false);
+            Assert.AreEqual(1, goblin.CurrentDefense, "重算后防御仍为 1（旧实现此处会掉回『无防御』）");
+            Assert.AreEqual(1, goblin.GetAttribute("先手调查"), "重算后先手调查仍在");
+
+            // ② 第二次发动（卡文"它仍然是附属" ⇒ 可再次发动）：必须**叠加**
+            game.TurnManager.PriorityPlayerId = 1;
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(2, goblin.GetAttribute("先手调查"), "第 2 次：先手调查叠加到 2");
+            Assert.AreEqual(2, goblin.GetAttribute("战斗"), "第 2 次：战斗叠加到 2");
+            Assert.AreEqual(2, goblin.GetAttribute("势力"), "第 2 次：势力叠加到 2");
+            Assert.AreEqual(2, goblin.GetAttribute("防御"), "第 2 次：防御叠加到 2（用户报的『不可叠加』）");
+            Assert.AreEqual(2, goblin.CurrentDefense, "第 2 次：当前防御＝2");
+
+            goblin.ResetToBaseValues(false);
+            Assert.AreEqual(2, goblin.CurrentDefense, "第 2 次后重算仍为 2（授予可被正确重建）");
+            Assert.AreEqual(2, goblin.GetAttribute("先手调查"), "第 2 次后重算先手调查＝2");
+        }
+
+        // ==================== ②c JC027：形态使其**迁入争夺区**（用户 2026-09 口径） ====================
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测"JC027 使用效果后成为角色，现在不能被以角色卡为目标的效果取为目标"】
+        /// 用户口径的最终实现：形态使其"成为角色"时**从附属区迁入争夺区**（`ZoneManager.MoveFormZone`，
+        /// **刷新版本号**、不发进场/移动触发），形态撤销时**迁回附属区**。
+        /// 这样它天然参与地区角色统计、"对地区所有角色"的伤害，以及所有"目标角色"类候选枚举——不需要取目标侧补丁。
+        /// </summary>
+        public void TestForm_JC027成为角色后迁入争夺区并可被取为目标()
+        {
+            var game = NewGame();
+            GiveMana(game, 1, 4);
+            string area = FirstArea(game);
+            var goblin = AttachToArea(game, "JC027_huayuandijingxiang", area);
+            var ability = FindEffect(goblin.PlayerTemplate, "JC027_A_BecomeGoblinCharacter");
+            game.TurnManager.PriorityPlayerId = 1;
+            int verBefore = goblin.VersionId;
+
+            Assert.AreEqual(CardZone.AttachedZone, goblin.CurrentZone, "前置：结附于地区（附属区）");
+            Assert.IsFalse(game.CardManager.GetAreaInstancesBySlot(area).Contains(goblin),
+                "前置：未变形时不在争夺区成员里");
+
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(TargetKind.Character, CardManager.MapInstanceToTargetKind(goblin), "形态后按角色参与判定");
+            Assert.AreEqual(CardZone.AreaZone, goblin.CurrentZone, "形态使其成为角色 ⇒ **迁入争夺区**");
+            Assert.AreEqual(area, goblin.ZoneDetailId, "所属地区不变");
+            Assert.IsTrue(goblin.IsAttached, "身份仍是附属（卡文『它仍然是附属』）");
+            Assert.IsTrue(goblin.VersionId > verBefore, "迁区必须**刷新版本号**（以它为目标的效果按 D16 重新校验）");
+            Assert.IsTrue(game.CardManager.GetAreaInstancesBySlot(area).Contains(goblin),
+                "⇒ 争夺区成员集合包含它（『目标角色』候选/地区统计/群伤全部天然生效）");
+            var inArea = game.ZoneManager.GetAllCardsInAreaIncludingAttached(area);
+            int cnt = 0;
+            foreach (var c in inArea) if (c == goblin) cnt++;
+            Assert.AreEqual(1, cnt, "对抗统计全集里**只出现一次**（不得因既在争夺区又在附属表而重复计入）");
+
+            // 以角色为目标的**激活能力**门禁同样能取到它
+            var probeAbility = new EffectData
+            {
+                EffectId = "TS_jc027_probe",
+                Timing = EffectTiming.CharacterActivated,
+                ActivateWindow = "快速",
+                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true, IsLocalZone = true },
+            };
+            var source = game.CardManager.CreateCardInstance(Probe("TS_jc027_src", CardCategory.Character), 1);
+            game.ZoneManager.MoveToArea(source, area, 1);
+            Assert.IsTrue(ActivateEligibility.IsLegalActivateTarget(source, probeAbility, goblin, game.CardManager, game.PlayerManager),
+                "『目标角色』类激活能力可取它为目标");
+            Assert.IsTrue(ActivateEligibility.HasLegalTarget(source, probeAbility, game.CardManager, game.PlayerManager),
+                "⇒ 该能力判定为『存在合法目标』");
+        }
+
+        /// <summary>
+        /// 用户目标场景：**"对地区所有角色造成伤害"必须命中形态角色**（迁入争夺区后天然生效）。
+        /// </summary>
+        public void TestForm_JC027形态角色会被地区群体伤害命中()
+        {
+            var game = NewGame();
+            GiveMana(game, 1, 4);
+            string area = FirstArea(game);
+            var goblin = AttachToArea(game, "JC027_huayuandijingxiang", area);
+            var ability = FindEffect(goblin.PlayerTemplate, "JC027_A_BecomeGoblinCharacter");
+            game.TurnManager.PriorityPlayerId = 1;
+
+            int hitBefore = game.PlayerActionService.DealAreaDamage(area, 1);
+            Assert.AreEqual(0, goblin.Damage, "前置：未变形时『对地区所有角色』的伤害打不到它（当时它只是地区附属）");
+
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
+            Assert.IsTrue(goblin.CurrentZone == CardZone.AreaZone, "前置：已迁入争夺区");
+
+            goblin.CurrentDefense = 5;   // 临时提高防御：否则 1 点就打死、Damage 随死亡清零，读不到数值
+            int hit = game.PlayerActionService.DealAreaDamage(area, 1);
+            Assert.IsTrue(hit >= 1, "地区群体伤害的目标数应包含它");
+            Assert.AreEqual(1, goblin.Damage, "形态角色被『对地区所有角色』的伤害命中（用户目标场景）");
+            Assert.IsTrue(hitBefore == 0, "对照：变形前同一效果打不到它");
+        }
+
+        /// <summary>形态到期（回合结束）⇒ 迁回附属区；若它已离场（墓地）则不得被迁回场上。</summary>
+        public void TestForm_JC027形态到期迁回附属区()
+        {
+            var game = NewGame();
+            GiveMana(game, 1, 4);
+            string area = FirstArea(game);
+            var goblin = AttachToArea(game, "JC027_huayuandijingxiang", area);
+            var ability = FindEffect(goblin.PlayerTemplate, "JC027_A_BecomeGoblinCharacter");
+            game.TurnManager.PriorityPlayerId = 1;
+
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
+            Assert.AreEqual(CardZone.AreaZone, goblin.CurrentZone, "前置：形态中在争夺区");
+            int verInForm = goblin.VersionId;
+
+            game.EffectEngine.ExpireTurnEndEffects(game.TurnManager.TurnCount);
+
+            Assert.AreEqual(CardZone.AttachedZone, goblin.CurrentZone, "形态撤销 ⇒ 迁回附属区");
+            Assert.AreEqual(area, goblin.ZoneDetailId, "仍在同一地区");
+            Assert.IsTrue(goblin.IsAttached, "回到附属身份");
+            Assert.IsTrue(goblin.VersionId > verInForm, "迁回同样刷新版本号");
+            Assert.AreEqual(TargetKind.Attachment, CardManager.MapInstanceToTargetKind(goblin), "不再按角色参与判定");
+
+            // 反向：形态中死亡（进墓地）→ 回合结束的形态还原**不得**把它迁回场上
+            var dead = AttachToArea(game, "JC027_huayuandijingxiang", area);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.EffectEngine.ActivateAbility(dead, ability, null);
+            ResolveStackOnce(game);
+            Assert.AreEqual(CardZone.AreaZone, dead.CurrentZone, "前置：形态中在争夺区");
+            dead.CurrentDefense = 1;
+            game.CardManager.DealDamageToInstance(dead, 5);   // 打死 → 进墓地（ResetToBaseState 顺带清形态）
+            Assert.AreEqual(CardZone.Graveyard, dead.CurrentZone, "前置：已进墓地");
+
+            game.EffectEngine.ExpireTurnEndEffects(game.TurnManager.TurnCount);
+            Assert.AreEqual(CardZone.Graveyard, dead.CurrentZone, "已离场的卡不得被形态还原迁回场上");
+        }
+
+        // ==================== ③ JC028 结构 ====================
         public void TestForm_JC028结构()
         {
             var tmpl = Load("JC028_xianxuenupu");

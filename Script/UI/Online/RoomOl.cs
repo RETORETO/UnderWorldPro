@@ -15,6 +15,8 @@ namespace Script.UI.Online
     public partial class RoomOl : Control
     {
         private Label _roomLabel, _seat1Label, _seat2Label, _statusLabel, _resultLabel, _deckStatusLabel;
+        /// <summary>【增量 D】"本机已建立主机"的局域网地址提示（只在房主本机托管服务端时显示）。</summary>
+        private Label _hostHintLabel;
         /// <summary>卡组下拉框：列出 `res://Decks/` 下所有卡组文件名；选择后即提交并记忆。</summary>
         private OptionButton _deckOption;
         private Button _deckButton, _readyButton, _startButton, _kickButton, _rematchButton, _leaveButton;
@@ -40,6 +42,7 @@ namespace Script.UI.Online
             _statusLabel = GetNodeOrNull<Label>("Panel/StatusLabel");
             _resultLabel = GetNodeOrNull<Label>("Panel/ResultLabel");
             _deckStatusLabel = GetNodeOrNull<Label>("Panel/DeckStatusLabel");
+            _hostHintLabel = GetNodeOrNull<Label>("Panel/HostHintLabel");
             _deckOption = GetNodeOrNull<OptionButton>("Panel/DeckOption");
             _deckButton = GetNodeOrNull<Button>("Panel/DeckButton");
             _readyButton = GetNodeOrNull<Button>("Panel/ReadyButton");
@@ -259,6 +262,8 @@ namespace Script.UI.Online
             if (_seat1Label != null) _seat1Label.Text = SeatLine(state, 1, state.HostSeat);
             if (_seat2Label != null) _seat2Label.Text = SeatLine(state, 2, state.HostSeat);
 
+            RefreshHostHint();
+
             if (_readyButton != null)
             {
                 _readyButton.Text = mine?.Ready == true ? "取消准备" : "准备";
@@ -296,6 +301,25 @@ namespace Script.UI.Online
                         ? $"本局你获胜（{state.MatchSummary.Reason}）"
                         : $"本局你落败（{state.MatchSummary.Reason}）";
             }
+        }
+
+        /// <summary>
+        /// 【建立主机·增量 D】刷新"本机地址"提示：只有**本进程托管了内嵌服务端**时才显示，
+        /// 并把对手要填的「局域网 IPv4:端口」与防火墙提醒写清楚。
+        /// 纯只读展示，不参与任何规则判定（红线：表现层只读）。
+        /// </summary>
+        private void RefreshHostHint()
+        {
+            if (_hostHintLabel == null) return;
+            if (!LocalHostServer.IsRunning)
+            {
+                _hostHintLabel.Visible = false;
+                return;
+            }
+            ushort port = LocalHostServer.Port;
+            _hostHintLabel.Visible = true;
+            _hostHintLabel.Text = $"本机已建立主机：请让对手在「联机对战」里连接 {LocalHostServer.AddressHint(port)}\n"
+                + $"（若对手连不上：本机 Windows 防火墙需放行 UDP {port} 入站）";
         }
 
         private static string SeatLine(RoomState state, int seat, int hostSeat)

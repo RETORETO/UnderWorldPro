@@ -32,6 +32,15 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
+                    // 【2026-09 修复·用户实测"效果可以指定其他地区的角色，现在不能指定"】
+                    // 卡文"消灭**目标角色**上的所有敌方附属"**没有"本地区"限定** ⇒ 候选＝**全场**角色。
+                    // 触发路径默认只枚举"来源卡所在地区"（`GetTargetUidsForSpec` 的 allAreas 分支），
+                    // 必须显式 `AllAreas = true` 才会取全场（与 JC009 同款）。
+                    AllAreas = true,
+                    // 卡文只写"目标角色"，**未排除自身** ⇒ 可指定自身
+                    // （与 JC008/JC069 同款约定）。否则它是本地区唯一角色时候选为空，
+                    // 该进场触发会被当作"无合法目标"静默跳过（与 JC004 同一类缺陷）。
+                    CanTargetSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {

@@ -2185,6 +2185,7 @@ public partial class TurnManager : Node
             areaUids.Add(sourceArea);
         }
         // 3) 合并各争夺区实例，按 Kind 过滤；默认排除来源自身，除非该效果显式允许以自身为目标（如袭击可打自己）
+        // 注：形态角色（JC027）经 `ZoneManager.MoveFormZone` **迁入争夺区**，本身就在 `_area` 里 ⇒ 无需额外并入。
         bool canTargetSelf = spec?.CanTargetSelf ?? false;
         foreach (var uid in areaUids)
         {
@@ -2726,13 +2727,13 @@ public partial class TurnManager : Node
     /// 并在**付费之前**完成合法性校验（必选槽 / 至少 `MinChosenSlots` 个 / 禁止原地移动…）——不合法则整次打出失败。
     /// </summary>
     /// <summary>
-    /// 【P3】卡是否具有某关键字：运行期授予（`HasKeyword`）∪ 卡面固有声明（`HasInherentKeyword`）。
-    /// 与 `CardInstance.HasPublicKeyword` 同款双层判定——印在卡面上的词条走模板固有，
-    /// 由效果授予的词条走运行时集合；效果失效时判定自然转 false。
+    /// 【P3】卡是否具有某关键字（**当前有效**）：运行期授予（`HasKeyword`）∪ 卡面固有声明（`HasInherentKeyword`）。
+    /// 【2026-09 用户口径·通用】背面朝上的卡（暗藏者）不提供其效果 ⇒ 卡面词条休眠，故走 `HasActiveKeyword`；
+    /// 手牌/牌库等跨区语义（本方法两处消费点都在**手牌期**）不受影响（非暗藏 → 仍读卡面）。
     /// 消费点：隐匿（打出门禁）、非资产（建立资产门禁）。
     /// </summary>
     private static bool HasCardKeyword(CardInstance card, PlayerCardData tmpl, string keyword)
-        => card != null && (card.HasKeyword(keyword) || (tmpl?.HasInherentKeyword(keyword) ?? false));
+        => card != null && card.HasActiveKeyword(keyword);
 
     /// <summary>
     /// 【K15·多目标·联机】服务端驱动的多目标打出流程（用户 2026-09 口径）：
@@ -4544,6 +4545,58 @@ public partial class TurnManager : Node
             case TurnPhase.EndRecover:  DoRecover(); break;
             case TurnPhase.EndPassTurn: DoPassTurn(); break;
         }
+    }
+
+    /// <summary>
+    /// 【PM 调试·`jumpto`】直接跳转到指定步骤：**不结算中间经过的步骤**——不逐个 `EnterPhase`，
+    /// 因此中间步骤的触发/效果**一律不结算**；只进入目标步骤并执行它**正常的步骤进入逻辑**
+    /// （目标步骤照常结算、后续流程照常推进，与自然流程一致）。
+    ///
+    /// 细节：
+    ///  · 对抗类步骤（调查/战斗/势力）：先确保"地区游标快照"已建立（`BeginCombatPhase`），
+    ///    并把游标指向 `areaNo`（1-based，缺省 1）；无任何地区 → 拒绝（返回 false）。
+    ///  · `PreCombat`（对抗前优先权窗口）：同样确保地区游标已建立（机动触发需要"当前对抗地区"）。
+    ///  · 免让过步骤（重置/恢复）：进入后由既有的 `TryAutoAdvance` 正常推进（例如恢复步骤照常做手牌上限结算）。
+    ///  · 拒绝的情形：游戏已结束 / 原子操作进行中（结算未完，跳转会把状态机撕开）/ 调度步骤（需正常开局流程）/
+    ///    堆叠非空（仅告警，不阻塞——留在堆叠上的条目会按正常让过流程结算）。
+    /// </summary>
+    public bool JumpToPhase(TurnPhase phase, int areaNo, out string error)
+    {
+        error = null;
+        if (_playerManager != null && _playerManager.IsGameOver) { error = "游戏已结束"; return false; }
+        if (IsAtomicLocked) { error = "原子操作进行中（请等当前结算/选择窗口结束后再跳转）"; return false; }
+        if (phase == TurnPhase.Mulligan) { error = "调度步骤请用正常开局流程（BeginMulligan）"; return false; }
+
+        // 对抗类（含"对抗前优先权窗口"）：确保地区游标快照存在，并按需定位到 areaNo。
+        if (phase is TurnPhase.PreCombat or TurnPhase.CombatInvestigation or TurnPhase.CombatStrength or TurnPhase.CombatPower)
+        {
+            if (_combatAreaUids == null || _combatAreaUids.Count == 0) BeginCombatPhase();
+            if (_combatAreaUids.Count == 0) { error = "当前没有任何地区，无法跳到对抗步骤"; return false; }
+            if (phase != TurnPhase.PreCombat)
+            {
+                int want = areaNo <= 0 ? 1 : areaNo;
+                if (want > _combatAreaUids.Count)
+                {
+                    error = $"地区{areaNo} 不存在（当前共 {_combatAreaUids.Count} 个地区）";
+                    return false;
+                }
+                _combatAreaIndex = want - 1;
+                GD.Print($"🪄 [PM jumpto] 对抗地区游标 → 地区{want}（UID={_combatAreaUids[_combatAreaIndex]}）");
+            }
+            else
+            {
+                _combatAreaIndex = 0;
+            }
+        }
+
+        int stackCount = _stackManager?.Entries.Count ?? 0;
+        if (stackCount > 0)
+            GD.Print($"⚠️ [PM jumpto] 堆叠非空（{stackCount} 项）：跳转不结算中间步骤，堆叠上的条目仍按正常让过流程结算");
+
+        GD.Print($"🪄 [PM jumpto] {CurrentPhase} → {phase}（中间步骤一律不结算，直接进入目标步骤）");
+        ResetPassWindow();     // 目标步骤从"双方均未让过"的干净节拍开始
+        EnterPhase(phase);     // 执行目标步骤的正常进入逻辑（该步骤照常可结算）
+        return true;
     }
 
     private void AdvancePhase()

@@ -214,5 +214,133 @@ namespace Script.Tests
             Assert.AreEqual(1, abilities.Count, "武器离场 → 运行期授予的能力收回，只剩宿主自带的 1 条");
             Assert.IsFalse(abilities.Exists(a => a.EffectId == "JC019_G_HostActivatedSmite"), "授予的那条已消失");
         }
+
+        // ==================== ⑥ 双击入口（2026-09 修复·用户实测"宿主高亮但点击/拖拽都无反馈"） ====================
+
+        /// <summary>
+        /// 【缺陷】单机 Arena 的双击转发器此前 `if (!IsAttached) return;` ⇒ **争夺区正面角色**（如 JC019 的宿主）
+        /// 双击根本进不来；而"能力收集"又只读模板 `EffectDataList`（运行期授予项不在里面）⇒ 宿主高亮却怎么点都无反应。
+        /// 修复：来源判定改用 `ActivateEligibility.IsDoubleClickActivationSource`（附属 / 争夺区正面角色 / 手牌行动卡），
+        /// 能力收集改用 `GetAllActivateAbilities`（模板 ∪ 授予）。
+        /// </summary>
+        public void TestGranted_宿主角色可作为双击激活来源()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            var host = OnField(game, Probe("TS_ga_dbl"), 1, areas[0]);   // 宿主**无**自带激活能力
+            Assert.AreEqual(0, ActivateEligibility.GetAllActivateAbilities(host).Count, "前置：宿主模板无激活能力");
+            Assert.IsTrue(ActivateEligibility.IsDoubleClickActivationSource(host),
+                "争夺区正面角色属于可双击激活的来源（旧实现被 `!IsAttached` 拦掉）");
+
+            PlaceSpear(game, host, areas[0]);
+
+            Assert.IsTrue(ActivateEligibility.IsDoubleClickActivationSource(host), "获得授予能力后仍是合法来源");
+            var abilities = ActivateEligibility.GetAllActivateAbilities(host);
+            Assert.AreEqual(1, abilities.Count, "宿主原本没有效果 ⇒ 选择内容只有 JC019 赋予的这 1 条");
+            Assert.AreEqual("JC019_G_HostActivatedSmite", abilities[0].EffectId, "即 JC019 赋予的那条");
+        }
+
+        /// <summary>
+        /// 【缺陷·同一入口】JC024 董事局「快速行动2：将 S．P．T 董事局潜伏」是**自我指代、不需要目标**：
+        /// 争夺区角色只能靠拖拽发动（`CardDragController` 要求拖到目标上），无目标能力因此**完全发不动**。
+        /// 现由双击入口承担：来源判定为真 + 能力收集到 1 条 + `NeedsSelection=false` ⇒ 直接发动、不弹目标窗。
+        /// </summary>
+        public void TestGranted_无目标自指激活可双击发动()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            var tmpl = Load("JC024_SPTdongshiju");
+            var card = OnField(game, tmpl, 1, areas[0]);
+            var ability = FindEffect(tmpl, "JC024_2_LatentThenFreeUncoverNextPrepare");
+
+            Assert.IsNotNull(ability, "JC024 应有『潜伏自身』的激活能力");
+            Assert.IsTrue(ActivateEligibility.IsDoubleClickActivationSource(card), "争夺区正面角色可双击");
+            Assert.IsFalse(ability.Target.NeedsSelection, "自我指代 ⇒ 不需要取目标（旧交互只能拖拽、无目标可拖 ⇒ 发不动）");
+            Assert.AreEqual(TargetKind.None, ability.Target.Kind, "目标声明＝None（自我指代）");
+            Assert.IsTrue(ability.Actions[0].Args[0] == "自身", "潜伏对象＝自身");
+
+            // 双击入口：单条能力 + 不需要目标 ⇒ 直接发动（等价于 Arena 的 BeginActivate(inst, only, null, -1)）
+            GiveMana(game, 1, ability.Cost);   // 快速行动2：需要 2 点费用
+            game.TurnManager.PriorityPlayerId = 1;
+            EffectEngine.Instance.ActivateAbility(card, ability, null, -1);
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+
+            Assert.IsTrue(card.IsCovert, "结算后已潜伏（自我指代生效）");
+        }
+
+        // ==================== ⑦ "目标含自身"的激活目标（A62 在激活路径的收口） ====================
+
+        /// <summary>
+        /// 【缺陷】`IsLegalActivateTarget` 无条件 `source == target → false`、`HasLegalTarget` 也无条件跳过来源卡，
+        /// 与候选枚举（按 `Target.CanTargetSelf` 放行）**口径分叉** ⇒ 当"本地区唯一合法对象就是自己"时
+        /// （JC003 独自在场、JC019 宿主独自在场）能力被判"无合法目标"，UI 置灰/双击被 `CanActivate` 拦下。
+        /// </summary>
+        public void TestGranted_目标含自身时可取自己且能发动()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            var host = OnField(game, Probe("TS_ga_self", "不死生物"), 1, areas[0]);   // 本地区**只有它自己**；非人类（本能力目标限定）
+            PlaceSpear(game, host, areas[0]);
+            var ability = EffectEngine.Instance.GetGrantedAbilities(host)[0];
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            Assert.IsTrue(ability.Target.CanTargetSelf, "前置：JC019 授予能力的『目标非人类角色』含自身（用户确认）");
+            Assert.IsFalse(host.IsTapped, "前置：宿主未横置");
+            Assert.IsTrue(ActivateEligibility.IsLegalActivateTarget(host, ability, host, game.CardManager, game.PlayerManager),
+                "取自身为激活目标必须合法");
+            Assert.IsTrue(ActivateEligibility.HasLegalTarget(host, ability, game.CardManager, game.PlayerManager),
+                "独自在场时也必须判定为『存在合法目标』");
+            Assert.IsTrue(ActivateEligibility.CanActivate(host, game.TurnManager, game.PlayerManager, game.CardManager),
+                "⇒ 能力可发动（旧实现此处为 false，宿主高亮却点不动）");
+
+            int before = host.Damage;
+            EffectEngine.Instance.ActivateAbility(host, ability, host);
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+
+            Assert.IsTrue(host.IsTapped, "代价：横置宿主");
+            Assert.AreEqual(before + 1, host.Damage, "独自在场 ⇒ 取自身为目标，对自己造成 1 点伤害");
+        }
+
+        /// <summary>对照：**未**声明 `CanTargetSelf` 的能力不能取来源卡自身（不因修复而放宽）。</summary>
+        public void TestGranted_未声明含自身时仍不能取自己()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            var probe = OnField(game, Probe("TS_ga_noself"), 1, areas[0]);
+            var ability = new EffectData
+            {
+                EffectId = "TS_ga_noself_ability",
+                Timing = EffectTiming.CharacterActivated,
+                ActivateWindow = "快速",
+                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true, IsLocalZone = true },
+            };
+            Assert.IsFalse(ActivateEligibility.IsLegalActivateTarget(probe, ability, probe, game.CardManager, game.PlayerManager),
+                "未声明 CanTargetSelf ⇒ 不能取自身");
+            Assert.IsFalse(ActivateEligibility.HasLegalTarget(probe, ability, game.CardManager, game.PlayerManager),
+                "本地区只有它自己且不能取自身 ⇒ 无合法目标");
+        }
+
+        private static EffectData FindEffect(PlayerCardData tmpl, string effectId)
+        {
+            if (tmpl?.EffectDataList == null) return null;
+            foreach (var e in tmpl.EffectDataList)
+                if (e != null && e.EffectId == effectId) return e;
+            return null;
+        }
+
+        /// <summary>给玩家 n 点可用费用（资产区放 n 张费用探针，与其它套件同款）。</summary>
+        private static void GiveMana(GameInitializer game, int playerId, int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                var asset = game.CardManager.CreateCardInstance(
+                    Probe($"TS_ga_mana_{playerId}_{i}", "", 1), playerId);
+                asset.PlayerTemplate.CategoryFlag = CardCategory.Attachment;
+                game.ZoneManager.MoveToAsset(asset, playerId);
+            }
+        }
     }
 }

@@ -38,7 +38,16 @@ namespace Script.Manager
             => card != null
                && (card.HasKeyword(Keyword) || (card.PlayerTemplate?.HasInherentKeyword(Keyword) ?? false));
 
-        /// <summary>某控制者**场上**（争夺区）的全部领袖，按"场上顺序"（先进场在前）返回。</summary>
+        /// <summary>
+        /// 某控制者**场上**（争夺区）**正面**的全部领袖，按"场上顺序"（先进场在前）返回。
+        ///
+        /// 【2026-09 用户口径】**"至多 1 个领袖"只统计正面在场的领袖**：
+        ///  · 背面朝上的领袖（暗藏者）**不占领袖名额**——因此"1 个正面领袖 + N 个暗藏领袖"可以共存、不牺牲；
+        ///  · 多个暗藏领袖也可同时在场（彼此都不计）；
+        ///  · 暗藏领袖**翻为正面**（现身/被效果揭示）时才重新计入 → 由各自落点钩子再次调用本规则收敛
+        ///    （见 `CardManager.RevealCard` 与 `ZoneManager.OnCardEnteredArea`）。
+        /// 语义依据：暗藏者尚未"在场成立"（其持续/静止效果亦不生效，见 D27 与`CovertChanged` 装配钩子）。
+        /// </summary>
         public static List<CardInstance> LeadersOnField(CardManager cm, int controllerId)
         {
             var list = new List<CardInstance>();
@@ -49,6 +58,7 @@ namespace Script.Manager
                 if (c == null || c.IsDying) continue;
                 if (c.CurrentZone != CardZone.AreaZone) continue;
                 if (c.ControllerId != controllerId) continue;
+                if (c.IsCovert) continue;          // 【2026-09】暗藏领袖不占领袖名额
                 if (!IsLeader(c)) continue;
                 list.Add(c);
             }
@@ -56,14 +66,16 @@ namespace Script.Manager
         }
 
         /// <summary>
-        /// 【进场消费点】一张卡进入争夺区后调用：若它是领袖且该控制者场上领袖数超限，
+        /// 【进场消费点】一张卡进入争夺区后调用：若它是**正面**领袖且该控制者场上正面领袖数超限，
         /// 则立刻让该控制者选一个牺牲（不入堆叠），直到只剩 1 个。
+        /// 暗藏（背面）进场不触发（其不占领袖名额，见 `LeadersOnField`）。
         /// </summary>
         public static void EnforceOnEntry(CardInstance entered, CardManager cm, EffectEngine ee)
         {
             if (entered == null) return;
             if (entered.CurrentZone != CardZone.AreaZone) return;
             if (entered.ControllerId <= 0) return;
+            if (entered.IsCovert) return;   // 【2026-09】暗藏者进场不占领袖名额 → 不做规则性牺牲
             if (!IsLeader(entered)) return;
             EnforceInvariant(cm, ee, entered.ControllerId, entered);
         }
