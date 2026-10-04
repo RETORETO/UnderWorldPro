@@ -16,9 +16,23 @@
 .godot/
 /android/
 
-# 导出/发布产物（export 出来的可执行包，体积大且可由 export_presets.cfg 重现）
+# 导出/发布产物（体积大，可由 export_presets.cfg + 源码 + 素材完整重现）
+# 说明：当前预设 export_path="./UWPro.exe"，导出三件套直接落在工程根目录：
+#   UWPro.exe                          —— Godot .NET 模板 exe（109MB）
+#   UWPro.pck                          —— 全部资源（含 700+ 卡图，200MB+）
+#   data_UWPro_windows_x86_64/         —— .NET 运行时 + 程序集（190 文件 / 83MB，缺了会
+#                                         "ERROR: .NET: Assemblies not found" 启动失败）
+# 三件套一律不入库：任何一台机器重跑一次导出即可得到同样的东西。
+/UWPro.exe
+/UWPro_single.exe
+/data_UWPro_*/
+# 任何位置的 pck 都不入库（内容已含全部资源）
+*.pck
+# 若把 export_path 改到子目录，这些目录名也一并忽略
 /build/
 /export/
+/dist/
+/release/
 *.tmp
 *.translation
 
@@ -85,9 +99,8 @@ desktop.ini
 # Godot user:// 目录的本地重定向（联机三开用的 clientA / clientB 独立用户目录）。
 # 内含 online_client.cfg（本机昵称/IP）、shader_cache（着色器缓存）等
 # 每台机器、每次运行都不同的内容。
-.godot_userdata_runtime/
-.godot_userdata_server/
-.godot_userdata/
+# 用通配覆盖所有派生用户目录（联机三开还会按需要新建更多同名前缀目录）
+.godot_userdata*/
 
 # 构建/运行日志转储（曾误入库的最大单体垃圾文件 test_out.txt 达 4MB）
 *_log.txt
