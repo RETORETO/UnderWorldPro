@@ -12,44 +12,24 @@ public class LocalWorldDeckProvider : IWorldDeckProvider
     {
         List<AreaCardData> areas = new List<AreaCardData>();
 
-        using var dir = DirAccess.Open(AREA_CARD_PATH);
-        if (dir == null)
-        {
-            GD.PrintErr($"【LocalWorldDeckProvider】无法打开目录: {AREA_CARD_PATH}");
-            return areas;
-        }
+        // 统一走导出安全的目录扫描：导出包内 .tres 会变成 "xxx.tres.remap"，
+        // 且素材在 .pck 内、磁盘上没有目录（详见 Script/IO/ResourceDirScan.cs 注释）。
+        var paths = Script.IO.ResourceDirScan.TresInDir(AREA_CARD_PATH);
+        if (paths.Count == 0)
+            GD.PrintErr($"【LocalWorldDeckProvider】未扫描到任何地区卡: {AREA_CARD_PATH}（编辑器与导出包内都应为 res://Cards/Data/AreaCards）");
 
-        dir.ListDirBegin();
-        string fileName = dir.GetNext();
-        while (fileName != "")
+        foreach (var fullPath in paths)
         {
-            // 导出后 .tres 被转成二进制资源，目录列表给出的是 "xxx.tres.remap"；编辑器下是 "xxx.tres"。
-            // 只认 ".tres" 会导致导出后地区卡扫描为 0（`WorldDeckManager` 加载 0 张地区卡）。
-            string resName = null;
-            if (!dir.CurrentIsDir())
+            var areaData = ResourceLoader.Load<AreaCardData>(fullPath);
+            if (areaData != null)
             {
-                if (fileName.EndsWith(".tres"))
-                    resName = fileName;
-                else if (fileName.EndsWith(".tres.remap"))
-                    resName = fileName.Substring(0, fileName.Length - ".remap".Length);
+                areas.Add(areaData);
             }
-
-            if (resName != null)
+            else
             {
-                string fullPath = $"{AREA_CARD_PATH}{resName}";
-                var areaData = ResourceLoader.Load<AreaCardData>(fullPath);
-                if (areaData != null)
-                {
-                    areas.Add(areaData);
-                }
-                else
-                {
-                    GD.PrintErr($"【LocalWorldDeckProvider】加载失败: {fullPath}");
-                }
+                GD.PrintErr($"【LocalWorldDeckProvider】加载失败: {fullPath}");
             }
-            fileName = dir.GetNext();
         }
-        dir.ListDirEnd();
 
         return areas;
     }

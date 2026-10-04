@@ -60,7 +60,7 @@ namespace Script.Tests
                 "res://Cards/Data/CouncilCards",
             };
             foreach (var dir in dirs)
-                foreach (var path in EnumerateTres(dir))
+                foreach (var path in Script.IO.ResourceDirScan.TresRecursive(dir))
                 {
                     var template = ResourceLoader.Load<BaseCardData>(path);
                     if (template == null || string.IsNullOrEmpty(template.UID)) continue;
@@ -68,27 +68,6 @@ namespace Script.Tests
                 }
             GD.Print($"[NetCrossProcessSim] 模板索引就绪：{index.Count} 张卡");
             return index;
-        }
-
-        private static List<string> EnumerateTres(string dir)
-        {
-            var result = new List<string>();
-            if (!DirAccess.DirExistsAbsolute(ProjectSettings.GlobalizePath(dir))) return result;
-            using var d = DirAccess.Open(dir);
-            if (d == null) return result;
-            d.ListDirBegin();
-            string name;
-            while ((name = d.GetNext()) != "")
-            {
-                if (d.CurrentIsDir())
-                {
-                    if (!name.StartsWith(".")) result.AddRange(EnumerateTres(dir + "/" + name));
-                    continue;
-                }
-                if (name.EndsWith(".tres")) result.Add(dir + "/" + name);
-            }
-            d.ListDirEnd();
-            return result;
         }
 
         /// <summary>

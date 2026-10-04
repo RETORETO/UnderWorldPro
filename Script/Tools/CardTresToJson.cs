@@ -49,7 +49,7 @@ namespace Script.Tools
         {
             // 注册全部卡效果构建器（幂等），确保 EffectDataList 经 CardEffectFactory 填充
             Cards.Effects.AllEffects.RegisterAll();
-            foreach (var path in EnumerateTres(dir))
+            foreach (var path in Script.IO.ResourceDirScan.TresRecursive(dir))
             {
                 var template = ResourceLoader.Load<PlayerCardData>(path);
                 if (template == null || string.IsNullOrEmpty(template.UID)) continue;
@@ -63,7 +63,7 @@ namespace Script.Tools
         // ---- 地区卡 ----
         private static void ScanAreaDir(string dir, List<CardTemplateData> templates, HashSet<string> scanned)
         {
-            foreach (var path in EnumerateTres(dir))
+            foreach (var path in Script.IO.ResourceDirScan.TresRecursive(dir))
             {
                 var template = ResourceLoader.Load<AreaCardData>(path);
                 if (template == null || string.IsNullOrEmpty(template.UID)) continue;
@@ -87,7 +87,7 @@ namespace Script.Tools
         // ---- 秘社卡 ----
         private static void ScanCouncilDir(string dir, List<CardTemplateData> templates, HashSet<string> scanned)
         {
-            foreach (var path in EnumerateTres(dir))
+            foreach (var path in Script.IO.ResourceDirScan.TresRecursive(dir))
             {
                 var template = ResourceLoader.Load<CouncilCardData>(path);
                 if (template == null || string.IsNullOrEmpty(template.UID)) continue;
@@ -110,28 +110,6 @@ namespace Script.Tools
                     if (r != null) d.Restrictions.Add(r.Describe());
                 templates.Add(d);
             }
-        }
-
-        /// <summary>递归枚举目录下所有 .tres 路径。</summary>
-        private static List<string> EnumerateTres(string dir)
-        {
-            var result = new List<string>();
-            if (!DirAccess.DirExistsAbsolute(ProjectSettings.GlobalizePath(dir))) return result;
-            using var d = DirAccess.Open(dir);
-            if (d == null) return result;
-            d.ListDirBegin();
-            string name;
-            while ((name = d.GetNext()) != "")
-            {
-                if (d.CurrentIsDir())
-                {
-                    if (!name.StartsWith(".")) result.AddRange(EnumerateTres(dir + "/" + name));
-                    continue;
-                }
-                if (name.EndsWith(".tres")) result.Add(dir + "/" + name);
-            }
-            d.ListDirEnd();
-            return result;
         }
 
         private static CardTemplateData ToPlayerData(PlayerCardData p)

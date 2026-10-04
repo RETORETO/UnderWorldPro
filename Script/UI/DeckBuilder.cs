@@ -127,38 +127,11 @@ public partial class DeckBuilder : Control
     private void ScanPool()
     {
         _allPoolPaths.Clear();
-        ScanDirRecursive(PlayerCardsDir, _allPoolPaths);
+        // 导出安全的递归扫描（导出包内 .tres 会变成 "xxx.tres.remap"，见 Script/IO/ResourceDirScan.cs）
+        Script.IO.ResourceDirScan.TresRecursiveInto(PlayerCardsDir, _allPoolPaths);
         _allPoolPaths.Sort();
         GD.Print($"【DeckBuilder】扫描到卡池 {_allPoolPaths.Count} 张");
         ApplyPoolFilter();
-    }
-
-    private void ScanDirRecursive(string dirPath, List<string> sink)
-    {
-        using var dir = DirAccess.Open(dirPath);
-        if (dir == null) return;
-        dir.ListDirBegin();
-        string name = dir.GetNext();
-        while (!string.IsNullOrEmpty(name))
-        {
-            string full = dirPath + "/" + name;
-            if (dir.CurrentIsDir())
-            {
-                ScanDirRecursive(full, sink);
-            }
-            // 导出后 .tres 被转成二进制资源，目录列表给出的是 "xxx.tres.remap"；编辑器下是 "xxx.tres"。
-            // 只认 ".tres" 会导致导出后卡池扫描为 0（卡组编辑里空白、没有任何卡图）。
-            else if (name.EndsWith(".tres", System.StringComparison.OrdinalIgnoreCase))
-            {
-                sink.Add(full);
-            }
-            else if (name.EndsWith(".tres.remap", System.StringComparison.OrdinalIgnoreCase))
-            {
-                sink.Add(dirPath + "/" + name.Substring(0, name.Length - ".remap".Length));
-            }
-            name = dir.GetNext();
-        }
-        dir.ListDirEnd();
     }
 
     // 根据搜索关键字过滤当前模式的候选列表（按文件路径卡号片段 / 秘社名匹配，不区分大小写）
@@ -247,7 +220,8 @@ public partial class DeckBuilder : Control
     private void ScanCouncils()
     {
         _councilPaths.Clear();
-        ScanDirRecursive(CouncilCardsDir, _councilPaths);   // 秘社按系列分子目录，需递归扫描
+        // 秘社按系列分子目录，需递归扫描；同样统一走导出安全的扫描工具
+        Script.IO.ResourceDirScan.TresRecursiveInto(CouncilCardsDir, _councilPaths);
         _councilPaths.Sort();
         ApplyPoolFilter();
         GD.Print($"【DeckBuilder】扫描到秘社 {_councilPaths.Count} 张");

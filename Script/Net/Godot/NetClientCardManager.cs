@@ -47,7 +47,7 @@ namespace Script.Net.Godot
             Cards.Effects.AllEffects.RegisterAll();
             _templates = new Dictionary<string, BaseCardData>();
             foreach (var dir in TemplateDirs)
-                foreach (var path in EnumerateTres(dir))
+                foreach (var path in Script.IO.ResourceDirScan.TresRecursive(dir))
                 {
                     var template = ResourceLoader.Load<BaseCardData>(path);
                     if (template == null || string.IsNullOrEmpty(template.UID)) continue;
@@ -86,35 +86,6 @@ namespace Script.Net.Godot
             }
             GD.PrintErr($"[NetClientCardManager] 无法解析模板：{r?.TemplateUid ?? "null"}（UID={r?.Uid ?? "null"}）");
             return null;
-        }
-
-        private static List<string> EnumerateTres(string dir)
-        {
-            var result = new List<string>();
-            // ⚠️ 不要用 ProjectSettings.GlobalizePath + DirAccess.DirExistsAbsolute 判断 res:// 是否存在：
-            //    导出后素材在 .pck 内，GlobalizePath 得到的是磁盘路径（不存在）→ 这里会直接返回空表，
-            //    症状：联机客户端「客户端模板库就绪：0 张卡」+ 全部卡「无法解析模板」，卡面/卡图全空。
-            //    DirAccess.Open 对 res:// 在编辑器和导出包内都有效，直接用即可。
-            using var d = DirAccess.Open(dir);
-            if (d == null) return result;
-            d.ListDirBegin();
-            string name;
-            while ((name = d.GetNext()) != "")
-            {
-                if (d.CurrentIsDir())
-                {
-                    if (!name.StartsWith(".")) result.AddRange(EnumerateTres(dir + "/" + name));
-                    continue;
-                }
-                // 导出后 .tres 被转成二进制资源，目录列表给出的是 "xxx.tres.remap"；编辑器下是 "xxx.tres"。
-                // 两种都要识别，remap 条目去掉后缀后仍按原 .tres 路径加载（ResourceLoader 会自动重映射）。
-                if (name.EndsWith(".tres"))
-                    result.Add(dir + "/" + name);
-                else if (name.EndsWith(".tres.remap"))
-                    result.Add(dir + "/" + name.Substring(0, name.Length - ".remap".Length));
-            }
-            d.ListDirEnd();
-            return result;
         }
     }
 }

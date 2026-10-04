@@ -694,9 +694,7 @@ namespace Script.UI
                         // 否则这条兜底在导出包里永远命不中（症状：目录名≠UID 的卡在编辑器有图、打包后没图）。
                         if (!da.CurrentIsDir())
                         {
-                            string fileName = f.EndsWith(".import", System.StringComparison.OrdinalIgnoreCase)
-                                ? f.Substring(0, f.Length - ".import".Length)
-                                : f;
+                            string fileName = Script.IO.ResourceDirScan.NormalizePackedName(f);
                             if (fileName.EndsWith(".jpg", System.StringComparison.OrdinalIgnoreCase)
                                 && fileName.StartsWith(uid, System.StringComparison.OrdinalIgnoreCase))
                             {
