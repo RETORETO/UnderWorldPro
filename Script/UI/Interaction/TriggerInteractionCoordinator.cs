@@ -91,6 +91,9 @@ namespace Script.UI.Interaction
                 var ordered = new List<StackEffectInstance>();
                 foreach (var o in orderedObjs)
                     if (o is StackEffectInstance ti) ordered.Add(ti);
+                // 记录本轮入栈的触发：Arena 处理完（含选目标）后回填"仍未处理"的触发总数，
+                // 供「第一张进入堆叠」判断"排序窗口内已无剩余卡牌/效果需加入堆叠"→ 自动关窗。
+                _pendingEnterStack = ordered;
                 onEnterStack?.Invoke(ordered);
             };
             _triggerOrderWindow.OnDone = () =>
@@ -101,14 +104,29 @@ namespace Script.UI.Interaction
             };
 
             _lockTriggerOrderModal?.Invoke();
+            // 先记录"本轮待处理触发总数"再开窗：Open 之后的兜底判定才不会被开窗瞬间的默认值误关。
+            _pendingEnterStack = null;
+            _triggerOrderWindow.SetRemainingTriggerCount(triggers?.Count ?? 0);
             _triggerOrderWindow.Open(ownerPlayerId, entries);
         }
 
+        /// <summary>本轮「进入堆叠」的触发列表（OnEnterStack 记录）；用于把剩余数回填给排序窗口。</summary>
+        private List<StackEffectInstance> _pendingEnterStack;
+
         /// <summary>触发实际入栈后由 TurnManager 调用：从 OrderZone 移除已入栈条目。
-        /// 取目标触发在玩家选完目标后才触发本方法，故条目保留到选目标完成（修复"卡提前从 OrderZone 消失"）。</summary>
+        /// 取目标触发在玩家选完目标后才触发本方法，故条目保留到选目标完成（修复"卡提前从 OrderZone 消失"）。
+        /// 移除后回填"仍未处理"的触发总数：归零时若本次来自「第一张进入堆叠」，排序窗口自动关闭并推进。</summary>
         public void RemoveOrderEntries(List<StackEffectInstance> pushed)
         {
             _triggerOrderWindow?.RemoveEntries(pushed);
+            // 剩余节点数＝本次点击时窗口内的条目（尚未从 OrderZone 移除）－本次已入栈数；
+            // 与引擎侧"剩余触发"同解（取消选目标的触发也已从 OrderZone 移除）。
+            // 注意：本计数**不含放弃框（DiscardZone）内的条目**——放弃框内容由窗口自身在自动关窗判定时检查
+            // （TriggerOrderWindow.TryAutoCloseIfNothingRemaining 要求排序框与放弃框皆空才关窗）。
+            int remainingUi = Math.Max(0, (_triggerOrderWindow?.GetOrderZoneChildren().Count ?? 0) - (pushed?.Count ?? 0));
+            int pending = _pendingEnterStack?.Count ?? 0;
+            _pendingEnterStack = null;
+            _triggerOrderWindow?.UpdateRemainingTriggerCount(pending + remainingUi);
         }
 
         /// <summary>

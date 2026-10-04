@@ -14,9 +14,6 @@ namespace Script.Net.Lobby
         /// <summary>是否已准备（服务端校验卡组通过后才为 true）。</summary>
         public bool Ready;
 
-        /// <summary>本座位是否已请求"再来一局"（双方都请求才执行，见 D10）。</summary>
-        public bool RematchRequested;
-
         // ---- 卡组（仅本人可见，D7）----
         public DeckList Deck;
         public string DeckName;
@@ -33,7 +30,7 @@ namespace Script.Net.Lobby
     /// 阶段迁移（与设计方案 §六 一致）：
     ///   Waiting ⇄ Ready（两人在座且都准备 → Ready；有人取消准备/离座 → Waiting）
     ///   Ready → Starting（房主开始，服务端复检卡组）→ InMatch → Finished
-    ///   Finished →（双方都请求重开）→ Waiting（复用原房间，见 D10）
+    ///   Finished →（结果展示 MatchResultDisplaySeconds 秒）→ Waiting（服务端自动复用原房间，无需玩家操作）
     ///   任意阶段 → Closed（空房/超时/踢空/服务端停止）
     ///
     /// 本类**不含协议与广播**（那是 `LobbyServer` 的职责），也不含对局规则（那是 `IRoomMatchHost`）。
@@ -111,7 +108,6 @@ namespace Script.Net.Lobby
             s.SessionId = null;
             s.PlayerName = null;
             s.Ready = false;
-            s.RematchRequested = false;
             s.Deck = null;
             s.DeckName = null;
             s.DeckCardCount = 0;
@@ -151,7 +147,6 @@ namespace Script.Net.Lobby
                     DisplayName = RoomState.MakeDisplayName(seat.PlayerName, s),
                     Ready = seat.Ready,
                     Connected = seat.Occupied && (isConnected == null || isConnected(seat.SessionId)),
-                    RematchRequested = seat.RematchRequested,
                     HasDeck = seat.Deck != null,
                     DeckName = seat.DeckName,
                     DeckCardCount = seat.DeckCardCount,

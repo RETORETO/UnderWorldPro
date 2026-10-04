@@ -613,6 +613,15 @@ namespace Script.Data.Effects
         /// <summary>形态自己的效果表（`SuppressPrintedEffects=true` 时取代模板效果表）。
         /// JC028：「受此结附的角色获得1防御力 和［黑刀］」＝一条 `GrantToHost` 的持续效果。</summary>
         [Export] public Array<EffectData> Effects { get; set; } = new Array<EffectData>();
+
+        /// <summary>
+        /// 【2026-09·JC027 用户口径】**形态自带的授予**（能力图标/属性/关键字/子类别）——**幂等**：
+        /// 重复施加同一形态**不会叠加**（卡文"成为一个地精角色，且具有［白眼］［黑刀］［黑星］和 1 防御力
+        /// 直到回合结束"是一个**状态**，不是可叠加的增益）⇒ 再次发动仍是 1 白眼/1 黑刀/1 势力/1 防御。
+        /// 与 `Actions` 里直接写 `Gain` 的区别：那些是"每次结算都累加"的一次性授予，不适用于形态自带属性。
+        /// 引擎侧由 `EffectEngine.ApplyFormGrants` 记账（先撤销上一次形态授予，再授予新的），形态到期一并撤销。
+        /// </summary>
+        [Export] public Array<EffectGrant> Grants { get; set; } = new Array<EffectGrant>();
     }
 
     /// <summary>

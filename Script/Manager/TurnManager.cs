@@ -2239,10 +2239,15 @@ public partial class TurnManager : Node
                 // 【K15·多目标】逐目标版本号比对（与 `TargetCardUids` 同序）：
                 // **只跳过"丢失的那一个目标"，其余照常结算**（用户 2026-09 口径）——
                 // 因此这里不返回"整条不结算"，而是把已丢失的目标从条目里剔除（保留顺序与版本号对齐）后继续。
-                if (entry.TargetCardUids != null && entry.TargetCardUids.Count > 0)
-                    PruneLostMultiTargets(entry);
-                // 事务卡：声明取目标且目标卡丢失 → 不结算进墓地
-                if (!string.IsNullOrEmpty(entry.TargetCardUid))
+                bool isMultiTarget = entry.TargetCardUids != null && entry.TargetCardUids.Count > 0;
+                if (isMultiTarget) PruneLostMultiTargets(entry);
+                // 事务卡：声明取目标且目标卡丢失 → 不结算进墓地。
+                // 【2026-09·用户口径】**多目标（卡文"和/或"）不走这条整条丢弃**：各目标互相独立——
+                // 已丢失者由上一行逐目标剔除；已不合法者（如结算前获得屏障）由
+                // `EffectEngine.PruneIllegalMultiChoices` 逐目标跳过；其余目标必须照常执行。
+                // （此前多目标条目也记了 `TargetCardUid`＝第一个卡目标 ⇒ 任一目标状态变化即整条不结算，
+                //   正是用户实测"JC021 仅一个目标不合法，剩下的也没执行"的根因。）
+                if (!isMultiTarget && !string.IsNullOrEmpty(entry.TargetCardUid))
                 {
                     if (entry.TargetWasLost || IsTargetLost(entry, entry.TargetCardUid))
                     {

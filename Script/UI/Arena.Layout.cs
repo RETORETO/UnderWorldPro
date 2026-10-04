@@ -107,6 +107,25 @@ public partial class Arena
     }
 
     /// <summary>
+    /// 【2026-09 修复·用户实测"附属 UI 部分情况下显示在宿主卡上方"】
+    /// 取宿主 UI 在**其容器本地坐标**下的**真实视觉中心**与**视觉半高**（兼容宿主横置）。
+    ///
+    /// 原实现用 `Position + PivotOffset.Rotated(角度)` 估算视觉中心 —— **错**：Godot 的旋转是**绕 PivotOffset**
+    /// 进行的，旋转后视觉中心**仍在** `Position + PivotOffset`（实测 `GetGlobalTransform()` 四角 AABB：
+    /// `Position=(0,0)` / `PivotOffset=(50,70)` / `RotationDegrees=90` → 视觉中心 **(50,70)**，
+    /// 而 `PivotOffset.Rotated(90°)` 给出 (-70,50)，误差 **(120,20)**）。
+    /// 于是**宿主一旦横置**，附属/封印就被摆到宿主的左上方（未横置时公式恰好等价，故表现为"部分情况"）。
+    /// 视觉半高：横置卡视觉高＝卡宽 ⇒ `CARD_WIDTH/2`（这一点原实现是对的）。
+    /// </summary>
+    private static void HostVisualCenter(Control hostUi, bool hostTapped,
+        out float centerX, out float centerY, out float visHalfH)
+    {
+        centerX = hostUi.Position.X + hostUi.PivotOffset.X;
+        centerY = hostUi.Position.Y + hostUi.PivotOffset.Y;
+        visHalfH = hostTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+    }
+
+    /// <summary>
     /// 重排所有结附关系：对每个带有附属的目标卡，将其附属 UI（挂在同一 PlayerXArea 容器内）
     /// 按 X 对齐目标卡视觉中心、Y 从目标卡视觉下缘向上露出 2/5 张起、多张依次下延；
     /// 正确处理横置卡（旋转 90° 后视觉下缘变为原右侧），目标卡 ZIndex 最高，
@@ -124,14 +143,8 @@ public partial class Arena
             var host = targetUI.GetParent() as Control;
             if (host == null) continue;
 
-            // 目标卡视觉中心与视觉下缘（本地坐标），兼容横置。
-            // Godot 中横置后视觉中心 = Position + PivotOffset.Rotated(角度)，而非未旋转的 PivotOffset；
-            // 直接使用 PivotOffset 会令横置卡附属/箭头整体偏移 90°。
-            float angle = Mathf.DegToRad(targetUI.IsTapped ? 90f : 0f);
-            Vector2 rotatedPivot = targetUI.PivotOffset.Rotated(angle);
-            float centerX = targetUI.Position.X + rotatedPivot.X;
-            float centerY = targetUI.Position.Y + rotatedPivot.Y;
-            float visHalfH = targetUI.IsTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+            // 目标卡真实视觉中心与视觉下缘（本地坐标，兼容横置；见 HostVisualCenter 注释）
+            HostVisualCenter(targetUI, targetUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
             float bottomY = centerY + visHalfH;
 
             for (int i = 0; i < targetInst.AttachedCards.Count; i++)
@@ -175,11 +188,8 @@ public partial class Arena
             var host = councilUI.GetParent() as Control;
             if (host == null) continue;
 
-            float angle = Mathf.DegToRad(councilUI.IsTapped ? 90f : 0f);
-            Vector2 rotatedPivot = councilUI.PivotOffset.Rotated(angle);
-            float centerX = councilUI.Position.X + rotatedPivot.X;
-            float centerY = councilUI.Position.Y + rotatedPivot.Y;
-            float visHalfH = councilUI.IsTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+            // 秘社真实视觉中心（兼容横置，见 HostVisualCenter）
+            HostVisualCenter(councilUI, councilUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
             float topY = centerY - visHalfH;
 
             int i = 0;
@@ -222,12 +232,8 @@ public partial class Arena
             if (host == null)
                 continue;
 
-            // 与 ArrangeAllAttachments 完全对称：用 UI 的 PivotOffset + Position 计算视觉中心（兼容横置旋转）
-            float angle = Mathf.DegToRad(councilUI.IsTapped ? 90f : 0f);
-            Vector2 rotatedPivot = councilUI.PivotOffset.Rotated(angle);
-            float centerX = councilUI.Position.X + rotatedPivot.X;
-            float centerY = councilUI.Position.Y + rotatedPivot.Y;
-            float visHalfH = councilUI.IsTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+            // 与 ArrangeAllAttachments 完全对称：用宿主真实视觉中心（兼容横置，见 HostVisualCenter）
+            HostVisualCenter(councilUI, councilUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
             float bottomY = centerY + visHalfH;
 
             for (int i = 0; i < councilInst.AttachedCards.Count; i++)
@@ -275,11 +281,8 @@ public partial class Arena
             var container = hostUI.GetParent() as Control;
             if (container == null) continue;
 
-            float angle = Mathf.DegToRad(hostUI.IsTapped ? 90f : 0f);
-            Vector2 rotatedPivot = hostUI.PivotOffset.Rotated(angle);
-            float centerX = hostUI.Position.X + rotatedPivot.X;
-            float centerY = hostUI.Position.Y + rotatedPivot.Y;
-            float visHalfH = hostUI.IsTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
+            // 宿主真实视觉中心与视觉上缘（兼容横置，见 HostVisualCenter）
+            HostVisualCenter(hostUI, hostUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
             float topY = centerY - visHalfH;   // 目标视觉上缘（向上偏移基准）
 
             // 仅处理"封印于角色"的封印卡（SealedBy == hostInst）
@@ -1063,12 +1066,12 @@ public partial class Arena
             ? container.Size.Y / 2f
             : visH / 2f;
 
-        // 逻辑尺寸固定 100x140，PivotOffset = (50,70)
-        // 逻辑左上角 = 视觉中心 - PivotOffset 经旋转后的偏移
+        // 逻辑尺寸固定 100x140，PivotOffset = (50,70)。
+        // 【2026-09 修复】逻辑左上角 = 视觉中心 - PivotOffset（**不旋转**）：Godot 的旋转绕 PivotOffset 进行，
+        // 旋转后视觉中心仍在 `Position + PivotOffset`（实测见 `HostVisualCenter` 注释）——
+        // 原写法减 `PivotOffset.Rotated(角度)` 会让**横置卡**的视觉中心偏 (120,20)，即整张卡向**右下**跑。
         Vector2 pivot = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-        float angle = Mathf.DegToRad(isTapped ? 90f : 0f);
-        Vector2 rotatedPivot = pivot.Rotated(angle);
-        Vector2 localPos = new Vector2(visCenterX, visCenterY) - rotatedPivot;
+        Vector2 localPos = new Vector2(visCenterX, visCenterY) - pivot;
 
         card.AnchorLeft = 0; card.AnchorRight = 0;
         card.AnchorTop = 0; card.AnchorBottom = 0;

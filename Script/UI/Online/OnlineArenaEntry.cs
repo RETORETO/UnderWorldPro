@@ -12,7 +12,8 @@ namespace Script.UI.Online
     ///   · 本页的连接来自 `OnlineClientContext`（大厅同一条连接）；
     ///   · 战场数据仍走同一套 `ClientMatchView` 投影与 `IMatchClientView` 接口（增量 B 抽出），
     ///     故 `ArenaOl` 的类型与交互逻辑**一行未改**。
-    /// 对局结束后回到房间页（房间页显示结果与"再来一局"）。
+    /// 对局结束后：先在**战场页**展示获胜者（`MatchResultDisplaySeconds` 秒，由服务端决定时长），
+    /// 服务端随后自动复用原房间并广播 `Waiting`，本页再切回房间页——玩家无需点任何按钮。
     /// </summary>
     public partial class OnlineArenaEntry : Node
     {
@@ -48,7 +49,7 @@ namespace Script.UI.Online
         {
             _session?.Poll();
 
-            // 冒烟模式：进入战场若干秒后自动认输（等同玩家点「投降」），用于验证"结束→回房间页→再来一局"闭环
+            // 冒烟模式：进入战场若干秒后自动认输（等同玩家点「投降」），用于验证"结束→战场页展示结果→自动回房间页"闭环
             if (!OnlineClientContext.SmokeMode || _smokeConceded || _session == null) return;
             _smokeTimer += delta;
             if (_smokeTimer < 8.0) return;
@@ -70,10 +71,18 @@ namespace Script.UI.Online
                 GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
                 return;
             }
-            // 房间阶段离开 InMatch（结束）→ 回房间页（房间页负责显示结果与"再来一局"）
-            if (state.Phase != RoomPhase.InMatch)
+            // 对局结束（Finished）→ **停在战场页**展示获胜者，等服务端展示结束后复用房间再切走。
+            if (state.Phase == RoomPhase.Finished)
             {
-                GD.Print($"[OnlineArenaEntry] 对局结束（阶段 {state.Phase}），返回房间页");
+                int winner = state.MatchSummary?.WinnerSeat ?? 0;
+                GD.Print($"[OnlineArenaEntry] 对局结束：获胜座位 {winner}，战场页展示结果（稍后自动回到房间）");
+                _arena?.ShowMatchResult(winner);
+                return;
+            }
+            // 房间回到可玩阶段（服务端已自动复用原房间）→ 回房间页（房间页不再显示结果，直接可重新准备）
+            if (state.Phase == RoomPhase.Waiting || state.Phase == RoomPhase.Ready)
+            {
+                GD.Print($"[OnlineArenaEntry] 房间已回到 {state.Phase}，返回房间页");
                 GameManager.Instance?.GoToStateDeferred(GameManager.GameState.RoomOnline);
             }
         }

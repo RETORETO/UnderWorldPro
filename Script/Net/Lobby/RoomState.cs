@@ -39,8 +39,7 @@ namespace Script.Net.Lobby
         /// <summary>卡组违规原因（**仅本人可见**，可能含卡牌信息）。</summary>
         public string DeckError;
 
-        /// <summary>本座位是否已请求"再来一局"（双方都点才执行，见 D10）。</summary>
-        public bool RematchRequested;
+
     }
 
     /// <summary>对局结果摘要（仅 `Finished` 阶段）。</summary>
@@ -110,7 +109,6 @@ namespace Script.Net.Lobby
                     DisplayName = s.DisplayName,
                     Ready = s.Ready,
                     Connected = s.Connected,
-                    RematchRequested = s.RematchRequested,
                     // 卡组：本人可见全部；对手只保留"是否违规"这一状态
                     HasDeck = isSelf && s.HasDeck,
                     DeckName = isSelf ? s.DeckName : null,

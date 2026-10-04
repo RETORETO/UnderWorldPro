@@ -512,6 +512,17 @@ namespace Script.UI.Interaction
             if (hit.Instance.IsAttached)
                 return false;
 
+            // 【2026-09·用户实测修复】拖拽**只能表达**"恰好 1 条能力 ＋ 需要选场上卡目标"的激活：
+            //  · 多条能力（JC024 自带 + JC019 授予 = 2 条）⇒ 必须走**双击效果菜单**（弹选择窗）；
+            //  · 无目标/自指能力（JC024"快速行动2：将自身潜伏"）⇒ 必须**双击直接发动**；
+            //  · 玩家目标（JC111）/地区目标（JC117）⇒ 拖到卡上无法表达。
+            // 以上情况一律 `return false`：**不吞左键**。此前无条件起手 ⇒ `Arena._Input` 会 `AcceptEvent()`，
+            // 双击信号根本到不了 CardUI（用户实测："JC024 UI 上依然是拖拽 UI，无法正常使用效果"、
+            // "结附给 JC024 后有两个激活效果，但双击没弹出选择效果界面（双击被拖拽覆盖）"）。
+            if (!ActivateEligibility.CanDragActivate(hit.Instance, out _)) return false;
+            // 没有可拖的合法目标（如只有自身可选的 A62 场景）也不吞左键，交给双击路径。
+            if (!_arena.HasCachedActivateTarget(hit)) return false;
+
             // 角色卡（非附属）：沿用拖拽手势激活，绘制箭头并高亮合法目标。
             _activatingCard = hit;
             var arrow = _arena.StackArrowScene?.Instantiate<StackArrow>();
@@ -589,15 +600,11 @@ namespace Script.UI.Interaction
             _lastDragHoverTarget = null;
         }
 
-        /// <summary>从可发动的场上卡上取其第一个角色激活能力（用于发动）。</summary>
+        /// <summary>从可发动的场上卡上取其"可用于拖拽的"激活能力。
+        /// 【2026-09】改为 `ActivateEligibility.GetFirstActivateAbility`（模板 ∪ **运行期授予**）——
+        /// 此前只读模板 ⇒ JC019 授予宿主的激活能力在拖拽路径上取不到（松手判"无合法目标"而取消）。
+        /// 能走到这里的前提已由 `TryBeginActivateDragAt` 的 `CanDragActivate` 保证（单条 ＋ 需选卡目标）。</summary>
         private EffectData GetActivatingAbility(CardUI card)
-        {
-            if (card?.Instance?.PlayerTemplate is not PlayerCardData tmpl) return null;
-            foreach (var e in tmpl.EffectDataList)
-            {
-                if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return e;
-            }
-            return null;
-        }
+            => ActivateEligibility.GetFirstActivateAbility(card?.Instance);
     }
 }

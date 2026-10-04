@@ -79,7 +79,6 @@ namespace Script.Net.Lobby
                 case LobbyRequestKind.SelectDeck: HandleSelectDeck(sessionId, req, room); break;
                 case LobbyRequestKind.StartMatch: HandleStartMatch(sessionId, req, room); break;
                 case LobbyRequestKind.Kick: HandleKick(sessionId, req, room); break;
-                case LobbyRequestKind.Rematch: HandleRematch(sessionId, req, room); break;
                 case LobbyRequestKind.Ping:
                     {
                         var res = LobbyResponse.Success(req.RequestId);
@@ -112,7 +111,7 @@ namespace Script.Net.Lobby
             var match = room?.Match;
             if (match == null) return false;
             // M3：**只有 InMatch 才对局通道开放**。终局后仍放行会让已结束的对局继续改状态甚至二次触发结束信号，
-            // 使客户端看到的结果与房间广播不一致（重启下一局由 `Rematch` 显式驱动，不需要 Finished 通道）。
+            // 使客户端看到的结果与房间广播不一致（下一局由服务端在结果展示结束后自动复用房间驱动，不需要 Finished 通道）。
             if (room.Phase != RoomPhase.InMatch) return false;
             return match.HandleMessage(sessionId, envelopeType, payload);
         }
@@ -319,7 +318,7 @@ namespace Script.Net.Lobby
         }
 
         // ====================================================================
-        // 房间：开始 / 踢人 / 再来一局
+        // 房间：开始 / 踢人
         // ====================================================================
 
         private void HandleStartMatch(string sessionId, LobbyRequest req, RoomSession room)
@@ -465,8 +464,8 @@ namespace Script.Net.Lobby
             };
             room.Phase = RoomPhase.Finished;
             room.FinishedAtTick = Now();
-            for (int s = 1; s <= 2; s++) room.Seat(s).RematchRequested = false;
-            Log($"[Lobby] 房间 {room.RoomId} 对局结束：获胜座位 {winnerSeat}（可再来一局）");
+            Log($"[Lobby] 房间 {room.RoomId} 对局结束：获胜座位 {winnerSeat}" +
+                $"（结果展示 {_config.MatchResultDisplaySeconds}s 后自动回到本房间）");
             Broadcast(room);
             // M5：若是"对手掉线/退出"导致只剩一人，房间不能停在 Finished（重开永远等不到对方）
             RecoverIfOpponentGone(room, "对手已离开（掉线或退出）");
@@ -474,8 +473,8 @@ namespace Script.Net.Lobby
 
         /// <summary>
         /// 【M5】对局结束（或结束后有人离座）且房里只剩一人时，把房间退回 `Waiting`：
-        ///   · 否则房间以"1 人 / Finished"的形态卡住 —— 重开请求永远凑不齐双方，且它在大厅列表里长时间不可加入；
-        ///   · `Summary` **保留**，让留下的一方仍能看到本局结果（下一局成功建局时会被清空）。
+        ///   · 否则房间以"1 人 / Finished"的形态卡住 —— 它在大厅列表里长时间不可加入，留下的一方也开不了下一局；
+        ///   · `Summary` 清空：结果只在**战场页**展示，房间页不再显示任何结果横幅。
         /// </summary>
         private void RecoverIfOpponentGone(RoomSession room, string reason)
         {
@@ -483,7 +482,8 @@ namespace Script.Net.Lobby
             if (room.OccupiedCount >= 2) return;
 
             room.Phase = RoomPhase.Waiting;
-            for (int s = 1; s <= 2; s++) room.Seat(s).RematchRequested = false;
+            room.Summary = null;
+            for (int s = 1; s <= 2; s++) room.Seat(s).Ready = false;
             room.LastActiveTick = Now();
             Log($"[Lobby] 房间 {room.RoomId} 只剩 {room.OccupiedCount} 人，退回等待阶段（{reason}）");
             Broadcast(room);
@@ -523,44 +523,30 @@ namespace Script.Net.Lobby
             LeaveRoomInternal(room, kickedSession, "被房主移出", notifySelf: false, forceClear: true);
         }
 
-        private void HandleRematch(string sessionId, LobbyRequest req, RoomSession room)
+        /// <summary>
+        /// 【结果展示结束 → 自动复用房间】关闭本局宿主并回到"同一房间 / 双方未准备"：
+        ///   · 房间号、座位、房主、卡组全部保留（与旧"再来一局"一致），房主再点「开始对局」即可开下一局；
+        ///   · `Summary` 清空（结果只在战场页展示，房间页不再显示结果横幅）；
+        ///   · 由 `Tick` 在 `Finished` 停留超过 `MatchResultDisplaySeconds` 后驱动，**无需任何玩家操作**。
+        /// </summary>
+        private void ReuseRoomAfterMatch(RoomSession room)
         {
-            if (room == null) { Host?.RespondFail(Host?.GetSession(sessionId), req, LobbyErrorCode.NotInRoom); return; }
-            var seat = room.SeatOfSession(sessionId);
-            if (seat == null) { Host?.RespondFail(Host?.GetSession(sessionId), req, LobbyErrorCode.NotInRoom); return; }
-            if (room.Phase != RoomPhase.Finished)
-            {
-                Host?.RespondFail(Host?.GetSession(sessionId), req, LobbyErrorCode.PhaseMismatch, "当前没有已结束的对局。");
-                return;
-            }
-
-            seat.RematchRequested = true;
-            Log($"[Lobby] 房间 {room.RoomId} 座位 {seat.Seat} 请求再来一局");
-
-            var res = LobbyResponse.Success(req.RequestId);
-            res.SessionId = sessionId;
-            res.RoomState = room.ToState(IsConnected).ForViewer(seat.Seat);
-            Host?.Respond(sessionId, res);
-
-            // D10：双方都请求 → 关闭本局、复用原房间、回到"双方均未准备"
-            bool all = room.Seat(1).Occupied && room.Seat(2).Occupied
-                       && room.Seat(1).RematchRequested && room.Seat(2).RematchRequested;
-            if (!all) { Broadcast(room); return; }
+            if (room == null || room.Phase != RoomPhase.Finished) return;
 
             if (room.Match != null)
             {
                 try { room.Match.StopServing(); } catch (Exception ex) { Log($"[Lobby] StopServing 异常：{ex.Message}"); }
                 room.Match = null;
             }
+            // 释放对局装配（与 AbortStart 一致），避免对局场景/节点残留
+            try { OnMatchAssemblyReleased?.Invoke(room); }
+            catch (Exception ex) { Log($"[Lobby] 释放对局装配异常：{ex.Message}"); }
+
             room.Summary = null;
             room.Phase = RoomPhase.Waiting;
-            for (int s = 1; s <= 2; s++)
-            {
-                room.Seat(s).Ready = false;
-                room.Seat(s).RematchRequested = false;
-            }
+            for (int s = 1; s <= 2; s++) room.Seat(s).Ready = false;
             room.LastActiveTick = Now();
-            Log($"[Lobby] 房间 {room.RoomId} 双方同意重开：本局已关闭，回到未准备状态（卡组保留）");
+            Log($"[Lobby] 房间 {room.RoomId} 结果展示结束：本局已关闭，自动回到本房间（双方未准备，卡组保留）");
             Broadcast(room);
         }
 
@@ -659,6 +645,7 @@ namespace Script.Net.Lobby
 
         /// <summary>
         /// 每帧驱动（服务端入口调用）：
+        ///   · 【结果展示】`Finished` 超过 `MatchResultDisplaySeconds` → 自动复用房间回到等待阶段（无需玩家操作）；
         ///   · 结束后超过 `FinishedRoomTtlSeconds` 无人操作 → 销毁；长时间无人在座的房间（异常情况兜底）→ 销毁；
         ///   · 【H1 兜底】卡在 `Starting` 超过 `StartingGraceMs` 的房间 → 回退 `Waiting`；
         ///   · 【M7】空闲超过 `SessionIdleTimeoutSeconds` 且**不在任何房间**的会话 → 回收连接槽位。
@@ -671,6 +658,9 @@ namespace Script.Net.Lobby
             _idleAccum = 0;
 
             long now = Now();
+            // ① 结果展示到点 → 自动复用房间（先于"超时销毁"，保证房间回到等待阶段而不是被销毁）
+            SweepFinishedRooms(now);
+
             var toClose = new List<RoomSession>();
             foreach (var room in _rooms.All)
             {
@@ -685,6 +675,25 @@ namespace Script.Net.Lobby
             SweepIdleSessions(now);
         }
         private double _idleAccum;
+
+        /// <summary>
+        /// 【结果展示 → 自动回房】`Finished` 停留超过 `MatchResultDisplaySeconds`（战场页展示获胜者的时长）后，
+        /// 自动关闭本局并复用原房间回到等待阶段；期间无需玩家点击任何按钮。
+        /// </summary>
+        private void SweepFinishedRooms(long now)
+        {
+            int secs = _config.MatchResultDisplaySeconds;
+            long limit = (secs > 0 ? secs : 0) * 1000L;
+            List<RoomSession> done = null;
+            foreach (var room in _rooms.All)
+            {
+                if (room.Phase != RoomPhase.Finished) continue;
+                if (now - room.FinishedAtTick <= limit) continue;
+                (done ??= new List<RoomSession>()).Add(room);
+            }
+            if (done == null) return;
+            foreach (var room in done) ReuseRoomAfterMatch(room);
+        }
 
         /// <summary>【H1 兜底】`Starting` 停留超时的房间退不回 `InMatch` 也不能永远占位（异常残留的唯一出口）。</summary>
         private void SweepStartingRooms(long now)

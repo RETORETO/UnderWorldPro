@@ -320,8 +320,22 @@ namespace Script.Game.Entities
         /// <summary>形态的**有效卡名**：有覆盖用覆盖，否则用模板卡名。</summary>
         public string EffectiveCardName
             => string.IsNullOrEmpty(_nameOverride) ? (PlayerTemplate?.CardName ?? "") : _nameOverride;
-        /// <summary>形态效果表（`IsPrintedEffectsSuppressed` 时取代模板效果表；空＝无效果）。</summary>
+        /// <summary>形态自己的效果表（`IsPrintedEffectsSuppressed` 时取代模板效果表；空＝无效果）。</summary>
         public List<EffectData> FormEffects => _formEffects;
+
+        /// <summary>
+        /// 【2026-09·JC027】**形态自带授予的记账**（`FormChangeSpec.Grants` 已实际施加的那些）。
+        /// 用于两件事：① 重复施加同一形态时**先撤销旧账再授予** ⇒ 幂等、不叠加；
+        /// ② 形态到期/离场时按账撤销。条目＝`(Kind, Value, Amount)`。
+        /// </summary>
+        private readonly List<(string Kind, string Value, int Amount)> _formGrants = new();
+        public IReadOnlyList<(string Kind, string Value, int Amount)> FormGrants => _formGrants;
+        public void RecordFormGrant(string kind, string value, int amount)
+        {
+            if (string.IsNullOrEmpty(kind) || string.IsNullOrEmpty(value) || amount == 0) return;
+            _formGrants.Add((kind, value, amount));
+        }
+        public void ClearFormGrants() => _formGrants.Clear();
         /// <summary>是否存在实例级形态覆盖（用于投影/判定短路）。</summary>
         public bool HasFormOverride
             => _categoryOverride != CardCategory.None || !string.IsNullOrEmpty(_nameOverride)

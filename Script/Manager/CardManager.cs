@@ -570,6 +570,15 @@ public partial class CardManager : Node
                     if (e != null && e.EffectId == effectId) return e;
             }
         }
+
+        // 【2026-09 修复·用户实测"JC019 结附后宿主发动能力被服务端拒绝：发动能力参数无效"】
+        // **运行期授予的激活能力**（`EffectData.GrantedAbility`，如 JC019 给宿主的"快速行动，横置：造成 1 点伤害"）
+        // 不在宿主模板的 `EffectDataList` 里 ⇒ 联机权威路径 `GodotIntentRouter.ActivateAbility` 经本方法取数得到 null
+        // ⇒ 直接抛"发动能力参数无效"（客户端弹了窗口、点了能力，却被服务端拒绝）。
+        // 现补一条：按运行期授予项查找（与候选枚举/门禁同一入口 `ActivateEligibility.GetAllActivateAbilities`）。
+        foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
+            if (e != null && e.EffectId == effectId) return e;
+
         return null;
     }
 

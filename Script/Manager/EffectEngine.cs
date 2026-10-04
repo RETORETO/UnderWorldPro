@@ -2149,6 +2149,9 @@ namespace Script.Manager
                         if (subject.CurrentZone == CardZone.AreaZone || subject.CurrentZone == CardZone.AttachedZone)
                             RegisterPersistent(subject);
                     }
+                    // 【2026-09·JC027 用户口径】形态**自带授予**（`FormChangeSpec.Grants`）幂等施加：
+                    // 重复发动同一形态**不叠加**（仍是 1 白眼/1 黑刀/1 势力/1 防御）——先撤销上一次形态授予，再授予。
+                    ApplyFormGrants(subject, spec, term.Contains("回合结束"));
                     // 【2026-09·用户口径】形态使其"成为角色" ⇒ **迁入争夺区**（JC027）。
                     // 迁区后它天然参与地区角色统计、**"对地区所有角色"的伤害**、以及所有"目标角色"类候选枚举
                     // （此前靠取目标侧补丁才能被取到，现由区归属天然保证）。反向形态（不再含角色）则迁回附属区。
@@ -4153,6 +4156,48 @@ namespace Script.Manager
 
         /// <summary>卡级时效修正登记（P2）。</summary>
         /// <summary>
+        /// 【2026-09·JC027 用户口径】**幂等**施加形态自带授予（`FormChangeSpec.Grants`）：
+        /// 先按实例的形态授予账（`CardInstance.FormGrants`）撤销上一次，再逐条授予并重新记账；
+        /// `timed`（期限含"回合结束"）时逐条登记时效项，形态到期由 `RevokeFormGrants` 撤销。
+        /// 语义＝"卡文'成为一个地精角色，且具有［白眼］［黑刀］［黑星］和 1 防御力'是一个状态、不是可叠加增益"。
+        /// </summary>
+        private void ApplyFormGrants(CardInstance card, FormChangeSpec spec, bool timed)
+        {
+            if (card == null) return;
+            RevokeFormGrants(card);                       // 幂等关键：先把上一次形态的授予撤掉
+            if (spec?.Grants == null || spec.Grants.Count == 0) return;
+            foreach (var g in spec.Grants)
+            {
+                if (g == null || string.IsNullOrEmpty(g.Kind) || string.IsNullOrEmpty(g.Value) || g.Amount == 0) continue;
+                // 【P3·K4】与 `Gain` 动词同款"两条通道"：能力图标名（白眼/黑刀…）→ 属性（先手调查/战斗…）
+                // 改数值，同时补一条 `Icon` 记图标存在性（供 `HasIcon`/展示）。
+                string attr = IconToAttribute(g.Value);
+                if (g.Kind == "Icon" && attr != null)
+                {
+                    card.Grant("Attribute", attr, g.Amount);
+                    card.RecordFormGrant("Attribute", attr, g.Amount);
+                    if (timed)
+                        RegisterTimedMod(new TimedMod { TargetUid = card.UID, Kind = "Attribute", Value = attr, Amount = g.Amount, ExpireTurn = CurrentTurn });
+                }
+                card.Grant(g.Kind, g.Value, g.Amount);
+                card.RecordFormGrant(g.Kind, g.Value, g.Amount);
+                if (timed)
+                    RegisterTimedMod(new TimedMod { TargetUid = card.UID, Kind = g.Kind, Value = g.Value, Amount = g.Amount, ExpireTurn = CurrentTurn });
+                GD.Print($"[EffectEngine] 🧬 形态授予（幂等）：{card.PlayerTemplate?.CardName} {g.Kind}:{g.Value}×{g.Amount}");
+            }
+        }
+
+        /// <summary>按实例记账**撤销**形态自带授予（重复施加前 / 形态到期 / 离场时）。</summary>
+        private void RevokeFormGrants(CardInstance card)
+        {
+            if (card == null || card.FormGrants.Count == 0) return;
+            foreach (var (kind, value, amount) in card.FormGrants)
+                card.Revoke(kind, value, amount);
+            GD.Print($"[EffectEngine] 🧬 形态授予撤销：{card.PlayerTemplate?.CardName} 共 {card.FormGrants.Count} 条");
+            card.ClearFormGrants();
+        }
+
+        /// <summary>
         /// 【2026-09·用户口径】形态转换后按**有效类别**校正所在区（JC027「成为一个地精角色（它仍然是附属）」）：
         ///  · 有效类别含**角色** ＋ 当前在附属区 ⇒ 迁入**争夺区**（`ZoneManager.MoveFormZone`）；
         ///  · 有效类别**不含角色** ＋ 当前在争夺区 ＋ 本卡是附属 ⇒ 迁回**附属区**（形态撤销 / JC028 反向形态）。
@@ -4255,8 +4300,9 @@ namespace Script.Manager
                             if (!string.IsNullOrWhiteSpace(sub)) fc.Revoke("SubCategory", sub.Trim(), 1);
                         fc.ClearFormOverride();
                         fc.ResetToBaseValues(false);
-                        // 【2026-09·用户口径】形态撤销后若它不再是"角色"（JC027 回到附属）⇒ **迁回附属区**；
-                        // 迁区同样刷新版本号（`MoveFormZone`）。注意顺序：先撤形态（有效类别复位），再迁区。
+                        // 【2026-09·用户口径】形态撤销：先按记账撤销形态自带授予（幂等记账的另一半），
+                        // 再按新（印刷）类别校正所在区（JC027 回到附属区）。
+                        RevokeFormGrants(fc);
                         SyncFormZone(fc);
                         if (fc.CurrentZone == CardZone.AreaZone || fc.CurrentZone == CardZone.AttachedZone)
                             RegisterPersistent(fc);
@@ -7785,9 +7831,48 @@ namespace Script.Manager
                 var choices = MultiTargetSlots.IsMultiTarget(spell)
                     ? MultiTargetSlots.Reconstruct(spell, targetAreaUid, targetCardUids)
                     : null;
+                // 【2026-09·用户口径】卡文"**和/或**"⇒ 各目标**互相独立**：结算时**已不合法**的目标
+                // （如结算前获得屏障、阵营/子类别改变、已被移入目标地区而违反"不能原地移动"）
+                // **只跳过它自己**，其余目标照常执行；"目标丢失"的剔除更早已由 `TurnManager.PruneLostMultiTargets` 完成。
+                if (choices != null) choices = PruneIllegalMultiChoices(spell, choices, sorcery);
                 // 【K16】模式分支：把入堆叠时选定的模式传下去（结算只执行该模式）
                 ResolveEffect(spell, sorcery, target, targetAreaUid, -1, targetVersionId, -1, choices, modeIndex);
             }
+        }
+
+        /// <summary>
+        /// 【2026-09·用户口径·JC021】**多目标逐目标合法性复检**：把"结算时已不合法"的卡目标槽**清空**
+        /// （只跳过该目标，不影响其余目标；地区/玩家槽不动）。
+        /// 判据与取目标阶段**同源**：`TargetValidity.CheckRestrictions`（含**屏障**"不能被敌方指定为目标"）
+        /// ＋ 槽级 `TargetSlot.ExcludeInChosenArea`（卡文"不能原地移动"：已在目标地区内的角色不再合法）。
+        /// 依据（用户原话）："JC021…仅一个不合法的时候，剩下一个角色继续执行效果（因为卡文是和/或，
+        /// 即使只有一个角色目标没有丢失也正常执行剩下的部分，仅目标丢失的角色/目标不合法的角色（例如获得屏障）不执行后续效果）"。
+        /// </summary>
+        private System.Collections.Generic.List<TargetChoice> PruneIllegalMultiChoices(
+            EffectData effect, System.Collections.Generic.List<TargetChoice> choices, CardInstance source)
+        {
+            if (effect?.TargetSlots == null || choices == null) return choices;
+            int srcCtrl = source?.ControllerId ?? -1;
+            var pm = CM?.PlayerManagerRef;
+            string chosenArea = MultiTargetSlots.ChosenAreaUid(effect, choices);
+            for (int i = 0; i < effect.TargetSlots.Count && i < choices.Count; i++)
+            {
+                var slot = effect.TargetSlots[i];
+                var choice = choices[i];
+                if (slot?.Spec == null || choice.IsArea || choice.IsPlayer || choice.IsEmpty) continue;
+                var t = CM?.GetInstance(choice.Uid);
+                bool legal = t != null
+                    && TargetValidity.CheckRestrictions(slot.Spec.Restrictions, slot.Spec.Param, t, srcCtrl, pm);
+                // 槽级"不能原地移动"（JC021）：结算时若该角色已在目标地区内 → 该目标不再合法
+                if (legal && slot.ExcludeInChosenArea && !string.IsNullOrEmpty(chosenArea)
+                    && string.Equals(t.ZoneDetailId, chosenArea, System.StringComparison.Ordinal))
+                    legal = false;
+                if (legal) continue;
+                GD.Print($"[EffectEngine] ⚑ [多目标] 第 {i + 1} 槽目标 {choice.Uid}" +
+                         $"（{t?.PlayerTemplate?.CardName ?? "实例不存在"}）结算时已不合法 → **只跳过该目标**，其余照常结算");
+                choices[i] = TargetChoice.Empty;
+            }
+            return choices;
         }
 
         // ==================== 激活能力入口 ====================

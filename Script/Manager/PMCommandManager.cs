@@ -70,11 +70,16 @@ public partial class PMCommandManager : Node
     /// 就地接线，使 PM 命令在**没有 View** 的场景（headless 测试 / 纯服务端）同样可用；
     /// View 侧的 UI 回调（抽牌回调、刷新回调等）仍由 `Initialize` 注入，且 `Initialize` 会覆盖这里设的值。
     /// </summary>
-    public void InjectModelRefs(CardManager cardManager, DeckManager deckManager, ZoneManager zoneManager)
+    public void InjectModelRefs(CardManager cardManager, DeckManager deckManager, ZoneManager zoneManager,
+                               AreaManager areaManager = null)
     {
         _cardManager ??= cardManager;
         _deckManager ??= deckManager;
         _zoneManager ??= zoneManager;
+        // 【2026-10 修复】`power` 命令依赖 AreaManager 加势力标记；此前只注入前三个 ⇒
+        // headless / 纯服务端下 `power` 恒报"AreaManager 未初始化"（什么都不做）。
+        _areaManager ??= areaManager;
+        AreaManagerRef ??= areaManager;
     }
 
     /// <summary>显式注入的 EffectEngine 引用（静态单例治理：核心逻辑不再依赖 EffectEngine.Instance）。</summary>
@@ -83,25 +88,45 @@ public partial class PMCommandManager : Node
     /// <summary>显式注入的 TurnManager 引用（`jumpto` 跳转步骤 / 定向取牌从牌库移出用）。</summary>
     public TurnManager TurnManagerRef { get; set; }
 
+    /// <summary>
+    /// 显式注入的 CombatManager 引用（2026-10）：联机服务端（无 Arena 本机窗口）下
+    /// `investigation` / `battle` 经它把对抗窗口**经决策协议下发**给玩家，并按正规结算链结算。
+    /// </summary>
+    public CombatManager CombatManagerRef { get; set; }
+
+    /// <summary>
+    /// 显式注入的 AreaManager 引用（2026-10）：`_getAreaUids` 回调缺省时（headless / 纯服务端 /
+    /// 测试装配）用它取"按槽位顺序的地区 UID 列表"，避免地区校验恒失败。
+    /// </summary>
+    public AreaManager AreaManagerRef { get; set; }
+
     /// <summary>定向取牌（`draw &lt;数量&gt; &lt;卡牌编号&gt;`）挑选"多张同名同编号"用的随机源。</summary>
     private readonly System.Random _rng = new System.Random();
 
     /// <summary>未显式注入时回退静态 Instance（向后兼容）。</summary>
     private Script.Manager.EffectEngine EE => EffectEngineRef ?? Script.Manager.EffectEngine.Instance;
 
-    /// <summary>实时获取当前按槽位顺序的地区 UID 列表（方案②：每次命令执行时查询，不持有过期快照）。</summary>
-    private List<string> CurrentAreaUids => _getAreaUids != null ? _getAreaUids() : new List<string>();
+    /// <summary>实时获取当前按槽位顺序的地区 UID 列表（方案②：每次命令执行时查询，不持有过期快照）。
+    /// 【2026-10 修复】View 侧回调（Arena/MatchHost 经 `Initialize` 注入）缺省时回退 `AreaManagerRef`：
+    /// 否则 headless / 纯服务端场景下地区列表恒为空 ⇒ `investigation`/`battle`/`power` 的地区校验全部失败
+    /// （表现为"命令什么都不做"）。</summary>
+    private List<string> CurrentAreaUids =>
+        _getAreaUids != null ? _getAreaUids()
+        : (AreaManagerRef != null ? AreaManagerRef.GetOrderedAreaUids() : new List<string>());
 
     /// <summary>
     /// 阻塞类命令：会打开对抗窗口并等待玩家响应。
     /// 批量执行时，遇到这类命令执行完即停止，后续命令全部丢弃。
+    /// 【2026-10 修正】只保留真正"打开窗口等玩家响应"的两条：`investigation` / `battle`。
+    /// `power` 是**瞬时结算**（直接加势力标记、不弹窗），不应截断后续命令 —— 旧实现把它列入本表，
+    /// 导致 `power 1 1 5` 之后的命令被静默丢弃。
     /// </summary>
     private static readonly HashSet<string> BlockingCommands = new HashSet<string>
     {
-        "investigation", "battle", "power"
+        "investigation", "battle"
     };
 
-    /// <summary>判断一行命令是否为阻塞类（对抗）命令</summary>
+    /// <summary>判断一行命令是否为阻塞类（对抗）命令（仅看命令名，供批量执行使用）。</summary>
     public static bool IsBlockingCommand(string cmd)
     {
         if (string.IsNullOrWhiteSpace(cmd)) return false;
@@ -109,6 +134,14 @@ public partial class PMCommandManager : Node
         if (parts.Length == 0) return false;
         return BlockingCommands.Contains(parts[0].ToLower());
     }
+
+    /// <summary>
+    /// **模式感知**的阻塞判定：只有"本地会真的弹窗等待玩家"时才算阻塞。
+    /// 单机（`_openCombatWindow != null`）＝弹本机窗口 → 阻塞；
+    /// 联机服务端（无本机窗口，命令经决策协议异步下发）＝不阻塞批量（否则整批命令会被误丢）。
+    /// </summary>
+    public bool IsBlockingCommandInCurrentMode(string cmd)
+        => IsBlockingCommand(cmd) && _openCombatWindow != null;
 
     /// <summary>
     /// 批量执行多行 PM 命令：按从上到下的顺序逐行执行。
@@ -132,7 +165,7 @@ public partial class PMCommandManager : Node
             ExecuteCommand(line);
             executed++;
 
-            if (IsBlockingCommand(line))
+            if (IsBlockingCommandInCurrentMode(line))
             {
                 int discarded = 0;
                 for (int j = i + 1; j < lines.Length; j++)
@@ -151,14 +184,30 @@ public partial class PMCommandManager : Node
         return executed;
     }
 
-    public void ExecuteCommand(string cmd)
+    /// <summary>最近一次命令的失败原因（成功/无错误为 null）。供联机 `DebugCommand` 回执给客户端。</summary>
+    public string LastError { get; private set; }
+
+    /// <summary>执行单条 PM 命令（不返回错误；错误打到日志）。</summary>
+    public void ExecuteCommand(string cmd) => TryExecuteCommand(cmd, out _);
+
+    /// <summary>
+    /// 执行单条 PM 命令并返回是否"无错误地执行"。
+    /// 错误来源：命令未识别 / 参数非法（含**玩家参数缺失或不是 1|2**）/ 目标卡不存在 / 卡组无该编号。
+    /// 联机侧（`GodotIntentRouter.DebugCommand`）用 `error` 回填 `IntentResult.Error`，
+    /// 解决"联机上 PM 命令失败后玩家毫无反馈"的调试盲区（此前结果只打到服务端 headless 日志）。
+    /// </summary>
+    public bool TryExecuteCommand(string cmd, out string error)
     {
-        if (string.IsNullOrWhiteSpace(cmd)) return;
+        LastError = null;
+        error = null;
+        if (string.IsNullOrWhiteSpace(cmd)) { error = "空命令"; LastError = error; return false; }
+
         var parts = cmd.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0) return;
+        if (parts.Length == 0) { error = "空命令"; LastError = error; return false; }
 
         GD.Print($"🛠️ 执行PM命令: {cmd}");
 
+        bool ok = true;
         switch (parts[0].ToLower())
         {
             case "damage": ExecuteDamage(parts); break;
@@ -167,10 +216,10 @@ public partial class PMCommandManager : Node
             case "list": ExecuteList(); break;
             case "kill": ExecuteKill(parts); break;
             case "heal": ExecuteHeal(parts); break;
-            case "draw": ExecuteDraw(parts); break;
+            case "draw": ok = ExecuteDraw(parts); break;
             // 【2026-09 新增】直接跳转步骤（中间经过的步骤一律不结算）
             case "jumpto": case "jump": ExecuteJumpTo(parts); break;
-            case "move": ExecuteMove(parts); break;
+            case "move": ok = ExecuteMove(parts); break;
             case "tap": ExecuteTap(parts); break;
             case "untap": ExecuteUntap(parts); break;
             case "flip": ExecuteFlip(parts); break;
@@ -178,24 +227,31 @@ public partial class PMCommandManager : Node
             case "printdeck": case "deck": ExecuteDeck(parts); break;
             case "player1draw": ExecuteDrawAlias(parts, 1); break;
             case "player2draw": ExecuteDrawAlias(parts, 2); break;
-            case "investigation": ExecuteInvestigation(parts); break;
-            case "battle": ExecuteStrength(parts); break;
-            case "power": ExecutePower(parts); break;
-            case "setassetfromdeck": ExecuteSetAssetFromDeck(parts); break;
+            case "investigation": ok = ExecuteInvestigation(parts); break;
+            case "battle": ok = ExecuteStrength(parts); break;
+            case "power": ok = ExecutePower(parts); break;
+            case "setassetfromdeck": ok = ExecuteSetAssetFromDeck(parts); break;
             case "addarea": ExecuteAddArea(parts); break;
-            case "attach": ExecuteAttach(parts); break;
-            case "attacharea": ExecuteAttachToArea(parts); break;
+            case "attach": ok = ExecuteAttach(parts); break;
+            case "attacharea": ok = ExecuteAttachToArea(parts); break;
             case "detach": ExecuteDetach(parts); break;
-            case "seal": ExecuteSeal(parts); break;
-            case "sealarea": ExecuteSealToArea(parts); break;
+            case "seal": ok = ExecuteSeal(parts); break;
+            case "sealarea": ok = ExecuteSealToArea(parts); break;
             case "returnhandtodeck": ExecuteReturnHandToDeckBottom(parts); break;
             case "help": case "?": ExecuteHelp(); break;
-            default: GD.Print($"❌ 未知命令: {parts[0]}，输入 help 查看帮助"); break;
+            default:
+                error = $"未知命令: {parts[0]}（输入 help 查看帮助）";
+                GD.Print($"❌ {error}");
+                LastError = error;
+                return false;
         }
+
+        if (!ok && string.IsNullOrEmpty(error)) error = LastError ?? $"命令执行失败: {cmd}";
+        LastError = error;
+        return ok;
     }
 
     // ==================== 子命令实现 ====================
-
     private void ExecuteDamage(string[] parts)
     {
         if (parts.Length < 4) { GD.Print("❌ 用法: damage area|card|hand 目标 数值"); return; }
@@ -322,52 +378,25 @@ public partial class PMCommandManager : Node
         }
     }
 
+    // ==================== 玩家参数 + 卡牌选择器（唯一解析真相源） ====================
+
     /// <summary>
-    /// `draw` —— 两种用法（**旧语法完全兼容**）：
-    ///  ① **旧**：`draw &lt;玩家 1|2&gt; [数量]`（两个参数都是数字）→ 该玩家从牌库顶抽牌（走 UI 注入的抽牌回调）。
-    ///  ② **新**：`draw &lt;数量&gt; &lt;卡牌编号&gt; [玩家 1|2]` → **定向取牌**：从该玩家（缺省 P1）**卡组**里
-    ///     找到**该编号**的牌加入其手牌。编号＝UID 里**第一个下划线之前**的部分、不区分大小写
-    ///     （如 `JC001` 命中 `JC001_shenmibunan`）；卡组里没有该编号的牌 → **什么都不做**（只打日志）；
-    ///     有多张 → **随机**挑一张。`数量` 表示最多取几张（取满/取不到即停）。
-    ///     简写 `draw &lt;卡牌编号&gt;`（省略数量）＝取 1 张。
+    /// 玩家参数统一口径（2026-10 用户裁定）：`1`＝P1、`2`＝P2。
+    /// **同一个玩家参数同时表示"从哪个玩家卡组/区域找牌"与"卡加到哪个玩家"**，不接受其它取值。
     /// </summary>
-    private void ExecuteDraw(string[] parts)
+    private static bool TryParsePlayerToken(string token, out int playerId)
     {
-        if (parts.Length < 2) { GD.Print("❌ 用法: draw <玩家 1|2> [数量] / draw <数量> <卡牌编号> [玩家 1|2]"); return; }
-
-        // 旧语法：`draw <玩家> [数量]`（第一个参数是玩家号；第二个参数缺省或是数字）
-        bool oldForm = int.TryParse(parts[1], out _)
-                       && (parts.Length < 3 || int.TryParse(parts[2], out _));
-        if (oldForm)
-        {
-            if (!int.TryParse(parts[1], out int playerId) || (playerId != 1 && playerId != 2))
-            { GD.Print("❌ 用法: draw <玩家 1|2> [数量]"); return; }
-            int count = 1;
-            if (parts.Length >= 3 && int.TryParse(parts[2], out int n) && n > 0) count = n;
-            _onDraw?.Invoke(playerId, count);
-            GD.Print($"✅ 玩家{playerId} 抽牌 {count} 张（已加入手牌区）");
-            return;
-        }
-
-        // 新语法：`draw <数量> <卡牌编号> [玩家]`（或简写 `draw <卡牌编号>`）
-        int take = 1;
-        string code;
-        int player = 1;
-        if (parts.Length == 2)
-        {
-            code = parts[1];                                   // 简写：draw JC001
-        }
-        else
-        {
-            if (!int.TryParse(parts[1], out take) || take <= 0)
-            { GD.Print("❌ 用法: draw <数量> <卡牌编号> [玩家 1|2]"); return; }
-            code = parts[2];
-            if (parts.Length >= 4 && int.TryParse(parts[3], out int p) && (p == 1 || p == 2)) player = p;
-        }
-        DrawSpecificCards(player, take, code);
+        playerId = 0;
+        if (token == "1") { playerId = 1; return true; }
+        if (token == "2") { playerId = 2; return true; }
+        return false;
     }
 
-    /// <summary>卡牌编号归一化：取 UID 中**第一个下划线之前**的部分（不区分大小写比较）。</summary>
+    /// <summary>玩家参数用法错误提示（统一文案，避免各命令各写一套）。</summary>
+    private static string PlayerUsageError(string cmd) =>
+        $"❌ 玩家参数必须是 1 或 2（1=P1，2=P2），且必须在第一位。用法: {cmd} <玩家 1|2> ...";
+
+    /// <summary>卡牌编号归一化：取模板 UID 中**第一个下划线之前**的部分（不区分大小写比较）。</summary>
     private static string NormalizeCardCode(string uid)
     {
         if (string.IsNullOrEmpty(uid)) return "";
@@ -375,39 +404,207 @@ public partial class PMCommandManager : Node
         return (idx > 0 ? uid.Substring(0, idx) : uid).Trim();
     }
 
-    /// <summary>`draw &lt;数量&gt; &lt;卡牌编号&gt;` 的实体：从玩家卡组定向取牌加入其手牌。</summary>
-    private void DrawSpecificCards(int playerId, int count, string code)
+    /// <summary>该卡的模板编号（`JC012` / `inst_37` 这类实例 UID 不算编号）。</summary>
+    private static string CardCodeOf(CardInstance card) => NormalizeCardCode(card?.PlayerTemplate?.UID);
+
+    /// <summary>该玩家卡组里编号匹配的牌（保持卡组顺序）。</summary>
+    private List<CardInstance> MatchInPlayerDeck(int playerId, string code)
+    {
+        var result = new List<CardInstance>();
+        if (_deckManager == null || string.IsNullOrEmpty(code)) return result;
+        var deck = playerId == 2 ? _deckManager.GetDeckPlayer2() : _deckManager.GetDeckPlayer1();
+        if (deck == null) return result;
+        foreach (var c in deck)
+            if (c != null && string.Equals(CardCodeOf(c), code, StringComparison.OrdinalIgnoreCase))
+                result.Add(c);
+        return result;
+    }
+
+    /// <summary>该玩家**除卡组外**各区域里编号匹配的牌（手牌/资产/争夺区/附属/封印/墓地/秘社/堆叠）。
+    /// 用于「卡组里没有该编号」时的可读错误提示与引用解析兜底。</summary>
+    private List<CardInstance> MatchInPlayerZones(int playerId, string code)
+    {
+        var result = new List<CardInstance>();
+        if (_zoneManager == null || string.IsNullOrEmpty(code)) return result;
+        var zones = new[]
+        {
+            CardZone.Hand, CardZone.AssetZone, CardZone.AreaZone, CardZone.AttachedZone,
+            CardZone.SealedZone, CardZone.Graveyard, CardZone.CouncilZone, CardZone.Stack,
+        };
+        foreach (var zone in zones)
+        {
+            var cards = _zoneManager.GetZoneCards(zone, playerId);
+            if (cards == null) continue;
+            foreach (var c in cards)
+                if (c != null && string.Equals(CardCodeOf(c), code, StringComparison.OrdinalIgnoreCase))
+                    result.Add(c);
+        }
+        return result;
+    }
+
+    /// <summary>该玩家编号匹配的牌总数（卡组 + 各区域），供"换一个玩家试试"类提示。用于日志分布统计。</summary>
+    private int CountCodeInPlayer(int playerId, string code)
+        => MatchInPlayerDeck(playerId, code).Count + MatchInPlayerZones(playerId, code).Count;
+
+    /// <summary>卡牌引用解析失败时的统一错误（含该编号在双方卡组/区域的分布，便于排查）。</summary>
+    private string DescribeCardLookupFailure(string token, int playerId)
+    {
+        string code = NormalizeCardCode(token);
+        // 含下划线的完整写法（如 JC012_weimushouwanghuiji）也按编号段比对
+        if (string.IsNullOrEmpty(code)) code = token;
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"❌ P{playerId} 卡组/区域中没有编号「{code}」的牌，也不是已有实例 UID（token={token}）");
+        int other = playerId == 1 ? 2 : 1;
+        int inDeck = MatchInPlayerDeck(playerId, code).Count;
+        int inZones = MatchInPlayerZones(playerId, code).Count;
+        int inOther = CountCodeInPlayer(other, code);
+        if (inDeck > 0 || inZones > 0)
+            sb.Append($"（该编号在 P{playerId} 的卡组 {inDeck} 张、其它区域 {inZones} 张）");
+        if (inOther > 0)
+            sb.Append($"；提示：编号「{code}」在 P{other} 侧有 {inOther} 张");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// **卡牌引用统一解析**（所有涉及卡牌参数的 PM 命令共用）：
+    ///  ① 先按**实例 UID**（`inst_37`）在全局实例表命中；
+    ///  ② 否则按**卡牌编号**（`JC012`）在**指定玩家**范围内命中：卡组 → 争夺区/附属/封印 → 手牌 → 资产 → 墓地/秘社/堆叠；
+    ///  ③ 同一编号有多张时**随机**挑一张（用 `_rng`）；`zoneFilter` 非空时逐张过滤（如 attach/seal 的宿主必须在场上）。
+    /// **搜索范围严格限定在 `playerId` 玩家内**：编号取牌只从"参数玩家"处找牌（2026-10 用户裁定）。
+    /// </summary>
+    private bool TryResolveCard(string token, int playerId, Func<CardInstance, bool> zoneFilter,
+                                out CardInstance card, out string how, out string error)
+    {
+        card = null;
+        how = null;
+        error = null;
+        if (string.IsNullOrWhiteSpace(token)) { error = "❌ 卡牌参数为空"; return false; }
+
+        // ① 实例 UID
+        var byUid = _cardManager?.GetInstance(token);
+        if (byUid != null && (zoneFilter == null || zoneFilter(byUid)))
+        {
+            card = byUid;
+            how = $"实例UID={token}";
+            return true;
+        }
+
+        // ② 编号：卡组 → 区域（候选与所在区域标签同步收集，避免错位）
+        string code = NormalizeCardCode(token);
+        if (string.IsNullOrEmpty(code)) code = token;
+
+        var candidates = new List<CardInstance>();
+        var labels = new List<string>();
+        void Take(List<CardInstance> src, string where)
+        {
+            foreach (var c in src)
+            {
+                if (c == null) continue;
+                if (zoneFilter != null && !zoneFilter(c)) continue;
+                candidates.Add(c);
+                labels.Add(where);
+            }
+        }
+        Take(MatchInPlayerDeck(playerId, code), "卡组");
+        Take(MatchInPlayerZones(playerId, code), "场上/其它区域");
+
+        if (candidates.Count == 0)
+        {
+            error = DescribeCardLookupFailure(token, playerId);
+            return false;
+        }
+        int pickIndex = candidates.Count == 1 ? 0 : _rng.Next(candidates.Count);
+        card = candidates[pickIndex];
+        how = $"编号「{code}」·P{playerId}·{labels[pickIndex]}";
+        return true;
+    }
+
+    /// <summary>
+    /// `draw` —— **玩家参数在第一位，且同时决定"从谁的卡组找"与"加到谁手牌"**（2026-10 用户裁定）：
+    ///  ① `draw &lt;玩家 1|2&gt;`                        → 该玩家从牌库顶抽 1 张；
+    ///  ② `draw &lt;玩家 1|2&gt; &lt;数量&gt;`               → 该玩家从牌库顶抽 <数量> 张（旧 `draw 1 5` 形态，逐字兼容）；
+    ///  ③ `draw &lt;玩家 1|2&gt; &lt;卡牌编号&gt;`            → **定向取牌**：从该玩家**卡组**取 1 张该编号的牌加入**该玩家**手牌；
+    ///  ④ `draw &lt;玩家 1|2&gt; 1 &lt;卡牌编号&gt;`          → 同 ③（显式数量只允许 1；编号取牌不支持多张）。
+    /// 语义要点：
+    ///  · 玩家参数缺省不再"静默按 P1"——**缺失或非 1/2 一律报错**（这是"draw 2 JC015 加进 P1 手牌"的根因）；
+    ///  · 编号取牌**不算"抓牌"**：不广播 `OnDraw`、不受"梦魇族群从牌库底抓牌"重定向、空库不判负
+    ///    （与 JC049「非抓牌式取牌」同口径）；
+    ///  · 卡组里没有该编号 → **明确报错**（并提示该编号在双方卡组/区域的分布），**绝不静默降级为普通抽牌**。
+    /// </summary>
+    private bool ExecuteDraw(string[] parts)
+    {
+        const string usage = "draw <玩家 1|2> [数量] [卡牌编号]";
+        if (parts.Length < 2) return Fail($"用法: {usage}");
+
+        // 玩家参数永远在第一位
+        if (!TryParsePlayerToken(parts[1], out int player))
+            return Fail(PlayerUsageError("draw") + $"（收到「{parts[1]}」）");
+
+        // ① draw <玩家>  —— 抽 1 张
+        if (parts.Length == 2)
+        {
+            _onDraw?.Invoke(player, 1);
+            GD.Print($"✅ 玩家{player} 抽牌 1 张（已加入手牌区）");
+            return true;
+        }
+
+        // ② draw <玩家> <数量>  —— 旧形态：牌库顶抽 <数量> 张
+        if (parts.Length == 3 && int.TryParse(parts[2], out int count) && count > 0)
+        {
+            _onDraw?.Invoke(player, count);
+            GD.Print($"✅ 玩家{player} 抽牌 {count} 张（已加入手牌区）");
+            return true;
+        }
+
+        // ③ draw <玩家> <卡牌编号>  —— 定向取牌（1 张）
+        if (parts.Length == 3)
+            return DrawSpecificCard(player, parts[2]);
+
+        // ④ draw <玩家> 1 <卡牌编号>  —— 显式数量；编号取牌不支持多张
+        if (parts.Length == 4)
+        {
+            if (!int.TryParse(parts[2], out int explicitTake) || explicitTake <= 0)
+                return Fail($"用法: {usage}");
+            if (explicitTake != 1)
+                return Fail($"按编号取牌不支持多张：一次只能从卡组取 1 张。请改用 `draw {player} 1 {parts[3]}`");
+            return DrawSpecificCard(player, parts[3]);
+        }
+
+        return Fail($"用法: {usage}");
+    }
+
+    /// <summary>打印并返回 false（统一"失败"出口，供 TryExecuteCommand 回执联机错误）。</summary>
+    private bool Fail(string error)
+    {
+        LastError = error;
+        GD.Print(error.StartsWith("❌") ? error : "❌ " + error);
+        return false;
+    }
+
+    /// <summary>
+    /// `draw &lt;玩家&gt; &lt;卡牌编号&gt;` 的实体：从**该玩家卡组**定向取 1 张该编号的牌，加入**该玩家**手牌。
+    /// 找不到 → 明确报错（含该编号在双方卡组/区域的分布），不静默降级。
+    /// </summary>
+    private bool DrawSpecificCard(int playerId, string codeToken)
     {
         if (TurnManagerRef == null || _deckManager == null || _zoneManager == null)
-        { GD.Print("❌ 定向取牌失败：TurnManager/DeckManager/ZoneManager 未注入"); return; }
-        string want = NormalizeCardCode(code);
-        if (string.IsNullOrEmpty(want)) { GD.Print("❌ 卡牌编号为空"); return; }
+            return Fail("定向取牌失败：TurnManager/DeckManager/ZoneManager 未注入");
 
-        int moved = 0;
-        var names = new List<string>();
-        for (int i = 0; i < count; i++)
-        {
-            var deck = playerId == 1 ? _deckManager.GetDeckPlayer1() : _deckManager.GetDeckPlayer2();
-            var matches = new List<CardInstance>();
-            foreach (var c in deck)
-                if (c != null && string.Equals(NormalizeCardCode(c.PlayerTemplate?.UID), want,
-                        StringComparison.OrdinalIgnoreCase))
-                    matches.Add(c);
-            if (matches.Count == 0) break;
-            var pick = matches.Count == 1 ? matches[0] : matches[_rng.Next(matches.Count)];
-            TurnManagerRef.RemoveCardFromDeckOf(playerId, pick);   // 先从牌库数据层移出（牌库不在区域桶里）
-            _zoneManager.MoveToHand(pick, playerId);               // 再加入手牌（照常广播移动事件）
-            names.Add(pick.PlayerTemplate?.CardName ?? pick.UID);
-            moved++;
-        }
+        string want = NormalizeCardCode(codeToken);
+        if (string.IsNullOrEmpty(want)) want = codeToken;
+        if (string.IsNullOrEmpty(want)) return Fail("卡牌编号为空");
 
-        if (moved == 0)
-        {
-            GD.Print($"ℹ️ 玩家{playerId} 卡组中没有编号「{want}」的牌 → 什么都不做");
-            return;
-        }
-        GD.Print($"✅ 定向取牌：玩家{playerId} 卡组 → 手牌 {moved} 张（编号「{want}」）：{string.Join("、", names)}");
+        var matches = MatchInPlayerDeck(playerId, want);
+        if (matches.Count == 0)
+            return Fail(DescribeCardLookupFailure(codeToken, playerId));
+
+        var pick = matches.Count == 1 ? matches[0] : matches[_rng.Next(matches.Count)];
+        TurnManagerRef.RemoveCardFromDeckOf(playerId, pick);   // 先从牌库数据层移出（牌库不在区域桶里）
+        _zoneManager.MoveToHand(pick, playerId);               // 再加入**该玩家**手牌（照常广播移动事件）
+        GD.Print($"✅ 定向取牌：P{playerId} 卡组 → P{playerId} 手牌 1 张（编号「{want}」）：" +
+                 $"{pick.PlayerTemplate?.CardName ?? pick.UID}");
         _onZoneChanged?.Invoke();
+        return true;
     }
 
     // ==================== 步骤跳转（调试） ====================
@@ -467,74 +664,97 @@ public partial class PMCommandManager : Node
     }
 
     // ==================== 卡牌区域移动 ====================
-    private void ExecuteMove(string[] parts)
+    /// <summary>
+    /// `move &lt;玩家 1|2&gt; &lt;卡牌编号|实例UID&gt; &lt;目标&gt; [目标玩家 1|2] [top|bottom]`
+    ///  · **玩家参数在第一位且同时是搜索域**（2026-10 用户裁定）：编号只从该玩家的卡组/区域里找；
+    ///    目标是 `hand/grave/asset/score/deck` 时，缺省"卡加到该玩家"；`目标玩家` 可显式覆盖；
+    ///  · 目标为纯数字 `1..N` ＝争夺区编号（越界显式报错，不再落到 default 分支）；
+    ///  · `deck` 可用 `top|bottom` 指定牌库顶/底（缺省底，与旧行为一致）。
+    /// </summary>
+    private bool ExecuteMove(string[] parts)
     {
+        const string usage = "move <玩家 1|2> <卡牌编号|实例UID> <目标> [目标玩家 1|2] [top|bottom]";
         if (parts.Length < 4)
         {
-            GD.Print("❌ 用法: move <UID> <玩家1|2> <目标>");
+            GD.Print($"❌ 用法: {usage}");
             GD.Print("   目标: 1..N(地区编号) / hand / grave / deck [top|bottom] / score / asset");
-            return;
+            return false;
         }
 
-        var uid = parts[1];
-        if (!int.TryParse(parts[2], out int playerId) || (playerId != 1 && playerId != 2))
-        { GD.Print("❌ 玩家必须是 1 或 2"); return; }
+        // ① 玩家参数（搜索域）
+        if (!TryParsePlayerToken(parts[1], out int searchPlayer))
+            return Fail(PlayerUsageError("move") + $"（收到「{parts[1]}」）");
 
-        var target = parts[3].ToLower();
-        var card = _cardManager.GetInstance(uid);
-        if (card == null) { GD.Print($"❌ 未找到卡牌: {uid}"); return; }
+        // ② 卡牌引用（编号只在 searchPlayer 范围内命中）
+        if (!TryResolveCard(parts[2], searchPlayer, null, out var card, out string how, out string error))
+            return Fail(error);
+
+        // ③ 目标（纯数字＝地区编号，先校验越界；避免把越界数字误当成"目标玩家"吞掉）
+        string target = parts[3].ToLower();
+        if (int.TryParse(target, out int parsedArea) && (parsedArea < 1 || parsedArea > CurrentAreaUids.Count))
+            return Fail($"无效地区编号 {parsedArea}，当前共 {CurrentAreaUids.Count} 个地区(1..{CurrentAreaUids.Count})");
+
+        // ④ 可选参数：目标玩家 / 牌库顶底
+        int destPlayer = searchPlayer;
+        string deckSide = null;
+        for (int i = 4; i < parts.Length; i++)
+        {
+            string tok = parts[i].ToLower();
+            if (TryParsePlayerToken(tok, out int p)) { destPlayer = p; continue; }
+            if (tok == "top" || tok == "bottom") { deckSide = tok; continue; }
+            return Fail($"无法识别的参数「{parts[i]}」。用法: {usage}");
+        }
 
         // 移动前实例归属
         int ownerBefore = card.OwnerId;
         int controllerBefore = card.ControllerId;
+        bool deckTarget = target is "deck" or "decktop" or "deckbottom";
+        bool toTop = target == "decktop" || deckSide == "top";
 
         // 目标为纯数字 -> 争夺区编号（1..N）
-        if (int.TryParse(target, out int areaNo) && areaNo >= 1 && areaNo <= CurrentAreaUids.Count)
+        if (int.TryParse(target, out int areaNo))
         {
             var areaUid = CurrentAreaUids[areaNo - 1];
-            _zoneManager.MoveToArea(card, areaUid, playerId);
-            GD.Print($"✅ {card.PlayerTemplate?.CardName} 移动到玩家{playerId}的争夺区{areaNo} ({areaUid})");
+            _zoneManager.MoveToArea(card, areaUid, destPlayer);
+            GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）移动到玩家{destPlayer}的争夺区{areaNo} ({areaUid})");
+        }
+        else if (deckTarget)
+        {
+            if (toTop) _zoneManager.MoveToDeckTop(card, destPlayer);
+            else _zoneManager.MoveToDeckBottom(card, destPlayer);
+            GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）返回玩家{destPlayer}牌库{(toTop ? "顶部" : "底部")}");
         }
         else
         {
             switch (target)
             {
                 case "hand":
-                    _zoneManager.MoveToHand(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 加入玩家{playerId}手牌");
+                    _zoneManager.MoveToHand(card, destPlayer);
+                    GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）加入玩家{destPlayer}手牌");
                     break;
                 case "grave":
-                    _zoneManager.MoveToGraveyard(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 进入墓地");
-                    break;
-                case "deck":
-                case "deckbottom":
-                    _zoneManager.MoveToDeckBottom(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 返回玩家{playerId}牌库底部");
-                    break;
-                case "decktop":
-                    _zoneManager.MoveToDeckTop(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 返回玩家{playerId}牌库顶部");
+                    _zoneManager.MoveToGraveyard(card, destPlayer);
+                    GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）进入玩家{destPlayer}墓地");
                     break;
                 case "score":
-                    _zoneManager.MoveToScore(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 进入玩家{playerId}得分区");
+                    _zoneManager.MoveToScore(card, destPlayer);
+                    GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）进入玩家{destPlayer}得分区");
                     break;
                 case "asset":
-                    _zoneManager.MoveToAsset(card, playerId);
-                    GD.Print($"✅ {card.PlayerTemplate?.CardName} 进入玩家{playerId}资产区（保留状态）");
+                    _zoneManager.MoveToAsset(card, destPlayer);
+                    GD.Print($"✅ {card.PlayerTemplate?.CardName}（{how}）进入玩家{destPlayer}资产区（保留状态）");
                     break;
                 default:
-                    GD.Print($"❌ 未知目标区域: {target}（支持 1..N(地区)/hand/grave/deck[top|bottom]/score/asset）");
-                    return;
+                    return Fail($"未知目标区域: {target}（支持 1..N(地区)/hand/grave/deck[top|bottom]/score/asset）");
             }
         }
 
         // 移动前后实例归属对比输出
-        GD.Print($"📦 移动归属变化 [{card.PlayerTemplate?.CardName} | {uid}]：" +
+        GD.Print($"📦 移动归属变化 [{card.PlayerTemplate?.CardName} | {card.UID}]：" +
                  $"OwnerId {ownerBefore}→{card.OwnerId}，ControllerId {controllerBefore}→{card.ControllerId}");
 
         _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>横置指定卡牌的实例（与支付费用横置一致）</summary>
@@ -662,19 +882,51 @@ public partial class PMCommandManager : Node
         instance.SealedCards.Clear();
     }
 
-    // ==================== 对抗窗口（调查/战斗） ====================
-    private void ExecuteInvestigation(string[] parts)
-    {
-        // 用法: investigation <玩家 1|2> <地区 areaNo> <X>
-        if (parts.Length < 4) { GD.Print("❌ 用法: investigation <玩家 1|2> <地区 areaNo> <X>"); return; }
-        if (!int.TryParse(parts[1], out int winner) || (winner != 1 && winner != 2)) { GD.Print("❌ 玩家必须是 1 或 2"); return; }
-        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1) { GD.Print("❌ 无效地区编号"); return; }
-        if (!int.TryParse(parts[3], out int x) || x <= 0) { GD.Print("❌ X 必须是正整数"); return; }
+    // ==================== 对抗命令（调查/战斗/势力） ====================
+    // 【2026-10 联机修复】三条命令统一经 `CombatManager.ResolveCombatFromDebug` 结算：
+    //  · 单机（注入 _openCombatWindow）→ 由 Arena 侧转调 CombatManager → 走"正规结算"事件链弹本机窗口；
+    //  · 联机服务端（无本机窗口）→ 直接经决策协议（IInputGateway）把对抗窗口下发/回收到对应玩家。
+    // 旧实现在联机下 `_openCombatWindow == null` 就直接打印"回调未初始化"什么都不做（用户实测）。
 
-        // 通过注入的回调打开窗口（不直接持有 Arena），保持 MVC 边界
-        if (_openCombatWindow == null) { GD.Print("❌ 对抗窗口回调未初始化"); return; }
-        _openCombatWindow.Invoke(CombatManager.CombatType.Investigation, winner, x, areaNo);
-        GD.Print($"✅ 打开调查对抗窗口（玩家P{winner}，地区area{areaNo}，X={x}）");
+    /// <summary>解析"胜者 + 地区号 + X"，并校验地区号在有效范围内；失败时经 `Fail` 记录可回执的错误。</summary>
+    private bool TryParseCombatArgs(string[] parts, string cmd, out int winner, out int areaNo, out int x)
+    {
+        winner = 0; areaNo = 0; x = 0;
+        if (parts.Length < 4) return Fail($"用法: {cmd} <玩家 1|2> <地区 areaNo> <X>");
+        if (!TryParsePlayerToken(parts[1], out winner))
+            return Fail(PlayerUsageError(cmd) + $"（收到「{parts[1]}」）");
+        if (!int.TryParse(parts[2], out areaNo) || areaNo < 1)
+            return Fail("无效地区编号（必须是正整数）");
+        if (areaNo > CurrentAreaUids.Count)
+            return Fail($"无效地区编号 {areaNo}，当前共 {CurrentAreaUids.Count} 个地区(1..{CurrentAreaUids.Count})");
+        if (!int.TryParse(parts[3], out x) || x <= 0)
+            return Fail("X 必须是正整数");
+        return true;
+    }
+
+    /// <summary>
+    /// `investigation &lt;玩家 1|2&gt; &lt;地区 areaNo&gt; &lt;X&gt;` —— 调查对抗：胜者从牌库顶查看 X 张，
+    /// 分配放回顶/底后抽 1 张。单机弹本机窗口；联机经决策协议下发到胜者客户端。
+    /// </summary>
+    private bool ExecuteInvestigation(string[] parts)
+    {
+        if (!TryParseCombatArgs(parts, "investigation", out int winner, out int areaNo, out int x))
+            return false;
+
+        // 单机：经注入回调交给 Arena → CombatManager.ResolveCombatFromDebug（走正规结算链，含获胜触发）
+        if (_openCombatWindow != null)
+        {
+            _openCombatWindow.Invoke(CombatManager.CombatType.Investigation, winner, x, areaNo);
+            GD.Print($"✅ 调查对抗：P{winner} 在地区{areaNo} 获胜 X={x}（单机：走本机对抗窗口 + 正规结算链）");
+            return true;
+        }
+
+        // 联机服务端（无本机窗口）：经决策协议把对抗窗口下发/回收到对应玩家
+        if (CombatManagerRef == null)
+            return Fail("调查对抗未生效：既无本机窗口回调，CombatManagerRef 也未注入");
+        CombatManagerRef.ResolveCombatFromDebug(CombatManager.CombatType.Investigation, areaNo, winner, x);
+        GD.Print($"✅ 调查对抗：P{winner} 在地区{areaNo} 获胜 X={x}（联机：已经决策协议下发窗口）");
+        return true;
     }
 
     /// <summary>打印卡组内容物（按卡组内真实顺序，索引 0 = 牌库顶）。用法: deck [1|2]</summary>
@@ -698,29 +950,37 @@ public partial class PMCommandManager : Node
         GD.Print($"========== 玩家{playerId} 卡组打印结束 ==========");
     }
 
-    private void ExecuteStrength(string[] parts)
+    /// <summary>
+    /// `battle &lt;玩家 1|2&gt; &lt;地区 areaNo&gt; &lt;获胜点 X&gt;` —— 战斗对抗：败方该地区角色分配 X 点伤害。
+    /// 单机弹本机窗口；联机经决策协议下发到胜者客户端。
+    /// </summary>
+    private bool ExecuteStrength(string[] parts)
     {
-        // 用法: battle <玩家 1|2> <地区 areaNo> <获胜点 X>
-        if (parts.Length < 4) { GD.Print("❌ 用法: battle <玩家 1|2> <地区 areaNo> <获胜点 X>"); return; }
-        if (!int.TryParse(parts[1], out int winner) || (winner != 1 && winner != 2)) { GD.Print("❌ 玩家必须是 1 或 2"); return; }
-        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1) { GD.Print("❌ 无效地区编号"); return; }
-        if (!int.TryParse(parts[3], out int x) || x <= 0) { GD.Print("❌ 获胜点 X 必须是正整数"); return; }
+        if (!TryParseCombatArgs(parts, "battle", out int winner, out int areaNo, out int x)) return false;
 
-        // 通过注入的回调打开窗口（不直接持有 Arena），保持 MVC 边界
-        if (_openCombatWindow == null) { GD.Print("❌ 对抗窗口回调未初始化"); return; }
-        _openCombatWindow.Invoke(CombatManager.CombatType.Strength, winner, x, areaNo);
-        GD.Print($"✅ 打开战斗对抗窗口（玩家P{winner}，地区area{areaNo}，获胜{x}点），点击败方该地区的角色分配伤害");
+        if (_openCombatWindow != null)
+        {
+            _openCombatWindow.Invoke(CombatManager.CombatType.Strength, winner, x, areaNo);
+            GD.Print($"✅ 战斗对抗：P{winner} 在地区{areaNo} 获胜 {x} 点（单机：走本机对抗窗口 + 正规结算链）");
+            return true;
+        }
+
+        if (CombatManagerRef == null)
+            return Fail("战斗对抗未生效：既无本机窗口回调，CombatManagerRef 也未注入");
+        CombatManagerRef.ResolveCombatFromDebug(CombatManager.CombatType.Strength, areaNo, winner, x);
+        GD.Print($"✅ 战斗对抗：P{winner} 在地区{areaNo} 获胜 {x} 点（联机：已经决策协议下发窗口）");
+        return true;
     }
 
-    /// <summary>势力对抗：在指定地区为指定玩家直接添加势力标记。用法: power <玩家 1|2> <地区 1|2|3> <点数></summary>
-    private void ExecutePower(string[] parts)
+    /// <summary>
+    /// 势力对抗：在指定地区为指定玩家直接添加势力标记（瞬时结算，**不弹窗**）。
+    /// 用法: power &lt;玩家 1|2&gt; &lt;地区 1..N&gt; &lt;点数&gt;
+    /// </summary>
+    private bool ExecutePower(string[] parts)
     {
-        if (parts.Length < 4) { GD.Print("❌ 用法: power <玩家 1|2> <地区 1|2|3> <点数>"); return; }
-        if (!int.TryParse(parts[1], out int playerId) || (playerId != 1 && playerId != 2)) { GD.Print("❌ 玩家必须是 1 或 2"); return; }
-        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count) { GD.Print($"❌ 无效地区编号，当前共 {CurrentAreaUids.Count} 个地区(1..{CurrentAreaUids.Count})"); return; }
-        if (!int.TryParse(parts[3], out int points) || points <= 0) { GD.Print("❌ 点数必须是正整数"); return; }
+        if (!TryParseCombatArgs(parts, "power", out int playerId, out int areaNo, out int points)) return false;
 
-        if (_areaManager == null) { GD.Print("❌ AreaManager 未初始化"); return; }
+        if (_areaManager == null) return Fail("AreaManager 未初始化");
         var areaUid = CurrentAreaUids[areaNo - 1];
         _areaManager.AddPowerMark(areaUid, playerId, points);
         GD.Print($"✅ 势力对抗：玩家{playerId} 在地区{areaNo} 获胜{points}点（已添加势力标记）");
@@ -728,28 +988,63 @@ public partial class PMCommandManager : Node
         // 规则不变：标记达标即结算赢取地区；仅时机改由命令结尾（非嵌套上下文）进行。
         if (_stackManager != null)
             _areaManager.TryStartAreaWin(_stackManager);
+        return true;
     }
 
-    /// <summary>快速建立资产：从玩家卡组顶部取 num 张置入资产区。用法: setassetfromdeck <玩家 1|2> <num></summary>
-    private void ExecuteSetAssetFromDeck(string[] parts)
+    /// <summary>
+    /// 快速建立资产：从**参数玩家**卡组取牌置入**该玩家**资产区（2026-10 用户裁定：编号只从该玩家卡组找）。
+    /// 用法: setassetfromdeck &lt;玩家 1|2&gt; &lt;num&gt;          - 该玩家卡组顶 num 张
+    ///       setassetfromdeck &lt;玩家 1|2&gt; &lt;卡牌编号&gt; [num]  - 该玩家卡组中该编号的牌（num 缺省 1，编号不重复取）
+    /// </summary>
+    private bool ExecuteSetAssetFromDeck(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: setassetfromdeck <玩家 1|2> <num>"); return; }
-        if (!int.TryParse(parts[1], out int playerId) || (playerId != 1 && playerId != 2)) { GD.Print("❌ 玩家必须是 1 或 2"); return; }
-        if (!int.TryParse(parts[2], out int num) || num <= 0) { GD.Print("❌ num 必须是正整数"); return; }
+        const string usage = "setassetfromdeck <玩家 1|2> <num> | <玩家 1|2> <卡牌编号> [num]";
+        if (parts.Length < 3) return Fail($"用法: {usage}");
+        if (!TryParsePlayerToken(parts[1], out int playerId))
+            return Fail(PlayerUsageError("setassetfromdeck") + $"（收到「{parts[1]}」）");
 
-        if (_deckManager == null) { GD.Print("❌ DeckManager 未初始化"); return; }
-        var deck = playerId == 1 ? _deckManager.GetPlayer1DeckData() : _deckManager.GetPlayer2DeckData();
-        int actual = Math.Min(num, deck.Count);
-        if (actual == 0) { GD.Print($"⚠️ 玩家{playerId}卡组为空，无法建立资产"); return; }
+        if (_deckManager == null) return Fail("DeckManager 未初始化");
 
-        for (int i = 0; i < actual; i++)
+        // —— 形态①：数量（卡组顶 N 张）——
+        if (int.TryParse(parts[2], out int num))
         {
-            var card = deck[i];
-            _zoneManager.MoveToAsset(card, playerId);
-            GD.Print($"✅ {card.PlayerTemplate?.CardName} 移入玩家{playerId}资产区");
+            if (num <= 0) return Fail("num 必须是正整数");
+            var deck = playerId == 2 ? _deckManager.GetPlayer2DeckData() : _deckManager.GetPlayer1DeckData();
+            int actual = Math.Min(num, deck.Count);
+            if (actual == 0) return Fail($"玩家{playerId}卡组为空，无法建立资产");
+
+            for (int i = 0; i < actual; i++)
+            {
+                var card = deck[i];
+                _zoneManager.MoveToAsset(card, playerId);
+                GD.Print($"✅ {card.PlayerTemplate?.CardName} 移入玩家{playerId}资产区");
+            }
+            GD.Print($"✅ 玩家{playerId} 从卡组顶部移入 {actual} 张至资产区（请求 {num} 张）");
+            _onZoneChanged?.Invoke();
+            return true;
         }
-        GD.Print($"✅ 玩家{playerId} 从卡组顶部移入 {actual} 张至资产区（请求 {num} 张）");
+
+        // —— 形态②：卡牌编号（从**该玩家**卡组按编号取）——
+        string code = NormalizeCardCode(parts[2]);
+        if (string.IsNullOrEmpty(code)) code = parts[2];
+        int want = 1;
+        if (parts.Length >= 4 && (!int.TryParse(parts[3], out want) || want <= 0))
+            return Fail($"用法: {usage}");
+
+        var matches = MatchInPlayerDeck(playerId, code);
+        if (matches.Count == 0)
+            return Fail(DescribeCardLookupFailure(parts[2], playerId));
+        int moved = 0;
+        for (int i = 0; i < matches.Count && moved < want; i++)
+        {
+            var card = matches[i];
+            _zoneManager.MoveToAsset(card, playerId);
+            GD.Print($"✅ {card.PlayerTemplate?.CardName}({card.UID}) 从 P{playerId} 卡组移入 P{playerId} 资产区");
+            moved++;
+        }
+        GD.Print($"✅ 按编号建立资产：P{playerId} 卡组 → 资产区 {moved} 张（编号「{code}」，请求 {want} 张）");
         _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
@@ -781,47 +1076,100 @@ public partial class PMCommandManager : Node
     // ==================== 附属系统（PM 调试用，配合离场连带/地区赢取验证） ====================
 
     /// <summary>
+    /// 解析"可选玩家参数 + 一个卡牌引用"（attach/seal/attacharea/sealarea 共用）：
+    ///  · 写法 A（带玩家，推荐）：`&lt;玩家 1|2&gt; &lt;卡牌编号|UID&gt; ...` → 编号只在该玩家范围内命中；
+    ///  · 写法 B（不带玩家，兼容旧写法）：`&lt;卡牌编号|UID&gt; ...` → 缺省取**当前行动权玩家**并打印提醒。
+    /// 成功后 `cardIndex` 指向卡牌参数、`restIndex`＝卡牌参数的下一个下标（供后续位置参数使用）。
+    /// </summary>
+    private bool TryTakePlayerAndCard(string[] parts, string cmd, int minLength,
+                                      out int searchPlayer, out int cardIndex, out int restIndex, out string error)
+    {
+        searchPlayer = 0; cardIndex = 0; restIndex = 0; error = null;
+
+        if (parts.Length < minLength)
+        {
+            error = $"❌ 用法: {cmd} [玩家 1|2] <卡牌编号|实例UID> ...";
+            return false;
+        }
+
+        bool hasPlayer = TryParsePlayerToken(parts[1], out searchPlayer);
+        if (!hasPlayer)
+        {
+            searchPlayer = CurrentPriorityPlayer();   // 兼容旧写法（不带玩家参数）
+            GD.Print($"ℹ️ {cmd}: 未指定玩家参数 → 按当前行动权玩家 P{searchPlayer} 搜索" +
+                     $"（建议显式写 `{cmd} {searchPlayer} ...`）");
+        }
+        cardIndex = hasPlayer ? 2 : 1;
+        restIndex = cardIndex + 1;
+        return true;
+    }
+
+    /// <summary>当前行动权玩家（缺省 P1）：用于 attach/seal 未显式给出玩家参数时的搜索域。</summary>
+    private int CurrentPriorityPlayer()
+    {
+        int p = TurnManagerRef?.PriorityPlayerId ?? 0;
+        return (p == 1 || p == 2) ? p : 1;
+    }
+
+    /// <summary>
     /// 把附属结附到场上（或任意区域）的宿主卡：建立双向引用、标记 IsAttached。
     /// 不移动区域，要求附属与宿主当前处于同一区域（通常都已在争夺区）。
-    /// 用法: attach <附属UID> <宿主UID>
+    /// 用法: attach [玩家 1|2] &lt;附属编号|UID&gt; &lt;宿主编号|UID&gt;
+    ///  · 玩家参数在第一位＝**搜索域**（编号只从该玩家的卡组/区域里找）；缺省取当前行动权玩家并打印提醒。
+    ///  · 宿主必须是**场上的角色/附属**（zoneFilter 保证不会因为"卡组里也有同编号"而错挑）。
     /// </summary>
-    private void ExecuteAttach(string[] parts)
+    private bool ExecuteAttach(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: attach <附属UID> <宿主UID>"); return; }
-        var att = _cardManager.GetInstance(parts[1]);
-        var host = _cardManager.GetInstance(parts[2]);
-        if (att == null) { GD.Print($"❌ 未找到附属卡: {parts[1]}"); return; }
-        if (host == null) { GD.Print($"❌ 未找到宿主卡: {parts[2]}"); return; }
-        if (att.AttachedTo != null) { GD.Print($"⚠️ {att.UID} 已结附于 {att.AttachedTo.UID}，先 detach"); return; }
+        if (!TryTakePlayerAndCard(parts, "attach", 3, out int player, out int ci, out int rest, out string err))
+            return Fail(err);
+        if (parts.Length < rest + 1) return Fail("用法: attach [玩家 1|2] <附属编号|UID> <宿主编号|UID>");
+
+        if (!TryResolveCard(parts[ci], player, null, out var att, out string howAtt, out string e1))
+            return Fail("未找到附属卡：" + e1);
+        // 宿主必须是场上的卡（角色或地区附属/结附在角色上的附属均处于 AreaZone/AttachedZone）
+        if (!TryResolveCard(parts[rest], player,
+                c => c.CurrentZone == CardZone.AreaZone || c.CurrentZone == CardZone.AttachedZone,
+                out var host, out string howHost, out string e2))
+            return Fail("未找到场上宿主卡：" + e2);
+
+        if (att.AttachedTo != null) return Fail($"{att.UID} 已结附于 {att.AttachedTo.UID}，先 detach");
 
         att.AttachedTo = host;
         att.IsAttached = true;
         if (!host.AttachedCards.Contains(att))
             host.AttachedCards.Add(att);
         // 移动到附属子区域（不进 _area），CurrentZone=AttachedZone，UI 挂宿主容器；ZoneDetailId=宿主所在地区
-        _zoneManager.MoveToAttachedZone(att, host.ZoneDetailId, att.ControllerId == 0 ? 1 : att.ControllerId);
-        GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}) 结附到宿主 {host.PlayerTemplate?.CardName}({host.UID})");
+        _zoneManager.MoveToAttachedZone(att, host.ZoneDetailId, att.ControllerId == 0 ? player : att.ControllerId);
+        GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到宿主 " +
+                 $"{host.PlayerTemplate?.CardName}({host.UID}·{howHost})");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
     /// 把附属结附到指定地区（作为"结附于地区的附属"，独立存在于地区上、不依附角色）。
-    /// 用法: attacharea <附属UID> <地区编号 1..N>
+    /// 用法: attacharea [玩家 1|2] &lt;附属编号|UID&gt; &lt;地区编号 1..N&gt;
     /// </summary>
-    private void ExecuteAttachToArea(string[] parts)
+    private bool ExecuteAttachToArea(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: attacharea <附属UID> <地区编号>"); return; }
-        var att = _cardManager.GetInstance(parts[1]);
-        if (att == null) { GD.Print($"❌ 未找到附属卡: {parts[1]}"); return; }
-        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
-        { GD.Print($"❌ 无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})"); return; }
+        if (!TryTakePlayerAndCard(parts, "attacharea", 3, out int player, out int ci, out int rest, out string err))
+            return Fail(err);
+        if (parts.Length < rest + 1) return Fail("用法: attacharea [玩家 1|2] <附属编号|UID> <地区编号>");
+
+        if (!TryResolveCard(parts[ci], player, null, out var att, out string howAtt, out string e1))
+            return Fail("未找到附属卡：" + e1);
+        if (!int.TryParse(parts[rest], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
+            return Fail($"无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})");
 
         // 结附地区：用 ZoneDetailId 标记为地区附属（与角色附属区分），并置于该争夺区
         var areaUid = CurrentAreaUids[areaNo - 1];
         att.AttachedTo = null;             // 地区附属不指向具体角色
         att.IsAttached = true;
         att.ZoneDetailId = areaUid;
-        _zoneManager.MoveToAttachedZone(att, areaUid, att.ControllerId == 0 ? 1 : att.ControllerId);
-        GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}) 结附到地区{areaNo}({areaUid})");
+        _zoneManager.MoveToAttachedZone(att, areaUid, att.ControllerId == 0 ? player : att.ControllerId);
+        GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到地区{areaNo}({areaUid})");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
@@ -846,21 +1194,26 @@ public partial class PMCommandManager : Node
     // ==================== 封印系统（PM 调试用，配合离场连带/地区赢取验证） ====================
 
     /// <summary>
-    /// 把封印卡封印到场上（或任意区域）的目标卡：建立双向引用、标记 IsSealed（标在目标卡上）。
+    /// 把封印卡封印到场上的目标卡：建立双向引用、标记 IsSealed（标在目标卡上）。
     /// 封印卡一律移动到目标所在争夺区（与 attacharea 行为一致，统一由 ZoneManager 管理区域）。
     /// 守卫：目标卡必须处于场上（AreaZone），手牌/卡组的卡暂不可被封印（需求⑨）。
-    /// 用法: seal <封印卡UID> <目标卡UID>
+    /// 用法: seal [玩家 1|2] &lt;封印卡编号|UID&gt; &lt;目标卡编号|UID&gt;
+    ///  · 玩家参数在第一位＝**搜索域**；缺省取当前行动权玩家并打印提醒。
+    ///  · 目标必须是场上卡（zoneFilter 保证"卡组里也有同编号"时不会错挑到卡组那张）。
     /// </summary>
-    private void ExecuteSeal(string[] parts)
+    private bool ExecuteSeal(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: seal <封印卡UID> <目标卡UID>"); return; }
-        var seal = _cardManager.GetInstance(parts[1]);
-        var target = _cardManager.GetInstance(parts[2]);
-        if (seal == null) { GD.Print($"❌ 未找到封印卡: {parts[1]}"); return; }
-        if (target == null) { GD.Print($"❌ 未找到目标卡: {parts[2]}"); return; }
-        if (target.CurrentZone != CardZone.AreaZone)
-        { GD.Print($"❌ 目标卡 {target.UID} 不在场上（当前区域={target.CurrentZone}），暂不可被封印（手牌/卡组封印后续支持）"); return; }
-        if (seal.SealedBy != null) { GD.Print($"⚠️ {seal.UID} 已被 {seal.SealedBy.UID} 封印，先 unseal"); return; }
+        if (!TryTakePlayerAndCard(parts, "seal", 3, out int player, out int ci, out int rest, out string err))
+            return Fail(err);
+        if (parts.Length < rest + 1) return Fail("用法: seal [玩家 1|2] <封印卡编号|UID> <目标卡编号|UID>");
+
+        if (!TryResolveCard(parts[ci], player, null, out var seal, out string howSeal, out string e1))
+            return Fail("未找到封印卡：" + e1);
+        if (!TryResolveCard(parts[rest], player,
+                c => c.CurrentZone == CardZone.AreaZone, out var target, out string howTarget, out string e2))
+            return Fail("未找到场上目标卡：" + e2);
+
+        if (seal.SealedBy != null) return Fail($"{seal.UID} 已被 {seal.SealedBy.UID} 封印，先 unseal");
 
         // 封印卡移动到目标所在地区（ZoneDetailId=目标所在地区），与目标同区
         seal.SealedBy = target;            // 封印卡记录被谁封印（对称 AttachedTo）
@@ -869,22 +1222,28 @@ public partial class PMCommandManager : Node
         target.SealedCards.Add(seal);      // 目标卡记录封印了哪些（对称 AttachedCards）
         target.IsSealed = true;            // 标记被封印（供封印关系/触发触点识别）
         // 封印卡移动到封印子区域（不进 _area），CurrentZone=SealedZone，UI 在 ArrangeAllSeals 做向上偏移
-        _zoneManager.MoveToSealedZone(seal, target.ZoneDetailId, seal.ControllerId == 0 ? 1 : seal.ControllerId);
-        GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}) 封印目标 {target.PlayerTemplate?.CardName}({target.UID})（已移入封印子区域 {target.ZoneDetailId}）");
+        _zoneManager.MoveToSealedZone(seal, target.ZoneDetailId, seal.ControllerId == 0 ? player : seal.ControllerId);
+        GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}·{howSeal}) 封印目标 " +
+                 $"{target.PlayerTemplate?.CardName}({target.UID}·{howTarget})（已移入封印子区域 {target.ZoneDetailId}）");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
-    /// 把封印卡封印到指定地区（作为"封印于地区的封印"，独立存在于地区上、不依附角色）。
+    /// 把封印卡封印到指定地区（作为"封印于地区的封印"，独立存在于地区上，不依附角色）。
     /// 封印卡移动到该争夺区，UI 挂 GetAreaContainer（无偏移，区别于封印角色时的向上偏移）。
-    /// 用法: sealarea <封印卡UID> <地区编号 1..N>
+    /// 用法: sealarea [玩家 1|2] &lt;封印卡编号|UID&gt; &lt;地区编号 1..N&gt;
     /// </summary>
-    private void ExecuteSealToArea(string[] parts)
+    private bool ExecuteSealToArea(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: sealarea <封印卡UID> <地区编号>"); return; }
-        var seal = _cardManager.GetInstance(parts[1]);
-        if (seal == null) { GD.Print($"❌ 未找到封印卡: {parts[1]}"); return; }
-        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
-        { GD.Print($"❌ 无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})"); return; }
+        if (!TryTakePlayerAndCard(parts, "sealarea", 3, out int player, out int ci, out int rest, out string err))
+            return Fail(err);
+        if (parts.Length < rest + 1) return Fail("用法: sealarea [玩家 1|2] <封印卡编号|UID> <地区编号>");
+
+        if (!TryResolveCard(parts[ci], player, null, out var seal, out string howSeal, out string e1))
+            return Fail("未找到封印卡：" + e1);
+        if (!int.TryParse(parts[rest], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
+            return Fail($"无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})");
 
         // 封印于地区：SealedBy=null + ZoneDetailId=地区UID 标记，并置于该争夺区（对称 attacharea）
         // 封印于地区不标 IsSealed（IsSealed 用于单卡压制守卫）；地区封印靠 SealedBy=null + ZoneDetailId 标识
@@ -893,8 +1252,10 @@ public partial class PMCommandManager : Node
         seal.IsSeal = true;                // 标记本卡为封印卡（封印于地区），供地区赢取/UI 识别
         seal.IsSealed = false;
         seal.ZoneDetailId = areaUid;
-        _zoneManager.MoveToSealedZone(seal, areaUid, seal.ControllerId == 0 ? 1 : seal.ControllerId);
-        GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}) 封印到地区{areaNo}({areaUid})");
+        _zoneManager.MoveToSealedZone(seal, areaUid, seal.ControllerId == 0 ? player : seal.ControllerId);
+        GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}·{howSeal}) 封印到地区{areaNo}({areaUid})");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
@@ -924,69 +1285,84 @@ public partial class PMCommandManager : Node
 
     private void ExecuteHelp()
     {
-        GD.Print(@"
-========== PM命令帮助 ==========
-  damage area <索引> <数值>   - 对地区所有角色造成伤害
-  damage card <UID> <数值>    - 对指定卡牌造成伤害
-  damage hand <索引> <数值>   - 对手牌指定位置造成伤害
-  trauma ...                  - 同 damage，但造成创伤
-  reset                       - 重置所有伤害标记
-  list                        - 列出所有卡牌状态
-  kill card <UID>             - 强制杀死卡牌
-  heal card <UID> [数值]      - 清除伤害（不填则完全清除）
-  draw <玩家 1|2> [数量]      - 指定玩家抽牌（默认1张，从牌库顶）
-  draw <数量> <卡牌编号> [玩家] - 【定向取牌】从该玩家（缺省P1）卡组取指定编号的牌加入其手牌
-                               编号＝UID 下划线前的部分，不区分大小写（如 JC001）；
-                               卡组里没有 → 什么都不做；有多张 → 随机一张；数量＝最多取几张
-                               简写 draw JC001 ＝取 1 张
+        // 用**原始字符串字面量**（"""）承载帮助正文：正文里含有直角引号与双引号，@"" 会被提前截断（CS1010）。
+        GD.Print("""
+========== PM命令帮助（2026-10 修订：玩家参数第一位） ==========
+  ★ 统一口径：凡是带卡牌参数的命令，**玩家参数（1=P1 / 2=P2）必须在第一位**，
+    它同时决定【从哪个玩家的卡组/区域找牌】与【把卡加到哪个玩家】。
+    玩家参数缺失或不是 1|2 一律报错（不会再静默按 P1 处理）。
+
+  ---- 抽牌 ----
+  draw <玩家 1|2>                  - 该玩家从牌库顶抽 1 张
+  draw <玩家 1|2> <数量>           - 该玩家从牌库顶抽 <数量> 张（如 draw 1 5）
+  draw <玩家 1|2> <卡牌编号>       - 【定向取牌·1张】从**该玩家卡组**取该编号的牌加入**该玩家**手牌
+                                    编号＝模板 UID 下划线前的部分，不区分大小写（如 JC015）
+                                    卡组里没有 → 明确报错（含该编号在双方卡组/区域的分布），
+                                    绝不静默降级为普通抽牌
+                                    例：draw 2 JC015 ＝ P2 卡组取 1 张 JC015 给 P2
+  draw <玩家 1|2> 1 <卡牌编号>     - 同上（显式数量只允许 1；**编号取牌不支持多张**）
+  注：按编号取牌**不算"抓牌"**（不触发"每当你抓牌时"、不受牌库底抓牌重定向、空库不判负）
+  player1draw [数量] / player2draw [数量] - 固定玩家号抽牌（牌库顶）
+
+  ---- 移动 / 建资产 ----
+  move <玩家 1|2> <卡牌编号|实例UID> <目标> [目标玩家 1|2] [top|bottom]
+                                   - 从**该玩家**卡组/区域找牌并移动；
+                                     目标: 1..N(地区编号) / hand / grave / deck[top|bottom] / score / asset
+                                     目标玩家缺省＝搜索玩家；地区号越界会明确报错
+  setassetfromdeck <玩家 1|2> <num>        - 从**该玩家**卡组顶取 num 张进**该玩家**资产区
+  setassetfromdeck <玩家 1|2> <卡牌编号> [num] - 从该玩家卡组按编号取（缺省 1 张）
+
+  ---- 附属 / 封印（编号或实例 UID 都可以；玩家参数可省略，省略时取当前行动权玩家并打印提醒）----
+  attach [玩家 1|2] <附属编号|UID> <宿主编号|UID>       - 结附到**场上**宿主（宿主自动限定场上卡）
+  attacharea [玩家 1|2] <附属编号|UID> <地区编号>       - 结附到指定地区
+  detach <附属UID>                                      - 解除结附（仅断引用）
+  seal [玩家 1|2] <封印卡编号|UID> <目标编号|UID>       - 封印到**场上**目标卡
+  sealarea [玩家 1|2] <封印卡编号|UID> <地区编号>       - 封印到指定地区
+
+  ---- 对抗 ----
+  investigation <玩家 1|2> <地区 areaNo> <X> - 调查对抗：胜者查看牌库顶 X 张、分配放回后抽 1
+                                               单机＝弹本机窗口；联机＝经决策协议下发给该玩家
+  battle <玩家 1|2> <地区 areaNo> <X>        - 战斗对抗：败方该地区角色分配 X 点伤害（同上，单机/联机）
+  power <玩家 1|2> <地区 areaNo> <点数>      - 势力对抗：**瞬时结算**（直接加势力标记，不弹窗、不阻塞批量）
   jumpto <步骤名>[地区号]     - 【跳转步骤】直接跳到该步骤，**中间经过的步骤一律不结算**
-                               步骤名用枚举名：StartReset/StartPrepare/StartDraw/ActionFirst/ActionSecond/
-                               PreCombat/CombatInvestigation/CombatStrength/CombatPower/EndCleanup/
-                               EndRecover/EndPassTurn；对抗类可带地区号：
-                               jumpto CombatInvestigation1 ＝跳到 1 地区调查对抗（省略＝地区1）
-  player1draw [数量]          - 玩家1抽牌（默认1张）
-  player2draw [数量]          - 玩家2抽牌（默认1张）
-  move <UID> <玩家> <目标>    - 移动卡牌: 1..N(地区编号)/hand/grave/deck[top|bottom]/score/asset
-  tap <UID>                   - 横置指定卡牌（实例 IsTapped=true）
-  untap <UID>                 - 解除横置（实例 IsTapped=false）
-  flip <UID>                  - 翻面（正反切换，清空指示物/附属/封印，翻到正面恢复基础属性）
-  covert <UID> [on|off]      - 测试: 强制设/解除暗藏者(IsCovert)，用于验证暗藏者免疫伤害
+                                步骤名用枚举名：StartReset/StartPrepare/StartDraw/ActionFirst/ActionSecond/
+                                PreCombat/CombatInvestigation/CombatStrength/CombatPower/EndCleanup/
+                                EndRecover/EndPassTurn；对抗类可带地区号：
+                                jumpto CombatInvestigation1 ＝跳到 1 地区调查对抗（省略＝地区1）
+
+  ---- 其它 ----
+  damage area <索引> <数值> / damage card <UID> <数值> / damage hand <索引> <数值>
+  trauma ... 同 damage 但造成创伤；reset 重置伤害；list 列出卡牌状态
+  kill card <UID>；heal card <UID> [数值]
+  tap/untap/flip <UID>；covert <UID> [on|off]
   deck [1|2] / printdeck      - 按卡组内真实顺序打印卡组内容（索引0=牌库顶，默认玩家1）
-  investigation <玩家 1|2> <地区 areaNo> <X> - 打开调查对抗窗口（胜者从牌库顶查看X张分配放回）
-  battle <玩家 1|2> <地区 areaNo> <X>        - 打开战斗对抗窗口（败方该地区角色分配X点伤害）
-  power <玩家 1|2> <地区 areaNo> <点数>       - 势力对抗：直接为指定玩家在地区添加势力标记
-  setassetfromdeck <玩家 1|2> <num> - 从牌库顶部移 num 张卡到资产区
-  addarea [数量]              - 从世界牌库抽地区卡并新建地区槽位（默认1个，自动重排/重叠）
-  attach <附属UID> <宿主UID>   - 结附：把附属卡结附到场上目标卡（不移动区域）
-  attacharea <附属UID> <地区>  - 结附地区：把附属卡结附到指定地区（移入争夺区）
-  detach <附属UID>            - 解除结附（仅断引用，不移动区域）
-  seal <封印卡UID> <目标卡UID>  - 封印：把封印卡封印到场上目标卡（封印卡移入目标所在地区）
-  sealarea <封印卡UID> <地区>   - 封印地区：把封印卡封印到指定地区（移入争夺区，不偏移）
-  returnhandtodeck <玩家 1|2>   - 把指定玩家所有手牌放回其卡组底部（不洗牌）
-  help                        - 显示帮助
+  addarea [数量]              - 从世界牌库抽地区卡并新建地区槽位（默认1个）
+  returnhandtodeck <玩家 1|2> - 把指定玩家所有手牌放回其卡组底部（不洗牌）
+  help / ?                    - 显示帮助
 
 【多行输入】
   Enter        换行（可输入多条命令，每行一条）
   Shift+Enter  执行全部命令（从上往下依次执行）
   以 # 开头的行视为注释，空行跳过
-  注意：遇到 investigation / battle / power 这类对抗命令时，
-        执行完该行即中止，后续命令全部舍弃（需等待玩家响应）
-
-
-  move inst_13 1 2           - 玩家1的卡 inst_13 移动到争夺区2
-  move inst_5 2 hand          - 玩家2的卡 inst_5 加入手牌
-  move inst_8 1 grave         - 卡 inst_8 进入墓地
-  move inst_3 1 deck          - 卡 inst_3 返回玩家1牌库底部
+  注意：单机遇到 investigation / battle（需弹本机窗口等待玩家）时，
+        执行完该行即中止，后续命令全部舍弃；
+        联机（服务器侧不弹本机窗口）与 power（瞬时结算）不中止，后面命令照常执行。
 
 示例:
-  damage area 0 3
-  damage card inst_5 2
-  damage hand 0 1
-  player1draw
-  player2draw 2
-  draw 1 JC001               - 从P1卡组取一张 JC001 加入P1手牌（没有则不加）
+  draw 2 JC015               - P2 卡组取 1 张 JC015 加入 P2 手牌（不是 P1！）
+  draw 1 5                   - P1 从牌库顶抽 5 张
+  draw 1 JC001               - P1 卡组取 1 张 JC001 加入 P1 手牌
+  move 2 JC014 hand          - P2 卡组取 1 张 JC014 加入 P2 手牌
+  move 1 inst_37 2           - P1 的实例 inst_37 移动到争夺区 2
+  setassetfromdeck 1 12      - P1 卡组顶 12 张进 P1 资产区
+  attacharea 1 JC012 1       - P1 的 JC012 结附到地区1
+  seal 1 JC020 <目标UID>      - P1 的 JC020 封印到场上目标卡
+  investigation 2 1 1        - P2 在地区1 调查对抗获胜 X=1
+  battle 1 1 2               - P1 在地区1 战斗对抗获胜 2 点
+  power 1 1 5                - P1 在地区1 加 5 个势力标记（瞬时）
   jumpto CombatInvestigation1 - 跳到1地区调查对抗
   jumpto EndRecover          - 跳到恢复步骤（中间步骤不结算）
-=================================");
+=================================
+""");
     }
 }

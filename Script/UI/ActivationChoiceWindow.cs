@@ -132,8 +132,12 @@ namespace Script.UI
                 {
                     if (_items[captured].Disabled) return; // 置灰项不可发动
                     _chosen = true;                        // 【2026-09】已交付选择 → 关闭时不走 OnCancelled
-                    _items[captured].OnChosen?.Invoke();
+                    // 【2026-09 修复·"后续目标选择框没有弹出"（JC021 多目标逐槽）】**先关本窗、再跑回调**：
+                    // 回调里常常立刻打开**下一个**选择窗（逐槽/确认面板）；若本窗此刻仍是可见的模态
+                    // popup，新窗会被 Godot 的 popup 秩序吞掉（不显示）。先 `Dismiss()`（QueueFree 本窗）
+                    // 再执行业务回调，链式窗口才能逐个正常弹出。
                     Dismiss();
+                    _items[captured].OnChosen?.Invoke();
                 };
                 _buttonBox.AddChild(btn);
                 idx++;

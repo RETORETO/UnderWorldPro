@@ -19,7 +19,12 @@ namespace Script.Net.Lobby
         public int NameMaxLen = 12;
         /// <summary>空房间（无人）立即销毁；此值用于回收"**不在任何房间**且长时间无消息"的会话（秒；≤0 = 关闭该机制）。</summary>
         public int SessionIdleTimeoutSeconds = 300;
-        /// <summary>对局结束后房间保留时长（秒）。</summary>
+        /// <summary>
+        /// 对局结束后、在**战场页**展示获胜者的时长（秒）。到点后服务端自动复用原房间回到等待阶段。
+        /// 期间房间停留在 `Finished`（客户端据此停在战场页展示结果），无需任何玩家操作。
+        /// </summary>
+        public int MatchResultDisplaySeconds = 5;
+        /// <summary>对局结束后房间保留时长（秒；兜底销毁，正常流程下房间早已自动复用回等待阶段）。</summary>
         public int FinishedRoomTtlSeconds = 600;
         /// <summary>是否打印详细日志。</summary>
         public bool Verbose;
@@ -39,6 +44,7 @@ namespace Script.Net.Lobby
                     case "--max-conns": if (Next(out var mc) && int.TryParse(mc, out var maxConns)) { cfg.MaxConnections = maxConns; i++; } break;
                     case "--max-rooms": if (Next(out var mr) && int.TryParse(mr, out var maxRooms)) { cfg.MaxRooms = maxRooms; i++; } break;
                     case "--name-max": if (Next(out var nm) && int.TryParse(nm, out var nameMax)) { cfg.NameMaxLen = nameMax; i++; } break;
+                    case "--result-seconds": if (Next(out var rs) && int.TryParse(rs, out var resultSecs)) { cfg.MatchResultDisplaySeconds = resultSecs; i++; } break;
                     case "--finished-ttl": if (Next(out var ft) && int.TryParse(ft, out var ttl)) { cfg.FinishedRoomTtlSeconds = ttl; i++; } break;
                     case "--idle-timeout": if (Next(out var it) && int.TryParse(it, out var idle)) { cfg.SessionIdleTimeoutSeconds = idle; i++; } break;
                     case "--verbose": cfg.Verbose = true; break;

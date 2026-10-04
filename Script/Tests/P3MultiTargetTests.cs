@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -477,6 +477,97 @@ namespace Script.Tests
                 ConfirmCalls++;
                 onConfirmed?.Invoke(Confirm ? choices : null);
             }
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径】JC021 卡文"**和/或**" ⇒ 两个角色目标**互相独立**：
+        /// 结算时其中一个目标已**不合法**（本例：结算前被移入目标地区，违反"不能原地移动"；
+        /// 用户举的例子是"获得屏障"）→ **只跳过它自己**，另一个目标照常执行；
+        /// 事务卡照常结算进墓地（不得整条丢弃）。
+        /// </summary>
+        public void TestK15_JC021部分目标不合法时其余照常结算()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            string a1 = areas[0], a2 = areas[1];
+            GiveAssets(game, 1, 3);
+
+            var mine = game.CardManager.CreateCardInstance(Probe("TS_k15_p_mine"), 1);
+            game.ZoneManager.MoveToArea(mine, a1, 1);
+            var foe = game.CardManager.CreateCardInstance(Probe("TS_k15_p_foe"), 2);
+            game.ZoneManager.MoveToArea(foe, a1, 2);
+            var card = game.CardManager.CreateCardInstance(Load("JC021_xialuxiangfeng"), 1);
+            game.ZoneManager.MoveToHand(card, 1);
+
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var stub = new MultiTargetStub
+            {
+                Script = (slot, _, __) => slot == 0 ? $"AREA:{a2}"
+                    : (slot == 1 ? $"CARD:{mine.UID}" : (slot == 2 ? $"CARD:{foe.UID}" : null)),
+            };
+            EffectEngine.Instance.UIHooks = stub;
+            game.TurnManager.BeginMultiTargetPlay(1, card.UID);
+
+            Assert.AreEqual(1, game.StackManager.Entries.Count, "前置：确认后效果入堆叠");
+            var entry = game.StackManager.Entries[0];
+            Assert.AreEqual(mine.UID, entry.TargetCardUids[0], "前置：本方角色目标已记录");
+            Assert.AreEqual(foe.UID, entry.TargetCardUids[1], "前置：敌方角色目标已记录");
+
+            // 结算前让"敌方角色"这个目标变得**不合法**：在同一个争夺区内移动不刷新版本号（D37）
+            // ⇒ 它不算"丢失"，只能靠结算时的**逐目标合法性复检**（ExcludeInChosenArea：不能原地移动）剔除。
+            game.ZoneManager.MoveToArea(foe, a2, 2);
+            Assert.AreEqual(a2, foe.ZoneDetailId, "前置：敌方目标已进入目标地区（原地移动 ⇒ 该目标不再合法）");
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(a2, mine.ZoneDetailId, "**合法目标照常执行**（移动到目标地区）");
+            Assert.AreEqual(a2, foe.ZoneDetailId, "不合法目标被跳过（它本来就在 a2，不再被移动）");
+            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "事务卡照常结算进墓地（不得整条丢弃）");
+
+            EffectEngine.Instance.UIHooks = null;
+        }
+
+        /// <summary>
+        /// 同上但用**屏障**（用户举的例子）：敌方角色在结算前获得屏障 ⇒ 该目标不合法被跳过，
+        /// 本方角色照常移动到目标地区。
+        /// </summary>
+        public void TestK15_JC021目标获得屏障时其余照常结算()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            string a1 = areas[0], a2 = areas[1];
+            GiveAssets(game, 1, 3);
+
+            var mine = game.CardManager.CreateCardInstance(Probe("TS_k15_g_mine"), 1);
+            game.ZoneManager.MoveToArea(mine, a1, 1);
+            var foe = game.CardManager.CreateCardInstance(Probe("TS_k15_g_foe"), 2);
+            game.ZoneManager.MoveToArea(foe, a1, 2);
+            var card = game.CardManager.CreateCardInstance(Load("JC021_xialuxiangfeng"), 1);
+            game.ZoneManager.MoveToHand(card, 1);
+
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var stub = new MultiTargetStub
+            {
+                Script = (slot, _, __) => slot == 0 ? $"AREA:{a2}"
+                    : (slot == 1 ? $"CARD:{mine.UID}" : (slot == 2 ? $"CARD:{foe.UID}" : null)),
+            };
+            EffectEngine.Instance.UIHooks = stub;
+            game.TurnManager.BeginMultiTargetPlay(1, card.UID);
+            Assert.AreEqual(1, game.StackManager.Entries.Count, "前置：效果入堆叠");
+
+            foe.SetGuard(true);   // 结算前获得屏障 ⇒ "不能被敌方卡牌或能力指定为目标"
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(a2, mine.ZoneDetailId, "另一个目标照常移动到目标地区");
+            Assert.AreEqual(a1, foe.ZoneDetailId, "获得屏障的目标被跳过（未被移动）");
+            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "事务卡照常结算进墓地");
+
+            EffectEngine.Instance.UIHooks = null;
         }
 
         /// <summary>确认面板通过 → 效果入堆叠并结算（且"逐槽候选"按已选目的地动态刷新）。</summary>

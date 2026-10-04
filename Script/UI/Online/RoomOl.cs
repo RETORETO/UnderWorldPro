@@ -8,18 +8,19 @@ namespace Script.UI.Online
     /// <summary>
     /// 【大厅/房间 UI · 增量 B】**联机房间页**（在线专用；单机 `Room.tscn` 保持原样不动）。
     ///
-    /// 显示：房间号、两个座位（`昵称#座位` / 准备状态 / 卡组校验状态）、自己的卡组与校验结果、
-    /// 结果与"再来一局"；房主额外有「开始对局」「踢出对手」。
+    /// 显示：房间号、两个座位（`昵称#座位` / 准备状态 / 卡组校验状态）、自己的卡组与校验结果；
+    /// 房主额外有「开始对局」「踢出对手」。
+    /// 对局结果只在**战场页**展示（结束后服务端自动复用本房间回到等待阶段），本页不再显示结果与「再来一局」。
     /// 规则全部由服务端裁决（本页只发请求 + 显示），对手卡组信息按 D7 根本收不到。
     /// </summary>
     public partial class RoomOl : Control
     {
-        private Label _roomLabel, _seat1Label, _seat2Label, _statusLabel, _resultLabel, _deckStatusLabel;
+        private Label _roomLabel, _seat1Label, _seat2Label, _statusLabel, _deckStatusLabel;
         /// <summary>【增量 D】"本机已建立主机"的局域网地址提示（只在房主本机托管服务端时显示）。</summary>
         private Label _hostHintLabel;
         /// <summary>卡组下拉框：列出 `res://Decks/` 下所有卡组文件名；选择后即提交并记忆。</summary>
         private OptionButton _deckOption;
-        private Button _deckButton, _readyButton, _startButton, _kickButton, _rematchButton, _leaveButton;
+        private Button _deckButton, _readyButton, _startButton, _kickButton, _leaveButton;
 
         /// <summary>下拉框中「显示名 → 卡组全路径」的映射（下标与 OptionButton 项一一对应）。</summary>
         private readonly System.Collections.Generic.List<string> _deckPaths = new System.Collections.Generic.List<string>();
@@ -40,7 +41,6 @@ namespace Script.UI.Online
             _seat1Label = GetNodeOrNull<Label>("Panel/Seat1Label");
             _seat2Label = GetNodeOrNull<Label>("Panel/Seat2Label");
             _statusLabel = GetNodeOrNull<Label>("Panel/StatusLabel");
-            _resultLabel = GetNodeOrNull<Label>("Panel/ResultLabel");
             _deckStatusLabel = GetNodeOrNull<Label>("Panel/DeckStatusLabel");
             _hostHintLabel = GetNodeOrNull<Label>("Panel/HostHintLabel");
             _deckOption = GetNodeOrNull<OptionButton>("Panel/DeckOption");
@@ -48,14 +48,12 @@ namespace Script.UI.Online
             _readyButton = GetNodeOrNull<Button>("Panel/ReadyButton");
             _startButton = GetNodeOrNull<Button>("Panel/StartButton");
             _kickButton = GetNodeOrNull<Button>("Panel/KickButton");
-            _rematchButton = GetNodeOrNull<Button>("Panel/RematchButton");
             _leaveButton = GetNodeOrNull<Button>("Panel/LeaveButton");
 
             if (_deckButton != null) _deckButton.Pressed += () => SubmitDeck(_selectedDeckPath, out _);   // 重新提交（同一卡组不会触发 item_selected，故保留显式按钮）
             if (_readyButton != null) _readyButton.Pressed += ToggleReady;
             if (_startButton != null) _startButton.Pressed += () => _session?.Send(new LobbyRequest { Kind = LobbyRequestKind.StartMatch });
             if (_kickButton != null) _kickButton.Pressed += KickOpponent;
-            if (_rematchButton != null) _rematchButton.Pressed += () => _session?.Send(new LobbyRequest { Kind = LobbyRequestKind.Rematch });
             if (_leaveButton != null) _leaveButton.Pressed += LeaveRoom;
 
             BuildDeckDropdown();
@@ -213,16 +211,7 @@ namespace Script.UI.Online
             var mine = _room.SeatState(_room.ViewerSeat);
             if (mine == null) return;
 
-            // 结束后：自动请求"再来一局"（等同于玩家点按钮），用于验证"结束→重开"闭环
-            if (_room.Phase == RoomPhase.Finished)
-            {
-                if (!mine.RematchRequested)
-                {
-                    GD.Print("[RoomOl][冒烟] 自动请求再来一局");
-                    _session.Send(new LobbyRequest { Kind = LobbyRequestKind.Rematch });
-                }
-                return;
-            }
+            // 结束后无需任何操作：服务端会自动复用本房间回到等待阶段（房间页不再有"再来一局"）
             if (!mine.HasDeck) { GD.Print("[RoomOl][冒烟] 自动提交卡组"); SubmitDeck(); return; }
             if (!mine.Ready) { GD.Print("[RoomOl][冒烟] 自动准备"); ToggleReady(); return; }
             if (_room.HostSeat == _room.ViewerSeat && _room.Phase == RoomPhase.Ready)
@@ -275,8 +264,6 @@ namespace Script.UI.Online
             if (_startButton != null) _startButton.Disabled = state.Phase != RoomPhase.Ready;
             if (_kickButton != null) _kickButton.Visible = state.HostSeat == me;
             if (_kickButton != null) _kickButton.Disabled = opp == null || string.IsNullOrEmpty(opp.PlayerName);
-            if (_rematchButton != null) _rematchButton.Visible = state.Phase == RoomPhase.Finished;
-            if (_rematchButton != null) _rematchButton.Disabled = mine?.RematchRequested == true;
 
             if (_deckStatusLabel != null)
             {
@@ -288,18 +275,6 @@ namespace Script.UI.Online
                 if (!string.IsNullOrEmpty(mine?.DeckError)) deckText += $"　违规原因：{mine.DeckError}";
                 if (mine?.Ready == true) deckText += "　🔒 已准备：卡组已锁定（取消准备后可更换）";
                 _deckStatusLabel.Text = deckText;
-            }
-
-            if (_resultLabel != null)
-            {
-                // M5：对手掉线后房间会退回 Waiting（不再卡在 Finished），此时 Summary 仍保留，
-                // 因此结果横幅按"有结果就显示"而不是"仅 Finished 才显示"，赢家不会因为对手掉线而看不到结果。
-                bool hasResult = state.MatchSummary != null;
-                _resultLabel.Visible = hasResult;
-                if (hasResult)
-                    _resultLabel.Text = state.MatchSummary.WinnerSeat == me
-                        ? $"本局你获胜（{state.MatchSummary.Reason}）"
-                        : $"本局你落败（{state.MatchSummary.Reason}）";
             }
         }
 

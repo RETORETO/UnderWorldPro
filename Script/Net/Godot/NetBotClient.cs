@@ -25,7 +25,7 @@ namespace Script.Net.Godot
         private readonly bool _isHost;
         private readonly string _deckPath;
 
-        private bool _helloed, _listed, _deckSent, _readySent, _startSent, _rematchSent;
+        private bool _helloed, _listed, _deckSent, _readySent, _startSent;
         private double _timer;
         private RoomState _room;
         private string _roomId;
@@ -67,7 +67,6 @@ namespace Script.Net.Godot
             if (!_deckSent) { SendDeck(); return; }
             if (!_readySent && _room != null && _room.Phase != RoomPhase.InMatch) { SetReady(); return; }
             if (_isHost && !_startSent && _room != null && _room.SeatsReadyForStart()) { StartMatch(); return; }
-            if (_room != null && _room.Phase == RoomPhase.Finished && !_rematchSent) { Rematch(); return; }
         }
 
         public void OnConnected()
@@ -131,14 +130,6 @@ namespace Script.Net.Godot
         }
         private double _passTimer;
         private int _passCount;
-
-        private void Rematch()
-        {
-            _rematchSent = true;
-            LastStage = "rematch";
-            _session.Send(new LobbyRequest { Kind = LobbyRequestKind.Rematch });
-            GD.Print($"[BOT {(_isHost ? "host" : "join")}] 请求再来一局");
-        }
 
         // ==================== 下行事件 ====================
 

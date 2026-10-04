@@ -298,9 +298,10 @@ namespace Script.Tests
             Assert.IsNotNull(win, "应能实例化为 OnlineTriggerOrderWindow");
             Assert.IsNotNull(win.OrderZoneContainer, "导出引用 OrderZoneContainer 应可解析");
             Assert.IsNotNull(win.DiscardZoneContainer, "导出引用 DiscardZoneContainer 应可解析");
-            Assert.IsNotNull(win.AllEnterButton, "导出引用 AllEnterButton 应可解析");
+            Assert.IsNull(win.GetNodeOrNull("RootControl/Panel/AllEnterButton"), "「全部进入堆叠」按钮已下线（场景中不应再有该节点）");
             Assert.IsNotNull(win.FirstEnterButton, "导出引用 FirstEnterButton 应可解析");
             Assert.IsNotNull(win.DoneButton, "导出引用 DoneButton 应可解析");
+            Assert.AreEqual("完成排序并放弃下方效果", win.DoneButton.Text, "完成排序按钮文案应为「完成排序并放弃下方效果」");
             Assert.IsNotNull(win.GetNodeOrNull("RootControl"), "应存在 RootControl（TriggerOrderRoot 承载节点）");
             win.Free();
 
@@ -309,6 +310,50 @@ namespace Script.Tests
 
             var arenaScene = ResourceLoader.Load<PackedScene>("res://Scenes/Net/ArenaOl.tscn");
             Assert.IsNotNull(arenaScene, "ArenaOl.tscn 应可加载（解析无错误）");
+        }
+
+        // ==================== 7) 联机排序窗口自动关窗口径（双框全空） ====================
+
+        /// <summary>
+        /// 排序窗口自动关闭口径：**排序框与放弃框都为空**时静默关闭（仅 Hide、不回包）；
+        /// 任一框还有内容则保持打开。拖拽/提交导致两框皆空时经 RefreshButtonStates 触发判定。
+        /// </summary>
+        public void TestOnlineTriggerOrderAutoCloseRequiresBothZonesEmpty()
+        {
+            var triggerScene = ResourceLoader.Load<PackedScene>("res://Scenes/Net/OnlineTriggerOrderWindow.tscn");
+            Assert.IsNotNull(triggerScene, "OnlineTriggerOrderWindow.tscn 应可加载");
+            var win = triggerScene.Instantiate<Script.UI.OnlineTriggerOrderWindow>();
+            Assert.IsNotNull(win, "应能实例化为 OnlineTriggerOrderWindow");
+
+            // 无条目（两框皆空）→ 拖拽变更刷新时即静默关闭，且不回调 OnDone（不回包）
+            bool doneFired = false;
+            win.OnDone = () => doneFired = true;
+            win.RefreshButtonStates();
+            Assert.IsFalse(win.Visible, "两框皆空时应自动关窗");
+            Assert.IsFalse(doneFired, "静默自动关窗不应回包（不触发 OnDone）");
+
+            // 排序框有内容 → 不关窗
+            win.Show();
+            var entry = new Godot.Control();
+            win.OrderZoneContainer.AddChild(entry);
+            win.RefreshButtonStates();
+            Assert.IsTrue(win.Visible, "排序框非空时不应自动关窗");
+
+            // 排序框清空、放弃框有内容 → 仍不应关窗
+            win.OrderZoneContainer.RemoveChild(entry);
+            entry.Free();
+            var discarded = new Godot.Control();
+            win.DiscardZoneContainer.AddChild(discarded);
+            win.RefreshButtonStates();
+            Assert.IsTrue(win.Visible, "放弃框非空时不应自动关窗");
+
+            // 放弃框也清空 → 双框皆空 → 关窗
+            win.DiscardZoneContainer.RemoveChild(discarded);
+            discarded.Free();
+            win.RefreshButtonStates();
+            Assert.IsFalse(win.Visible, "双框皆空时应自动关窗");
+
+            win.Free();
         }
     }
 }

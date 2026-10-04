@@ -40,20 +40,24 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Category = FormCategory.CharacterOrAttachment,
                     AddSubCategories = new Array<string> { "地精" },
+                    // 【2026-09 用户口径】**形态自带属性＝状态、不叠加**：重复发动仍是 1 白眼/1 黑刀/1 势力/1 防御。
+                    // （走 `FormChangeSpec.Grants` 由引擎幂等施加；若写成 `Actions` 里的 `Gain` 会每次累加。）
+                    Grants = new Array<EffectGrant>
+                    {
+                        new EffectGrant { Kind = "Icon", Value = "白眼", Amount = 1 },   // 白眼＝先手调查 +1（Icon 名自动折成属性）
+                        new EffectGrant { Kind = "Icon", Value = "黑刀", Amount = 1 },   // 黑刀＝战斗 +1
+                        new EffectGrant { Kind = "Icon", Value = "黑星", Amount = 1 },   // 黑星＝势力 +1
+                        new EffectGrant { Kind = "Attribute", Value = "防御", Amount = 1 },
+                    },
                 },
                 Actions = new Array<EffectAction>
                 {
-                    // ① 施加形态（直到回合结束）：实例类别覆盖 + 子类别「地精」
+                    // 形态（类别覆盖 ＋ 子类别 ＋ **形态自带授予** 全在 `FormChange` 里，由引擎幂等施加）
                     new EffectAction
                     {
                         Verb = ActionVerb.TransformForm,
                         Args = new Array<string> { "自身", "直到回合结束" },
                     },
-                    // ② 图标与防御（同样到回合结束；图标名经 IconToAttribute 折成数值）
-                    new EffectAction { Verb = ActionVerb.Gain, Args = new Array<string> { "白眼", "1", "自身" } },
-                    new EffectAction { Verb = ActionVerb.Gain, Args = new Array<string> { "黑刀", "1", "自身" } },
-                    new EffectAction { Verb = ActionVerb.Gain, Args = new Array<string> { "黑星", "1", "自身" } },
-                    new EffectAction { Verb = ActionVerb.Gain, Args = new Array<string> { "防御", "1", "自身" } },
                 },
                 Duration = "直到回合结束",
                 FaqNote = "快速行动2：本卡实例类别变为『角色/附属』（仍是附属）并追加『地精』子类别，"

@@ -566,6 +566,13 @@ K18 流程改造 3 → **只要做完 §五 的 P1+P2+P3，C 档会塌缩掉 2/3
 | A53 | **检索一律强制（不可取消）＋ JC051 宿主改由玩家选（2026-09，用户裁定；撤销 §7.4b 第 5 条）** | 用户两项裁定：**①"收紧为强制：单机也去掉取消，与卡文和联机一致"**（8 张 JC 检索卡 JC007/025/026/032/033/051/109/131 的卡文**都没有"你可以寻找"**）⇒ 单机 `EffectEngine.ResolveSearch` 改 `allowCancel: false`；联机 `SearchViaGatewayAsync` 改 `ForceChoice = true`，且回包**取消/非法**不再等于"不取牌"（**原口径"玩家放弃 = 检索未发生 → 不洗牌"作废**）⇒ **fail-safe 兜底取第一张匹配**再落地 + 洗牌，否则异常客户端可用一次取消/越权回包**规避强制检索**；安全属性不变（候选只来自"检索者牌库 ∧ 通过筛选"）。**②"改成开窗选宿主"**（JC051『结附于合理的目标』）⇒ 宿主**候选来源不变**（＝被检索卡自身 `TargetRules` 的合法宿主，判定与打出阶段同一实现 `CardManager.MatchesRule`），但**候选 ≥2 时由玩家选**：单机 `IGameUIHooks.PromptPickCard`（不可取消）/ 联机 `Kind.SelectTarget`（服务端 `OptionLabels`，`ForceChoice=true`，回包权威复检）；回包非法/取消 → **确定性兜底取第一个合法宿主**（强制结附不可被规避）；**候选 = 1 时不弹窗**（无可决策空间）、无 UI 时确定性兜底取第一个。实现细节：去向落地改为**续算式** `ApplySearchDestination(..., onDone)`（选宿主窗挂起期间不洗牌，宿主落定后才"揭示 + 洗牌"）；卡数据 `Args[2]` 由 `"自动"` 改 `"按目标规则"`。**留档**：若将来出现"你可以寻找…"的卡，需先在 `Args` 加可选标记再恢复取消分支 |
 | A54 | **秘社重放幂等 ＋ 联机"秘社目标"可点（2026-09，用户裁定"现在就修／补上"）** | 用户对两项"顺手发现"的裁定：**"现在就修"＋"补上"**。① **`SetupCouncils` 幂等化**（`ZoneManager.ClearCouncilZone` 新方法：旧秘社按 `CardZone.Exiled` 移出游戏 + 广播 `OnCardMoved` + 注销持续效果登记）——原先 `DealOpeningHands` 的"重放秘社"会累积 **2 张/玩家**，导致起手数读旧卡（回退 6）与"结附本方秘社"类效果重复候选；**秘社恒 1 张**后两者同时消失。② **秘社 UI 三态化**（`Arena.Layout.SyncCouncilCardUI`）：不在秘社区→摘除、在秘社区但无 UI→**补建**、已有→确保容器，配套秘社重放；`SyncCardUIToZone` 秘社判定放宽为"当前在秘社区 **或** 曾有 UI"。③ **联机选目标补秘社通道**：`OpenOnlineTargetSelectionWindow` 外加高亮 `_councilCardUIMap` 合法目标、`PickLegalActivationTargetAt` 纳入秘社同款 ZIndex 命中（新增 `CouncilCardUI.GetVisualGlobalRect`）、清理同款；动机＝JC051 宿主候选含秘社（否则联机只能等超时走兜底）。④ 顺手修：`PromptPickCard` 候选名兜底 `CouncilTemplate?.CardName`（原显示原始 UID）；`MakePlayableCard` 补 `_effectsInjected`（否则 `EnsureEffects` 清空效果表 ⇒ 探针 `PlayTiming.Response` 被抹掉、静默退化 A 档 = 既有失败真因） |
 | A55 | **联机"需要玩家选择"的效果必须真问玩家（2026-09，用户裁定"这一批全补齐"）** | 用户实测反馈：服务端日志出现 `⚠ Search 无 UI：确定性兜底取第一张匹配` ⇒ 选卡只能自动选择。**根因（架构级）**：生产链路是 `TurnManager.ResolveStackTop`（同步）→ `ResolveEntry` → **同步** `EffectEngine.ResolveEffect`，而网关分支只写在 `ResolveEffectAsync`/`ExecuteVerbAsync`/`*ViaGatewayAsync` 那套"可挂起续算"实现里——**全项目调用 `ResolveEffectAsync` 的只有测试** ⇒ 服务端（无 `UIHooks`、有 `InputGateway`）下所有决策都静默走无 UI 兜底。**修法**：① 在**同步**执行体里接入网关：`ExecuteVerb` 对 `Inspect/PayOptional/PrepareUpkeep/Discard/Seal(手牌)/RevealSealedAndQueueFreePlay/Search` 改走既有异步执行体，并用 `SuspendChainForInput`/`ContinuePendingChain` 挂起-续算（服务端不阻塞线程；**有 UIHooks 时仍优先本机窗口**）；② 补齐原本**没有**网关分支的 5 处：JC083「选择一个数字」`ValueExpr=玩家选择`（原先服务端**整条不发动**）、JC064 `PayOrSacrificeSelf`、JC114 `SacrificeSelfOptional`、JC128 `BribeOrSacrifice`、`SacrificeChoice`（JC046/113/134/65 逐位牺牲）；③ 统一收口 `BeginGatewayFlow`（同步/异步回包都正确接管链）+ `AskZeroOrOneViaGatewayAsync`（0/1 二选一）+ `AskPlayerValueViaGatewayAsync`（数字）；④ 等待回包期间由引擎**显式 `EnterAtomic`**（服务端没有 View 帮忙 `NotifyModalOpened`），续算后经新 `TurnManager.OnEngineChainSettled` 补做"地区赢取检查 / 解原子锁 / JC119 免费打出队列"（挂起时 `ResolveStackTop` 已提前 return）；⑤ `SuspendChainForInput` 加"不覆盖已记录续算点"护栏（嵌套决策不再丢动作）。**顺带修复**：JC128 单机窗口原先**未挂起动作链**（窗口异步，代码同帧按"牺牲"分叉 ⇒ 玩家选择被丢弃；旧测试用同步桩掩盖）。 |
+| A74 | **链式选择窗必须"先关本窗、再开下一窗"；联机决策面板每次请求新建（2026-09，用户实测"JC021 选择地区后后续目标框不弹"）** | 用户实测："JC021 发动，选择地区后，后续目标选择框没有弹出"。两处收口：① `ActivationChoiceWindow` 的按钮回调原为**先跑业务回调（可能立刻打开下一个窗）再 `Dismiss()`** ⇒ 新窗在旧窗仍可见/模态时打开，被 popup 秩序吞掉；现改为 **`Dismiss()`（先关本窗）→ 再 `OnChosen()`**，逐槽/确认面板才能链式弹出。② 联机 `ArenaOl.OnClientChoiceRequest` 原为"面板不存在才新建"，而 `ChoicePromptPanel.Complete` 里已 `QueueFree()`：同一帧内到达的**下一个**请求（本地主机/低延迟常见）会看到"实例仍有效"而复用**待释放**的面板 ⇒ 新窗随释放一起销毁（表现为"第一个框弹了、后面的不弹"）；现改为**每次请求都释放旧面板并新建**。 |
+| A73 | **权威（联机）激活取数必须包含运行期授予的能力（2026-09，用户实测"发动能力参数无效"）** | 用户实测："JC019 结附后，宿主使用效果，弹出提示框操作被服务端拒绝：**发动能力参数无效**"。根因：`GodotIntentRouter.ActivateAbility` 用 `CardManager.GetEffectData(uid, effectId)` 按 id 找效果，而该方法只查**模板/秘社**的 `EffectDataList` ⇒ 运行期授予的能力（`EffectData.GrantedAbility`，如 JC019 给宿主的"快速行动，横置：造成 1 点不可防止伤害"）取不到 → 服务端直接抛错，而客户端**已经弹出并用同一入口**（`GetAllActivateAbilities`）列出该能力。修复：`GetEffectData` 补查 `ActivateEligibility.GetAllActivateAbilities(inst)`（候选枚举/门禁/权威取数同源）。**纪律**：凡"按 effectId 找效果"的入口都必须覆盖运行期授予项。 |
+| A72 | **声望在"势力对抗结束"的每个出口结算，与胜负无关（2026-09，用户实测"JC011 声望没有生效"）** | 卡文口径（`RenownRule`）：声望**不依赖势力对抗胜负**——平局、甚至败方，只要本方在该地区的声望角色**严格更多**就 +1 势力标志。缺陷：该结算只写在"**有胜方**"的分支里（`ResolveWinner`/`ResolveWinnerAsync` 的 Power 分支）⇒ **0:0 平局**（典型：本地区只有一个声望角色、其印刷势力值为 0 ⇒ `firstValue == 0` 直接 return）、"破平被放弃"、"无费用/次数不可破平"三种情况下**声望完全不结算**。修复：抽出单一出口 `CombatManager.FinishPowerCombat(type, areaUid)`（先发 `PowerCombatEnded` 触发点，再跑 `RenownRule.ApplyIfMajority`），把**单机 `ResolveAreaCombat` 与联机 `ResolveAreaCombatAsync` 的每一个势力对抗出口**（含上述三种平局出口）都收口到它。 |
+| A71 | **UI 几何：横置卡的视觉中心＝`Position + PivotOffset`（2026-09，用户实测"附属 UI 有时显示在宿主上方"）** | Godot 的 `Control` 旋转**绕 `PivotOffset`** 进行 ⇒ 旋转后**视觉中心仍在** `Position + PivotOffset`（实测 `GetGlobalTransform()` 四角 AABB：`Position=(0,0)`/`PivotOffset=(50,70)`/`RotationDegrees=90` → 视觉中心 **(50,70)**、视觉尺寸 (140,100)）。代码里曾用 `Position + PivotOffset.Rotated(角度)` 估算 ⇒ 横置时中心误差 **(120,20)**：① 附属/封印排版把附件摆到宿主**左上方**（用户现象）；② `PlaceCardInContainer` 把横置卡整体挪到**右下 (120,20)**。现统一改为 `Position + PivotOffset`（视觉半高仍取"横置＝卡宽/2"），单机 4 处（`ArrangeAllAttachments`/`ArrangeCouncilAttachments`/`ArrangeAllSeals`/`ArrangeCouncilSeals` ＋ `Arena.Layout.PlaceCardInContainer`）、`CardLayoutHelper.PlaceCardInContainer`、联机 `ArenaOl.LayoutAttachmentRelative` 一并修正；并加**几何回归用例** `P5LayoutMathTests` 锁定该关系（Godot 语义若变化会立刻失败）。 |
+| A70 | **"形态自带属性"是状态、不叠加（2026-09 用户口径，JC027）** | 用户实测："JC027 多次使用可以让各项属性越来越高"是 bug；期望"**即使多次激活同一个实例，从这个效果获得的属性也只有 1 白眼/1 黑刀/1 势力/1 防御**"。实现：形态自带授予改走结构化 `FormChangeSpec.Grants`（＋实例侧记账 `CardInstance.FormGrants`），由 `EffectEngine.ApplyFormGrants` **幂等**施加——每次（重新）施加形态先按记账**撤销上一次**、再授予，形态到期/离场同样按记账撤销。⚠️ **不要**把这类"形态自带属性"写成 `Actions` 里的 `Gain`（那是"每次结算都累加"的一次性授予语义）；另：**其他来源**（光环等）给同一属性的授予**仍正常叠加**（幂等只作用于本形态自带的那一份）。 |
+| A69 | **多目标（卡文"和/或"）逐目标独立：不合法/丢失只跳过它自己（2026-09 用户口径，JC021）** | 用户实测："JC021 取两个角色目标，仅一个不合法的时候，剩下的角色继续执行效果（因为卡文是**和/或**）；仅目标丢失的角色/目标不合法的角色（例如获得屏障）不执行后续效果"。实现两处收口：① **不再整条丢弃**：`TurnManager.ResolveEntryTargetIsLost` 的 `EventToGraveyard` 分支对**多目标条目**跳过"单目标丢失 ⇒ 整条不结算"（多目标条目也记了 `TargetCardUid`＝第一个卡目标，此前任一目标状态变化即整条丢弃——正是本 bug 根因），改为逐目标剔除（`PruneLostMultiTargets`）；② **结算时逐目标合法性复检**：`EffectEngine.PruneIllegalMultiChoices` 按各槽 `TargetSpec` 与取目标阶段**同源**判据（`TargetValidity.CheckRestrictions`，含**屏障**）＋ 槽级 `ExcludeInChosenArea`（"不能原地移动"）把已不合法的卡目标槽清空，其余目标照常执行；**地区槽丢失**仍按既有口径整条不结算。 |
+| A68 | **拖拽 / 双击的分工：拖拽只表达"单条 ＋ 需选场上卡目标"（2026-09 用户实测）** | 用户实测三连："JC019 宿主高亮但**拖拽无反馈**"、"JC024 UI 上依然是拖拽 UI，无法正常使用效果"、"JC019 结附给 JC024 后有两激活效果但双击**不弹**效果选择界面（双击被拖拽覆盖）"。根因：`Arena._Input` 左键按下时**无条件**先试激活拖拽并 `AcceptEvent()` ⇒ 双击信号根本到不了 `CardUI`；而拖拽路径的能力取法只读模板（漏运行期授予）⇒ 宿主 `ability=null` ⇒ 松手判"无合法目标"取消。口径与实现：能力取法统一＝`ActivateEligibility.GetFirstActivateAbility`（**模板 ∪ 运行期授予**，单机/联机/高亮缓存三处同源）；**能否用拖拽表达**＝`ActivateEligibility.CanDragActivate`（**恰好 1 条能力** ∧ 需选**场上卡**目标 ∧ 非玩家/地区目标），不满足则 `TryBeginActivateDragAt` **返回 false、不吞左键**，于是：多能力 ⇒ **双击弹效果菜单**；无目标/自指（JC024 潜伏）⇒ **双击直接发动**；玩家目标（JC111）/地区目标（JC117）⇒ 各自专用窗口。 |
 | A67 | **形态使其"成为角色" ⇒ **迁入争夺区**；撤销时迁回附属区（2026-09 用户口径，取代早前的"取目标候选并入"补丁）** | ① **JC027 成为角色后不能被以角色为目标的效果取为目标**。用户口径（最终实现）：**形态转换直接迁区**——`ZoneManager.MoveFormZone(card, AreaZone)`：迁入争夺区（`_area` 桶）后，**一切自然成立**：作为"目标角色"的候选、地区角色统计、"**对地区所有角色**"的伤害（`GetAreaInstancesBySlot`）全部覆盖它，**不需要**在取目标侧写补丁（早前的 `GetAreaCandidatesForTargeting` 已删除）。形态撤销（回合结束）⇒ `MoveFormZone(card, AttachedZone)` **迁回附属区**。要点：**刷新版本号**（用户明确要求 ⇒ 以它为目标的效果按 D16 重新校验）＋ 广播 `Moved`；**不发** `EnterTrigger`/`OnMove`（它一直在场上，只是形态变了，避免"当某角色进入本地区时"类效果被误触发）；所属地区（`ZoneDetailId`）不变；**保持附属身份**（`IsAttached=true`，卡文"它仍然是附属"）。② **附属生效区例外**：迁入争夺区后，它声明为 `AttachTarget`（附属区）的**激活能力/持续效果必须继续生效**，否则变形后连它自己的"快速行动2"都发动不了（`EffectEngine.IsEffectActiveInZone` 增加"形态角色"判据：`CurrentZone==AreaZone && IsAttached`；**未结附**的附属被移到争夺区不算，既有语义不变）。③ **`HasDefense` 认"实例当前防御"**：`DealDamageToInstance`/战斗伤害分配都用它把关，原先只看**印刷**防御 ⇒ 印刷无防御（-1 哨兵）的卡即使被授予 +1 防御力也**完全无法受伤**（形态角色也吃不到群伤）；现为 `印刷防御≥0 || CurrentDefense≥0`。④ A62 在激活路径的收口（见 A62）。 |
 | A66 | **"双击请求激活"的来源与能力来源（2026-09，用户实测）** | 用户实测：**JC019 给宿主能力后，宿主高亮但点击/拖拽都无反馈**。根因：单机双击转发器 `if (!IsAttached) return;` ⇒ **争夺区正面角色**（宿主角色）双击进不来；且能力收集只读 `PlayerTemplate.EffectDataList`（运行期授予项不在里面）。口径（用户 2026-09 确认）：来源判定＝`ActivateEligibility.IsDoubleClickActivationSource`（**附属 / 争夺区正面角色 / 手牌行动卡**）；能力收集＝`GetAllActivateAbilities`（**模板 ∪ 运行期授予**，授予项追加在模板项之后 ⇒ 宿主原有激活效果时窗口自动多一条）；**只有 1 条能力 ⇒ 直接发动、不弹窗**（沿用既有"少一次点击"规则，用户确认）；是否需要取目标由 `Target.NeedsSelection` 决定。**同一根因还救活了 JC024**（见 A63）。 |
 | A65 | **能力图标/属性授予必须写"属性通道"；`防御` 授予尤其（2026-09，用户实测）** | 用户实测：**JC016 持续效果给自己增加能力图标（先手调查/势力）没有生效**。根因：`ContinuousGrants` 只写了 `Kind="Icon"`（图标存在性）⇒ `HasIcon` 为真但**数值恒 0**（`AreaStatsCalculator` 读的是 `GetAttribute("先手调查"/"先手势力")`）。口径：**要改数值就必须写 `Kind="Attribute"` ＋ 属性名**（白眼=先手调查 / 黑刀=战斗 / 黑眼=调查 / 白刀=先手战斗 / 黑星=势力 / 白星=先手势力 / 防御），需要"图标存在性/展示"时**再补一条 `Kind="Icon"`**（`Gain` 动词本来就是两条通道都写，持续授予也必须同款）。② **`防御` 授予一律走属性通道**：`Gain{"防御"}` 原先只直接改 `CurrentDefense`（时效项 `Kind="Defense"`），而 `ResetToBaseValues` 重建防御的基准＝模板防御 ＋ `GetAttribute("防御")` ⇒ 任何一次属性重算都会把授予的防御冲掉（**JC027"再次使用效果不会获得更多属性"**）。现正值/负值都走 `Grant("Attribute","防御")`（**负值必须走 `Grant`**：`Revoke` 在没有既有授予记录时直接跳过 ⇒ 纯减益如 JC100"获得 -1 防御力"会失效），时效项登记 `Kind="Attribute"`。 |
@@ -921,6 +928,47 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   （因该能力在准备步骤后发动时事件已过，兑现必然落在下一回合的准备步骤）。
 - 其余"步骤级"需求（如"结束步骤触发"）走既有 `OnTurnEnded` 时机，无需再扩机制。
 
+**98 用户报 3 项修复（JC011 声望 / JC019 联机发动被拒 / JC021 后续目标框不弹）**
+- 见 §7.4b 新增口径 **A72~A74**。逐条根因与修复：
+  1. **JC011 声望没有生效**：声望结算是"势力对抗**结束**"时机的规则，与胜负无关（平局/败方只要本方声望角色更多就 +1）；
+     但它只写在"有胜方"的分支里 ⇒ **0:0 平局**（本地区只有 1 个声望角色、势力值 0）、"破平被放弃"、
+     "不可破平"三种出口**完全不结算**。修复：抽出 `CombatManager.FinishPowerCombat`，把单机/联机两条路径的
+     **每个势力对抗出口**都收口到它（A72）。
+  2. **JC019 结附后宿主发动能力被服务端拒绝"发动能力参数无效"**：联机权威路径按 effectId 找效果时只查模板，
+     漏**运行期授予**项 ⇒ 取不到就抛错（客户端却已弹出并用全集列过该项）。修复：`CardManager.GetEffectData`
+     补查 `GetAllActivateAbilities`（A73）。
+  3. **JC021 选择地区后后续目标选择框没有弹出**：① `ActivationChoiceWindow` 先跑回调再关本窗 ⇒ 新窗被旧窗
+     的 popup 秩序吞掉；② 联机决策面板在"实例仍有效但已 `QueueFree`"时被**复用** ⇒ 新窗随释放一起消失。
+     修复：先 `Dismiss()` 再回调；联机**每次请求新建面板**（A74）。
+- 测试：`P3KeywordsTests` +2（声望在 0:0 平局下**单机/联机**都必须结算）、`P3GrantedAbilityTests` +1
+  （权威路径可按 id 取到运行期授予的能力）。
+- 账本：全量 headless **145 套件 1133 例 0 失败 0 错误**（上批 145/1130），构建 0 警告 0 错误。
+  **红测**：回退"声望每个出口结算" ＋ 回退"权威取数含授予项" → **3 例失败**。
+
+**97 用户报 6 项修复（JC019 / JC021 / JC024 / JC027 / 附属 UI 位置；含交互与 UI 几何）**
+- 见 §7.4b 新增口径 **A68~A71**。逐条根因与修复：
+  1. **JC019 宿主高亮但拖拽无反馈**：拖拽路径能力取法只读模板（漏运行期授予）⇒ `ability=null`，松手判"无合法目标"取消。
+     修复：`GetFirstActivateAbility`（模板 ∪ 授予）统一供单机高亮缓存/拖拽/联机三处使用（A68）。
+  2. **JC024 UI 上仍是拖拽 UI、无法使用** ＋ **JC019 结附给 JC024 后双击不弹效果菜单**：
+     `Arena._Input` 无条件先起激活拖拽并吞掉左键 ⇒ 双击信号被覆盖；且无目标能力没有可落的目标。
+     修复：`CanDragActivate`（恰好 1 条能力 ∧ 需选**场上卡**目标）失败即**不起拖拽、不吞左键** ⇒
+     多能力走**双击效果菜单**、无目标自指走**双击直接发动**（A68）。
+  3. **JC021 仅一个目标不合法时，剩下一个也应执行**：卡文"和/或"⇒ 逐目标独立。修复两处——
+     多目标条目**不再**走"单目标丢失 ⇒ 整条不结算"（`TurnManager`），并在结算时对每个卡目标做
+     **合法性复检**（`EffectEngine.PruneIllegalMultiChoices`：同源限制判据 ＋ 含**屏障** ＋ 槽级"不能原地移动"），
+     只清空已不合法的槽（A69）。
+  4. **JC027 重复发动不应让属性越来越多**（1 白眼/1 黑刀/1 势力/1 防御）：形态自带授予改为结构化
+     `FormChangeSpec.Grants` ＋ 实例记账，由引擎**幂等**施加（重复施加先撤销上一次），形态到期一并撤销（A70）。
+  5. **附属 UI 有时显示在宿主卡上方**：`Control` 旋转**绕 `PivotOffset`**，旋转后视觉中心仍是 `Position + PivotOffset`；
+     原实现用 `PivotOffset.Rotated(角度)` ⇒ **宿主横置时**中心偏 (120,20)（附属被摆到左上方），
+     `PlaceCardInContainer` 同样把横置卡挪到右下 (120,20)。7 处统一修正 ＋ 几何回归用例（A71）。
+- 测试：新增 `P5LayoutMathTests`(1，锁定 `Position+PivotOffset` 几何)、`P3MultiTargetTests` +2
+  （JC021 部分目标不合法/获得屏障时其余照常结算）、`P3GrantedAbilityTests` +1（拖拽只表达"单条＋需选卡目标"）；
+  `P4FormChangeTests` 两例改写为"形态属性幂等"（含"外部授予仍可叠加"对照）。
+- 账本：全量 headless **145 套件 1130 例 0 失败 0 错误**（上批 144/1126），构建 0 警告 0 错误。
+  **红测**：① 回退拖拽规则（`CanDragActivate` 放行）＋ 回退多目标两处收口 → **4 例失败**
+  （含既有 `TestK15_多目标部分丢失只跳过丢失的那个`，证明旧代码连"丢失一个"也整条丢弃）。
+
 **96 用户报 7 个 BUG 修复批次：JC016 / JC017 / JC019 / JC022 / JC024 / JC027（框架级＋卡数据，无新增效果行）**
 - 见 §7.4b 新增口径 **A63~A67**（无目标自指激活的手势 / 「灵体」前缀必须授予关键词 / 能力图标与防御必须走属性通道 /
   双击激活的来源与能力来源 / 取目标候选含形态角色且"目标含自身"在激活路径同样生效）。逐条根因与修复：
@@ -947,6 +995,49 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   **红测**：① 回退 4 处引擎修复（防御属性通道 / `CanTargetSelf` 激活目标 / 双击来源判定 / 形态角色候选）→ **8 例失败**；
   ② 回退"形态迁区"（`TransformForm` 不调 `SyncFormZone`）→ **4 例失败**，逐条命中本批新用例。
 
+**96 PM 命令修复：`draw` 玩家参数语义 ＋ 全量编号选牌 ＋ 联机对抗命令接通（用户实测，无新增效果行）**
+- **① 用户实测缺陷**：输入 `DRAW 2 JC015` → 卡被加进 **P1** 手牌（期望 **P2** 卡组取牌进 P2 手牌）。
+- **② 根因**：`draw` 用"参数个数 ＋ 首参是否数字"同时兼容两套语法，**`parts[1]` 在旧分支是玩家号、
+  在新分支是数量**，且玩家缺省时**静默按 P1**（不打印任何提醒）⇒ 数量被当玩家号、玩家被静默吃成 P1。
+- **③ 统一口径（用户 2026-10 裁定）**：`draw <玩家 1|2> [数量|卡牌编号]`——**玩家参数在第一位**，
+  且**同时决定"从哪个玩家卡组/区域找牌"与"卡加到哪个玩家"**：
+  · `draw 1 5` → P1 牌库顶抽 5 张（旧日志形态逐字兼容）；`draw 2 3` → P2 抽 3 张；
+  · `draw 2 JC015` → **P2 卡组**取 1 张 JC015 → **P2 手牌**；
+  · `draw 1 2 JC015` → 显式数量只允许 1，否则报错"**按编号取牌不支持多张**"；
+  · 缺玩家参数或非 1/2 → **一律报错**（不再静默落 P1）；
+  · 卡组无该编号 → **明确报错**，并附"该编号在 P1/P2 卡组与区域的分布"（不再是一句"什么都不做"）。
+  语义固定：**按编号取牌不算"抓牌"**（不广播 `OnDraw`、不受"梦魇族群从牌库底抓牌"重定向、空库不判负，
+  与 JC049「非抓牌式取牌」同口径）。
+- **④ 联机对抗命令接通（用户实测"没生效"）**：旧实现 `MatchHost` 侧 `openCombatWindow: null` ⇒
+  `investigation`/`battle` 第一句就打印"对抗窗口回调未初始化"什么都不做；且单机侧旧实现**直调窗口协调器、
+  绕过 `CombatManager.ResolveWinner`** ⇒ **不广播 `OnInvestigationWon` 获胜触发**、`IsDamageAssignmentOpen` 不置位。
+  现新增 `CombatManager.ResolveCombatFromDebug(type, areaNo, winner, diff)`：
+  · **单机** → 既有 `ResolveWinner`（正规结算链，弹本机窗口，含获胜触发与分配伤害阶段置位）；
+  · **联机服务端** → 经 `IInputGateway` 下发**真实对抗窗口**给玩家（`ResolveStrengthDamageAsync` /
+    `ResolveInvestigationPlacementAsync` 从 `ResolveWinnerAsync` **原样抽出**，正常联机路径行为不变）；
+  · `power` 保持瞬时结算（不弹窗）。
+- **⑤ 编号选牌覆盖面**：`draw` / `setassetfromdeck` / `move` / `attach` / `seal` / `attacharea` / `sealarea`
+  共用统一**卡牌选择器**（`TryResolveCard`）：实例 UID 优先 → 否则按编号在**参数玩家**范围内
+  （卡组 → 争夺区/附属/封印 → 手牌 → 资产 → 墓地/秘社/堆叠）；多张同编号**随机一张**；
+  attach/seal 的宿主/目标加"**场上**"过滤（避免"卡组里也有同编号"时错挑）。
+  `move` 统一为 `move <玩家 1|2> <卡牌编号|实例UID> <目标> [目标玩家 1|2] [top|bottom]`（越界地区号显式报错）；
+  `attach`/`seal`/`attacharea`/`sealarea` 新增**可选玩家参数**（缺省取当前行动权玩家并打印提醒）。
+- **⑥ 附带修复**：`power` 移出 `BlockingCommands`（瞬时结算不该截断批量命令；判定改为**模式感知**：
+  仅"本地会真的弹窗"时才阻塞）；`InjectModelRefs` 补注入 `AreaManager`（此前 headless/服务端 `power`
+  恒报"AreaManager 未初始化"）；新增 `AreaManagerRef` 兜底地区列表（测试/纯服务端装配下地区校验恒失败）；
+  `IIntentRouter.DebugCommand(..., out error)` → `IntentResult.Error` → 客户端 `OnlineNoticeWindow` 弹提示
+  （此前联机 PM 失败只打到服务端 headless 日志，玩家毫无反馈）。
+- 文件：`Script/Manager/PMCommandManager.cs`、`Script/Manager/CombatManager.cs`、`Script/Manager/GameInitializer.cs`、
+  `Script/UI/Arena.cs`、`Script/Net/IIntentRouter.cs`、`Script/Net/IntentHub.cs`、`Script/Net/Godot/GodotIntentRouter.cs`、
+  `Script/Net/Godot/MatchHost.cs`、`Script/Tests/PMCommandTests.cs`、`Script/Tests/NetP3CTests.cs`。
+- 测试：`PMCommandTests` **12 例 → 30 例全绿**——含用户报的 `draw 2 <编号>` 形态回归（进 P2 手牌）、
+  旧 `draw 1 5`/`draw 2 3` 形态回归、玩家参数非法不动作、编号不支持多张、只搜参数玩家卡组、
+  错误含区域分布、`move` 编号/UID/越界、`setassetfromdeck` 编号与参数玩家、
+  "investigation 单机走正规结算链并广播获胜触发"、"battle 单机窗口期间置位分配伤害阶段"、
+  "power 瞬时结算且不截断批量命令"、"对抗命令玩家参数非法则失败"。
+- 账本：全量 headless **146 套件 1157 例 0 失败 0 错误**（上批 144/1126），构建 **0 警告 0 错误**；
+  不新增效果行、不改任何行的 ✅/⛔ 判定。
+
 **95 重置步骤竖置秘社卡（缺陷修复）＋ 两个新 PM 调试命令（`draw` 定向取牌 / `jumpto` 跳转步骤）**
 - **① 缺陷修复·重置阶段横置的秘社卡没有被重置（用户实测）**：
   `CardManager.UntapAll`（重置步骤**唯一**解横置出口）的解横置**区列表**原先为
@@ -963,6 +1054,8 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   `draw <玩家 1|2> [数量]`（两个参数都是数字）完全兼容**（仍走 UI 注入的抽牌回调）。
   实现：`PMCommandManager.ExecuteDraw` / `DrawSpecificCards`（`RemoveCardFromDeckOf` + `MoveToHand`，
   与检索取牌的收口一致；随机源 `System.Random` 字段）。
+  > ⚠️ **该写法已于 2026-10 修订**（见 §7.10 106）：玩家参数改到**第一位**，`draw <数量> <编号>` 不再使用；
+  > "没有则什么都不做"也改为**明确报错 + 双方分布提示**。
 - **③ 新 PM 命令 `jumpto <步骤名>[地区号]`（跳转步骤）**：
   **中间经过的步骤一律不结算**（不逐个 `EnterPhase`，故中间步骤的触发/效果都不结算），只进入目标步骤并执行
   它**正常的进入逻辑**（目标步骤照常结算、后续流程照常推进）。

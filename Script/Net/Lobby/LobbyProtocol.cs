@@ -39,8 +39,7 @@ namespace Script.Net.Lobby
         StartMatch,
         /// <summary>踢出某座位玩家（仅房主）。</summary>
         Kick,
-        /// <summary>请求再来一局（双方都点后：关闭本局、回到同一房间的未准备状态）。</summary>
-        Rematch,
+
         /// <summary>心跳/延迟测量（仅回显，不做状态变更）。</summary>
         Ping,
     }
@@ -98,7 +97,7 @@ namespace Script.Net.Lobby
         Starting,
         /// <summary>对局进行中（除 Ping 外，房间操作一律拒绝）。</summary>
         InMatch,
-        /// <summary>本局已结束（可再来一局 / 离开）。</summary>
+        /// <summary>本局已结束（战场页展示结果中；服务端到点后自动复用房间回到等待阶段，也可离开）。</summary>
         Finished,
         /// <summary>房间已关闭（收到通知后客户端回大厅）。</summary>
         Closed,

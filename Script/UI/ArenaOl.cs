@@ -57,7 +57,9 @@ namespace Script.UI
         private Control _scoreContainer1, _scoreContainer2;   // 分数区（P1/P2）
         private Control _councilContainer1, _councilContainer2; // 秘社区（P1/P2）
         private Control _stackContainer;      // 堆叠区容器
-        private Label _resultLabel;           // 游戏结束结算文字
+        private Label _resultLabel;           // 游戏结束结算文字（由服务端权威结果驱动）
+        /// <summary>是否已展示本局结果（避免后续快照刷新把结算文字刷掉）。</summary>
+        private bool _matchResultShown;
         private Button _concedeButton;        // 投降按钮
         private ChoicePromptPanel _choicePromptPanel;   // 联机决策面板（收到 ChoiceRequest 时弹出）
         private TextEdit _commandInput;       // PM 调试命令输入（Shift+Enter 上行 DebugCommand）
@@ -85,6 +87,12 @@ namespace Script.UI
         private OnlineTriggerOrderWindow _onlineTriggerOrderWindow;
         /// <summary>当前排序窗口的上下文 id（服务端 OrderContextId；变化＝新一轮排序，需重建窗口）。</summary>
         private string _triggerOrderContextId;
+        /// <summary>
+        /// 本轮（当前 OrderContextId 下最新一轮）触发排序请求。
+        /// 同一 ctx 会连发多轮（每次入堆叠一轮，各轮 RequestId 不同），回包必须用**最新一轮**的 RequestId，
+        /// 否则新轮次的入堆叠/完成回包会挂到已完成的旧请求上而被服务端丢弃。
+        /// </summary>
+        private Script.Net.ChoiceRequest _onlineTriggerOrderCurrentRequest;
         /// <summary>联机专用排序窗口场景缓存。</summary>
         private PackedScene _triggerOrderWindowScene;
 
@@ -244,6 +252,18 @@ namespace Script.UI
         public void AttachSession(Script.Net.Godot.ClientSession session, int localPlayerId = 0)
             => AttachMatchClient(session, localPlayerId != 0 ? localPlayerId : session.MySeat);
 
+        /// <summary>【对局结束 → 战场页展示获胜者】由服务端房间广播的权威结果驱动（对齐单机居中结算文字）。</summary>
+        /// <param name="winnerSeat">获胜座位（1/2）；0 表示无胜者（服务端中止）。</param>
+        public void ShowMatchResult(int winnerSeat)
+        {
+            _matchResultShown = true;
+            if (_resultLabel == null) return;
+            _resultLabel.Text = winnerSeat <= 0 ? "对局结束"
+                : (winnerSeat == _localPlayerId ? "你获胜！" : "你落败！");
+            _resultLabel.Visible = true;
+            GD.Print($"[ArenaOl] 展示对局结果：{_resultLabel.Text}（获胜座位 {winnerSeat}）");
+        }
+
         public void DetachLauncher()
         {
             if (_matchClient != null)
@@ -271,6 +291,24 @@ namespace Script.UI
         {
             if (snap == null) return;
             _snapshotQueue.Enqueue(snap);
+            // 【触发排序窗口·状态同步】快照到达时，若排序窗口已不可见（可能已被"双框全空"静默关闭），
+            // 清理本地引用，避免悬挂；排序窗口的自动关闭判定已在窗口内部由界面状态驱动
+            // （OnlineTriggerOrderWindow.SilentCloseIfBothZonesEmpty），此处只做引用清理。
+            PollOnlineTriggerOrderWindowClosed();
+        }
+
+        /// <summary>
+        /// 清理已关闭/失效的触发排序窗口引用（排序窗口自身负责"双框全空即静默关闭"的判定）。
+        /// </summary>
+        private void PollOnlineTriggerOrderWindowClosed()
+        {
+            if (_onlineTriggerOrderWindow == null) return;
+            if (!GodotObject.IsInstanceValid(_onlineTriggerOrderWindow) || !_onlineTriggerOrderWindow.Visible)
+            {
+                _onlineTriggerOrderWindow = null;
+                _onlineTriggerOrderCurrentRequest = null;
+                _activationSelectionBusy = false;
+            }
         }
 
         /// <summary>【第0回合·调度】本地是否已上报过调度选择（防重复弹出 / 重复上报）。</summary>
@@ -340,11 +378,14 @@ namespace Script.UI
             // 【对齐单机】决策请求改用单机同款窗口（调查/战斗/破平/支付横置/触发排序/选目标），失败再退回通用决策面板
             if (TryOpenOnlineDecisionWindow(request)) return;
 
-            if (_choicePromptPanel == null || !GodotObject.IsInstanceValid(_choicePromptPanel))
-            {
-                _choicePromptPanel = new ChoicePromptPanel();
-                AddChild(_choicePromptPanel);
-            }
+            // 【2026-09 修复·用户实测"JC021 发动、选择地区后，后续目标选择框没有弹出"】
+            // 通用决策面板**每次请求都用新实例**：上一个请求完成时面板已 `QueueFree()`，但同一帧内（本地主机/低延迟）
+            // 到达的**下一个**请求（多目标逐槽 / 确认面板）会看到"实例仍有效"而复用它 ⇒ 新窗口被随后的释放一起销毁，
+            // 表现为"第一个框弹了、后面的框不弹"。这里显式释放旧面板再建新的。
+            if (_choicePromptPanel != null && GodotObject.IsInstanceValid(_choicePromptPanel))
+                _choicePromptPanel.QueueFree();
+            _choicePromptPanel = new ChoicePromptPanel();
+            AddChild(_choicePromptPanel);
             _choicePromptPanel.Init(request, ResolveChoiceLabel, result =>
             {
                 // 【乐观回显·快照架构内】手牌上限弃牌（SelectHandCards 且 NumberMin==NumberMax==N）：
@@ -894,12 +935,16 @@ namespace Script.UI
         }
 
         /// <summary>
-        /// 触发排序（对齐单机 `TriggerOrderWindow`）：拖拽决定入堆叠顺序 + 取消（放弃区）/ 全部进入堆叠 /
-        /// 第一张进入堆叠 / 完成排序（＝放弃剩余）。联机专用窗口 `OnlineTriggerOrderWindow`（复用共享的
+        /// 触发排序（对齐单机 `TriggerOrderWindow`）：拖拽决定入堆叠顺序 + 取消（放弃区）/
+        /// 第一张进入堆叠 / 完成排序并放弃下方效果（＝放弃剩余）。联机专用窗口 `OnlineTriggerOrderWindow`（复用共享的
         /// `TriggerEntryUI`/`TriggerOrderRoot` 纯 View 组件，不改它们）。
         ///
         /// 逐次入堆叠会产生**多轮请求-响应**：同一 `OrderContextId` 复用同一窗口并刷新条目；上下文变化则重建窗口。
+        /// **本轮请求的 OptionUids ＝ 服务端侧"当前全部剩余待排序触发"**，故收到同 ctx 请求即刷新窗口、
+        /// 且证明排序未结束（绝不在本方法内关窗）。
         /// 回包：`SelectedIndices` = 本次入堆叠的条目下标顺序（服务端据此按序入栈）；"完成排序"= `Cancelled=true`。
+        /// 窗口的自动关闭由窗口内部"双框全空"判定触发（静默关闭、不回包）；
+        /// 若窗口已被静默关闭而服务端仍下发同 ctx 请求，本方法"窗口为空则新建"分支会**重新弹出**并刷新（防御兜底）。
         /// </summary>
         private bool OpenOnlineTriggerOrderWindow(Script.Net.ChoiceRequest req)
         {
@@ -909,7 +954,15 @@ namespace Script.UI
             {
                 _onlineTriggerOrderWindow.CloseAndFree();   // 新的排序轮次（如换 owner）→ 重建窗口
                 _onlineTriggerOrderWindow = null;
+                _onlineTriggerOrderCurrentRequest = null;
             }
+            // 【关键·不可在此关窗】收到同 OrderContextId 的排序请求，恰恰**证明整轮排序尚未结束**
+            // （服务端"逐次入堆叠"会对同一 owner 复用同一 ctx 连发多轮请求，每轮 OptionUids = 服务器侧
+            //  **当前全部剩余待排序触发**）。故此处只允许走下方 OpenOrUpdate 刷新窗口，**绝不能**关窗——
+            //  否则「第一张进入堆叠」后（尤其该触发需选目标、服务端 await 选目标后才移除并下发下一轮）
+            //  会把"还有剩余触发的正常下一轮请求"误判为"排序已结束"而误关窗、误弃后续触发。
+            // 【重开兜底】若窗口此前已被"双框全空"静默关闭（`_onlineTriggerOrderWindow == null`），
+            // 本分支会走下方"窗口为空 → 新建 + OpenOrUpdate(Popup)"重新弹出并刷新剩余条目。
             if (_onlineTriggerOrderWindow == null || !GodotObject.IsInstanceValid(_onlineTriggerOrderWindow))
             {
                 _triggerOrderContextId = ctx;
@@ -921,12 +974,15 @@ namespace Script.UI
                     return false;
                 }
                 AddChild(_onlineTriggerOrderWindow);
-                var decisionReq = req;
+                // 回包必须用「当前这一轮」的 RequestId（同 ctx 会连发多轮请求，各轮 RequestId 不同；
+                // 若沿用首轮捕获的 id，后续轮的入堆叠/完成回包会挂到已完成的旧请求上 → 服务端收不到，卡死）。
                 _onlineTriggerOrderWindow.OnSubmitIndices = indices =>
                 {
+                    var current = _onlineTriggerOrderCurrentRequest;
+                    if (current == null) { GD.PrintErr("[ArenaOl] 触发排序入堆叠回包：无当前请求，丢弃"); return; }
                     var res = new Script.Net.ChoiceResult
                     {
-                        RequestId = decisionReq.RequestId,
+                        RequestId = current.RequestId,
                         Cancelled = false,
                     };
                     if (indices != null) res.SelectedIndices.AddRange(indices);
@@ -935,20 +991,27 @@ namespace Script.UI
                 };
                 _onlineTriggerOrderWindow.OnDone = () =>
                 {
-                    _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                    var current = _onlineTriggerOrderCurrentRequest;
+                    if (current != null)
                     {
-                        RequestId = decisionReq.RequestId,
-                        Cancelled = true,
-                    });
+                        _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                        {
+                            RequestId = current.RequestId,
+                            Cancelled = true,
+                        });
+                    }
                     GD.Print("[ArenaOl] 触发排序完成（放弃剩余）已回包");
                     // 对齐单机 Done 关闭窗口：本轮排序结束（若还有其它 owner，服务端会下发新的上下文 id 开新窗口）
                     if (_onlineTriggerOrderWindow != null && GodotObject.IsInstanceValid(_onlineTriggerOrderWindow))
                         _onlineTriggerOrderWindow.CloseAndFree();
                     _onlineTriggerOrderWindow = null;
+                    _onlineTriggerOrderCurrentRequest = null;
                     _activationSelectionBusy = false;
                 };
             }
 
+            // 记录本轮请求：供 OnSubmitIndices / OnDone 回包使用正确的 RequestId。
+            _onlineTriggerOrderCurrentRequest = req;
             _onlineTriggerOrderWindow.OpenOrUpdate(ctx, req.PlayerId, BuildOnlineTriggerEntries(req));
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
             GD.Print($"[ArenaOl] 触发排序窗口已打开/刷新（ctx={ctx}，条目 {(req.OptionUids?.Count ?? 0)} 个）");
@@ -1137,17 +1200,9 @@ namespace Script.UI
             // 费用池（对标单机 Arena.RefreshAssetLabels）：费用：可用/总 + 颜色忠诚 + 领域忠诚
             RefreshOnlineAssetLabels(snap);
 
-            // 游戏结束展示（IsGameOver 由服务端 PlayerManager 权威广播）
-            if (_resultLabel != null)
-            {
-                bool over = snap.Players.Exists(p => p.IsGameOver);
-                _resultLabel.Visible = over;
-                if (over)
-                {
-                    int winner = snap.Players.Find(p => p.IsGameOver)?.PlayerId ?? 0;
-                    _resultLabel.Text = winner == 1 ? "玩家1 胜利！" : "玩家2 胜利！";
-                }
-            }
+            // 游戏结束展示：由 `ShowMatchResult`（服务端房间广播的权威结果）驱动；
+            // 快照里的 `IsGameOver` 是"对局已结束"的**全局**标志（双方都为 true），不能用来推断胜者。
+            if (_resultLabel != null) _resultLabel.Visible = _matchResultShown;
 
             ArrangeAll();
 
@@ -1558,12 +1613,12 @@ namespace Script.UI
             ui.PivotOffset = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT) / 2f;
             ui.RotationDegrees = ui.IsTapped ? 90f : 0f;
 
-            // 宿主视觉中心与上/下缘（本地坐标，兼容宿主横置旋转）
-            bool hostTapped = hostUi is CardUI hc ? hc.IsTapped : hostUi is CouncilCardUI cc ? cc.IsTapped : false;
-            float angle = Mathf.DegToRad(hostTapped ? 90f : 0f);
-            Vector2 rotatedPivot = hostUi.PivotOffset.Rotated(angle);
-            float centerX = hostUi.Position.X + rotatedPivot.X;
-            float centerY = hostUi.Position.Y + rotatedPivot.Y;
+            // 宿主真实视觉中心与上/下缘（本地坐标，兼容宿主横置旋转）
+            // 【2026-09 修复】原用 `PivotOffset.Rotated(角度)` 估算视觉中心 ⇒ 宿主横置时误差 (120,20)、
+            // 附属被摆到宿主左上方；Godot 旋转**绕 PivotOffset**，旋转后视觉中心仍是 `Position + PivotOffset`（单机同修）。
+            bool hostTapped = hostUi is CardUI hc ? hc.IsTapped : hostUi is CouncilCardUI cc && cc.IsTapped;
+            float centerX = hostUi.Position.X + hostUi.PivotOffset.X;
+            float centerY = hostUi.Position.Y + hostUi.PivotOffset.Y;
             float visHalfH = hostTapped ? CardLayoutHelper.CARD_WIDTH / 2f : CardLayoutHelper.CARD_HEIGHT / 2f;
 
             float topLeftX = centerX - CardLayoutHelper.CARD_WIDTH / 2f;
@@ -2543,6 +2598,9 @@ namespace Script.UI
 
             var ability = GetFirstOnlineActivateAbility(inst);
             if (ability == null) return false;
+            // 【2026-09·与单机同款】拖拽只能表达"恰好 1 条能力 ＋ 需选场上卡目标"：多能力走双击菜单、
+            // 无目标/自指走双击直接发动、玩家/地区目标不走卡拖拽 ⇒ 除这些情况外不起手（不吞左键）。
+            if (!ActivateEligibility.CanDragActivate(inst, out _)) return false;
 
             // 与单机 CardDragController.TryBeginActivateDragAt 同源门禁：优先权 + 费用 + 生效区 + 行动窗口 + 有合法目标
             // 【P2】改为"服务端投影优先 + 同一规则函数兜底"，客户端不再自行拼输入
@@ -2621,14 +2679,9 @@ namespace Script.UI
             _activationSelectionBusy = false;
         }
 
-        /// <summary>源卡首个角色/附属激活能力（与单机 CardDragController.GetActivatingAbility 一致）。</summary>
+        /// <summary>源卡首个角色/附属激活能力（**模板 ∪ 运行期授予**，与单机 `CardDragController.GetActivatingAbility` 同源）。</summary>
         private static EffectData GetFirstOnlineActivateAbility(CardInstance inst)
-        {
-            if (inst?.PlayerTemplate is PlayerCardData tmpl)
-                foreach (var e in tmpl.EffectDataList)
-                    if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return e;
-            return null;
-        }
+            => ActivateEligibility.GetFirstActivateAbility(inst);
 
         /// <summary>
         /// 某张**本地手牌**在当前蒙版下是否允许被拖起（对齐单机 `CardDragController.IsDraggableUnderMask`）：

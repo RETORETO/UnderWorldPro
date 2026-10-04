@@ -129,6 +129,11 @@ namespace Script.Tests
         public void ResetActionCharges(int playerId) { }
         public void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids) { }
         public string LastDebugCommand;
-        public void DebugCommand(int playerId, string commandLine) { LastDebugCommand = commandLine; }
+        public bool DebugCommand(int playerId, string commandLine, out string error)
+        {
+            LastDebugCommand = commandLine;
+            error = null;
+            return true;
+        }
     }
 }

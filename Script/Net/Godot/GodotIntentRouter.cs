@@ -104,14 +104,19 @@ namespace Script.Net.Godot
         public void MulliganReport(int playerId, System.Collections.Generic.IList<string> pickedUids)
             => _service.MulliganReport(playerId, pickedUids);
 
-        public void DebugCommand(int playerId, string commandLine)
+        /// <summary>
+        /// 执行服务端权威的 PM 调试命令；失败原因经 <paramref name="error"/> 回传（→ `IntentResult.Error` → 客户端提示）。
+        /// </summary>
+        public bool DebugCommand(int playerId, string commandLine, out string error)
         {
+            error = null;
             if (_pm == null)
             {
-                GD.PrintErr("[GodotIntentRouter] PMCommandManager 未注入，DebugCommand 不可用");
-                return;
+                error = "PMCommandManager 未注入，DebugCommand 不可用";
+                GD.PrintErr($"[GodotIntentRouter] {error}");
+                return false;
             }
-            _pm.ExecuteCommand(commandLine);
+            return _pm.TryExecuteCommand(commandLine, out error);
         }
 
         public void MarkCreateWatch() => _cardManager.MarkCreateWatch();

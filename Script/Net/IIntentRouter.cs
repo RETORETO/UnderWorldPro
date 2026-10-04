@@ -54,8 +54,12 @@ namespace Script.Net
         /// <summary>重置行动次数。</summary>
         void ResetActionCharges(int playerId);
 
-        /// <summary>执行一条 PM 调试命令（仅调试/验证用；服务端权威执行，字符串为整行命令）。</summary>
-        void DebugCommand(int playerId, string commandLine);
+        /// <summary>
+        /// 执行一条 PM 调试命令（仅调试/验证用；服务端权威执行，字符串为整行命令）。
+        /// 返回 false 并把失败原因写入 <paramref name="error"/>：服务端会把该原因回填到 `IntentResult.Error`
+        /// 下行给客户端，解决"联机下 PM 命令失败后玩家毫无反馈"（此前只打到服务端 headless 日志）。
+        /// </summary>
+        bool DebugCommand(int playerId, string commandLine, out string error);
 
         /// <summary>
         /// 【第0回合·调度】客户端主动上报调度选择：`pickedUids` 为**要换掉**的手牌 UID（任意数量、可空）。

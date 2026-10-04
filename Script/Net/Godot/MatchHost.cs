@@ -330,10 +330,15 @@ namespace Script.Net.Godot
                 refreshCardUI: null,
                 getFaceUp: null,
                 setFaceUp: null,
+                // 【2026-10】联机服务端**没有本机窗口**：`investigation`/`battle` 改为经决策协议
+                // 把对抗窗口下发给玩家（见 PMCommandManager.ExecuteInvestigation/ExecuteStrength →
+                // CombatManager.ResolveCombatFromDebug → ResolveStrengthDamageAsync/...PlacementAsync）。
                 openCombatWindow: null,
                 areaManager: Game.AreaManager,
                 drawAndAddNewArea: () => DrawAndAddAreaForDebug(),
                 stackManager: Game.StackManager);
+            // 对抗命令的结算入口（显式注入，避免依赖 GameInitializer 装配顺序）
+            pm.CombatManagerRef = Game.CombatManager;
         }
 
         /// <summary>PM 命令 addarea 的纯逻辑实现：从世界牌库抽 1 张地区卡注册为新区（不建 UI），作用于**本场**。</summary>

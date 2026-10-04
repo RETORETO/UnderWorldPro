@@ -94,8 +94,9 @@ namespace Script.Tests
                 new P3StepPledgeTests(),               // P3：步骤级承诺（下个准备步骤免费现身）+ JC024 S.P.T董事局②
                 new P3ControlTransferTests(),          // P3：控制权转移 + 到期归还 + JC129 操控心智
                 new P3ActionOutcomeTests(),            // P3：动作成果判定（"若你如此做"）+ JC009 远东六号科研所 / JC087 格鲁尼的走私客
-                new P3DestroyOnTargetTests(),
-                new P3SpiritKeywordTests(),           // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
+                new P3DestroyOnTargetTests(),          // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
+                new P3SpiritKeywordTests(),            // 灵体前缀必须授予关键词：6 张卡的灵体防止伤害（JC022 实测 + 同类排查）
+                new P5LayoutMathTests(),               // UI 几何：横置卡视觉中心＝Position+PivotOffset（附属/封印排版与卡位摆放基准）
                 new P3RuntimeKeywordTests(),           // P3·K13：运行期授予的触发类关键词参与收集 + 群体 Gain 主体 + JC024①/ JC089
                 new P3CompositeTargetTests(),          // P3：复合目标限制（SpecAlt 两条声明 OR）+ HostIsCouncil + JC043 纵火狂
                 new P3LatentTests(),                   // P3：新时机「被潜伏/翻面时」(OnLatent) + 群体伤害 + JC054 蒙古死亡蠕虫①
@@ -157,6 +158,7 @@ namespace Script.Tests
                 new P5CouncilRestrictionTests(),       // 秘社构筑限制：CouncilRestriction.Describe / ValidateDeckDetailed / MSJC001 需 ≥25 张黄色牌
                 new CouncilEffectTests(),              // 秘社效果：MSJC001 按卡文落地（先手标志前提 / 独有检索 / 每局一次）＋【A57】每局上限 + 独有筛选
                 new CouncilEffectBatch2Tests(),        // 秘社效果批次2：MSJC010~017 按卡文落地 + 牌作代价/卡上标志门槛/磨牌/抓牌方向/静态子类别授予/开局效果
+                new CouncilAssignTests(),              // 秘社归属：双方各拿自己卡组的秘社 / 起手数各自取 / 无卡组方回退默认秘社 / 重开不串场 / 开局效果落最终实例
                 new LocalHostTests(),                  // 增量 D：首页「建立主机」内嵌服务端（起/连自己/自动建房、端口顺延、Stop 同步释放端口）
             };
 

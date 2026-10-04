@@ -11,7 +11,7 @@ namespace Script.Tests
 {
     /// <summary>
     /// 【大厅/房间 · 增量 A】**完整流程自检**（不是单元测试）：同进程内起真实 ENet 服务端 + 两个真实客户端会话，
-    /// 走完 `连接 → Hello → 房间列表 → 建房 → 加入 → 提交卡组 → 准备 → 开始 → 对局（收快照）→ 结束 → 再来一局`。
+    /// 走完 `连接 → Hello → 房间列表 → 建房 → 加入 → 提交卡组 → 准备 → 开始 → 对局（收快照）→ 结束 → 自动回同一房间`。
     ///
     /// 目的与定位（用户已明确"大厅/房间不写单测"）：本套件只验证**流程能走通且双方视角一致**，
     /// 不断言内部实现细节；真正的交付验收是"一台机器三进程冒烟"（`NetServer + 2×NetEntry --bot`）。
@@ -216,16 +216,17 @@ namespace Script.Tests
                 $"判负后房间应为 Finished（实际 {rig.Last2?.Phase}）");
             Assert.AreEqual(2, rig.Last2.MatchSummary?.WinnerSeat, "结果应广播给双方（获胜座位 2）");
 
-            // ⑩ 再来一局（D10：双方都请求 → 关闭本局、回同一房间、双方未准备、卡组保留）
-            rig.Host1.Send(new LobbyRequest { Kind = LobbyRequestKind.Rematch });
-            Assert.IsTrue(Pump(rig, 3000, () => rig.Last1?.SeatState(1)?.RematchRequested == true), "房主请求重开应可见");
-            rig.Guest2.Send(new LobbyRequest { Kind = LobbyRequestKind.Rematch });
-            Assert.IsTrue(Pump(rig, 5000,
-                () => rig.Last1?.Phase == RoomPhase.Waiting && rig.Last1.SeatState(1).Ready == false),
-                $"双方重开后应回到 Waiting 且双方未准备（实际 {rig.Last1?.Phase}）");
-            Assert.IsNull(rig.Lobby.GetRoom(roomId)?.Match, "重开后旧对局应已关闭");
-            Assert.IsTrue(rig.Last1.SeatState(1).DeckValid, "重开后卡组应保留（仍有效）");
-            Assert.AreEqual(roomId, rig.Last1.RoomId, "D10：应复用原房间");
+            // ⑩ 结果展示结束后**自动**回同一房间（无需任何"再来一局"操作）：
+            //    双方未准备、卡组保留、房间号与座位不变、旧对局已关闭、不再保留结果。
+            Assert.IsTrue(Pump(rig, 8000,
+                () => rig.Last1?.Phase == RoomPhase.Waiting
+                      && rig.Last1.SeatState(1).Ready == false
+                      && rig.Last1.SeatState(2).Ready == false),
+                $"结果展示结束后应自动回到 Waiting 且双方未准备（实际 {rig.Last1?.Phase}）");
+            Assert.IsNull(rig.Lobby.GetRoom(roomId)?.Match, "自动回房后旧对局应已关闭");
+            Assert.IsTrue(rig.Last1.SeatState(1).DeckValid, "自动回房后卡组应保留（仍有效）");
+            Assert.AreEqual(roomId, rig.Last1.RoomId, "应复用原房间（房间号不变）");
+            Assert.IsNull(rig.Last1.MatchSummary, "结果只在战场页展示，回到房间后不再保留结果");
 
             // ⑪ 离开：两人都离开后房间销毁
             rig.Host1.Send(new LobbyRequest { Kind = LobbyRequestKind.LeaveRoom });
@@ -393,8 +394,8 @@ namespace Script.Tests
                 $"对手掉线后房间应退回 Waiting（实际 {rig.Last1?.Phase}）");
             Assert.IsNull(rig.Last1.SeatState(2).PlayerName, "座位2 应已释放");
             Assert.IsNotNull(rig.Lobby.GetRoom(roomId), "房主还在，房间不应销毁");
-            Assert.IsNotNull(rig.Last1.MatchSummary, "M5：留下的玩家仍应看到本局结果（Summary 保留）");
-            Assert.AreEqual(1, rig.Last1.MatchSummary.WinnerSeat, "掉线方判负 → 座位1 获胜");
+            // 结果只在**战场页**展示：回到房间后不再保留结果
+            Assert.IsNull(rig.Last1.MatchSummary, "结果只在战场页展示，回到房间后不再保留 Summary");
 
             // M1：服务端停止要关闭全部房间，并把 `Closed` 房间状态下发给在座客户端。
             // 拆成两条断言的原因：`ServerHost.Stop()` 会在关房后紧接着关传输，而本套件是同进程回环测试 ——

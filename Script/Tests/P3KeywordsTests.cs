@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -369,6 +369,44 @@ namespace Script.Tests
         }
 
         // ==================== 声望（势力对抗结束） ====================
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测"JC011 声望没有生效"】声望结算是挂在"势力对抗**结束**"上的，
+        /// 与胜负**无关**（卡文：不依赖胜负；平局、甚至败方，只要本方声望角色更多就 +1）。
+        /// 此前该结算只写在"有胜方"的分支里 ⇒ **0:0 平局**（典型：本地区只有一个声望角色、其势力值为 0）
+        /// 与"破平被放弃/不可破平"时声望完全不结算。本例锁单机路径。
+        /// </summary>
+        public void TestP3_声望_零比零平局也结算_单机()
+        {
+            var game = NewGame();
+            var area = FirstArea(game);
+            MakeWithDomains(game, "TS_p3_renown_tie1", 1, area, MagicDomain.Mind, renown: true);   // 势力值 0 ⇒ 0:0 平局
+
+            var before = game.AreaManager.GetMarks(area);
+            bool done = false;
+            game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Power, area, 1, () => done = true);
+            var after = game.AreaManager.GetMarks(area);
+
+            Assert.IsTrue(done, "势力对抗流程走完（0:0 平局不可破平）");
+            Assert.AreEqual(before.p1 + 1, after.p1,
+                "0:0 平局同样是『势力对抗结束』⇒ 声望较多方 +1 势力标志（修复前这里不会结算）");
+        }
+
+        /// <summary>同上，锁**联机（权威）路径**：0:0 平局也必须结算声望。</summary>
+        public void TestP3_声望_零比零平局也结算_联机()
+        {
+            var game = NewGame();
+            var area = FirstArea(game);
+            MakeWithDomains(game, "TS_p3_renown_tie2", 1, area, MagicDomain.Star, renown: true);
+
+            var before = game.AreaManager.GetMarks(area);
+            game.CombatManager.ResolveAreaCombatAsync(CombatManager.CombatType.Power, area, 1)
+                .GetAwaiter().GetResult();
+            var after = game.AreaManager.GetMarks(area);
+
+            Assert.AreEqual(before.p1 + 1, after.p1,
+                "联机路径 0:0 平局同样结算声望（与单机同源收口 FinishPowerCombat）");
+        }
 
         public void TestP3_声望_对抗结束由声望较多方加标记()
         {

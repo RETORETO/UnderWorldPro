@@ -23,11 +23,15 @@ namespace Script.UI
     /// <summary>
     /// 【联机专用·触发效果排序窗口】对齐单机 `TriggerOrderWindow` 的**视觉与操作**：
     ///  - 入堆叠区（左→右＝先→后入栈）/ 放弃区（仅非强制可拖入，可拖回）；
-    ///  - 三个按钮：全部进入堆叠 / 第一张进入堆叠 / 完成排序（仅入堆叠区为空时可点＝放弃剩余）；
+    ///  - 两个按钮：第一张进入堆叠 / 完成排序并放弃下方效果（**仅入堆叠区为空时可点，不看放弃区**＝放弃剩余）；
+    ///  - **自动关闭**：只要"排序框与放弃框皆空"即静默关闭窗口（仅 Hide、不回包）。
+    ///    前提（既定规则）：无合法目标的效果不入排序窗、入堆叠不可取消 ⇒"客户端两框全空"等价于"服务端剩余为空"。
+    ///    收到同 ctx 的下一轮请求＝排序未结束（刷新窗口，绝不关窗）；若窗口已被静默关闭而服务端仍下发请求，
+    ///    `ArenaOl` 会重新弹出（`OpenOrUpdate` 内 `Popup`）；
     ///  - 直接复用共享的纯 View 组件 `TriggerEntryUI`（条目）与 `TriggerOrderRoot`（排布与拖拽），**不改这两个类**。
     ///
     /// 与单机的差异（仅交互落点，不涉规则）：
-    ///  - 单机"全部/第一张进入堆叠"本地直接入栈；联机把"本次入堆叠的条目下标顺序"回包给服务端，由服务端入栈；
+    ///  - 单机"第一张进入堆叠"本地直接入栈；联机把"本次入堆叠的条目下标顺序"回包给服务端，由服务端入栈；
     ///  - 逐次入堆叠会产生多轮请求-响应（`OrderContextId` 相同）→ 本窗口**保持打开**并在新请求到达时刷新条目，
     ///    被入堆叠的条目随即消失（服务端的"剩余集合"里已不含它们）。
     ///
@@ -38,7 +42,6 @@ namespace Script.UI
     {
         [Export] public Control OrderZoneContainer;
         [Export] public Control DiscardZoneContainer;
-        [Export] public Button AllEnterButton;
         [Export] public Button FirstEnterButton;
         [Export] public Button DoneButton;
         [Export] public Label TitleLabel;
@@ -47,8 +50,10 @@ namespace Script.UI
 
         /// <summary>提交"本次入堆叠的条目下标顺序"（下标指向本次请求的条目列表）；窗口不关闭，等服务端下一轮。</summary>
         public Action<List<int>> OnSubmitIndices;
-        /// <summary>点"完成排序"（＝放弃剩余，仅入堆叠区为空时可点）时回调；服务端据此结束本 owner 的排序。</summary>
+        /// <summary>点"完成排序并放弃下方效果"（＝放弃剩余，仅入堆叠区为空时可点）时回调；服务端据此结束本 owner 的排序。</summary>
         public Action OnDone;
+        /// <summary>本轮提交是否为「第一张进入堆叠」（仅用于日志/追踪；自动关闭已改由双框全空判定驱动）。</summary>
+        public bool LastSubmitWasFirstEnter { get; private set; }
 
         /// <summary>当前排序窗口归属玩家（先手=1 / 后手=2）。</summary>
         public int OwnerPlayerId { get; private set; }
@@ -65,11 +70,14 @@ namespace Script.UI
         // 提交后等服务端下一轮请求期间冻结按钮（带超时兜底，避免服务端异常时窗口卡死）
         private bool _waitingForServer;
         private double _waitSeconds;
+        // 等待服务端"下一条消息"（含下一轮排序请求、选目标请求、快照等）的宽限时长。
+        // 必须显著大于"服务端两次消息之间"的正常间隔：选目标路径下，玩家可能长时间停留在选目标窗口，
+        // 此期间本窗口处于 _waitingForServer 但**不应**被判定为"排序已结束"。
+        // 超时后仅恢复按钮可用（不自动关窗）——窗口不能永久冻结，但关窗统一交给"双框全空"判定。
         private const double WaitTimeoutSeconds = 3.0;
 
         public override void _Ready()
         {
-            if (AllEnterButton != null) AllEnterButton.Pressed += OnAllEnterPressed;
             if (FirstEnterButton != null) FirstEnterButton.Pressed += OnFirstEnterPressed;
             if (DoneButton != null) DoneButton.Pressed += OnDonePressed;
             _root = GetNodeOrNull<TriggerOrderRoot>("RootControl");
@@ -82,9 +90,47 @@ namespace Script.UI
             if (!_waitingForServer) return;
             _waitSeconds += delta;
             if (_waitSeconds < WaitTimeoutSeconds) return;
-            // 超时兜底：服务端未再下发下一轮请求（如超时/异常），恢复按钮可用，避免窗口永久冻结
-            GD.PrintErr("[OnlineTriggerOrderWindow] 等待服务端下一轮排序请求超时，恢复按钮可用");
+            // 超时兜底：服务端长时间未再下发任何消息（异常/丢包），窗口不能永久冻结。
+            // 注意：**不自动关窗**——「第一张进入堆叠」的触发若需选目标，玩家可能在选目标窗口停留很久
+            // （选目标上限 60s），此时服务端只是"在等你选目标"，并非排序已结束；若此处关窗会误弃剩余触发。
+            // 关窗统一由"双框全空"判定（OpenOrUpdate 收到下一轮请求会复位本计时）。此处仅恢复按钮可用。
+            _waitingForServer = false;
+            GD.PrintErr("[OnlineTriggerOrderWindow] 等待服务端消息超时，恢复按钮可用（不自动关窗）");
             SetButtonsEnabled(true);
+        }
+
+        /// <summary>
+        /// 双框全空 → 静默关闭（仅隐藏窗口，**不回包**）。
+        /// 判定依据：客户端 "排序框 + 放弃框" 子节点数均为 0。
+        /// 正确性前提（项目既定规则，已确认）：① 场上无合法目标的效果不会进入排序窗；② 进入堆叠后不可取消。
+        /// 故"客户端两框全空"严格等价于"服务端本轮剩余待排序触发为空" → 排序自然结束，直接关窗收尾。
+        ///
+        /// 与手动「完成排序」的区别：手动路径走 <see cref="OnDonePressed"/> → `OnDone?.Invoke()` 回包 Cancelled=true；
+        /// 本静默路径**只 Hide**，因为每张触发提交时已各自回包过入堆叠顺序，剩余本就为空，无需再发放弃语义。
+        /// 若服务端（异常情况下）仍下发同 ctx 的下一轮请求，`ArenaOl` 会重新弹出本窗口（`OpenOrUpdate` 内部 Popup）。
+        /// </summary>
+        private void SilentCloseIfBothZonesEmpty()
+        {
+            if (!Visible) return;
+            int orderCount = OrderZoneContainer?.GetChildCount() ?? 0;
+            int discardCount = DiscardZoneContainer?.GetChildCount() ?? 0;
+            if (orderCount > 0 || discardCount > 0) return;
+            GD.Print("[OnlineTriggerOrderWindow] 排序框与放弃框皆空 → 静默关闭排序窗口（不回包）");
+            _waitingForServer = false;
+            _waitSeconds = 0;
+            LastSubmitWasFirstEnter = false;
+            Hide();
+        }
+
+        /// <summary>结束本次排序（回包路径）：先关闭再回调调用方（`ArenaOl` 据 `OnDone` 回包 Cancelled 并释放窗口）。
+        /// 仅用于"服务端确认排序结束"，**不**用于静默自动关闭。</summary>
+        private void RaiseDone()
+        {
+            _waitingForServer = false;
+            LastSubmitWasFirstEnter = false;
+            _waitSeconds = 0;
+            Hide();
+            OnDone?.Invoke();
         }
 
         // 与单机 TriggerOrderWindow 完全对称：用 Window 自身的 _Input（全局输入）驱动条目拖拽。
@@ -138,7 +184,10 @@ namespace Script.UI
 
             _waitingForServer = false;
             _waitSeconds = 0;
+            LastSubmitWasFirstEnter = false;   // 新一轮请求到达 → 由本轮提交重新置位
             SetButtonsEnabled(true);
+            // 边界兜底：服务端下发的条目列表为空（理论上不会，但防御上游异常）→ 双框全空 → 静默关闭。
+            SilentCloseIfBothZonesEmpty();
         }
 
         /// <summary>按当前条目列表重建条目节点，并恢复上一轮的放弃区落区。</summary>
@@ -227,25 +276,29 @@ namespace Script.UI
             return list;
         }
 
-        private void RefreshButtonStates() => SetButtonsEnabled(true);
+        /// <summary>
+        /// 刷新按钮状态并做"双框全空"自动关闭判定。
+        /// 绑定到 `TriggerOrderRoot.OnOrderZoneChanged`（条目在排序框/放弃框间移动后）；同时对外暴露，
+        /// 便于测试与调用方在条目集合变更后主动驱动一次刷新。
+        /// </summary>
+        public void RefreshButtonStates()
+        {
+            SetButtonsEnabled(true);
+            // 拖拽在排序框/放弃框之间移动条目后：若两框皆空 → 静默关闭（覆盖"提交后残留空窗"等边界）。
+            SilentCloseIfBothZonesEmpty();
+        }
 
-        /// <summary>控制三个按钮的可用状态（入堆叠区为空时"完成排序"可点；否则可入堆叠）。</summary>
+        /// <summary>
+        /// 控制两个按钮的可用状态（入堆叠区为空时"完成排序"可点；否则可入堆叠）。
+        /// 「完成排序」启用口径与单机一致：**仅排序框（入堆叠区）为空时可点，不看放弃区**。
+        /// </summary>
         public void SetButtonsEnabled(bool enabled)
         {
             int orderCount = OrderZoneContainer?.GetChildCount() ?? 0;
-            if (AllEnterButton != null) AllEnterButton.Disabled = !enabled || orderCount == 0;
             if (FirstEnterButton != null) FirstEnterButton.Disabled = !enabled || orderCount == 0;
             // 对齐单机：仅当入堆叠区为空时可"完成排序"（＝放弃剩余；强制触发不可能在放弃区，故此时必无强制待入栈）
             if (DoneButton != null) DoneButton.Disabled = !enabled || orderCount > 0;
             if (_root != null) _root.SetDragFrozen(!enabled);
-        }
-
-        private void OnAllEnterPressed()
-        {
-            var indices = CurrentOrderIndices();
-            if (indices.Count == 0) return;
-            GD.Print($"[OnlineTriggerOrderWindow] 全部进入堆叠：{indices.Count} 个");
-            Submit(indices);
         }
 
         private void OnFirstEnterPressed()
@@ -253,20 +306,23 @@ namespace Script.UI
             var indices = CurrentOrderIndices();
             if (indices.Count == 0) return;
             GD.Print("[OnlineTriggerOrderWindow] 第一张进入堆叠");
-            Submit(new List<int> { indices[0] });
+            Submit(new List<int> { indices[0] }, isFirstEnter: true);
         }
 
         private void OnDonePressed()
         {
             if ((OrderZoneContainer?.GetChildCount() ?? 0) > 0) return;   // 双保险：入堆叠区非空不可完成
-            GD.Print("[OnlineTriggerOrderWindow] 完成排序（放弃剩余触发）");
+            GD.Print("[OnlineTriggerOrderWindow] 完成排序并放弃下方效果");
+            LastSubmitWasFirstEnter = false;
+            Hide();
             OnDone?.Invoke();
         }
 
         /// <summary>提交本次入堆叠的下标顺序：冻结按钮、移除已提交条目、回调调用方（等服务端下一轮）。</summary>
-        private void Submit(List<int> indices)
+        private void Submit(List<int> indices, bool isFirstEnter = false)
         {
             if (indices == null || indices.Count == 0) return;
+            LastSubmitWasFirstEnter = isFirstEnter;
             var submitted = new HashSet<int>(indices);
             foreach (var ui in new List<TriggerEntryUI>(EnumerateAllEntries()))
             {
@@ -283,6 +339,10 @@ namespace Script.UI
             _waitSeconds = 0;
             SetButtonsEnabled(false);
             OnSubmitIndices?.Invoke(indices);
+
+            // 提交并移除条目后：若排序框与放弃框都已为空（＝本轮全部处理完）→ 静默关闭排序窗口（不回包）。
+            // 服务端若仍有剩余（异常兜底）会下发同 ctx 下一轮请求 → ArenaOl 重新弹出并刷新。
+            SilentCloseIfBothZonesEmpty();
         }
 
         /// <summary>关闭窗口（新的排序轮次由 ArenaOl 决定：不同 contextId 时销毁重建）。</summary>

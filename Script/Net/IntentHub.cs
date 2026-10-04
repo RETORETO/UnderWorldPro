@@ -155,7 +155,13 @@ namespace Script.Net
 
                 case PlayerIntent.Kind.DebugCommand:
                     // Args: 整行 PM 命令（客户端已作为单个参数上行，含空格）
-                    _router.DebugCommand(intent.PlayerId, At(a, 0) ?? "");
+                    // 失败原因回填 IntentResult.Error → 客户端可提示（此前只打到服务端日志，玩家无反馈）。
+                    if (!_router.DebugCommand(intent.PlayerId, At(a, 0) ?? "", out string dbgErr)
+                        && !string.IsNullOrEmpty(dbgErr))
+                    {
+                        result.Success = false;
+                        result.Error = dbgErr;
+                    }
                     break;
 
                 case PlayerIntent.Kind.MulliganReport:

@@ -89,15 +89,6 @@ offset_bottom = 208.0
 text = "我的卡组：未提交"
 autowrap_mode = 2
 
-[node name="ResultLabel" type="Label" parent="Panel"]
-layout_mode = 0
-offset_left = 20.0
-offset_top = 216.0
-offset_right = 800.0
-offset_bottom = 252.0
-visible = false
-text = "本局已结束"
-
 [node name="HostHintLabel" type="Label" parent="Panel"]
 layout_mode = 0
 offset_left = 20.0
@@ -131,15 +122,6 @@ offset_top = 330.0
 offset_right = 584.0
 offset_bottom = 372.0
 text = "踢出对手"
-
-[node name="RematchButton" type="Button" parent="Panel"]
-layout_mode = 0
-offset_left = 404.0
-offset_top = 330.0
-offset_right = 584.0
-offset_bottom = 372.0
-visible = false
-text = "再来一局"
 
 [node name="LeaveButton" type="Button" parent="Panel"]
 layout_mode = 0

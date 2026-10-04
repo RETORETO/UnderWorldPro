@@ -304,6 +304,84 @@ namespace Script.Tests
             Assert.AreEqual(before + 1, host.Damage, "独自在场 ⇒ 取自身为目标，对自己造成 1 点伤害");
         }
 
+        // ==================== ⑨ 联机权威路径取数（2026-09 用户实测） ====================
+
+        /// <summary>
+        /// 【用户实测】"JC019 结附后，宿主使用效果，弹出提示框操作被服务端拒绝：**发动能力参数无效**"。
+        /// 根因：联机权威路径 `GodotIntentRouter.ActivateAbility` 用 `CardManager.GetEffectData(uid, effectId)`
+        /// 按 id 找效果，而该方法只查**模板/秘社**的 `EffectDataList` ⇒ 运行期授予的能力（JC019 给宿主的）
+        /// 取不到 → 抛"发动能力参数无效"（客户端弹了窗、点了能力却被拒）。
+        /// 修复：`GetEffectData` 补查运行期授予项（与候选枚举/门禁同一入口）。
+        /// </summary>
+        public void TestGranted_权威路径可按id取到授予的能力()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            var host = OnField(game, Probe("TS_ga_lookup", "不死生物"), 1, areas[0]);
+            PlaceSpear(game, host, areas[0]);
+
+            var granted = EffectEngine.Instance.GetGrantedAbilities(host);
+            Assert.IsTrue(granted.Count > 0, "前置：宿主获得运行期授予的能力");
+            string id = granted[0].EffectId;
+            Assert.AreEqual("JC019_G_HostActivatedSmite", id, "前置：授予的能力 id");
+
+            var byId = game.CardManager.GetEffectData(host.UID, id);
+            Assert.IsNotNull(byId,
+                "联机权威路径必须能按 id 取到**运行期授予**的能力（否则报『发动能力参数无效』）");
+            Assert.AreEqual(id, byId.EffectId, "取到的就是该授予项");
+        }
+
+        // ==================== ⑧ 拖拽 / 双击的分工（2026-09 用户实测修复） ====================
+
+        /// <summary>
+        /// 【用户实测】"JC019 角色高亮了但是拖拽无反馈"、"JC024 UI 上依然是拖拽 UI，无法正常使用效果"、
+        /// "结附给 JC024 后有两个激活效果，但双击没有弹出选择效果界面（双击被拖拽覆盖）"。
+        /// 规则（单一实现 `ActivateEligibility.CanDragActivate`）：**拖拽只能表达"恰好 1 条能力 ＋ 需选场上卡目标"**；
+        /// 其余（多能力 ⇒ 双击弹效果菜单；无目标/自指 ⇒ 双击直接发动；玩家/地区目标 ⇒ 各自专用窗口）
+        /// 一律**不进入拖拽**，从而不吞左键、让双击信号送达卡 UI。
+        /// 同时 `GetFirstActivateAbility` 必须**含运行期授予项**（否则 JC019 宿主的拖拽取不到能力＝无反馈）。
+        /// </summary>
+        public void TestGranted_拖拽只表达单条需卡目标的能力()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+
+            // ① JC019 宿主（只有授予的"需选角色目标"能力）⇒ 可用拖拽，且取到的就是授予的那条
+            var host = OnField(game, Probe("TS_ga_drag", "不死生物"), 1, areas[0]);
+            OnField(game, Probe("TS_ga_drag_t", "不死生物"), 2, areas[0]);   // 给个合法目标
+            PlaceSpear(game, host, areas[0]);
+
+            Assert.AreEqual(1, ActivateEligibility.GetAllActivateAbilities(host).Count, "宿主只有授予的 1 条能力");
+            Assert.AreEqual("JC019_G_HostActivatedSmite",
+                ActivateEligibility.GetFirstActivateAbility(host)?.EffectId,
+                "首条能力取法必须包含**运行期授予**（旧实现只读模板 ⇒ 拖拽时 ability=null ⇒ 松手判『无合法目标』取消）");
+            Assert.IsTrue(ActivateEligibility.CanDragActivate(host, out var dragAbility), "单条 ＋ 需选卡目标 ⇒ 可拖拽");
+            Assert.AreEqual("JC019_G_HostActivatedSmite", dragAbility?.EffectId, "拖拽用的就是授予的那条");
+
+            // ② 宿主再自带一条激活能力（＝JC024 那种"自带 + 授予"的两条）⇒ **不可拖拽**（交给双击菜单）
+            var host2 = OnField(game, HostWithAbility("TS_ga_drag2"), 1, areas[0]);
+            PlaceSpear(game, host2, areas[0]);
+            Assert.AreEqual(2, ActivateEligibility.GetAllActivateAbilities(host2).Count, "前置：宿主自带 1 条 + 授予 1 条");
+            Assert.IsFalse(ActivateEligibility.CanDragActivate(host2, out _),
+                "多条能力 ⇒ 不进拖拽（否则吞掉左键，双击无法弹出效果选择窗）");
+
+            // ③ JC024「将自身潜伏」＝自我指代、不需要目标 ⇒ **不可拖拽**（双击直接发动）
+            var jc024 = OnField(game, Load("JC024_SPTdongshiju"), 1, areas[0]);
+            Assert.IsFalse(ActivateEligibility.CanDragActivate(jc024, out _),
+                "无目标的自指激活 ⇒ 不进拖拽（拖拽无目标可落 ⇒ 松手取消＝用户报的『拖拽 UI 无法正常使用』）");
+
+            // ④ 对照：普通"单条需选卡目标"的角色能力仍走拖拽（既有交互不变）
+            var tapLike = OnField(game, Probe("TS_ga_drag3"), 1, areas[0]);
+            tapLike.PlayerTemplate.EffectDataList.Add(new EffectData
+            {
+                EffectId = "TS_ga_drag3_ability",
+                Timing = EffectTiming.CharacterActivated,
+                ActivateWindow = "快速",
+                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true },
+            });
+            Assert.IsTrue(ActivateEligibility.CanDragActivate(tapLike, out _), "单条 ＋ 需选卡目标 ⇒ 照常可拖拽");
+        }
+
         /// <summary>对照：**未**声明 `CanTargetSelf` 的能力不能取来源卡自身（不因修复而放宽）。</summary>
         public void TestGranted_未声明含自身时仍不能取自己()
         {

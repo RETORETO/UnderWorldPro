@@ -115,6 +115,8 @@ public partial class CombatManager : Node
             if (firstValue == 0)
             {
                 GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：0:0 平局，不可使用先手破平");
+                // 【2026-09 修复·声望】势力对抗"结束"即结算声望（与胜负无关，0:0 平局同样要结算）
+                FinishPowerCombat(type, areaUid);
                 onComplete?.Invoke();
                 return;
             }
@@ -125,6 +127,7 @@ public partial class CombatManager : Node
                 if (OnTieBreakRequired == null)
                 {
                     GD.Print($"  ⚠️ 无 UI 订阅破平窗口事件，按平局继续");
+                    FinishPowerCombat(type, areaUid);
                     onComplete?.Invoke();
                     return;
                 }
@@ -143,6 +146,8 @@ public partial class CombatManager : Node
                     {
                         // 取消：平局无效果，继续下一步
                         GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：玩家取消破平，平局无效果");
+                        // 【2026-09 修复·声望】放弃破平＝势力对抗结束 ⇒ 声望照常结算
+                        FinishPowerCombat(type, areaUid);
                         onComplete?.Invoke();
                     }
                 });
@@ -150,11 +155,26 @@ public partial class CombatManager : Node
             }
 
             GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：平局，先手玩家不可破平（无费用或次数耗尽），无获胜方");
+            FinishPowerCombat(type, areaUid);
             onComplete?.Invoke();
             return;
         }
 
         ResolveWinner(type, areaUid, areaNo, winner, diff, onComplete);
+    }
+
+    /// <summary>
+    /// 【2026-09 修复·用户实测"JC011 声望没有生效"】**势力对抗结束时一律结算声望规则**。
+    /// 卡文口径：声望**不依赖势力对抗胜负**（平局、甚至败方，只要本方在该地区的声望角色**更多**就 +1 势力标志）。
+    /// 此前该结算只写在"有胜方"的分支里 ⇒ **0:0 平局**（典型：本地区只有一个声望角色、其势力值为 0）与
+    /// "破平被放弃/不可破平"时**声望完全不结算**。现把单机/联机两条路径的**每个势力对抗出口**都收口到本方法
+    /// （先发 `PowerCombatEnded` 触发点，再跑引擎级规则；两者共用同一计数实现）。
+    /// </summary>
+    private void FinishPowerCombat(CombatType type, string areaUid)
+    {
+        if (type != CombatType.Power || string.IsNullOrEmpty(areaUid)) return;
+        _triggerEmitPoints?.PowerCombatEnded(areaUid);
+        Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
     }
 
     // ==================== C/S 化：联机对抗网络化结算（与单机事件路径并列） ====================
@@ -172,7 +192,12 @@ public partial class CombatManager : Node
         {
             int firstPlayer = (_playerManager != null && _playerManager.IsFirstPlayer(1)) ? 1 : 2;
             int firstValue = SumPlayerValue(areaUid, firstPlayer, type);
-            if (firstValue == 0) return;   // 0:0 不可破平
+            if (firstValue == 0)
+            {
+                // 【2026-09 修复·声望】0:0 平局同样是"势力对抗结束" ⇒ 声望照常结算（不依赖胜负）
+                FinishPowerCombat(type, areaUid);
+                return;   // 0:0 不可破平
+            }
 
             if (_playerManager != null && _playerManager.CanTieBreak(firstPlayer))
             {
@@ -194,6 +219,16 @@ public partial class CombatManager : Node
                     OnAssetsChanged?.Invoke();
                     await ResolveWinnerAsync(type, areaUid, areaNo, firstPlayer, 1);
                 }
+                else
+                {
+                    // 【2026-09 修复·声望】放弃破平＝势力对抗结束 ⇒ 声望照常结算
+                    FinishPowerCombat(type, areaUid);
+                }
+            }
+            else
+            {
+                // 【2026-09 修复·声望】不可破平（无费用/次数耗尽）＝对抗结束 ⇒ 声望照常结算
+                FinishPowerCombat(type, areaUid);
             }
             return;
         }
@@ -201,7 +236,11 @@ public partial class CombatManager : Node
         await ResolveWinnerAsync(type, areaUid, areaNo, winner, diff);
     }
 
-    /// <summary>网络化胜方结算：势力瞬时、战斗伤害分配、调查放回牌库 + 抽牌。</summary>
+    /// <summary>
+    /// 网络化胜方结算：势力瞬时、战斗伤害分配、调查放回牌库 + 抽牌。
+    /// 【2026-10 重构】战斗/调查两个分支已抽成 `ResolveStrengthDamageAsync` / `ResolveInvestigationPlacementAsync`
+    /// （供 PM 调试命令路径复用同一份"下发窗口 → 回收 → 结算"实现，杜绝两处逻辑漂移）。行为逐字不变。
+    /// </summary>
     private async Task ResolveWinnerAsync(CombatType type, string areaUid, int areaNo, int winner, int diff)
     {
         // 【P3·杀伤N】与单机路径同源：战斗对抗可分配伤害 = 获胜点数 + 获胜方参与战斗的杀伤值之和
@@ -212,85 +251,124 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
-            // 【P3·声望】势力对抗结束触发（联机路径，与单机同源）
-            _triggerEmitPoints?.PowerCombatEnded(areaUid);
-            Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
+            // 【P3·声望】势力对抗结束触发（联机路径，与单机同源；含声望引擎级规则）
+            FinishPowerCombat(type, areaUid);
             return;
         }
 
         if (type == CombatType.Strength)
         {
-            int loser = winner == 1 ? 2 : 1;
-            var targets = new List<CardInstance>();
-            if (_zoneManager != null)
-                foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
-                    if (IsLegalStrengthTarget(c, loser, areaUid)) targets.Add(c);
+            await ResolveStrengthDamageAsync(areaUid, areaNo, winner, diff);
+            return;
+        }
 
-            if (targets.Count == 0)
-            {
-                GD.Print($"  📍 地区{areaNo} 无可分配伤害对象，{diff} 点伤害流失");
-                _triggerEmitPoints?.OnCombatWon(winner, areaUid);
-                return;
-            }
+        await ResolveInvestigationPlacementAsync(areaUid, areaNo, winner, diff);
+    }
 
-            var req = new ChoiceRequest
-            {
-                // 联机模式：调查/战斗窗口统一推送给对抗获胜方（winner）操作（与单机主机操作语义对齐）。
-                // 合法承伤目标仍按规则取"败方在该地区的角色/附属"（loser 仅用于目标判定，不决定推送对象）。
-                PlayerId = winner,
-                RequestKind = ChoiceRequest.Kind.CombatStrength,
-                OptionUids = targets.ConvertAll(t => t.UID),
-                Amount = diff,
-                Prompt = $"地区{areaNo} 战斗对抗：分配 {diff} 点伤害",
-                ForceChoice = true,   // 对齐单机 StrengthWindow：必须分配完才能确认
-                // 客户端复用单机 StrengthWindow 所需上下文
-                AreaUid = areaUid,
-                AreaNo = areaNo,
-                LoserPlayerId = loser,
-                CombatTypeValue = (int)type,
-            };
-            // 【K26】分配窗口打开期间（含 await 等待玩家分配）：置位，供 `PhaseGateRule` 拒绝"分配战斗伤害阶段"排除的效果
-            IsDamageAssignmentOpen = true;
-            ChoiceResult result = null;
-            try
-            {
-                result = await InputGateway.RequestChoice(winner, req);
-            }
-            finally
-            {
-                IsDamageAssignmentOpen = false;
-            }
-            if (result == null || result.Cancelled)
-            {
-                GD.Print("  📍 战斗对抗未分配伤害（取消），伤害流失");
-                _triggerEmitPoints?.OnCombatWon(winner, areaUid);
-                return;
-            }
-            // 【服务端权威复检】客户端回传的分配必须落在服务端已计算的合法承伤目标内（防越权/防漂移）
-            var legalTargets = new HashSet<string>(targets.ConvertAll(t => t.UID));
-            for (int i = 0; i < result.SelectedUids.Count; i++)
-            {
-                string uid = result.SelectedUids[i];
-                int amt = i < result.SelectedAmounts.Count ? result.SelectedAmounts[i] : 0;
-                if (string.IsNullOrEmpty(uid) || amt <= 0) continue;
-                if (!legalTargets.Contains(uid))
-                {
-                    GD.PrintErr($"  ⛔ 战斗对抗分配目标非法（{uid}），已忽略该条分配");
-                    continue;
-                }
-                var tgt = _cardManager?.GetInstance(uid);
-                if (tgt != null) _cardManager.DealDamageToInstance(tgt, amt);
-            }
+    /// <summary>
+    /// 【2026-10 抽出·战斗对抗伤害分配】**经决策协议下发战斗对抗窗口 → 回收分配 → 服务端权威复检并结算伤害**。
+    /// 从 `ResolveWinnerAsync` 原样搬出（正规联机路径与 PM 调试命令 `battle` 共用同一实现）。
+    /// 要求 `InputGateway` 已注入（联机服务端）；单机路径走 `ResolveWinner` 的本地窗口事件。
+    /// </summary>
+    public async Task ResolveStrengthDamageAsync(string areaUid, int areaNo, int winner, int diff)
+    {
+        if (InputGateway == null)
+        {
+            GD.PrintErr("  ❌ 战斗对抗网络化需要注入 InputGateway");
+            return;
+        }
+
+        int loser = winner == 1 ? 2 : 1;
+        var targets = CollectStrengthTargets(areaUid, loser);
+
+        if (targets.Count == 0)
+        {
+            GD.Print($"  📍 地区{areaNo} 无可分配伤害对象，{diff} 点伤害流失");
             _triggerEmitPoints?.OnCombatWon(winner, areaUid);
             return;
         }
 
-        // 调查对抗
+        var req = new ChoiceRequest
+        {
+            // 联机模式：调查/战斗窗口统一推送给对抗获胜方（winner）操作（与单机主机操作语义对齐）。
+            // 合法承伤目标仍按规则取"败方在该地区的角色/附属"（loser 仅用于目标判定，不决定推送对象）。
+            PlayerId = winner,
+            RequestKind = ChoiceRequest.Kind.CombatStrength,
+            OptionUids = targets.ConvertAll(t => t.UID),
+            Amount = diff,
+            Prompt = $"地区{areaNo} 战斗对抗：分配 {diff} 点伤害",
+            ForceChoice = true,   // 对齐单机 StrengthWindow：必须分配完才能确认
+            // 客户端复用单机 StrengthWindow 所需上下文
+            AreaUid = areaUid,
+            AreaNo = areaNo,
+            LoserPlayerId = loser,
+            CombatTypeValue = (int)CombatType.Strength,
+        };
+        // 【K26】分配窗口打开期间（含 await 等待玩家分配）：置位，供 `PhaseGateRule` 拒绝"分配战斗伤害阶段"排除的效果
+        IsDamageAssignmentOpen = true;
+        ChoiceResult result = null;
+        try
+        {
+            result = await InputGateway.RequestChoice(winner, req);
+        }
+        finally
+        {
+            IsDamageAssignmentOpen = false;
+        }
+        if (result == null || result.Cancelled)
+        {
+            GD.Print("  📍 战斗对抗未分配伤害（取消），伤害流失");
+            _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+            return;
+        }
+        // 【服务端权威复检】客户端回传的分配必须落在服务端已计算的合法承伤目标内（防越权/防漂移）
+        var legalTargets = new HashSet<string>(targets.ConvertAll(t => t.UID));
+        for (int i = 0; i < result.SelectedUids.Count; i++)
+        {
+            string uid = result.SelectedUids[i];
+            int amt = i < result.SelectedAmounts.Count ? result.SelectedAmounts[i] : 0;
+            if (string.IsNullOrEmpty(uid) || amt <= 0) continue;
+            if (!legalTargets.Contains(uid))
+            {
+                GD.PrintErr($"  ⛔ 战斗对抗分配目标非法（{uid}），已忽略该条分配");
+                continue;
+            }
+            var tgt = _cardManager?.GetInstance(uid);
+            if (tgt != null) _cardManager.DealDamageToInstance(tgt, amt);
+        }
+        _triggerEmitPoints?.OnCombatWon(winner, areaUid);
+    }
+
+    /// <summary>
+    /// 【2026-10 抽出】收集某地区内**败方**的合法承伤目标（战斗对抗伤害分配候选）。
+    /// 与 `ResetStrengthWindow` 侧使用的判定同源（`IsLegalStrengthTarget`）。
+    /// </summary>
+    public List<CardInstance> CollectStrengthTargets(string areaUid, int loser)
+    {
+        var targets = new List<CardInstance>();
+        if (_zoneManager == null || string.IsNullOrEmpty(areaUid)) return targets;
+        foreach (var c in _zoneManager.GetAllCardsInAreaIncludingAttached(areaUid))
+            if (IsLegalStrengthTarget(c, loser, areaUid)) targets.Add(c);
+        return targets;
+    }
+
+    /// <summary>
+    /// 【2026-10 抽出·调查对抗牌序分配】**经决策协议下发调查对抗窗口 → 回收牌序 → 放回牌库 + 抽 1 张**。
+    /// 从 `ResolveWinnerAsync` 原样搬出（正规联机路径与 PM 调试命令 `investigation` 共用同一实现）。
+    /// </summary>
+    public async Task ResolveInvestigationPlacementAsync(string areaUid, int areaNo, int winner, int diff)
+    {
+        if (InputGateway == null)
+        {
+            GD.PrintErr("  ❌ 调查对抗网络化需要注入 InputGateway");
+            return;
+        }
         if (ActionService == null)
         {
             GD.PrintErr("  ❌ 调查对抗网络化需要注入 PlayerActionService");
             return;
         }
+
         var cards = ActionService.TakeTopForInvestigation(winner, diff);
         // 【联机·客户端 UI 对齐】把"待分配的调查卡"登记为待决状态，由 BuildSnapshot 下发
         // （仅下发给决策者 winner：客户端要显示这些卡面才能复刻单机 InvestigationWindow）。
@@ -310,7 +388,7 @@ public partial class CombatManager : Node
             // 客户端复用单机 InvestigationWindow 所需上下文
             AreaUid = areaUid,
             AreaNo = areaNo,
-            CombatTypeValue = (int)type,
+            CombatTypeValue = (int)CombatType.Investigation,
         };
         var resInv = await InputGateway.RequestChoice(winner, reqInv);
         _pendingInvestigationCards = null;
@@ -334,6 +412,49 @@ public partial class CombatManager : Node
         _triggerEmitPoints?.OnInvestigationWon(winner, areaUid);
     }
 
+    /// <summary>
+    /// 【2026-10·PM 调试命令】**用显式指定的获胜方结算一次对抗**（不重新计算胜负）。
+    /// · 单机（`InputGateway == null`）→ 走既有 `ResolveWinner`：由 `OnCombatWindowRequired` 事件打开**本机窗口**，
+    ///   与正规结算完全同一条链路（含获胜触发 `OnCombatWon` / `OnInvestigationWon`、`IsDamageAssignmentOpen` 置复位）。
+    ///   —— 这同时修好了旧 PM 命令"直调窗口协调器、绕过 `ResolveWinner` ⇒ 不广播获胜触发"的缺陷。
+    /// · 联机（`InputGateway != null`）→ 经决策协议下发真实窗口（`ResolveStrengthDamageAsync` /
+    ///   `ResolveInvestigationPlacementAsync`），**不**走 `ResolveWinner`（避免与事件路径重复弹窗）。
+    /// · `Power` 为瞬时结算（加势力标记 + 声望），不弹窗。
+    /// </summary>
+    public void ResolveCombatFromDebug(CombatType type, int areaNo, int winner, int diff)
+    {
+        if (areaNo < 1) { GD.PrintErr($"❌ [CombatManager] 非法地区编号 area{areaNo}"); return; }
+        var uids = GetOrderedAreaUids();
+        if (areaNo > uids.Count)
+        {
+            GD.PrintErr($"❌ [CombatManager] 地区编号 {areaNo} 越界（当前 {uids.Count} 个）");
+            return;
+        }
+        string areaUid = uids[areaNo - 1];
+
+        if (type == CombatType.Strength) diff += KillBonus(areaUid, winner);
+
+        if (type == CombatType.Power)
+        {
+            _areaManager?.AddPowerMark(areaUid, winner, diff);
+            FinishPowerCombat(type, areaUid);
+            return;
+        }
+
+        if (InputGateway != null)
+        {
+            // 联机服务端：经决策协议下发（异步；完成后由既有 OnAsyncSettlementCompleted 推快照）
+            if (type == CombatType.Strength)
+                _ = ResolveStrengthDamageAsync(areaUid, areaNo, winner, diff);
+            else
+                _ = ResolveInvestigationPlacementAsync(areaUid, areaNo, winner, diff);
+            return;
+        }
+
+        // 单机：走正规结算链（本地窗口由 OnCombatWindowRequired 事件打开）
+        ResolveWinner(type, areaUid, areaNo, winner, diff, null);
+    }
+
     /// <summary>胜方结算分支（从 ResolveAreaCombat 抽出，供平局破平后复用）。</summary>
     private void ResolveWinner(CombatType type, string areaUid, int areaNo, int winner, int diff, System.Action onComplete)
     {
@@ -348,10 +469,8 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
-            // 【P3·声望】势力对抗结束触发（含胜负；声望不依赖对抗胜负）
-            _triggerEmitPoints?.PowerCombatEnded(areaUid);
-            // 【P3·声望】引擎级落地：该地区声望角色较多的一方 +1 势力标志（多个声望只放一个）
-            Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
+            // 【P3·声望】势力对抗结束触发（含胜负；声望不依赖对抗胜负）+ 引擎级落地（该地区声望角色较多的一方 +1）
+            FinishPowerCombat(type, areaUid);
             onComplete?.Invoke();
             return;
         }

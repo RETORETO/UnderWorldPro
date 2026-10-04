@@ -91,11 +91,12 @@ namespace Script.UI
                 ? container.Size.Y / 2f
                 : visH / 2f;
 
-            // 逻辑尺寸固定 100x140，PivotOffset = (50,70)
+            // 逻辑尺寸固定 100x140，PivotOffset = (50,70)。
+            // 【2026-09 修复】逻辑左上角 = 视觉中心 - PivotOffset（**不旋转**）：Godot 的旋转绕 PivotOffset 进行，
+            // 旋转后视觉中心仍在 `Position + PivotOffset`（实测：Position=(0,0)/pivot=(50,70)/90° → 视觉中心 (50,70)，
+            // 而 `pivot.Rotated(90°)` = (-70,50) ⇒ 原写法让**横置卡**整体偏移 (120,20)）。
             Vector2 pivot = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-            float angle = Mathf.DegToRad(isTapped ? 90f : 0f);
-            Vector2 rotatedPivot = pivot.Rotated(angle);
-            Vector2 localPos = new Vector2(visCenterX, visCenterY) - rotatedPivot;
+            Vector2 localPos = new Vector2(visCenterX, visCenterY) - pivot;
 
             card.AnchorLeft = 0; card.AnchorRight = 0;
             card.AnchorTop = 0; card.AnchorBottom = 0;

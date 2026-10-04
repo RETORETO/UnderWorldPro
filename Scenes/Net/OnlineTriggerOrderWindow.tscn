@@ -4,7 +4,7 @@
 [ext_resource type="Script" path="res://Script/UI/TriggerDropZone.cs" id="2_dropzone"]
 [ext_resource type="Script" path="res://Script/UI/TriggerOrderRoot.cs" id="3_root"]
 
-[node name="OnlineTriggerOrderWindow" type="Window" node_paths=PackedStringArray("OrderZoneContainer", "DiscardZoneContainer", "AllEnterButton", "FirstEnterButton", "DoneButton", "TitleLabel", "HintLabel", "DragHandle")]
+[node name="OnlineTriggerOrderWindow" type="Window" node_paths=PackedStringArray("OrderZoneContainer", "DiscardZoneContainer", "FirstEnterButton", "DoneButton", "TitleLabel", "HintLabel", "DragHandle")]
 oversampling_override = 1.0
 title = "触发排序"
 position = Vector2i(0, 36)
@@ -12,7 +12,6 @@ size = Vector2i(840, 620)
 script = ExtResource("1_otow")
 OrderZoneContainer = NodePath("RootControl/Panel/OrderZone/OrderZoneContainer")
 DiscardZoneContainer = NodePath("RootControl/Panel/DiscardZone/DiscardZoneContainer")
-AllEnterButton = NodePath("RootControl/Panel/AllEnterButton")
 FirstEnterButton = NodePath("RootControl/Panel/FirstEnterButton")
 DoneButton = NodePath("RootControl/Panel/DoneButton")
 TitleLabel = NodePath("RootControl/Panel/TitleLabel")
@@ -126,27 +125,19 @@ offset_bottom = 166.0
 script = ExtResource("2_dropzone")
 IsDiscardZone = true
 
-[node name="AllEnterButton" type="Button" parent="RootControl/Panel"]
+[node name="FirstEnterButton" type="Button" parent="RootControl/Panel"]
 layout_mode = 0
 offset_left = 16.0
 offset_top = 400.0
-offset_right = 190.0
-offset_bottom = 440.0
-text = "全部进入堆叠"
-
-[node name="FirstEnterButton" type="Button" parent="RootControl/Panel"]
-layout_mode = 0
-offset_left = 210.0
-offset_top = 400.0
-offset_right = 384.0
+offset_right = 260.0
 offset_bottom = 440.0
 text = "第一张进入堆叠"
 
 [node name="DoneButton" type="Button" parent="RootControl/Panel"]
 z_index = 100
 layout_mode = 0
-offset_left = 404.0
+offset_left = 280.0
 offset_top = 400.0
 offset_right = 824.0
 offset_bottom = 440.0
-text = "完成排序"
+text = "完成排序并放弃下方效果"

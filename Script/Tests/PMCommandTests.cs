@@ -134,35 +134,55 @@ namespace Script.Tests
             Assert.AreEqual(handBefore + 1, game.TurnManager.GetHandOf(1).Count, "P1 手牌 +1");
         }
 
-        public void TestPMCommand_draw定向取牌_数量2取两张()
+        /// <summary>
+        /// 【用户约定】"输入卡牌编号时不支持多张"：`draw 1 2 ZZ995`（玩家1、数量2、编号）必须报错，
+        /// 一张都不取；需要按编号取牌时数量只能写 1。
+        /// </summary>
+        public void TestPMCommand_draw定向取牌_编号不支持多张()
         {
             var game = NewGame();
             var a = PutInDeck(game, Probe("ZZ995_探针A"));
             var b = PutInDeck(game, Probe("ZZ995_探针B"));
             var c = PutInDeck(game, Probe("ZZ995_探针C"));
+            int handBefore = game.TurnManager.GetHandOf(1).Count;
 
-            Run(game, "draw 2 ZZ995");
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw 1 2 ZZ995", out string error);
 
-            int inHand = 0;
-            foreach (var card in new[] { a, b, c }) if (game.TurnManager.GetHandOf(1).Contains(card)) inHand++;
-            Assert.AreEqual(2, inHand, "数量 2 → 取 2 张（第 3 张留在卡组）");
+            Assert.IsFalse(ok, "编号取牌 + 数量 2 → 必须报错");
+            Assert.IsTrue(error != null && error.Contains("不支持多张"), $"错误应说明不支持多张，实际: {error}");
+            Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count, "一张都不取");
+            int stillInDeck = 0;
+            foreach (var card in new[] { a, b, c }) if (InDeck(game, card, 1)) stillInDeck++;
+            Assert.AreEqual(3, stillInDeck, "3 张仍全部留在卡组");
         }
 
-        public void TestPMCommand_draw定向取牌_简写与P2()
+        /// <summary>
+        /// 【2026-10 修订】编号取牌的**玩家位**写法：`draw 1 ZZ994`（玩家在前）与
+        /// `draw 1 1 ZZ994`（显式数量 1）；旧的"省略玩家"不再可用（会被当成非法玩家参数并报错）。
+        /// </summary>
+        public void TestPMCommand_draw定向取牌_玩家位写法()
         {
             var game = NewGame();
-            var p1Card = PutInDeck(game, Probe("ZZ994_探针P1"), 1);
-            var p2Card = PutInDeck(game, Probe("ZZ994_探针P2"), 2);
+            var p1Card = PutInDeck(game, Probe("ZZC01_探针P1"), 1);
+            var p2Card = PutInDeck(game, Probe("ZZC01_探针P2"), 2);
 
-            Run(game, "draw ZZ994");          // 简写：省略数量＝1，缺省 P1
-            Assert.IsTrue(game.TurnManager.GetHandOf(1).Contains(p1Card), "简写取 1 张（缺省 P1）");
-            Assert.IsFalse(game.TurnManager.GetHandOf(2).Contains(p2Card), "未指定玩家时不取 P2 的牌");
+            Run(game, "draw 1 ZZC01");        // 玩家1 取 1 张
+            Assert.IsTrue(game.TurnManager.GetHandOf(1).Contains(p1Card), "玩家参数在第一位＝P1");
+            Assert.IsFalse(game.TurnManager.GetHandOf(2).Contains(p2Card), "未指定 P2 时不取 P2 的牌");
 
-            Run(game, "draw 1 ZZ994 2");      // 显式指定玩家 2
-            Assert.IsTrue(game.TurnManager.GetHandOf(2).Contains(p2Card), "第 4 个参数＝玩家号（P2）");
+            Run(game, "draw 2 ZZC01");        // 玩家2 取 1 张（用户报的 `DRAW 2 JC015` 形态）
+            Assert.IsTrue(game.TurnManager.GetHandOf(2).Contains(p2Card), "玩家参数 2 ⇒ 从 P2 卡组取并进 P2 手牌");
+
+            // 省略玩家的旧简写必须报错（不再静默按 P1）
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw ZZC01", out string error);
+            Assert.IsFalse(ok, "缺玩家参数的 `draw <编号>` 必须报错");
+            Assert.IsTrue(error != null && error.Contains("玩家"), $"错误应提示玩家参数，实际: {error}");
         }
 
-        /// <summary>旧语法 `draw &lt;玩家&gt; [数量]` 保持兼容（走 UI 注入的抽牌回调）。</summary>
+        /// <summary>
+        /// 【2026-10 修订】`draw 1 5` / `draw 2 3`：**玩家参数第一位**、第二参是数量 → 该玩家从牌库顶抽 N 张。
+        /// 旧日志形态（`draw 1 5` / `draw 2 5`）逐字兼容。
+        /// </summary>
         public void TestPMCommand_draw旧语法兼容()
         {
             var game = NewGame();
@@ -175,9 +195,383 @@ namespace Script.Tests
                 areaManager: game.AreaManager,
                 stackManager: game.StackManager);
 
-            Run(game, "draw 1 2");   // 两个参数都是数字 → 旧语义：玩家1 抽 2 张
-            Assert.AreEqual(1, calledPlayer, "旧语法：第一个参数＝玩家号");
-            Assert.AreEqual(2, calledCount, "旧语法：第二个参数＝抽牌数量");
+            Run(game, "draw 1 2");   // 玩家1 抽 2 张
+            Assert.AreEqual(1, calledPlayer, "第一个参数＝玩家号");
+            Assert.AreEqual(2, calledCount, "第二个参数＝抽牌数量");
+
+            Run(game, "draw 2 3");   // 玩家2 抽 3 张
+            Assert.AreEqual(2, calledPlayer, "第一个参数＝玩家号（P2）");
+            Assert.AreEqual(3, calledCount, "第二个参数＝抽牌数量");
+        }
+
+        // ==================== ①-b 【2026-10】玩家参数语义（用户实测缺陷） ====================
+
+        /// <summary>把一个探针卡放进指定玩家手牌（用于"卡组里没有该编号"的分布提示断言）。</summary>
+        private static CardInstance PutInHand(GameInitializer game, PlayerCardData tmpl, int ownerId = 1)
+        {
+            var card = game.CardManager.CreateCardInstance(tmpl, ownerId);
+            game.ZoneManager.MoveToHand(card, ownerId);
+            return card;
+        }
+
+        /// <summary>
+        /// 【用户实测缺陷回归】`draw 3 ZZ990`：第一位是**玩家参数**，只能是 1|2 → 必须报错，
+        /// 且**双方手牌都不能变**（旧实现会把「3」当数量、静默按 P1 取牌/抽牌 —— 就是用户看到的现象）。
+        /// </summary>
+        public void TestPMCommand_draw玩家参数非法则不动作()
+        {
+            var game = NewGame();
+            var p1 = PutInDeck(game, Probe("ZZ990_探针P1"), 1);
+            var p2 = PutInDeck(game, Probe("ZZ990_探针P2"), 2);
+            int hand1 = game.TurnManager.GetHandOf(1).Count;
+            int hand2 = game.TurnManager.GetHandOf(2).Count;
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw 3 ZZ990", out string error);
+
+            Assert.IsFalse(ok, "玩家参数 3 非法 → 命令必须失败");
+            Assert.IsTrue(!string.IsNullOrEmpty(error), "必须给出可读错误（供联机回执）");
+            Assert.AreEqual(hand1, game.TurnManager.GetHandOf(1).Count, "P1 手牌不能变（禁止静默按 P1）");
+            Assert.AreEqual(hand2, game.TurnManager.GetHandOf(2).Count, "P2 手牌不能变");
+            Assert.IsTrue(InDeck(game, p1, 1) && InDeck(game, p2, 2), "双方卡组都不动");
+        }
+
+        /// <summary>`draw 1 ZZ991` → 从 **P1** 卡组取该编号进 **P1** 手牌，P2 完全不受影响。</summary>
+        public void TestPMCommand_draw定向取牌_进指定玩家手牌_P1()
+        {
+            var game = NewGame();
+            var p1Card = PutInDeck(game, Probe("ZZ991_探针"), 1);
+            var p2Card = PutInDeck(game, Probe("ZZ991_探针"), 2);
+
+            Run(game, "draw 1 ZZ991");
+
+            Assert.IsTrue(game.TurnManager.GetHandOf(1).Contains(p1Card), "P1 的 ZZ991 进 P1 手牌");
+            Assert.IsFalse(game.TurnManager.GetHandOf(2).Contains(p2Card), "P2 的 ZZ991 一动不动");
+        }
+
+        /// <summary>
+        /// 【用户报的原始命令形态】`draw 2 ZZ992` → 玩家参数＝2 ⇒ 从 **P2** 卡组取该编号进 **P2** 手牌。
+        /// 旧实现把「2」当数量、缺省玩家 P1 ⇒ 卡进 P1 手牌（用户实测 `DRAW 2 JC015` 的根因）。
+        /// </summary>
+        public void TestPMCommand_draw定向取牌_进指定玩家手牌_P2()
+        {
+            var game = NewGame();
+            var p1Card = PutInDeck(game, Probe("ZZ992_探针"), 1);
+            var p2Card = PutInDeck(game, Probe("ZZ992_探针"), 2);
+
+            Run(game, "draw 2 ZZ992");
+
+            Assert.IsTrue(game.TurnManager.GetHandOf(2).Contains(p2Card), "P2 的 ZZ992 进 P2 手牌");
+            Assert.IsFalse(game.TurnManager.GetHandOf(1).Contains(p1Card), "P1 的 ZZ992 不能被取走（核心回归点）");
+            Assert.IsTrue(InDeck(game, p1Card, 1), "P1 卡组保持原样");
+        }
+
+        /// <summary>`draw 1 1 ZZ993`：显式数量＝1 → 允许；编号取牌一次只取 1 张。</summary>
+        public void TestPMCommand_draw定向取牌_显式数量1()
+        {
+            var game = NewGame();
+            var a = PutInDeck(game, Probe("ZZ993_探针A"), 2);
+            var b = PutInDeck(game, Probe("ZZ993_探针B"), 2);
+
+            Run(game, "draw 2 1 ZZ993");
+
+            int inHand = 0;
+            if (game.TurnManager.GetHandOf(2).Contains(a)) inHand++;
+            if (game.TurnManager.GetHandOf(2).Contains(b)) inHand++;
+            Assert.AreEqual(1, inHand, "编号取牌一次只取 1 张（不支持多张）");
+        }
+
+        /// <summary>`draw 1 2 ZZ994`：显式数量 ≠ 1 → 必须报错（用户约定：输入卡牌编号时不支持多张）。</summary>
+        public void TestPMCommand_draw定向取牌_数量大于1报错()
+        {
+            var game = NewGame();
+            PutInDeck(game, Probe("ZZ994_探针A"), 1);
+            PutInDeck(game, Probe("ZZ994_探针B"), 1);
+            int hand1 = game.TurnManager.GetHandOf(1).Count;
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw 1 2 ZZ994", out string error);
+
+            Assert.IsFalse(ok, "编号取牌 + 数量 2 → 必须失败");
+            Assert.IsTrue(error != null && error.Contains("不支持多张"), $"错误应说明不支持多张，实际: {error}");
+            Assert.AreEqual(hand1, game.TurnManager.GetHandOf(1).Count, "一张都不取");
+        }
+
+        /// <summary>
+        /// `draw 2 ZZ995` 而该编号**只在 P1 卡组**：按"玩家参数＝搜索域"口径，P2 卡组没有 → 报错，
+        /// 并且错误信息要提示该编号在 P1 侧有几张（便于排查）。
+        /// </summary>
+        public void TestPMCommand_draw定向取牌_只搜参数玩家的卡组()
+        {
+            var game = NewGame();
+            PutInDeck(game, Probe("ZZD01_探针"), 1);
+            int hand1 = game.TurnManager.GetHandOf(1).Count;
+            int hand2 = game.TurnManager.GetHandOf(2).Count;
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw 2 ZZD01", out string error);
+
+            Assert.IsFalse(ok, "P2 卡组没有该编号 → 失败");
+            Assert.IsTrue(error != null && error.Contains("P1"), $"错误应提示 P1 侧有该编号，实际: {error}");
+            Assert.AreEqual(hand1, game.TurnManager.GetHandOf(1).Count, "P1 手牌不变");
+            Assert.AreEqual(hand2, game.TurnManager.GetHandOf(2).Count, "P2 手牌不变");
+        }
+
+        /// <summary>编号只剩在**手牌**时，`draw` 必须失败并把分布写进错误（不再一句"什么都不做"）。</summary>
+        public void TestPMCommand_draw定向取牌_仅在区域时错误含分布()
+        {
+            var game = NewGame();
+            PutInHand(game, Probe("ZZE01_探针"), 1);
+            int hand1 = game.TurnManager.GetHandOf(1).Count;
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("draw 1 ZZE01", out string error);
+
+            Assert.IsFalse(ok, "卡组里没有该编号 → 失败");
+            Assert.IsTrue(error != null && error.Contains("其它区域"), $"错误应含区域分布，实际: {error}");
+            Assert.AreEqual(hand1, game.TurnManager.GetHandOf(1).Count, "手牌不变");
+        }
+
+        /// <summary>`draw 1 10` 这类"数量很大而卡组不足/编号不存在"的旧写法不回归（仍是牌库顶抽）。</summary>
+        public void TestPMCommand_draw旧语法_数量形态不回归为取牌()
+        {
+            var game = NewGame();
+            int calledPlayer = -1, calledCount = -1;
+            game.PMCommandManager.Initialize(
+                game.CardManager, game.DeckManager,
+                () => game.AreaManager.GetOrderedAreaUids(),
+                (pid, count) => { calledPlayer = pid; calledCount = count; },
+                game.ZoneManager,
+                areaManager: game.AreaManager,
+                stackManager: game.StackManager);
+
+            Run(game, "draw 1 10");
+
+            Assert.AreEqual(1, calledPlayer, "必须走「牌库顶抽牌」回调（不是定向取牌）");
+            Assert.AreEqual(10, calledCount, "数量＝10");
+        }
+
+        // ==================== ①-d 【2026-10】对抗命令：单机走正规结算链（含获胜触发） ====================
+
+        /// <summary>对抗窗口桩：记录收到的请求并立即"关闭窗口"（模拟 View 处理完毕）。</summary>
+        private sealed class WindowStub
+        {
+            private readonly GameInitializer _game;
+            public int Calls;
+            public CombatManager.CombatType LastType;
+            public int LastWinner, LastDiff, LastAreaNo;
+
+            public WindowStub(GameInitializer game)
+            {
+                _game = game;
+                _game.CombatManager.OnCombatWindowRequired += OnWindow;
+            }
+
+            private void OnWindow(CombatManager.CombatType type, int winner, int diff, int areaNo, System.Action onResolved)
+            {
+                Calls++;
+                LastType = type;
+                LastWinner = winner;
+                LastDiff = diff;
+                LastAreaNo = areaNo;
+                onResolved?.Invoke();
+            }
+
+            public void Detach() => _game.CombatManager.OnCombatWindowRequired -= OnWindow;
+        }
+
+        /// <summary>把一张探针角色放到指定地区（供对抗窗口/获胜触发的上下文）。</summary>
+        private static CardInstance PutInArea(GameInitializer game, string code, int ownerId, string areaUid)
+        {
+            var card = game.CardManager.CreateCardInstance(Probe(code), ownerId);
+            game.ZoneManager.MoveToArea(card, areaUid, ownerId);
+            return card;
+        }
+
+        /// <summary>
+        /// `investigation 1 1 1`（单机）：经 CombatManager.ResolveCombatFromDebug → ResolveWinner
+        /// ⇒ 打开本机调查窗口，并在窗口关闭后**广播 OnInvestigationWon 获胜触发**
+        /// （旧 PM 命令直调窗口协调器、绕过 ResolveWinner ⇒ 该触发完全不会广播）。
+        /// 判据＝场上带 OnInvestigationWon 效果的探针在窗口关闭后入堆叠。
+        /// </summary>
+        public void TestPMCommand_investigation_单机走正规结算链并广播获胜()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+
+            // 场上放一张"调查对抗获胜 → 入堆叠"的探针（仅验证广播是否发生）
+            var tmpl = Probe("TS_pm_invwon");
+            tmpl.EffectDataList.Add(new EffectData
+            {
+                EffectId = "TS_pm_invwon_e",
+                Timing = EffectTiming.OnInvestigationWon,
+                Condition = new EffectCondition { Predicate = "WinnerIsSelfInSameArea" },
+                Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
+                Actions = new Array<EffectAction>(),
+            });
+            tmpl._effectsInjected = true;
+            var unit = game.CardManager.CreateCardInstance(tmpl, 1);
+            game.ZoneManager.MoveToArea(unit, areaUid, 1);
+
+            var stub = new WindowStub(game);
+            try
+            {
+                Run(game, "investigation 1 1 1");
+            }
+            finally
+            {
+                stub.Detach();
+            }
+
+            Assert.AreEqual(1, stub.Calls, "必须打开一次本机调查对抗窗口");
+            Assert.AreEqual(CombatManager.CombatType.Investigation, stub.LastType, "窗口类型＝调查对抗");
+            Assert.AreEqual(1, stub.LastWinner, "胜者＝P1");
+            Assert.AreEqual(1, stub.LastDiff, "获胜点数 X=1");
+            Assert.AreEqual(1, stub.LastAreaNo, "地区号＝1");
+
+            StackEntry found = null;
+            foreach (var e in game.StackManager.Entries)
+                if (e.EffectDataEffect?.EffectId == "TS_pm_invwon_e") { found = e; break; }
+            Assert.IsNotNull(found, "窗口关闭后必须广播 OnInvestigationWon（旧实现直调窗口 ⇒ 该触发不会发生）");
+        }
+
+        /// <summary>
+        /// `battle 1 1 1`（单机）：打开战斗窗口；`IsDamageAssignmentOpen` 在**窗口打开期间**为 true、
+        /// 关闭后复位（K26 口径；旧 PM 直调窗口时会一直为 false）。
+        /// </summary>
+        public void TestPMCommand_battle_单机窗口期间置位分配伤害阶段()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            PutInArea(game, "TS_pm_loser", 2, areaUid);   // 败方（P2）在场角色，保证有可分配对象
+
+            bool openDuringWindow = false;
+            int calls = 0;
+            bool sawStrength = false;
+            void OnWindow(CombatManager.CombatType type, int winner, int diff, int areaNo, System.Action onResolved)
+            {
+                calls++;
+                sawStrength = type == CombatManager.CombatType.Strength;
+                openDuringWindow = game.CombatManager.IsDamageAssignmentOpen;
+                onResolved?.Invoke();
+            }
+            game.CombatManager.OnCombatWindowRequired += OnWindow;
+            try
+            {
+                Run(game, "battle 1 1 1");
+            }
+            finally
+            {
+                game.CombatManager.OnCombatWindowRequired -= OnWindow;
+            }
+
+            Assert.AreEqual(1, calls, "必须打开一次本机战斗对抗窗口");
+            Assert.IsTrue(sawStrength, "窗口类型＝战斗对抗");
+            Assert.IsTrue(openDuringWindow, "窗口打开期间 IsDamageAssignmentOpen 必须为 true");
+            Assert.IsFalse(game.CombatManager.IsDamageAssignmentOpen, "窗口关闭后必须复位");
+        }
+
+        /// <summary>
+        /// `power 1 1 2`：瞬时结算（加势力标记、不弹窗），且**不截断**后续批量命令
+        /// （旧实现把 power 列入 BlockingCommands，后面的命令会被静默丢弃）。
+        /// </summary>
+        public void TestPMCommand_power_瞬时结算且不截断批量命令()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var before = game.AreaManager.GetPowerMark(areaUid, 1);
+
+            int executed = game.PMCommandManager.ExecuteCommandBatch("power 1 1 2\ndraw 1 TSK01");
+
+            var after = game.AreaManager.GetPowerMark(areaUid, 1);
+            Assert.IsTrue(after > before, $"势力标记应增加（{before} → {after}）");
+            Assert.AreEqual(2, executed, "power 之后的命令不能被截断（旧实现只执行 1 条）");
+        }
+
+        /// <summary>
+        /// `investigation 3 1 1`：玩家参数非法 → 命令失败（不再静默按 P1 开窗）。
+        /// </summary>
+        public void TestPMCommand_对抗命令_玩家参数非法则失败()
+        {
+            var game = NewGame(1);
+            var stub = new WindowStub(game);
+            try
+            {
+                bool ok = game.PMCommandManager.TryExecuteCommand("investigation 3 1 1", out string error);
+                Assert.IsFalse(ok, "玩家参数 3 非法 → 失败");
+                Assert.IsTrue(error != null && error.Contains("玩家"), $"错误应提示玩家参数，实际: {error}");
+            }
+            finally
+            {
+                stub.Detach();
+            }
+            Assert.AreEqual(0, stub.Calls, "不得打开任何对抗窗口");
+        }
+
+        // ==================== ①-c 【2026-10】move / setassetfromdeck 的玩家参数语义 ====================
+
+        /// <summary>`move 2 ZZ997 hand`：从 **P2** 卡组找编号 → 进 **P2** 手牌。</summary>
+        public void TestPMCommand_move_编号与玩家参数()
+        {
+            var game = NewGame();
+            var p1Card = PutInDeck(game, Probe("ZZ997_探针"), 1);
+            var p2Card = PutInDeck(game, Probe("ZZ997_探针"), 2);
+
+            Run(game, "move 2 ZZ997 hand");
+
+            Assert.IsTrue(game.TurnManager.GetHandOf(2).Contains(p2Card), "P2 卡组的 ZZ997 → P2 手牌");
+            Assert.IsTrue(InDeck(game, p1Card, 1), "P1 卡组的同编号卡不受影响");
+        }
+
+        /// <summary>`move 1 inst_xxx grave`：**实例 UID** 写法仍然可用（兼容既有用法）。</summary>
+        public void TestPMCommand_move_实例UID兼容()
+        {
+            var game = NewGame();
+            var card = PutInDeck(game, Probe("ZZ998_探针"), 1);
+
+            Run(game, $"move 1 {card.UID} grave");
+
+            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "按实例 UID 也能移动到墓地");
+            Assert.IsFalse(InDeck(game, card, 1), "已离开卡组");
+        }
+
+        /// <summary>
+        /// `move 1 ZZ999 1 99`：地区号越界（当前 2 个地区）→ 明确失败且卡仍在卡组，
+        /// 不允许把 "99" 静默吞成别的参数继续执行。
+        /// </summary>
+        public void TestPMCommand_move_地区号越界报错()
+        {
+            var game = NewGame(2);
+            var card = PutInDeck(game, Probe("ZZ999_探针"), 1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("move 1 ZZ999 1 99", out string error);
+
+            Assert.IsFalse(ok, "地区号 99 越界 → 失败");
+            Assert.IsTrue(!string.IsNullOrEmpty(error), "必须给出可读错误");
+            Assert.IsTrue(InDeck(game, card, 1), "卡仍在卡组，未被移动");
+            Assert.IsFalse(card.CurrentZone == CardZone.AreaZone, "没有被移到任何地区");
+        }
+
+        /// <summary>`setassetfromdeck 2 3`：从 **P2** 卡组顶取 3 张进 **P2** 资产区。</summary>
+        public void TestPMCommand_setassetfromdeck_参数玩家()
+        {
+            var game = NewGame();
+            for (int i = 0; i < 3; i++) PutInDeck(game, Probe($"ZZA9{i}_探针"), 2);
+
+            Run(game, "setassetfromdeck 2 3");
+
+            var p2Assets = game.ZoneManager.GetZoneCards(CardZone.AssetZone, 2);
+            Assert.IsTrue(p2Assets.Count >= 3, $"P2 资产区应至少有 3 张，实际 {p2Assets.Count}");
+            var p1Assets = game.ZoneManager.GetZoneCards(CardZone.AssetZone, 1);
+            Assert.AreEqual(0, p1Assets.Count, "P1 资产区不受影响");
+        }
+
+        /// <summary>`setassetfromdeck 1 ZZ991`：按编号从 P1 卡组取 1 张进 P1 资产区。</summary>
+        public void TestPMCommand_setassetfromdeck_按编号()
+        {
+            var game = NewGame();
+            var card = PutInDeck(game, Probe("ZZB01_探针"), 1);
+
+            Run(game, "setassetfromdeck 1 ZZB01");
+
+            Assert.AreEqual(CardZone.AssetZone, card.CurrentZone, "该编号的卡进了资产区");
+            Assert.AreEqual(1, card.ControllerId, "归属 P1");
         }
 
         // ==================== ② jumpto <步骤名>[地区号] ====================

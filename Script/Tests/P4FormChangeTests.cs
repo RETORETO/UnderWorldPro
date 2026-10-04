@@ -117,7 +117,18 @@ namespace Script.Tests
             Assert.IsFalse(e.FormChange.SuppressPrintedEffects, "保留自身印刷效果（形态后仍可再用该能力）");
             Assert.AreEqual(ActionVerb.TransformForm, e.Actions[0].Verb, "第一个动作＝施加形态");
             Assert.AreEqual("直到回合结束", e.Actions[0].Args[1], "形态期限＝直到回合结束");
-            Assert.AreEqual(5, e.Actions.Count, "形态 + 白眼/黑刀/黑星/防御 共 5 个动作");
+            // 【2026-09 用户口径】形态自带的四项属性走 `FormChange.Grants`（引擎**幂等**施加：重复发动不叠加），
+            // 不再是 `Actions` 里的 `Gain`（那样每次结算都会累加）。
+            Assert.AreEqual(1, e.Actions.Count, "动作只有一条：施加形态（属性在 FormChange.Grants 里）");
+            Assert.AreEqual(4, e.FormChange.Grants.Count, "形态自带：白眼/黑刀/黑星/防御 共 4 条");
+            bool hasDef = false, hasWhiteEye = false;
+            foreach (var g in e.FormChange.Grants)
+            {
+                if (g.Kind == "Attribute" && g.Value == "防御" && g.Amount == 1) hasDef = true;
+                if (g.Kind == "Icon" && g.Value == "白眼" && g.Amount == 1) hasWhiteEye = true;
+            }
+            Assert.IsTrue(hasWhiteEye, "白眼（Icon 名，引擎自动折成属性『先手调查』）");
+            Assert.IsTrue(hasDef, "防御 1（属性通道）");
         }
 
         // ==================== ② JC027：成为角色（参与目标合法性/统计）＋ 回合结束还原 ====================
@@ -165,15 +176,16 @@ namespace Script.Tests
             Assert.IsFalse(goblin.HasIcon("黑刀"), "图标还原");
         }
 
-        // ==================== ②b JC027：属性可叠加 + 重算不丢（2026-09 修复） ====================
+        // ==================== ②b JC027：形态自带属性**幂等**（重复发动不叠加）＋重算不丢 ====================
 
         /// <summary>
-        /// 【2026-09 修复·用户实测"JC027 效果给的属性不可叠加，成为角色后再次使用效果不会获得更多属性"】
-        /// 根因：`Gain{"防御"}` 原先**只直接改 `CurrentDefense`**（时效项 `Kind="Defense"`），而属性重算
-        /// （`ResetToBaseValues`）重建防御的基准是"模板防御 + `GetAttribute("防御")`" ⇒ 一重算就把授予的
-        /// 防御冲掉（白眼/黑刀走属性通道故不受影响）。修复：防御也走属性通道（`Grant/Revoke("Attribute","防御")`）。
+        /// 【2026-09 用户口径】JC027「成为一个地精角色，**且具有**［白眼］［黑刀］［黑星］和 1 防御力 直到回合结束」
+        /// 描述的是一个**状态**，不是可叠加增益 ⇒ **重复发动同一形态仍只有 1 白眼/1 黑刀/1 势力/1 防御**
+        /// （用户实测："多次使用可以让各项属性越来越高"是 bug）。
+        /// 实现＝`FormChangeSpec.Grants` 由引擎幂等施加（先撤销上一次形态授予再授予）；
+        /// 另：防御走**属性通道**（`Grant/Revoke("Attribute","防御")`），属性重算不会把它冲掉。
         /// </summary>
-        public void TestForm_JC027属性可叠加且重算不丢()
+        public void TestForm_JC027形态属性幂等且重算不丢()
         {
             var game = NewGame();
             GiveMana(game, 1, 8);
@@ -196,20 +208,27 @@ namespace Script.Tests
             Assert.AreEqual(1, goblin.CurrentDefense, "重算后防御仍为 1（旧实现此处会掉回『无防御』）");
             Assert.AreEqual(1, goblin.GetAttribute("先手调查"), "重算后先手调查仍在");
 
-            // ② 第二次发动（卡文"它仍然是附属" ⇒ 可再次发动）：必须**叠加**
+            // ② 第二次、第三次发动：**幂等**，不得累加（用户 2026-09 口径）
+            game.TurnManager.PriorityPlayerId = 1;
+            game.EffectEngine.ActivateAbility(goblin, ability, null);
+            ResolveStackOnce(game);
             game.TurnManager.PriorityPlayerId = 1;
             game.EffectEngine.ActivateAbility(goblin, ability, null);
             ResolveStackOnce(game);
 
-            Assert.AreEqual(2, goblin.GetAttribute("先手调查"), "第 2 次：先手调查叠加到 2");
-            Assert.AreEqual(2, goblin.GetAttribute("战斗"), "第 2 次：战斗叠加到 2");
-            Assert.AreEqual(2, goblin.GetAttribute("势力"), "第 2 次：势力叠加到 2");
-            Assert.AreEqual(2, goblin.GetAttribute("防御"), "第 2 次：防御叠加到 2（用户报的『不可叠加』）");
-            Assert.AreEqual(2, goblin.CurrentDefense, "第 2 次：当前防御＝2");
+            Assert.AreEqual(1, goblin.GetAttribute("先手调查"), "重复发动：先手调查仍是 1（不叠加）");
+            Assert.AreEqual(1, goblin.GetAttribute("战斗"), "重复发动：战斗仍是 1（不叠加）");
+            Assert.AreEqual(1, goblin.GetAttribute("势力"), "重复发动：势力仍是 1（不叠加）");
+            Assert.AreEqual(1, goblin.GetAttribute("防御"), "重复发动：防御仍是 1（不叠加）");
+            Assert.AreEqual(1, goblin.CurrentDefense, "重复发动：当前防御仍是 1");
 
             goblin.ResetToBaseValues(false);
-            Assert.AreEqual(2, goblin.CurrentDefense, "第 2 次后重算仍为 2（授予可被正确重建）");
-            Assert.AreEqual(2, goblin.GetAttribute("先手调查"), "第 2 次后重算先手调查＝2");
+            Assert.AreEqual(1, goblin.CurrentDefense, "重复发动 + 重算后仍为 1");
+            Assert.AreEqual(1, goblin.GetAttribute("先手调查"), "重复发动 + 重算后先手调查＝1");
+
+            // ③ 其他来源的授予仍应正常叠加（幂等只作用于"本形态自带"的那一份）
+            goblin.Grant("Attribute", "先手调查", 1);
+            Assert.AreEqual(2, goblin.GetAttribute("先手调查"), "外部授予（如光环）与本形态自带属性**仍可叠加**");
         }
 
         // ==================== ②c JC027：形态使其**迁入争夺区**（用户 2026-09 口径） ====================

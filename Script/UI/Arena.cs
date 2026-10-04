@@ -601,6 +601,13 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                    && set.Contains(targetCard.Instance.UID);
         }
 
+        /// <summary>该源卡当前是否有**可拖拽的合法目标**（缓存存在且非空）。
+        /// 【2026-09】拖拽起手据此决定是否吞掉左键：无可拖目标时**不吞**，让双击信号送达卡 UI。</summary>
+        public bool HasCachedActivateTarget(CardUI actingCard)
+            => actingCard?.Instance != null
+               && _activateLegalTargetCache.TryGetValue(actingCard.Instance.UID, out var set)
+               && set.Count > 0;
+
         // ============================================================
         // 堆叠区 UI 同步
         // ============================================================
@@ -1411,12 +1418,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             (string uid, bool face) => FindCardUIByUID(uid)?.SetFace(face), // 设置翻面状态
             (CombatManager.CombatType type, int winner, int x, int areaNo) =>
             {
-                // 按对抗类型路由到对应窗口：调查对抗走调查窗口（取牌分配+抽1），战斗对抗走战斗窗口（伤害分配）。
-                // 原实现硬编码调用 OpenStrengthWindow，导致 investigation 命令也误用战斗对抗逻辑，违反核心需求 6.4。
-                if (type == CombatManager.CombatType.Investigation)
-                    _modalCoordinator.OpenInvestigationWindow(winner, x, areaNo, null);
-                else
-                    _modalCoordinator.OpenStrengthWindow(winner, x, areaNo, null);
+                // 【2026-10 修复】不再直调窗口协调器（那会绕过 CombatManager.ResolveWinner，
+                // 导致 PM `investigation` 不广播 OnInvestigationWon 获胜触发、也不置 IsDamageAssignmentOpen）。
+                // 现统一经 CombatManager.ResolveCombatFromDebug → 单机走 ResolveWinner → 事件链弹本机窗口，
+                // 与"正规对抗结算"完全同一条链路。联机侧同一条命令由 MatchHost 侧直接调该方法（无本窗口回调）。
+                _initializer.CombatManager.ResolveCombatFromDebug(type, areaNo, winner, x);
             },
             _areaManager,
             () => DrawAndAddNewArea(),
@@ -1689,36 +1695,29 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
                 bool can = ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
                 ui.SetActivatableHighlight(can);
-                // 【MVC 收口-问题A】仅对“可发动”的卡预计算其合法目标集合，供拖拽控制器只读查询
-                if (can)
+                // 【MVC 收口-问题A】仅对"**可用拖拽表达**的激活"预计算合法目标集合，供拖拽控制器只读查询。
+                // 【2026-09】能力取法改为 `GetFirstActivateAbility`（模板 ∪ 运行期授予，JC019 宿主可用），
+                // 且只缓存 `CanDragActivate` 成立者（多能力/无目标/玩家/地区目标 ⇒ 不进拖拽，交给双击）。
+                if (can && ActivateEligibility.CanDragActivate(inst, out var ability))
                 {
-                    var ability = GetFirstActivateAbility(inst);
-                    if (ability != null)
+                    bool canSelf = ability.Target?.CanTargetSelf == true;
+                    var set = new HashSet<string>();
+                    foreach (var t in _zoneManager.GetZoneCards(CardZone.AreaZone, 0))
                     {
-                        var set = new HashSet<string>();
-                        foreach (var t in _zoneManager.GetZoneCards(CardZone.AreaZone, 0))
-                        {
-                            if (t == inst) continue;
-                            if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
-                                set.Add(t.UID);
-                        }
-                        _activateLegalTargetCache[inst.UID] = set;
+                        if (t == inst && !canSelf) continue;   // A62：声明"目标含自身"时来源卡也是合法目标
+                        if (ActivateEligibility.IsLegalActivateTarget(inst, ability, t, _cardManager))
+                            set.Add(t.UID);
                     }
+                    if (set.Count > 0) _activateLegalTargetCache[inst.UID] = set;
                 }
             }
         }
 
-        /// <summary>D9：取某卡的第一个角色/附属激活能力（与 CardDragController.GetActivatingAbility 对齐）。</summary>
+        /// <summary>D9：取某卡的第一个角色/附属激活能力（**模板 ∪ 运行期授予**，与拖拽控制器同源）。</summary>
         private static EffectData GetFirstActivateAbility(CardInstance inst)
         {
-            if (inst?.PlayerTemplate is PlayerCardData tmpl)
-            {
-                foreach (var e in tmpl.EffectDataList)
-                {
-                    if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return e;
-                }
-                return null;
-            }
+            if (inst?.PlayerTemplate is PlayerCardData)
+                return ActivateEligibility.GetFirstActivateAbility(inst);
             if (inst?.CouncilTemplate is CouncilCardData councilTmpl)
             {
                 foreach (var opt in councilTmpl.ActivationOptions)

@@ -312,6 +312,41 @@ namespace Script.Manager
             return false;
         }
 
+        /// <summary>
+        /// 【2026-09】"**首条**激活能力"的统一取法：`GetAllActivateAbilities`（模板 ∪ **运行期授予**）的第一条。
+        /// 单机 `Arena.RefreshActivateHighlights`/`CardDragController.GetActivatingAbility`、
+        /// 联机 `ArenaOl.GetFirstOnlineActivateAbility` 都必须用本方法——此前各自只读模板 `EffectDataList`，
+        /// 于是 JC019 授予宿主的激活能力在**拖拽路径**上取不到（箭头里 ability=null ⇒ 松手"无合法目标"取消）。
+        /// </summary>
+        public static EffectData GetFirstActivateAbility(CardInstance card)
+        {
+            var all = GetAllActivateAbilities(card);
+            return all.Count > 0 ? all[0] : null;
+        }
+
+        /// <summary>
+        /// 【2026-09·用户实测】"**能否用拖拽表达**这次激活"：恰好 **1 条**能力 ＋ 需要选**场上卡**目标。
+        ///  · 多条能力（JC024 自带 ＋ JC019 授予 = 2 条）⇒ 必须走**双击效果菜单**；
+        ///  · 无目标/自指能力（JC024"快速行动2：将自身潜伏"）⇒ 必须**直接发动**（双击）；
+        ///  · 玩家目标（JC111）/地区目标（JC117）⇒ 拖到卡上无法表达；
+        /// 以上一律不进入拖拽（否则 UI 会吞掉左键 ⇒ 双击被拖拽覆盖，效果根本用不了）。
+        /// `ability` 输出＝可用于拖拽的那条能力（不可拖拽时为 null）。
+        /// </summary>
+        public static bool CanDragActivate(CardInstance card, out EffectData ability)
+        {
+            ability = null;
+            var all = GetAllActivateAbilities(card);
+            if (all.Count != 1) return false;
+            var e = all[0];
+            var spec = e?.Target;
+            if (spec == null || !spec.NeedsSelection) return false;      // 无目标 ⇒ 双击直接发动
+            if (spec.Kind == TargetKind.None) return false;
+            if (PlayerTargetPool.IsPlayerSpec(spec)) return false;       // 玩家目标不走卡拖拽
+            if (spec.Kind == TargetKind.Area) return false;              // 地区目标走选地区窗
+            ability = e;
+            return true;
+        }
+
         /// <summary>秘社激活门禁：遍历 ActivationOptions 各选项的 EffectDataList，任一可发动即返回 true。</summary>
         private static bool CanActivateCouncil(CardInstance card, CouncilCardData councilTmpl, TurnManager tm,
             PlayerManager pm, CardManager cm, bool ignoreAtomicLock = false)

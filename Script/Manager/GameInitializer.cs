@@ -62,8 +62,13 @@ public partial class GameInitializer : Node
     /// </summary>
     [Export] public int DebugSeed = -1;
 
-    /// <summary>本局加载的卡组（含卡组与秘社），供 SetupCouncils 读取秘社。由 InitializeAll 加载并缓存。</summary>
-    private DeckList _loadedDeck;
+    /// <summary>本局加载的 P1 卡组（含卡组与秘社），供 SetupCouncils 按玩家读取秘社；null=该方无专属卡组。</summary>
+    private DeckList _deckP1;
+    /// <summary>本局加载的 P2 卡组（含卡组与秘社），供 SetupCouncils 按玩家读取秘社；null=该方无专属卡组。</summary>
+    private DeckList _deckP2;
+
+    /// <summary>取指定玩家的本局卡组（即该玩家秘社的来源）；该方无专属卡组时返回 null，由调用方回退默认秘社。</summary>
+    private DeckList GetDeckForPlayer(int playerId) => playerId == 1 ? _deckP1 : _deckP2;
 
     /// <summary>本局 EffectEngine 实例（静态单例治理：显式注入替代 EffectEngine.Instance）。</summary>
     private Script.Manager.EffectEngine _effectEngine;
@@ -301,10 +306,16 @@ public partial class GameInitializer : Node
         PMCommandManager = new PMCommandManager();
         AddChild(PMCommandManager);
         PMCommandManager.EffectEngineRef = effectEngine;   // 静态单例治理：显式注入 EffectEngine
-        PMCommandManager.TurnManagerRef = TurnManager;     // 【2026-09】jumpto 跳转步骤 / 定向取牌（draw <数量> <编号>）用
+        PMCommandManager.TurnManagerRef = TurnManager;     // 【2026-09】jumpto 跳转步骤 / 定向取牌（draw <玩家> <编号>）用
+        // 【2026-10】对抗命令（investigation/battle）结算入口：联机服务端（无 Arena 本机窗口）经它把
+        // 对抗窗口通过决策协议下发给玩家；单机由 Arena 的窗口回调转调同一方法（正规结算链）。
+        PMCommandManager.CombatManagerRef = CombatManager;
+        // 【2026-10】地区列表兜底：View 侧 `_getAreaUids` 回调未注入时（headless 测试 / 纯服务端）
+        // 用 AreaManager 取"按槽位顺序的地区 UID"，避免 investigation/battle/power 的地区校验恒失败。
+        PMCommandManager.AreaManagerRef = AreaManager;
         // 【2026-09】模型侧依赖就地接线：使 PM 命令在无 View 场景（headless 测试 / 纯服务端）也可用；
         // View 的 UI 回调仍由 Arena/MatchHost 调 `Initialize` 注入（并覆盖此处）。
-        PMCommandManager.InjectModelRefs(CardManager, DeckManager, ZoneManager);
+        PMCommandManager.InjectModelRefs(CardManager, DeckManager, ZoneManager, AreaManager);
         if (VerboseSetup) GD.Print("  ✅ PMCommandManager");
 
         // 8.5【MVC 收口】EffectEngine 的管理器引用注入收归本 Composition Root，不再由 View（Arena）装配。
@@ -332,11 +343,11 @@ public partial class GameInitializer : Node
     // ============================================================
 
     /// <summary>
-    /// 加载双方卡组并缓存秘社来源（_loadedDeck）。
+    /// 加载双方卡组并**按玩家**缓存秘社来源（`_deckP1`/`_deckP2`）。
     /// 优先级（自上而下）：
     ///   1. **本局显式指定的卡组**（`P1DeckOverride`/`P2DeckOverride`）——联机房间/`MatchHost` 用；
     ///   2. 单机 UI 选择（`GameManager.UseSelectedDeck` + `SelectedDeck/SelectedDeckPath`，仅 P1）；
-    ///   3. 硬编码测试卡组（P1/P2）。
+    ///   3. 硬编码测试卡组（P1/P2）→ 记为"该方无专属卡组"，秘社回退默认秘社。
     /// InitTestDecks / InitFromDeckList 均为幂等重建（内部 Clear 后填充+洗牌），可安全重复调用。
     /// </summary>
     private void ReloadDecks()
@@ -345,18 +356,20 @@ public partial class GameInitializer : Node
         if (P2DeckOverride != null)
         {
             DeckManager.InitFromDeckList(P2DeckOverride, playerId: 2);
+            _deckP2 = P2DeckOverride;   // 秘社来源：P2 自己的卡组
             GD.Print("【GameInitializer】P2 使用本局显式指定卡组");
         }
         else
         {
             DeckManager.InitTestDecks(playerId: 2); // P2 硬编码
+            _deckP2 = null;                         // 无专属卡组 → 秘社回退默认秘社
         }
 
-        // ② P1 卡组
+        // ② P1 卡组（每个分支都必须显式赋值 _deckP1，避免沿用上一局/其它分支的残留）
         if (P1DeckOverride != null)
         {
             DeckManager.InitFromDeckList(P1DeckOverride, playerId: 1);
-            _loadedDeck = P1DeckOverride;   // 秘社来源：以 P1 卡组为准（与单机"P1 用 JSON 时以该卡组为秘社来源"一致）
+            _deckP1 = P1DeckOverride;   // 秘社来源：P1 自己的卡组（不再以 P1 卡组统一双方秘社）
             GD.Print("【GameInitializer】P1 使用本局显式指定卡组");
             return;
         }
@@ -364,28 +377,32 @@ public partial class GameInitializer : Node
         var gm = GameManager.Instance;
         if (gm != null && gm.UseSelectedDeck)
         {
-            _loadedDeck = gm.SelectedDeck ?? DeckListLoader.Load(gm.SelectedDeckPath);
-            if (_loadedDeck != null && _loadedDeck.Cards.Count > 0)
+            var deck = gm.SelectedDeck ?? DeckListLoader.Load(gm.SelectedDeckPath);
+            if (deck != null && deck.Cards.Count > 0)
             {
-                DeckManager.InitFromDeckList(_loadedDeck, playerId: 1); // P1 用 JSON
+                DeckManager.InitFromDeckList(deck, playerId: 1); // P1 用 JSON
+                _deckP1 = deck;
                 GD.Print($"【GameInitializer】P1 使用卡组 JSON: {gm.SelectedDeckPath}");
             }
             else
             {
                 GD.PrintErr("[GameInitializer] 卡组 JSON 无效，P1 回退到硬编码卡组");
                 DeckManager.InitTestDecks(playerId: 1);
+                _deckP1 = null;   // 回退硬编码 = 无专属卡组，不能沿用已加载但无效的 deck
             }
         }
         else if (P2DeckOverride != null)
         {
-            // 联机场景：P2 已显式指定 → P1 未指定时沿用 P2 卡组（避免服务端去读 UI 状态）
+            // 联机场景：P2 已显式指定 → P1 未指定时沿用 P2 卡组（避免服务端去读 UI 状态）。
+            // 此时 P1 的牌确实来自该卡组，秘社也取该卡组自带值，保持"卡与秘社同源"。
             DeckManager.InitFromDeckList(P2DeckOverride, playerId: 1);
-            _loadedDeck = P2DeckOverride;
+            _deckP1 = P2DeckOverride;
             GD.Print("【GameInitializer】P1 沿用 P2 的本局显式卡组（未单独指定）");
         }
         else
         {
             DeckManager.InitTestDecks(playerId: 1); // P1 硬编码（未勾选）
+            _deckP1 = null;                         // 无专属卡组 → 秘社回退默认秘社
         }
     }
 
@@ -397,45 +414,61 @@ public partial class GameInitializer : Node
     private const string DefaultCouncilPath = "res://Cards/Data/CouncilCards/JC/MSJC009_mishe.tres";
 
     /// <summary>
-    /// 从已加载卡组（_loadedDeck.Councils）实例化双方秘社并移入各自 CouncilZone。
-    /// 单机默认：每个秘社模板双方各创建一张。councils 为空时由 DeckListLoader 兜底补默认秘社，
-    /// 若仍无则本方法直接返回（不阻塞开局）。
+    /// 按**各自**卡组实例化双方秘社并移入各自 CouncilZone。
+    /// 秘社来源＝该玩家自己的卡组（`GetDeckForPlayer(pid).Councils`）；该方无专属卡组或卡组未携带秘社时，
+    /// 回退默认秘社 `DefaultCouncilPath`（**不镜像对手的秘社**）。
     /// </summary>
     private void SetupCouncils()
     {
-        var councils = _loadedDeck?.Councils;
-        if (councils == null || councils.Count == 0)
-        {
-            GD.PrintErr($"❌ 卡组未携带秘社，回退默认秘社: {DefaultCouncilPath}");
-            councils = new List<DeckList.DeckEntry>
-            {
-                new DeckList.DeckEntry { TemplatePath = DefaultCouncilPath, Copies = 1 },
-            };
-        }
-
-        // 【幂等·2026-09 修复】本方法会被调用两次（InitializeAll → DealOpeningHands 重放，
-        // 目的是读到本局最终卡组携带的秘社），而 MoveToCouncil 只"加入"不移除 ⇒
-        // 原先每位玩家 CouncilZone 里会累积 2 张秘社（同模板）：
+        // 【幂等】本方法会被调用多次（InitializeAll → DealOpeningHands 重放，ResetMatch 亦会重放），
+        // 而 MoveToCouncil 只"加入"不移除 ⇒ 需先清空双方秘社区再重建，否则每位玩家 CouncilZone 会累积多张秘社：
         //   · `GetCouncilHandSize` 读到先建的旧卡 → 起手数回退默认 6（本局卡组秘社的 StartingHandSize 失效）；
         //   · "结附于本方秘社"类效果会出现重复候选（JC051 的宿主选择会多出一个候选）。
-        // 故先清空双方秘社区（旧实例按移出游戏处理并广播 → View 摘除旧秘社 UI），再按本次卡组重建。
+        // 清空时旧实例按移出游戏处理并广播 → View 摘除旧秘社 UI。
         for (int pid = 1; pid <= 2; pid++) ZoneManager.ClearCouncilZone(pid);
 
-        foreach (var entry in councils)
+        for (int playerId = 1; playerId <= 2; playerId++)
         {
-            var councilData = ResourceLoader.Load<CouncilCardData>(entry.TemplatePath);
-            if (councilData == null)
+            var councils = ResolveCouncilEntries(playerId);
+            foreach (var entry in councils)
             {
-                GD.PrintErr($"❌ 加载秘社失败: {entry.TemplatePath}");
-                continue;
-            }
-            for (int playerId = 1; playerId <= 2; playerId++)
-            {
-                var inst = CardManager.CreateCardInstance(councilData, playerId);
-                ZoneManager.MoveToCouncil(inst, playerId);
-                if (VerboseSetup) GD.Print($"  ✅ 玩家{playerId} 秘社就位: {councilData.CardName}");
+                var councilData = ResourceLoader.Load<CouncilCardData>(entry.TemplatePath);
+                if (councilData == null)
+                {
+                    GD.PrintErr($"❌ 加载秘社失败: {entry.TemplatePath}");
+                    continue;
+                }
+                int copies = entry.Copies > 0 ? entry.Copies : 1;
+                for (int i = 0; i < copies; i++)
+                {
+                    var inst = CardManager.CreateCardInstance(councilData, playerId);
+                    ZoneManager.MoveToCouncil(inst, playerId);
+                }
+                GD.Print($"  ✅ 玩家{playerId} 秘社就位: {councilData.CardName}");
             }
         }
+    }
+
+    /// <summary>
+    /// 取指定玩家的秘社条目：来自**该玩家自己的卡组**；无卡组或卡组未携带秘社时回退默认秘社 1 张。
+    /// 【修复·秘社归属】此前双方共用 P1 卡组的秘社（旧的 `_loadedDeck`），导致 P2 拿到 P1 卡组的秘社，
+    /// 且 `GetCouncilHandSize(2)` 读到的是 P1 秘社的起始手牌数。
+    /// </summary>
+    private List<DeckList.DeckEntry> ResolveCouncilEntries(int playerId)
+    {
+        var deck = GetDeckForPlayer(playerId);
+        var councils = deck?.Councils;
+        if (councils != null && councils.Count > 0) return councils;
+
+        if (deck == null)
+            GD.Print($"ℹ️ 玩家{playerId} 无专属卡组（硬编码卡组/未提交卡组），使用默认秘社: {DefaultCouncilPath}");
+        else
+            GD.PrintErr($"❌ 玩家{playerId} 卡组未携带秘社，回退默认秘社: {DefaultCouncilPath}");
+
+        return new List<DeckList.DeckEntry>
+        {
+            new DeckList.DeckEntry { TemplatePath = DefaultCouncilPath, Copies = 1 },
+        };
     }
 
     // ============================================================
@@ -495,10 +528,13 @@ public partial class GameInitializer : Node
         // 【A57】开局清空"每局游戏"能力使用次数（`EffectData.MaxUsesPerGame`，如秘社 MSJC001 行动4）：
         // 实例虽按局重建，这里显式兜底"重开一局复用实例"的情形——**回合重置不清它**。
         CardManager?.ResetAllAbilityUsesThisGame();
-        // 【秘社批次】秘社"开局效果"（"持续：在每局游戏开始时…"，MSJC015 在本方秘社上放置【隐秘】标志）：
-        // 必须早于发牌（015 若声明了抓牌方向也会立刻生效），且**早于第一回合的准备步骤**。
-        ApplyCouncilOpeningEffects();
+        // ① 先按各自秘社发起始手牌（DealOpeningHands 内部按本局卡组重放秘社，并据此取各自起手数）。
         DealOpeningHands();
+        // ② 后结算秘社开局效果（"持续：在每局游戏开始时…"，如 MSJC015 在本方秘社上放置【隐秘】标志）。
+        // 【修复·时序】旧顺序是先结算再发牌，而 DealOpeningHands 会重建秘社并清掉带标志的旧实例 ⇒ 效果产物丢失。
+        // 现改为发牌之后结算：起手已抽完（与卡文"第一个回合的准备步骤开始时"口径一致），
+        // 且效果打在**最终保留**的秘社实例上，仍早于第一回合的准备步骤。
+        ApplyCouncilOpeningEffects();
 
         // 单机：直接开始第一回合（无联机调度步骤）。
         PlayerActionService.StartGame();
@@ -506,7 +542,8 @@ public partial class GameInitializer : Node
 
     /// <summary>
     /// 【秘社批次】执行双方秘社声明的**开局效果**（`CouncilCardData.OpeningEffectList`）。
-    /// 时机：秘社实例已就位（`SetupCouncils` 之后）、第一回合开始之前。
+    /// 时机：秘社实例已就位（`SetupCouncils` 之后）、起手牌已发完（`DealOpeningHands` 之后）、
+    /// 第一回合开始之前（早于第一回合的准备步骤）。
     /// 覆盖 MSJC015「在每局游戏开始时，在本方秘社上放置一个【隐秘】标志」与
     /// MSJC016「在第一个回合的准备步骤开始时，将你牌库顶的三张牌置于你的墓地」
     /// （后者在 .cs 里同时也在准备步骤登记触发，本处只负责"第一回合"这一次的即时生效，

@@ -185,13 +185,13 @@ namespace Script.Tests
                     new RoomSeatState
                     {
                         Seat = 1, PlayerName = "我", DisplayName = RoomState.MakeDisplayName("我", 1),
-                        Ready = true, Connected = true, RematchRequested = false,
+                        Ready = true, Connected = true,
                         HasDeck = true, DeckName = "我的卡组", DeckCardCount = 30, DeckValid = true, DeckError = null,
                     },
                     new RoomSeatState
                     {
                         Seat = 2, PlayerName = "对手", DisplayName = RoomState.MakeDisplayName("对手", 2),
-                        Ready = true, Connected = true, RematchRequested = true,
+                        Ready = true, Connected = true,
                         HasDeck = true, DeckName = "对手卡组", DeckCardCount = 40, DeckValid = false, DeckError = "卡牌 JC999 不存在",
                     },
                 },
