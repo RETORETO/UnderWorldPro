@@ -143,9 +143,19 @@ public partial class DeckBuilder : Control
         {
             string full = dirPath + "/" + name;
             if (dir.CurrentIsDir())
+            {
                 ScanDirRecursive(full, sink);
+            }
+            // 导出后 .tres 被转成二进制资源，目录列表给出的是 "xxx.tres.remap"；编辑器下是 "xxx.tres"。
+            // 只认 ".tres" 会导致导出后卡池扫描为 0（卡组编辑里空白、没有任何卡图）。
             else if (name.EndsWith(".tres", System.StringComparison.OrdinalIgnoreCase))
+            {
                 sink.Add(full);
+            }
+            else if (name.EndsWith(".tres.remap", System.StringComparison.OrdinalIgnoreCase))
+            {
+                sink.Add(dirPath + "/" + name.Substring(0, name.Length - ".remap".Length));
+            }
             name = dir.GetNext();
         }
         dir.ListDirEnd();

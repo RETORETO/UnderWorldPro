@@ -690,11 +690,19 @@ namespace Script.UI
                     string f = da.GetNext();
                     while (!string.IsNullOrEmpty(f))
                     {
-                        if (!da.CurrentIsDir() && f.EndsWith(".jpg", System.StringComparison.OrdinalIgnoreCase)
-                            && f.StartsWith(uid, System.StringComparison.OrdinalIgnoreCase))
+                        // 导出后目录列表里的图片名是 "xxx.jpg.import"（编辑器下是 "xxx.jpg"），先归一化再匹配，
+                        // 否则这条兜底在导出包里永远命不中（症状：目录名≠UID 的卡在编辑器有图、打包后没图）。
+                        if (!da.CurrentIsDir())
                         {
-                            da.ListDirEnd();
-                            return $"{dir}/{f}";
+                            string fileName = f.EndsWith(".import", System.StringComparison.OrdinalIgnoreCase)
+                                ? f.Substring(0, f.Length - ".import".Length)
+                                : f;
+                            if (fileName.EndsWith(".jpg", System.StringComparison.OrdinalIgnoreCase)
+                                && fileName.StartsWith(uid, System.StringComparison.OrdinalIgnoreCase))
+                            {
+                                da.ListDirEnd();
+                                return $"{dir}/{fileName}";
+                            }
                         }
                         f = da.GetNext();
                     }
