@@ -6,28 +6,28 @@
 
 [sub_resource type="Resource" id="Resource_color_0"]
 script = ExtResource("2")
-Color = 3
-Amount = 1
+Color = 7
+Amount = 3
 
 
 
 [resource]
 script = ExtResource("1")
-Cost = 2
+Cost = 3
 ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
 DomainLoyaltyRequirements = Array[ExtResource("3")]([])
-CategoryFlag = 4
-SubCategories = Array[String](["装备", "武器"])
-Colors = Array[int]([3])
+CategoryFlag = 1
+SubCategories = Array[String](["人类", "罪犯"])
+Colors = Array[int]([7])
 MagicDomains = Array[int]([-1])
-Organization = "猎魔人"
+Organization = "方碑序列"
 Investigation = 0
-Strength = 0
-Power = 0
+Strength = 1
+Power = 1
 FirstStrikeInvestigation = 0
-FirstStrikeStrength = 0
+FirstStrikeStrength = 1
 FirstStrikePower = 0
-Defense = -1
-Effects = Array[String](["结附于目标人类角色 持续：受此结附的角色获得［黑刀］［黑刀］和+1防御力，并获得【隐秘】机动和【暴露】护卫2。"])
-UID = "WM020_aodexiusixingwaiguge"
-CardName = "奥德修斯E型外骨骼"
+Defense = 1
+Effects = Array[String](["触发：当一个本方罪犯成为敌方卡牌的目标时，其操控者需额外支付1，否则终止该卡牌。 现身触发：移除本地区上所有敌方势力标志。"])
+UID = "WM058_tanhuangdaoqiansi"
+CardName = "“弹簧刀”钱斯"

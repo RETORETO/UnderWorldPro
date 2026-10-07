@@ -7,6 +7,6 @@ script = ExtResource("1")
 RequiredPower = 4
 SubCategories = Array[String](["遗迹", "水域"])
 CardImagePath = "res://Cards/Image/AreaCards/DQ001_chenmodefeixu.jpg"
-UID = "DQ01_chenmodefeixu"
+UID = "DQ001_chenmodefeixu"
 CardName = "沉没的废墟"
 Score = 4

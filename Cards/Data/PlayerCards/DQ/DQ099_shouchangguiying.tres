@@ -25,5 +25,5 @@ FirstStrikeStrength = 0
 FirstStrikePower = 0
 Defense = 2
 Effects = Array[String](["优先进入：顺序最末位的地区。 行动2，支付［黑星］［黑星］［黑星］：利用。 --- 恐怖3 触发：当一个敌方角色因恐怖离开瘦长鬼影所在的地区时，遏制2。"])
-UID = "DQ099_shouzhangguiying"
+UID = "DQ099_shouchangguiying"
 CardName = "瘦长鬼影"

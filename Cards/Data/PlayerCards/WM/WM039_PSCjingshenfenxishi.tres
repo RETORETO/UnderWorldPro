@@ -6,28 +6,28 @@
 
 [sub_resource type="Resource" id="Resource_color_0"]
 script = ExtResource("2")
-Color = 1
-Amount = 2
+Color = 4
+Amount = 1
 
 
 
 [resource]
 script = ExtResource("1")
-Cost = 6
+Cost = 2
 ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
 DomainLoyaltyRequirements = Array[ExtResource("3")]([])
 CategoryFlag = 1
-SubCategories = Array[String](["人工智能", "互联网"])
-Colors = Array[int]([1])
+SubCategories = Array[String](["人类", "特工"])
+Colors = Array[int]([4])
 MagicDomains = Array[int]([-1])
-Organization = "帷幕守望"
+Organization = "国家机构"
 Investigation = 0
 Strength = 0
-Power = 2
+Power = 1
 FirstStrikeInvestigation = 0
 FirstStrikeStrength = 0
 FirstStrikePower = 0
-Defense = 2
-Effects = Array[String](["领袖 【隐秘】传闻 持续：阿兰斯托曼v3．0获得+X防御力，且你在隐秘对抗时获得+X，X等于你所操控的其他互联网、媒体、工程师数量之和。 触发：当对手在非抓牌步骤抓牌时，若本方秘社上没有【暴露】，你可以抓等量的牌。"])
-UID = "WM006_alansituoman"
-CardName = "阿兰斯托曼v3．0"
+Defense = 1
+Effects = Array[String](["机动 行动1：从本方秘社上移除一个【暴露】标志，P．S．C．精神分析师获得［黑眼］直到本回合结束。该能力每回合只能发动一次。"])
+UID = "WM039_PSCjingshenfenxishi"
+CardName = "P．S．C．精神分析师"

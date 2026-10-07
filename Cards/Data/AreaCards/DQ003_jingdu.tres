@@ -7,6 +7,6 @@ script = ExtResource("1")
 RequiredPower = 3
 SubCategories = Array[String](["城市"])
 CardImagePath = "res://Cards/Image/AreaCards/DQ003_jingdu.jpg"
-UID = "DQ003_jingdou"
+UID = "DQ003_jingdu"
 CardName = "京都"
 Score = 3

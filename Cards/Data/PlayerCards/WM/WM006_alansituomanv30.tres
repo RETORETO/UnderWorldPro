@@ -7,27 +7,27 @@
 [sub_resource type="Resource" id="Resource_color_0"]
 script = ExtResource("2")
 Color = 1
-Amount = 1
+Amount = 2
 
 
 
 [resource]
 script = ExtResource("1")
-Cost = 0
+Cost = 6
 ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
 DomainLoyaltyRequirements = Array[ExtResource("3")]([])
-CategoryFlag = 2
-SubCategories = Array[String](["法术", "命运"])
-Colors = Array[int]([0])
-MagicDomains = Array[int]([2])
-Organization = ""
+CategoryFlag = 1
+SubCategories = Array[String](["人工智能", "互联网"])
+Colors = Array[int]([1])
+MagicDomains = Array[int]([-1])
+Organization = "帷幕守望"
 Investigation = 0
 Strength = 0
-Power = 0
+Power = 2
 FirstStrikeInvestigation = 0
 FirstStrikeStrength = 0
 FirstStrikePower = 0
-Defense = -1
-Effects = Array[String](["隐秘：+4 非资产 行动：选择一项： ·检视目标玩家的手牌。 ·检视目标暗藏者或秘密计划。 ·预测1。"])
-UID = "WM090_chayezhanbofa"
-CardName = "茶叶占卜法"
+Defense = 2
+Effects = Array[String](["领袖 【隐秘】传闻 持续：阿兰斯托曼v3．0获得+X防御力，且你在隐秘对抗时获得+X，X等于你所操控的其他互联网、媒体、工程师数量之和。 触发：当对手在非抓牌步骤抓牌时，若本方秘社上没有【暴露】，你可以抓等量的牌。"])
+UID = "WM006_alansituomanv30"
+CardName = "阿兰斯托曼v3．0"

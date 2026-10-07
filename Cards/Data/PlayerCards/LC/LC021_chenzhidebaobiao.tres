@@ -25,5 +25,5 @@ FirstStrikeStrength = 1
 FirstStrikePower = 0
 Defense = 1
 Effects = Array[String](["公开 护卫1"])
-UID = "LC021_chengzhidebaobiao"
+UID = "LC021_chenzhidebaobiao"
 CardName = "称职的保镖"

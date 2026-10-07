@@ -6,28 +6,28 @@
 
 [sub_resource type="Resource" id="Resource_color_0"]
 script = ExtResource("2")
-Color = 7
-Amount = 3
+Color = 2
+Amount = 1
 
 
 
 [resource]
 script = ExtResource("1")
-Cost = 3
+Cost = 2
 ColorLoyaltyRequirements = Array[ExtResource("2")]([SubResource("Resource_color_0")])
 DomainLoyaltyRequirements = Array[ExtResource("3")]([])
-CategoryFlag = 1
-SubCategories = Array[String](["人类", "罪犯"])
-Colors = Array[int]([7])
-MagicDomains = Array[int]([-1])
-Organization = "方碑序列"
+CategoryFlag = 4
+SubCategories = Array[String](["装备", "护身符"])
+Colors = Array[int]([2])
+MagicDomains = Array[int]([1])
+Organization = "圣贤"
 Investigation = 0
-Strength = 1
-Power = 1
+Strength = 0
+Power = 0
 FirstStrikeInvestigation = 0
-FirstStrikeStrength = 1
+FirstStrikeStrength = 0
 FirstStrikePower = 0
-Defense = 1
-Effects = Array[String](["触发：当一个本方罪犯成为敌方卡牌的目标时，其操控者需额外支付1，否则终止该卡牌。 现身触发：移除本地区上所有敌方势力标志。"])
-UID = "WM058_danhuangdaoqiansi"
-CardName = "“弹簧刀”钱斯"
+Defense = -1
+Effects = Array[String](["结附于目标角色 额外费用：若结附的目标是僧侣角色，则辟邪十字架的所需费用减少2。 触发：当受此结附的角色死亡时，你可以牺牲辟邪十字架，若你如此做，则该角色移回场上，置于其之前所在的地区并横置。"])
+UID = "LC009_bixieshizijia"
+CardName = "辟邪十字架"

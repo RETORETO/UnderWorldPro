@@ -8466,7 +8466,7 @@
     },
     {
       "Kind": 0,
-      "UID": "BQ110_buqiang",
+      "UID": "BQ110_M16buqiang",
       "CardName": "M16\u6B65\u67AA",
       "Score": 0,
       "SubCardName": null,
@@ -10836,7 +10836,7 @@
     },
     {
       "Kind": 0,
-      "UID": "DQ001_chenmeidefeixu",
+      "UID": "DQ001_chenmodefeixu",
       "CardName": "\u6C89\u6CA1\u7684\u5E9F\u589F",
       "Score": 0,
       "SubCardName": null,
@@ -10882,7 +10882,7 @@
     },
     {
       "Kind": 0,
-      "UID": "DQ002_fuluolunsa",
+      "UID": "DQ002_foluolunsa",
       "CardName": "\u4F5B\u7F57\u4F26\u8428",
       "Score": 0,
       "SubCardName": null,
@@ -10927,7 +10927,7 @@
     },
     {
       "Kind": 0,
-      "UID": "DQ003_jingdou",
+      "UID": "DQ003_jingdu",
       "CardName": "\u4EAC\u90FD",
       "Score": 0,
       "SubCardName": null,
@@ -12202,7 +12202,7 @@
     },
     {
       "Kind": 0,
-      "UID": "DQ099_shouzhangguiying",
+      "UID": "DQ099_shouchangguiying",
       "CardName": "\u7626\u957F\u9B3C\u5F71",
       "Score": 0,
       "SubCardName": null,
@@ -23506,7 +23506,7 @@
     },
     {
       "Kind": 0,
-      "UID": "LC009_pixieshizijia",
+      "UID": "LC009_bixieshizijia",
       "CardName": "\u8F9F\u90AA\u5341\u5B57\u67B6",
       "Score": 0,
       "SubCardName": null,
@@ -24139,7 +24139,7 @@
     },
     {
       "Kind": 0,
-      "UID": "LC021_chengzhidebaobiao",
+      "UID": "LC021_chenzhidebaobiao",
       "CardName": "\u79F0\u804C\u7684\u4FDD\u9556",
       "Score": 0,
       "SubCardName": null,
@@ -24551,7 +24551,7 @@
     },
     {
       "Kind": 0,
-      "UID": "LC030_luobocihaidiao",
+      "UID": "LC030_Jluobocihaidiao",
       "CardName": "J\u00B7\u7F57\u4F2F\u8328\uFF0C\u201C\u6D77\u96D5\u201D",
       "Score": 0,
       "SubCardName": null,
@@ -25460,7 +25460,7 @@
     },
     {
       "Kind": 0,
-      "UID": "WM006_alansituoman",
+      "UID": "WM006_alansituomanv30",
       "CardName": "\u963F\u5170\u65AF\u6258\u66FCv3\uFF0E0",
       "Score": 0,
       "SubCardName": null,
@@ -26171,7 +26171,7 @@
     },
     {
       "Kind": 0,
-      "UID": "WM020_aodexiusixingwaiguge",
+      "UID": "WM020_aodexiusiExingwaiguge",
       "CardName": "\u5965\u5FB7\u4FEE\u65AFE\u578B\u5916\u9AA8\u9ABC",
       "Score": 0,
       "SubCardName": null,
@@ -27138,7 +27138,7 @@
     },
     {
       "Kind": 0,
-      "UID": "WM039_jingshenfenxishi",
+      "UID": "WM039_PSCjingshenfenxishi",
       "CardName": "P\uFF0ES\uFF0EC\uFF0E\u7CBE\u795E\u5206\u6790\u5E08",
       "Score": 0,
       "SubCardName": null,
@@ -28102,7 +28102,7 @@
     },
     {
       "Kind": 0,
-      "UID": "WM058_danhuangdaoqiansi",
+      "UID": "WM058_tanhuangdaoqiansi",
       "CardName": "\u201C\u5F39\u7C27\u5200\u201D\u94B1\u65AF",
       "Score": 0,
       "SubCardName": null,
@@ -29674,7 +29674,7 @@
     },
     {
       "Kind": 0,
-      "UID": "WM090_chayezhanbofa",
+      "UID": "WM090_chayezhanbufa",
       "CardName": "\u8336\u53F6\u5360\u535C\u6CD5",
       "Score": 0,
       "SubCardName": null,
@@ -35133,7 +35133,7 @@
     },
     {
       "Kind": 1,
-      "UID": "DQ01_chenmodefeixu",
+      "UID": "DQ001_chenmodefeixu",
       "CardName": "\u6C89\u6CA1\u7684\u5E9F\u589F",
       "Score": 4,
       "SubCardName": null,
@@ -35173,7 +35173,7 @@
     },
     {
       "Kind": 1,
-      "UID": "DQ029_huashengdun D\uFF0EC\uFF0E",
+      "UID": "DQ029_huashengdunDC",
       "CardName": "\u534E\u76DB\u987F D\uFF0EC\uFF0E",
       "Score": 4,
       "SubCardName": null,
