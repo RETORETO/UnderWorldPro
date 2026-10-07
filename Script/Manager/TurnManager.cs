@@ -192,6 +192,10 @@ public partial class TurnManager : Node
     /// </summary>
     public void OnEngineChainSettled()
     {
+        // 【2026-09·检视·续算】玩家在检视窗点『确认』后，继续同一张事务卡尚未结算的剩余效果
+        // （JC062「检视 → （等确认） → 抓一张牌」，用户口径："抓牌排在确认之后"）。
+        EE?.ContinueDeferredSettlement();
+
         // 结算后若堆叠清空，立即检查是否有基础地区满足赢取条件（与 ResolveStackTop 同款）
         if (_stackManager != null && _stackManager.IsEmpty && _areaManager != null)
             _areaManager.TryStartAreaWin(_stackManager);
@@ -389,6 +393,37 @@ public partial class TurnManager : Node
         // D-1 熔断查询：堆叠累计压入达上限后，TriggerRegistry 不再收集任何触发、EffectEngine 拒绝激活
         registry.IsCircuitBroken = () => _stackManager != null && _stackManager.IsCircuitBroken;
         EE.IsStackCircuitBroken = () => _stackManager != null && _stackManager.IsCircuitBroken;
+        // 【2026-09 修复·JC043】"**没有合法目标的效果不得加入触发排序窗口**"：
+        // 收集阶段即用**与实际取目标同一套候选枚举**（`GetValidTargetUidsForTrigger` /
+        // `PlayerTargetPool.Collect`）判定；空 ⇒ 不收集（于是排序窗里不会再出现"点了也没法选目标"的条目）。
+        registry.HasLegalTargetsForTrigger = HasLegalTargetsForTrigger;
+    }
+
+    /// <summary>
+    /// 【2026-09 修复·JC043】某触发效果此刻**是否有合法目标**（收集阶段门禁）：
+    ///  · 不需要选目标（`NeedsSelection=false` / `Kind=None` / 群体动作）→ 恒 `true`（照常收集）；
+    ///  · 玩家目标（K24）→ `PlayerTargetPool.Collect` 非空；
+    ///  · 地区目标（机动/目标地区）→ 存在"其他争夺区"（与 `GetValidTargetUidsForTrigger` 同源）；
+    ///  · 卡目标 → `GetValidTargetUidsForTrigger` 非空（含 K14 区域牌堆目标）。
+    /// 复用**同一套候选枚举**，不新增第二套规则；判定为空即"没得选" ⇒ 该触发不收集。
+    /// </summary>
+    private bool HasLegalTargetsForTrigger(CardInstance card, Script.Data.Effects.EffectData data,
+        TriggerContext ctx)
+    {
+        var spec = data?.Target;
+        if (spec == null || spec.Kind == TargetKind.None || !spec.NeedsSelection) return true;
+        if (PlayerTargetPool.IsPlayerSpec(spec))
+            return PlayerTargetPool.Collect(spec, card?.ControllerId ?? -1, _playerManager).Count > 0;
+
+        var probe = new Script.Data.Effects.StackEffectInstance
+        {
+            Source = card,
+            ControllerId = card?.ControllerId ?? 0,
+            EffectDataRef = data,
+            IsAreaTarget = spec.Kind == TargetKind.Area,
+            SourceAreaAtTrigger = ctx?.SourceAreaAtTrigger,
+        };
+        return GetValidTargetUidsForTrigger(probe).Count > 0;
     }
 
     /// <summary>
@@ -1203,7 +1238,13 @@ public partial class TurnManager : Node
                     if (c == null) continue;
                     int have = EE.GetMarkerCountOnCard(c, ability.CounterCost);
                     req.OptionUids.Add(c.UID);
-                    req.OptionMaxAmounts.Add(have);   // 逐卡分配模式：客户端据此显示"已选 X / 共 N"
+                    // 【2026-09 修复·JC044 联机】`OptionMaxAmounts` 是客户端区分**两种窗口模式**的**唯一信号**
+                    // （`ArenaOl.OpenOnlineActivationCostWindow`：`allocationMode = OptionMaxAmounts.Count > 0`）。
+                    // 原先**两种模式都填** ⇒ 固定数量代价（JC044「移除 1 个时间标志」）在客户端被误判成"逐卡分配"：
+                    // 窗口样式与单机不一致，且回包发的是 `SelectedUids/SelectedAmounts`（分配式），
+                    // 而服务端固定模式只读 `SelectedUid` ⇒ 收不到选择 → **无法发动**（用户实测）。
+                    // 故**只在"X 由玩家选择"的逐卡分配模式下**下发每张卡的现有标志数上限。
+                    if (byChoice) req.OptionMaxAmounts.Add(have);
                     req.OptionLabels.Add(byChoice
                         ? $"{c.PlayerTemplate?.CardName ?? c.UID}：移除 1 个（共 {have}）"
                         : $"从 {c.PlayerTemplate?.CardName ?? c.UID} 上移除 {ability.CounterCost.Amount} 个标志");
@@ -1732,7 +1773,7 @@ public partial class TurnManager : Node
                     return;
                 }
                 t.SelectedPlayerId = pRes.SelectedPlayerId;
-                PushTriggerToStack(t);
+                await EnsureOptionalPayThenPushAsync(t);
                 return;
             }
 
@@ -1747,8 +1788,10 @@ public partial class TurnManager : Node
             int controller = t.Source?.ControllerId ?? t.ControllerId;
             // 【K14】墓地/手牌目标：这些卡没有场上 CardUI，"场上点选"窗口点不到 →
             // 改用 `SelectZoneCard`（客户端走通用决策面板的按钮式选卡；候选随 OptionCardRefs 下发以便渲染卡名）。
+            // 【2026-09 修复·JC043②】附属/封印/秘社**有场上卡 UI**（`_cardUIMap` 里能命中、可高亮）
+            // ⇒ 走 `SelectTarget`（客户端 `OpenOnlineTargetSelectionWindow`：场上高亮 + 点击），不再走列表窗。
             var spec = t.EffectDataRef?.Target;
-            bool zonePile = TargetZonePool.IsZonePileSpec(spec);
+            bool zonePile = TargetZonePool.IsZonePileSpec(spec) && !TargetZonePool.IsFieldVisibleSpec(spec);
             var req = new Script.Net.ChoiceRequest
             {
                 PlayerId = controller,
@@ -1787,11 +1830,11 @@ public partial class TurnManager : Node
                 return;
             }
             t.SelectedTargetUid = result.SelectedUid;
-            PushTriggerToStack(t);
+            await EnsureOptionalPayThenPushAsync(t);
             return;
         }
 
-        PushTriggerToStack(t);
+        await EnsureOptionalPayThenPushAsync(t);
     }
 
     /// <summary>计算"需要选目标"触发的合法候选 UID（同步/异步选目标共用，单一真相源）。</summary>
@@ -1902,15 +1945,13 @@ public partial class TurnManager : Node
                     return;
                 }
                 t.SelectedPlayerId = picked;
-                PushTriggerToStack(t);
-                onPushed?.Invoke();
+                EnsureOptionalPayThenPush(t, onPushed);
             });
             return;
         }
         GD.Print($"[Trigger] {t.DisplayName} 需选目标玩家但无 UI → 取第一个候选（确定性兜底：玩家{candidates[0]}）");
         t.SelectedPlayerId = candidates[0];
-        PushTriggerToStack(t);
-        onPushed?.Invoke();
+        EnsureOptionalPayThenPush(t, onPushed);
     }
 
     /// <summary>确保触发已选定目标后压入堆叠。需目标且未选时，先通过 Arena 弹选目标窗口收集目标。</summary>
@@ -1937,8 +1978,11 @@ public partial class TurnManager : Node
 
             // 【K14】墓地/手牌目标：这些卡**没有场上的 CardUI**，"点选场上卡"的窗口点不到，
             // 故改走通用选卡窗（`IGameUIHooks.PromptPickCard`：按钮式列出候选卡名，任何区域的卡都能选）。
+            // 【2026-09 修复·JC043② 用户口径】**附属/封印/秘社有场上卡 UI**（渲染在宿主/秘社群旁）⇒
+            // 这几类不再走列表窗，改走"场上高亮 + 点击"（用户实测："选目标弹出了选择窗 UI，
+            // 应该是选择**场上的高亮卡**"）；只有墓地/手牌/资产区这类真正没有场上 UI 的才用列表窗。
             var spec = t.EffectDataRef?.Target;
-            if (TargetZonePool.IsZonePileSpec(spec))
+            if (TargetZonePool.IsZonePileSpec(spec) && !TargetZonePool.IsFieldVisibleSpec(spec))
             {
                 var hooks = EE?.UIHooks;
                 if (hooks != null)
@@ -1956,15 +2000,13 @@ public partial class TurnManager : Node
                         {
                             if (picked == null) { onPushed?.Invoke(); return; }   // 无选择 → 不结算（与"无合法目标"同结果）
                             t.SelectedTargetUid = picked.UID;
-                            PushTriggerToStack(t);
-                            onPushed?.Invoke();
+                            EnsureOptionalPayThenPush(t, onPushed);
                         });
                     return;
                 }
                 GD.Print($"[Trigger] {t.DisplayName} 区域牌堆目标（{spec.Kind}）但无 UI → 取第一个候选（确定性兜底）");
                 t.SelectedTargetUid = valid[0];
-                PushTriggerToStack(t);
-                onPushed?.Invoke();
+                EnsureOptionalPayThenPush(t, onPushed);
                 return;
             }
 
@@ -1977,8 +2019,7 @@ public partial class TurnManager : Node
                 _view.RequestTargetSelection(t, valid, (uid) =>
                 {
                     t.SelectedTargetUid = uid;
-                    PushTriggerToStack(t);
-                    onPushed?.Invoke();
+                    EnsureOptionalPayThenPush(t, onPushed);
                 });
                 return;
             }
@@ -1986,14 +2027,142 @@ public partial class TurnManager : Node
             // 无视图：确定性兜底取第一个候选
             GD.Print($"[Trigger] {t.DisplayName} 需选目标但无视图 → 取第一个候选（确定性兜底）");
             t.SelectedTargetUid = valid[0];
-            PushTriggerToStack(t);
-            onPushed?.Invoke();
+            EnsureOptionalPayThenPush(t, onPushed);
         }
         else
         {
-            PushTriggerToStack(t);
-            onPushed?.Invoke();
+            EnsureOptionalPayThenPush(t, onPushed);
         }
+    }
+
+    /// <summary>联机"是否支付 N"两按钮的哨兵候选 UID（`Kind.ForceChoice` 的 `OptionUids` ↔ 回包 `SelectedUid`）。</summary>
+    private const string OptionalPayYesUid = "__optpay_yes";
+    private const string OptionalPayNoUid = "__optpay_no";
+
+    /// <summary>
+    /// 【K11·触发版·2026-09 用户口径 JC061】触发**入堆叠前**的**可选固定费用**（`EffectData.OptionalPayCost`），
+    /// **单机**路径。语义：
+    ///  · 未声明（≤0）→ 直接入堆叠（既有行为完全不变）；
+    ///  · 已声明但**费用不足** → **不弹窗**，直接按"不支付"处理（该触发不入堆叠；绝不替玩家花钱）；
+    ///  · 有 UI → `IGameUIHooks.PromptOptionalPay`（**只有"支付N / 不支付"两个按钮**，不出现数值输入框）；
+    ///  · **无 UI（headless/测试/异常装配）→ 确定性兜底＝不支付**（与 K11 `PayOptional` 既有兜底同口径）。
+    ///
+    /// 位置纪律：本门禁**紧邻 `PushTriggerToStack`**（＝"**先选完目标、再问支付**"）：选目标阶段取消时
+    /// **不会白扣费**；这与"发动代价在入堆叠之前付清、不在堆叠里结算、不可被响应"的既有口径一致
+    /// （对比 `EffectData.SacrificeCost` / `CounterCost` / `CardCost`）。
+    /// </summary>
+    private void EnsureOptionalPayThenPush(Script.Data.Effects.StackEffectInstance t, System.Action onPushed)
+    {
+        int amount = t?.EffectDataRef?.OptionalPayCost ?? 0;
+        if (amount <= 0) { PushTriggerToStack(t); onPushed?.Invoke(); return; }
+
+        int payer = t.Source?.ControllerId ?? t.ControllerId;
+        if (!CanPayOptionalTriggerCost(payer, amount, t)) { onPushed?.Invoke(); return; }
+
+        var hooks = EE?.UIHooks;
+        if (hooks != null)
+        {
+            hooks.PromptOptionalPay(payer, $"{t.DisplayName}：是否支付 {amount}？", amount, pay =>
+            {
+                if (!pay)
+                {
+                    GD.Print($"[Trigger] 💰 {t.DisplayName} 选择不支付 {amount} → 该触发不入堆叠（整条效果不结算）");
+                    onPushed?.Invoke();
+                    return;
+                }
+                if (!SpendOptionalTriggerCost(payer, amount, t)) { onPushed?.Invoke(); return; }
+                PushTriggerToStack(t);
+                onPushed?.Invoke();
+            });
+            return;
+        }
+
+        GD.Print($"[Trigger] 💰 {t.DisplayName} 声明了可选费用 {amount} 但无 UI → 按『不支付』处理（不入堆叠）");
+        onPushed?.Invoke();
+    }
+
+    /// <summary>
+    /// （联机孪生）见 <see cref="EnsureOptionalPayThenPush"/>：经网关下发"**是否支付 N**"两按钮列表。
+    /// 复用 `ChoiceRequest.Kind.ForceChoice`（`BuildOptions`：每个候选一个按钮，且**对 ForceChoice 不追加
+    /// "取消"按钮** ⇒ 严格只有两个选项；放弃整条效果由更上层的**触发排序窗**负责，不做第三个按钮）。
+    /// 回包非哨兵/取消/超时/异常 → 一律按"**不支付**"处理（fail-closed，绝不替玩家花钱）。
+    /// </summary>
+    private async System.Threading.Tasks.Task EnsureOptionalPayThenPushAsync(Script.Data.Effects.StackEffectInstance t)
+    {
+        int amount = t?.EffectDataRef?.OptionalPayCost ?? 0;
+        if (amount <= 0) { PushTriggerToStack(t); return; }
+
+        int payer = t.Source?.ControllerId ?? t.ControllerId;
+        if (!CanPayOptionalTriggerCost(payer, amount, t)) return;
+        if (InputGateway == null)
+        {
+            GD.Print($"[Trigger] 💰 {t.DisplayName} 声明了可选费用 {amount} 但无网关 → 按『不支付』处理（不入堆叠）");
+            return;
+        }
+
+        bool pay = false;
+        try
+        {
+            var req = new Script.Net.ChoiceRequest
+            {
+                PlayerId = payer,
+                RequestKind = Script.Net.ChoiceRequest.Kind.ForceChoice,
+                SourceUid = t.Source?.UID,
+                Prompt = $"{t.DisplayName}：是否支付 {amount}？",
+                ForceChoice = true,   // ForceChoice 面板不提供"取消"按钮 ⇒ 严格只有两个选项
+            };
+            req.OptionUids.Add(OptionalPayYesUid);
+            req.OptionLabels.Add($"支付 {amount}");
+            req.OptionUids.Add(OptionalPayNoUid);
+            req.OptionLabels.Add("不支付");
+            var res = await InputGateway.RequestChoice(payer, req);
+            if (res != null && !res.Cancelled
+                && res.SelectedUid != OptionalPayYesUid && res.SelectedUid != OptionalPayNoUid)
+            {
+                // 【A49·权威复检】回包必须是本次下发的候选项之一
+                GD.PrintErr($"[Trigger] ⛔ {t.DisplayName} 可选费用回包 {res.SelectedUid} 不在本次候选中 → 按『不支付』处理（fail-closed）");
+                pay = false;
+            }
+            else
+            {
+                pay = res != null && !res.Cancelled && res.SelectedUid == OptionalPayYesUid;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            GD.PrintErr($"[Trigger] ⚠ {t.DisplayName} 可选费用询问异常：{ex.GetType().Name}: {ex.Message} → 按『不支付』处理");
+            pay = false;
+        }
+
+        if (!pay)
+        {
+            GD.Print($"[Trigger] 💰 {t.DisplayName} 选择不支付 {amount} → 该触发不入堆叠（整条效果不结算）");
+            return;
+        }
+        if (!SpendOptionalTriggerCost(payer, amount, t)) return;
+        PushTriggerToStack(t);
+    }
+
+    /// <summary>
+    /// 可选触发费用：玩家**当前付得起**吗？付不起 ⇒ 打日志并返回 false
+    /// （调用方**不弹窗**、直接按"不支付"处理——2026-09 用户口径：付不起就不问）。
+    /// </summary>
+    private bool CanPayOptionalTriggerCost(int payer, int amount, Script.Data.Effects.StackEffectInstance t)
+    {
+        int avail = GetAvailableMana(payer);
+        if (avail >= amount) return true;
+        GD.Print($"[Trigger] 💰 {t?.DisplayName} 声明可选费用 {amount}，但玩家{payer} 当前可用 {avail} "
+                 + "→ 不弹窗，按『不支付』处理（该触发不入堆叠）");
+        return false;
+    }
+
+    /// <summary>扣可选触发费用（`PlayerManager.SpendMana`：临时费用优先，再横置资产区牌）。</summary>
+    private bool SpendOptionalTriggerCost(int payer, int amount, Script.Data.Effects.StackEffectInstance t)
+    {
+        if (_playerManager == null) return true;   // 无玩家管理器（纯逻辑测试）→ 费用账本不在场
+        if (_playerManager.SpendMana(payer, amount)) return true;
+        GD.PrintErr($"[Trigger] ⛔ {t?.DisplayName} 可选费用 {amount} 扣除失败（玩家{payer} 费用不足）→ 该触发不入堆叠");
+        return false;
     }
 
     /// <summary>将单个触发效果作为 Trigger 类堆叠条目压入堆叠。</summary>
@@ -2035,11 +2204,12 @@ public partial class TurnManager : Node
                 entry.SourceCardUid = t.Source.UID;
             // 结算前校验来源卡版本号未变（RequireSourceVersionUnchanged）：入栈时记录来源卡 VersionId，
             // 结算时比对，来源卡离场/翻面/进手牌/进墓地等触发 BumpVersion 则跳过结算。
+            // 【2026-09·JC052】**无条件记录**来源版本号（原先只在 `RequireSourceVersionUnchanged` 时才记）：
+            // 群体集合的"版本号不同的**自己**"判定（`TargetSpec.VersionSkipsSelf`）同样需要它——
+            // 否则 `entry.SourceVersionId` 恒为 -1，集合只好保守排除自身 ⇒ 老触发永远消灭不掉翻面后的自己。
+            if (t.Source != null) entry.SourceVersionId = t.Source.VersionId;
             if (t.EffectDataRef.RequireSourceVersionUnchanged && t.Source != null)
-            {
-                entry.SourceVersionId = t.Source.VersionId;
                 GD.Print($"[Trigger] 入栈: {t.EffectDataRef.EffectId} 记录来源版本号={entry.SourceVersionId}（来源={t.Source.PlayerTemplate?.CardName}）");
-            }
             GD.Print($"[Trigger] 入栈(新系统 EffectData): {t.EffectDataRef.EffectId}, 来源={t.Source?.PlayerTemplate?.CardName}");
         }
 
@@ -2159,7 +2329,16 @@ public partial class TurnManager : Node
             int srcCtrl0 = source.ControllerId;
             string srcArea0 = !string.IsNullOrEmpty(sourceAreaOverride) ? sourceAreaOverride : (source.ZoneDetailId ?? "");
             result = TargetZonePool.CollectUids(spec, srcCtrl0, _zoneManager, _cardManager.PlayerManagerRef, srcArea0);
-            GD.Print($"[取目标] K14 非争夺区目标（{spec.Kind}/{spec.KindAlt}）：来源控制者=P{srcCtrl0} → 候选 {result.Count} 张");
+            // 【2026-09 修复·JC055】**混合声明**的坑：卡文"在目标**角色或附属**上放置一个时间标志"
+            // （`Kind=Character` + `KindAlt=Attachment`）。`TargetZonePool` 只覆盖**非争夺区**
+            // （附属/秘社/封印/墓地/手牌/资产），**争夺区角色它不枚举** ⇒ 整条 spec 走本分支时
+            // "角色"那一半**永远取不到**（用户实测："JC055 只能给附属放置标记，需要能给角色放置标记"）。
+            // 故把 spec 里声明的**争夺区大类**（角色/暗藏者）另行并入（与主分支同一口径）。
+            int beforeCount = result.Count;
+            foreach (var areaKind in AreaKindsOf(spec))
+                AppendAreaZoneCandidates(spec, areaKind, source, srcArea0, allAreasIfNotLocal, result);
+            GD.Print($"[取目标] K14 非争夺区目标（{spec.Kind}/{spec.KindAlt}）：来源控制者=P{srcCtrl0} → " +
+                     $"非争夺区候选 {beforeCount} 张，并入争夺区候选后共 {result.Count} 张");
             return result;
         }
         // 2) 收集争夺区 UID：
@@ -2194,7 +2373,7 @@ public partial class TurnManager : Node
                 if (inst == source && !canTargetSelf) continue;
                 // 【触发语义】"正在死亡"的卡已不再是合法目标（死亡触发窗口在它离场前打开，它仍在区内）
                 if (inst.IsDying) continue;
-                if (CardManager.MapInstanceToTargetKind(inst) == kind) result.Add(inst.UID);
+                if (MatchesAreaKind(inst, spec, kind)) result.Add(inst.UID);
             }
         }
         return result;
@@ -2529,8 +2708,13 @@ public partial class TurnManager : Node
             {
                 var card = entry.SourceCard ?? (_cardManager?.GetInstance(entry.SourceCardUid));
                 if (card == null) return;
-                GD.Print($"[Resolve] 事务卡 {card.PlayerTemplate?.CardName} 结算 → 置入墓地");
-                _cardManager?.MoveCardToGraveyard(card);
+                // 【2026-09 用户口径】事务卡已在**入堆叠时**置入弃牌堆 ⇒ 此处只在尚未入墓时补一次（幂等，
+                // 避免重复移动/重复广播"弃置"）。兼容旧路径（如直接构造 StackEntry 的测试/兜底分支）。
+                if (card.CurrentZone != CardZone.Graveyard)
+                {
+                    GD.Print($"[Resolve] 事务卡 {card.PlayerTemplate?.CardName} 结算 → 置入墓地（补：入堆叠时未移动）");
+                    _cardManager?.MoveCardToGraveyard(card);
+                }
                 // 新效果系统桥接（P0）：执行事务卡 F 组 EffectData（打出即结算）
                 // 【K2】把"打出时选定的目标地区"一并透传：群体动作（MassMode.AllInArea）据此确定作用地区
                 // 【K15】把"逐槽选定的卡目标（有序）"一并透传：多目标效果据此逐目标执行动作
@@ -2684,7 +2868,7 @@ public partial class TurnManager : Node
                     EE.TriggerContextCard = string.IsNullOrEmpty(entry.StackEffect?.TargetCardUid)
                         ? null
                         : _cardManager?.GetInstance(entry.StackEffect.TargetCardUid);
-                    EE.ResolveEffect(entry.EffectDataEffect, src, tgt, entry.TargetAreaId ?? "", entry.WinnerId, entry.TargetVersionId, entry.EventAmount, null, entry.ModeIndex, entry.TargetPlayerId);
+                    EE.ResolveEffect(entry.EffectDataEffect, src, tgt, entry.TargetAreaId ?? "", entry.WinnerId, entry.TargetVersionId, entry.EventAmount, null, entry.ModeIndex, entry.TargetPlayerId, entry.SourceVersionId);
                     break;
                 }
 
@@ -2763,6 +2947,19 @@ public partial class TurnManager : Node
         for (int i = 0; i < effect.TargetSlots.Count; i++) choices.Add(TargetChoice.Empty);
         string contextId = $"mt_{playerId}_{TurnCount}_{++_multiTargetContextSeq}";
 
+        // 【2026-09 用户口径 JC062/JC021】**"一个窗多选"形状**（`ClassifyShape == FieldMultiPick`：
+        // 全槽＝地区槽或"场上看得见的卡槽"，且至少一个卡槽）⇒ 服务端**一次性聚合下发全部候选**
+        // （`Kind.FieldMultiPick`），客户端用与单机 `Arena.TryPromptFieldMultiPick` **同款**的
+        // "一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"回答；该请求的**确认就是最终确认**
+        // ⇒ 不再另发逐槽请求、也不再另发确认面板（用户口径："JC062 只需要一个提示框"）。
+        // 其余形状（含区域牌堆槽，如 JC092/JC133 的墓地角色牌）仍走下面的逐槽 + 确认面板流程。
+        {
+            var plan = MultiTargetSlots.FieldPickPlan.Build(effect, instance, playerId, _zoneManager,
+                _cardManager, _playerManager, _areaManager);
+            if (plan != null)
+                return await PlayFieldMultiPickAsync(playerId, instance, effect, plan, contextId);
+        }
+
         EnterAtomic();
         try
         {
@@ -2782,6 +2979,9 @@ public partial class TurnManager : Node
                     Prompt = $"请选择{cand.Label}（第 {i + 1}/{effect.TargetSlots.Count} 个目标槽）",
                     ForceChoice = !cand.Optional,   // 必选槽：客户端不提供"留空"（但仍可整次取消）
                     OrderContextId = contextId,
+                    // 【2026-09·A86】"该槽候选在场上看得见"由服务端用**同一份判定**算好下发：
+                    // 场上看得见 ⇒ 客户端走"高亮 + 点击"（与单机同款），否则退回候选按钮列表。
+                    SlotFieldVisible = MultiTargetSlots.ShouldPickOnField(cand),
                     OptionUids = cand.IsArea ? cand.AreaUids : UidList(cand.Cards),
                     OptionLabels = cand.IsArea ? AreaLabels(cand.AreaUids) : CardLabels(cand.Cards),
                 };
@@ -2858,6 +3058,82 @@ public partial class TurnManager : Node
 
     /// <summary>【K15】多目标选择上下文序号（客户端据此复用同一面板）。</summary>
     private int _multiTargetContextSeq;
+
+    /// <summary>
+    /// 【2026-09 用户口径 JC062/JC021·联机】**"一个窗多选"**（`ChoiceRequest.Kind.FieldMultiPick`）：
+    /// 一次性下发各组候选与上限/下限（`MultiTargetSlots.FieldPickPlan`，与单机**同一份**计划），
+    /// 等玩家回包"已选卡 + 已选地区"，再由**同一份**计划折算成逐槽 `TargetChoice`，
+    /// 经 `MultiTargetSlots.Validate` 权威复检后入堆叠。
+    ///  · 回包 `Cancelled=true`/超时 → 整次打出失败（不扣费、卡留手牌）；
+    ///  · 该请求的"确认"＝最终确认（不再发 `ConfirmTargets`）；
+    ///  · 期间持原子锁（与单机模态窗口语义一致）。
+    /// </summary>
+    private async System.Threading.Tasks.Task<bool> PlayFieldMultiPickAsync(int playerId, CardInstance instance,
+        EffectData effect, MultiTargetSlots.FieldPickPlan plan, string contextId)
+    {
+        var emptyCards = new System.Collections.Generic.List<string>();
+        var emptyAreas = new System.Collections.Generic.List<string>();
+        var cardUids = plan.OpenCardCandidates(emptyCards, emptyAreas);
+        var areaUids = plan.OpenAreaCandidates(emptyCards, emptyAreas);
+
+        var req = new Script.Net.ChoiceRequest
+        {
+            PlayerId = playerId,
+            RequestKind = Script.Net.ChoiceRequest.Kind.FieldMultiPick,
+            SourceUid = instance?.UID,
+            Prompt = plan.Title(emptyCards, emptyAreas),
+            ForceChoice = true,          // 只能"确认/取消"（没有"留空退出"入口；JC062 允许 0 张 ⇒ 直接确认）
+            OrderContextId = contextId,
+            MultiCardLabel = plan.CardLabel,
+            MultiAreaLabel = plan.AreaLabel,
+            MultiMaxCards = plan.MaxCards,
+            MultiMaxAreas = plan.MaxAreas,
+            MultiMinCards = plan.MinCards,
+            MultiAreaRequired = plan.AreaRequired,
+            MultiSameControllerOnce = plan.SameControllerOnce,
+            OptionUids = cardUids,
+            OptionAreaUids = areaUids,
+        };
+        foreach (var uid in cardUids)
+        {
+            var c = _cardManager?.GetInstance(uid);
+            if (c == null) continue;
+            req.OptionLabels.Add(c.PlayerTemplate?.CardName ?? uid);
+            req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+        }
+        GD.Print($"[K15 多目标·联机] 【一个窗多选】{instance?.PlayerTemplate?.CardName}：卡候选 {cardUids.Count}、" +
+                 $"地区候选 {areaUids.Count}（至多卡 {plan.MaxCards}/至少 {plan.MinCards}、地区 {(plan.AreaRequired ? "必选" : "无")}）");
+
+        System.Collections.Generic.List<TargetChoice> choices = null;
+        EnterAtomic();
+        try
+        {
+            var res = await InputGateway.RequestChoice(playerId, req);
+            if (res == null || res.Cancelled)
+            {
+                GD.Print($"[K15 多目标·联机] 玩家{playerId} 取消/超时（一个窗多选）→ 不打出 {instance?.PlayerTemplate?.CardName}");
+                return false;
+            }
+            choices = plan.MapPicks(res.SelectedUids, res.SelectedAreaUids);
+            string bad = MultiTargetSlots.Validate(effect, choices, playerId, _zoneManager, _cardManager,
+                _playerManager, instance, _areaManager);
+            if (bad != null)
+            {
+                GD.Print($"[K15 多目标·联机] 一个窗多选组合不合法：{bad} → 整次打出中止");
+                return false;
+            }
+        }
+        finally
+        {
+            // 与逐槽流程同款：选目标期间持原子锁，但**必须在 `PlayCard` 之前释放**（PlayCard 自己会 EnterAtomic）。
+            ExitAtomicWhenIdle();
+        }
+
+        bool ok = PlayCard(playerId, instance.UID, null, null, choices);
+        GD.Print($"[K15 多目标·联机] 一个窗多选确认 → PlayCard={ok}（{MultiTargetSlots.Describe(effect, choices, _cardManager)}）");
+        OnAsyncSettlementCompleted?.Invoke();
+        return ok;
+    }
 
     /// <summary>
     /// 【K10·额外费用·联机】服务端驱动的"带额外费用选择"的打出流程（用户口径 **A23/A33**）：
@@ -3029,10 +3305,53 @@ public partial class TurnManager : Node
         => new System.Collections.Generic.List<string> { MultiTargetSlots.Describe(data, choices, _cardManager) };
 
     /// <summary>
+    /// 【2026-09 用户口径·声望】**广播"一次势力对抗结束"触发点**（声望的触发时机）：
+    /// **每次**势力对抗结算完毕都会调用（含平局/败方；JC067「本地区额外进行一次势力对抗」
+    /// 追加的那一次也各触发一次）⇒ 用户口径："还是改成**每个势力对抗后都触发声望**"。
+    /// 同一势力对抗内"多个声望角色都触发也只加 1 个势力标志"由 `TriggerEmitPoints.PowerCombatEnded`
+    /// 开头的 `ResetCombatWonDedup` + `PlaceToken` 的"声望"维度去重负责（与威名同款）。
+    /// 独立成方法：让"触发点"成为 Controller 的显式 API（结算路径与测试走同一入口）。
+    /// </summary>
+    public void EmitPowerCombatEnded(string areaUid)
+    {
+        if (string.IsNullOrEmpty(areaUid)) return;
+        _triggerEmitPoints?.PowerCombatEnded(areaUid);
+    }
+
+    /// <summary>仅在"势力对抗"类型时广播声望触发点（其它对抗类型与声望无关）。</summary>
+    private void EmitPowerCombatEndedIfPower(CombatManager.CombatType type, string areaUid)
+    {
+        if (type != CombatManager.CombatType.Power) return;
+        EmitPowerCombatEnded(areaUid);
+    }
+
+    /// <summary>
+    /// 【2026-09 用户口径 JC063】各模式**当前是否有合法目标**（与真正取目标时**同一份**枚举实现
+    /// `GetTargetUidsForSpec`）：用户口径"JC063 两个效果如果场上完全没有合法目标，置灰
+    /// （注意两个效果要求的合法目标不一致）"。
+    /// 返回与 `modeEffect.Modes` 同序的布尔表（true ＝ 可用）；无目标的模式恒可用。
+    /// </summary>
+    public System.Collections.Generic.List<bool> GetModeAvailability(EffectData modeEffect, CardInstance instance)
+    {
+        var list = new System.Collections.Generic.List<bool>();
+        if (modeEffect?.Modes == null) return list;
+        for (int i = 0; i < modeEffect.Modes.Count; i++)
+        {
+            var spec = modeEffect.ModeAt(i)?.Target;
+            bool needTarget = spec != null && spec.Kind != TargetKind.None && spec.NeedsSelection;
+            if (!needTarget) { list.Add(true); continue; }
+            list.Add(GetTargetUidsForSpec(spec, instance, null, allAreasIfNotLocal: true).Count > 0);
+        }
+        return list;
+    }
+
+    /// <summary>
     /// 【K16·模式分支·单机】"选择一项"类卡牌的打出入口：**先让玩家选定模式（付费之前）** → 选该模式的目标
     /// → 再走入 `PlayCard(..., modeIndex)`。
     /// 口径（用户 2026-09，与 JC063 的 FAQ 一致）：模式在**打出并付费时**选定，入堆叠后**不可更改**。
     /// 无 UI（测试/headless）时确定性兜底：不选模式直接尝试打出 → 会被 `PlayCard` 的模式校验拒绝（绝不静默代选）。
+    /// 【2026-09】各模式"有无合法目标"随窗下发（`GetModeAvailability` ⇒ `PromptEffectModeWithAvailability`），
+    /// 供 View 把"完全没有合法目标"的选项**置灰**（用户实测 JC063 口径）。
     /// </summary>
     public void BeginModeCardPlay(int playerId, string cardUid)
     {
@@ -3051,7 +3370,8 @@ public partial class TurnManager : Node
             PlayCard(playerId, cardUid);
             return;
         }
-        hooks.PromptEffectMode(instance, effect, chosenIndex =>
+        var availability = GetModeAvailability(effect, instance);
+        hooks.PromptEffectModeWithAvailability(instance, effect, availability, chosenIndex =>
         {
             if (chosenIndex < 0 || chosenIndex >= effect.Modes.Count)
             {
@@ -3131,6 +3451,12 @@ public partial class TurnManager : Node
             };
             for (int i = 0; i < effect.Modes.Count; i++)
                 modeReq.OptionLabels.Add(effect.ModeAt(i)?.Label ?? $"选项{i + 1}");
+            // 【2026-09 用户口径 JC063】各模式可用性随请求下发（"场上完全没有合法目标"的模式客户端置灰）；
+            // 与真正取目标**同一份枚举**（`GetModeAvailability`）。服务端仍会复检（选中无目标模式 → 不打出）。
+            modeReq.OptionDisabled = GetModeAvailability(effect, instance);
+            for (int i = 0; i < modeReq.OptionDisabled.Count; i++)
+                if (!modeReq.OptionDisabled[i])
+                    modeReq.OptionLabels[i] = modeReq.OptionLabels[i] + "（场上没有合法目标）";
             var mres = await InputGateway.RequestChoice(playerId, modeReq);
             if (mres == null || mres.Cancelled)
             {
@@ -3154,7 +3480,8 @@ public partial class TurnManager : Node
                     GD.Print($"[K16 模式·联机] 模式 {chosen + 1} 无合法目标 → 不打出");
                     return false;
                 }
-                bool zonePile = TargetZonePool.IsZonePileSpec(spec);
+                // 【2026-09 修复·JC043②】同触发路径：附属/封印/秘社有场上卡 UI ⇒ 用 `SelectTarget`（场上高亮）。
+                bool zonePile = TargetZonePool.IsZonePileSpec(spec) && !TargetZonePool.IsFieldVisibleSpec(spec);
                 var treq = new Script.Net.ChoiceRequest
                 {
                     PlayerId = playerId,
@@ -3770,6 +4097,17 @@ public partial class TurnManager : Node
             CaptureTargetSnapshot(entry);
 
             _stackManager.Push(entry);
+
+            // 【2026-09 用户口径 JC062/JC063】事务卡**进入堆叠时**就置入弃牌堆（不再等到结算）：
+            // 用户实测："JC063/JC062 打出后效果加入堆叠就应该置入弃牌堆，现在打出后结算前还在手牌，
+            // **可以再次打出**"。原先"入墓"发生在结算分支（`ResolveKind.EventToGraveyard`），
+            // 从入堆叠到结算之间事务卡仍留在手牌 ⇒ 界面上还能再拖一次（联机尤其明显：快照仍把它画在手牌里）。
+            // 修法＝入堆叠后立即 `MoveCardToGraveyard`；结算分支对"已在墓地"的卡不再重复移动（幂等）。
+            if (entry.Kind == ResolveKind.EventToGraveyard && instance.CurrentZone != CardZone.Graveyard)
+            {
+                _cardManager?.MoveCardToGraveyard(instance);
+                GD.Print($"[TurnManager] 事务 {tmpl.CardName} 入堆叠 → 立即置入弃牌堆（不再留手牌，防重复打出）");
+            }
         }
         else
         {
@@ -4650,6 +4988,10 @@ public partial class TurnManager : Node
                         break;
                     }
                 }
+                // 【2026-09 用户口径·声望（第二轮）】此处**不再**广播声望：用户口径最终为
+                // "**每个势力对抗后都触发声望**"（同一次势力对抗内多个声望角色也只加 1 个标志），
+                // 故广播点移到"每次势力对抗结算完毕"（`ResolveCurrentAreaCombat` 收尾 / 异步路径），
+                // JC067 追加的那一次势力对抗会**再触发一次**。
                 _combatAreaIndex++;
                 if (_combatAreaIndex < _combatAreaUids.Count)
                 {
@@ -4984,8 +5326,13 @@ public partial class TurnManager : Node
             return;
         }
 
-        _combatManager.ResolveAreaCombat(type, areaUid, areaNo,
-            () => GrantPriorityAfterCombatStep(stepName, areaNo));
+        _combatManager.ResolveAreaCombat(type, areaUid, areaNo, () =>
+        {
+            // 【2026-09 用户口径·声望】每次势力对抗结算完毕 → 广播声望触发点
+            // （触发效果：走正常收集 → 入堆叠 → 排序/放弃窗口 → `PlaceToken{势力标志,1,声望}`）
+            EmitPowerCombatEndedIfPower(type, areaUid);
+            GrantPriorityAfterCombatStep(stepName, areaNo);
+        });
     }
 
     /// <summary>联机服务端对抗异步结算：await 网关回收决策后，再走统一的让过收尾。</summary>
@@ -5006,6 +5353,8 @@ public partial class TurnManager : Node
         {
             ExitAtomicWhenIdle();
         }
+        // 【2026-09 用户口径·声望】联机异步路径：每次势力对抗结算完毕 → 广播声望触发点（与单机同源）
+        EmitPowerCombatEndedIfPower(type, areaUid);
         GrantPriorityAfterCombatStep(stepName, areaNo);
         OnAsyncSettlementCompleted?.Invoke();
     }
@@ -5308,5 +5657,73 @@ public partial class TurnManager : Node
         FirstPlayerId = snap.FirstPlayerId;
         PriorityPlayerId = snap.PriorityPlayerId;
         _projectedCombatAreaNo = snap.CombatAreaNo;   // 对抗地区序号（联机显示"1地区调查步骤"用）
+    }
+
+    /// <summary>
+    /// 【2026-09 修复·JC066】争夺区实例是否命中某"争夺区大类"候选：映射大类相等，**或** `IncludeCovert`
+    /// 放宽（`Kind=Character` 同时接受暗藏者）。
+    ///
+    /// 为什么需要这一条：`IncludeCovert`（卡文"目标角色**或暗藏者**"）此前只在**三处**实现
+    /// （`TargetZonePool` / `MassTargetPool` / `EffectEngine.IsLegalActivateTarget`），
+    /// 而**触发取目标的主枚举**（`GetTargetUidsForSpec` / `AppendAreaZoneCandidates`）漏了它
+    /// ⇒ JC066 进场触发"角色或暗藏者"只能枚举到**正面角色**，暗藏者既不高亮也点不到，
+    /// 且"无合法目标"门禁还会把整条触发直接过滤掉（用户实测："JC066 现在不能以暗藏者为目标"）。
+    /// 本方法把这条放宽**单一化**，两处枚举共用，避免再次分叉。
+    /// </summary>
+    private static bool MatchesAreaKind(CardInstance inst, TargetSpec spec, TargetKind kind)
+    {
+        var instKind = CardManager.MapInstanceToTargetKind(inst);
+        if (instKind == kind) return true;
+        return spec != null && spec.IncludeCovert
+               && kind == TargetKind.Character && instKind == TargetKind.Covert;
+    }
+
+    /// <summary>
+    /// 【2026-09·JC055】spec（含 `KindAlt` 与复合 `SpecAlt`）里声明的**争夺区大类**（角色/暗藏者）。
+    /// 用于"混合声明"（角色 **或** 附属）时把争夺区那一半也并入候选池——见 `GetTargetUidsForSpec`。
+    /// </summary>
+    private static List<TargetKind> AreaKindsOf(TargetSpec spec)
+    {
+        var kinds = new List<TargetKind>();
+        void Collect(TargetSpec s)
+        {
+            if (s == null) return;
+            if ((s.Kind == TargetKind.Character || s.Kind == TargetKind.Covert) && !kinds.Contains(s.Kind))
+                kinds.Add(s.Kind);
+            if ((s.KindAlt == TargetKind.Character || s.KindAlt == TargetKind.Covert) && !kinds.Contains(s.KindAlt))
+                kinds.Add(s.KindAlt);
+            Collect(s.SpecAlt);
+        }
+        Collect(spec);
+        return kinds;
+    }
+
+    /// <summary>【2026-09·JC055】按某"争夺区大类"枚举候选（与主分支同口径：来源 SLOT 内争夺区、
+    /// 按大类映射过滤、`CanTargetSelf=false` 时排除来源自身、正在死亡者排除、去重）。</summary>
+    private void AppendAreaZoneCandidates(TargetSpec spec, TargetKind kind, CardInstance source, string sourceArea,
+        bool allAreasIfNotLocal, List<string> result)
+    {
+        if (source == null || _cardManager == null || result == null) return;
+        bool canTargetSelf = spec?.CanTargetSelf ?? false;
+        bool allAreas = (spec?.AllAreas ?? false) || (allAreasIfNotLocal && !(spec?.IsLocalZone ?? false));
+        var areaUids = new List<string>();
+        if (_zoneManager != null && _areaManager != null)
+        {
+            foreach (var uid in _zoneManager.GetAllAreaSlotUids())
+                if (allAreas || _areaManager.GetSlotIndex(uid) == _areaManager.GetSlotIndex(sourceArea))
+                    areaUids.Add(uid);
+        }
+        else if (!string.IsNullOrEmpty(sourceArea))
+        {
+            areaUids.Add(sourceArea);
+        }
+        foreach (var uid in areaUids)
+            foreach (var inst in _cardManager.GetAreaInstancesBySlot(uid))
+            {
+                if (inst == null || inst.IsDying) continue;
+                if (inst == source && !canTargetSelf) continue;
+                if (!MatchesAreaKind(inst, spec, kind)) continue;
+                if (!result.Contains(inst.UID)) result.Add(inst.UID);
+            }
     }
 }

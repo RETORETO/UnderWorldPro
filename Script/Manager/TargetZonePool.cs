@@ -34,10 +34,24 @@ namespace Script.Manager
             || kind == TargetKind.Attachment || kind == TargetKind.Council || kind == TargetKind.Seal;
 
         /// <summary>该 TargetSpec 是否按"非争夺区目标"处理（`Kind` 或 `KindAlt` 任一命中即可；
-        /// 【P3·复合目标限制】`SpecAlt` 那条命中也算）。</summary>
+        /// 【P3】复合目标限制 `SpecAlt` 那条命中也算）。</summary>
         public static bool IsZonePileSpec(TargetSpec spec)
             => spec != null && (IsZonePileKind(spec.Kind) || IsZonePileKind(spec.KindAlt)
                                 || (spec.SpecAlt != null && IsZonePileSpec(spec.SpecAlt)));
+
+        /// <summary>
+        /// 【2026-09·JC043② 用户口径】该目标大类虽然"不在争夺区"，但**有场上的卡 UI 可以直接点**：
+        /// 附属/封印（渲染在宿主卡旁）、秘社（渲染在秘社群）。
+        /// 这些目标**不再**走"按钮列表选卡窗"，而走**场上高亮 + 点击**（与争夺区角色同一交互）；
+        /// 只有真正"没有场上 UI"的（墓地/手牌/牌库/资产区等）才用列表窗。
+        /// </summary>
+        public static bool IsFieldVisibleKind(TargetKind kind)
+            => kind == TargetKind.Attachment || kind == TargetKind.Seal || kind == TargetKind.Council;
+
+        /// <summary>该 TargetSpec 是否涉及"场上可点目标"（`Kind`/`KindAlt`/`SpecAlt` 任一命中）。</summary>
+        public static bool IsFieldVisibleSpec(TargetSpec spec)
+            => spec != null && (IsFieldVisibleKind(spec.Kind) || IsFieldVisibleKind(spec.KindAlt)
+                                || (spec.SpecAlt != null && IsFieldVisibleSpec(spec.SpecAlt)));
 
         private static CardZone? ZoneOf(TargetKind kind)
             => kind == TargetKind.Graveyard ? CardZone.Graveyard

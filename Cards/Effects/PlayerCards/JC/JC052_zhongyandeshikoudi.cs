@@ -39,12 +39,19 @@ namespace Cards.Effects.PlayerCards.JC
                     MassMode = MassMode.AllInArea, // 【K2】本地区所有符合条件的卡
                     CanTargetSelf = false,         // 卡文"**其他**角色和暗藏者" → 排除自身
                     NeedsSelection = false,        // 群体动作不选单目标
+                    // 【2026-09 修复·用户口径】"…其他角色和暗藏者"里的"其他"＝**与收集该触发时同一张卡**：
+                    // 若来源卡在此期间**版本号已变**（如进场触发 A 收集后本卡翻面/重新现身），
+                    // 现存的这张"自己"对老触发而言已不是同一张卡 ⇒ **应当被消灭**。
+                    // （用户举例：JC052 进场 → 进场A 收集 → 翻面 → 重新现身 → 进场B；进场A 结算时应消灭 JC052。）
+                    VersionSkipsSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {
                     new EffectAction { Verb = ActionVerb.Destroy },
                 },
-                Forced = true,
+                // 【2026-09 修复·用户口径】卡文没有"你可以"⇒ **非强制**（用户实测："进场触发写成强制触发了"）。
+                // 注意：`Forced` 只影响"是否可在触发排序窗放弃"，与"消灭范围"无关（范围见 `Target.VersionSkipsSelf`）。
+                Forced = false,
                 Duration = "瞬时",
                 FaqNote = "进场时消灭本地区除自身外的所有角色与暗藏者（群体动作一次结算完成）。",
             });

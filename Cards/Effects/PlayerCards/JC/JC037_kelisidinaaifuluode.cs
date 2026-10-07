@@ -38,7 +38,12 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousEffect = "你每操控一个暗藏者，克里斯蒂娜·爱弗罗德就获得一个［黑眼］",
                 ContinuousGrants = new Array<EffectGrant>
                 {
+                    // 【2026-09 修复·A65】"获得一个［黑眼］"＝**数值**（黑眼=调查）：两条通道都要写——
+                    // `Icon` 只管"图标存在性/展示"，**数值**必须走 `Attribute:调查`。
+                    // 实测：此前只写 `Icon` ⇒ 每有一个暗藏者仍 `GetAttribute("调查")==0`（用户："没有增加黑眼数量"）。
+                    // 缩放由 `GetPrereqScale` 施加（`Amount × N`），故 N 个暗藏者 ⇒ +N 调查。
                     new EffectGrant { Kind = "Icon", Value = "黑眼", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "调查", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Duration = "常驻",

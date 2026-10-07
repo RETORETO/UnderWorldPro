@@ -74,6 +74,40 @@ namespace Script.Tests
             public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> pushed) { }
         }
 
+        /// <summary>触发视图：记录"触发取目标"的**真实候选集合**，并选第一个（用于断言候选范围）。</summary>
+        private sealed class 记录目标候选视图 : Script.Interfaces.ITriggerView
+        {
+            public readonly System.Collections.Generic.List<string> 候选 = new System.Collections.Generic.List<string>();
+            public string 选中;
+
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                System.Collections.Generic.List<StackEffectInstance> triggers,
+                System.Action<System.Collections.Generic.List<StackEffectInstance>> onEnterStack,
+                System.Action onDone)
+            {
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+
+            public void RequestTargetSelection(StackEffectInstance trigger,
+                System.Collections.Generic.List<string> validTargetUids, System.Action<string> onPicked)
+            {
+                候选.Clear();
+                if (validTargetUids != null) 候选.AddRange(validTargetUids);
+                选中 = 候选.Count > 0 ? 候选[0] : null;
+                onPicked?.Invoke(选中);
+            }
+
+            public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> pushed) { }
+        }
+
+        /// <summary>连续让过直到堆叠清空（触发结算收尾）。</summary>
+        private static void ResolveStackOnce(GameInitializer game)
+        {
+            for (int i = 0; i < 6 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+        }
+
         private static string FirstArea(GameInitializer game) => game.AreaManager.GetOrderedAreaUids()[0];
 
         private static PlayerCardData Probe(string uid, int cost = 1, string subCategory = null,
@@ -278,6 +312,40 @@ namespace Script.Tests
             var e = Find(serena.PlayerTemplate, "JC066_1_SealTarget");
             Assert.IsTrue(ActivateEligibility.IsLegalActivateTarget(serena, e, covert, null),
                 "JC066 的封印目标应允许暗藏者");
+        }
+
+        /// <summary>
+        /// 【2026-09 用户实测·修复】"JC066 现在不能以暗藏者为目标"：
+        /// `IncludeCovert`（卡文"目标角色**或暗藏者**"）此前只在**合法性判定**
+        /// （`ActivateEligibility.IsLegalActivateTarget`）与**区域牌堆枚举**（`TargetZonePool`）里实现，
+        /// 而**触发取目标的主枚举**（`TurnManager.GetTargetUidsForSpec`）仍按"大类严格相等"过滤
+        /// ⇒ 暗藏者既不高亮也点不到；若本地区只有暗藏者，"无合法目标"门禁还会把整条进场触发直接丢掉。
+        /// 本用例走**生产路径**（进场 → 收集 → 取目标 → 结算）断言候选含本地区暗藏者、且它确实被封印。
+        /// </summary>
+        public void TestJC066_进场触发候选含本地区暗藏者()
+        {
+            var game = NewGame();
+            var area = FirstArea(game);
+
+            var covert = game.CardManager.CreateCardInstance(Probe("TS_066_cov_tgt"), 2);
+            covert.SetCovert(true);
+            game.ZoneManager.MoveToArea(covert, area, 2);
+
+            var view = new 记录目标候选视图();
+            game.TurnManager.SetTriggerView(view);
+
+            var serena = game.CardManager.CreateCardInstance(Load("JC066_fengmopingselinna"), 1);
+            game.ZoneManager.MoveToArea(serena, area, 1);   // 进场 → 进场触发收集 → 取目标（观察候选）
+
+            Assert.IsTrue(view.候选.Contains(covert.UID),
+                "JC066 进场触发的合法候选应包含本地区暗藏者（IncludeCovert 放宽），实际候选="
+                + string.Join(",", view.候选));
+            Assert.AreEqual(covert.UID, view.选中, "视图应选中该暗藏者");
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(CardZone.SealedZone, covert.CurrentZone, "被选中的暗藏者应被封印（全链路生效）");
+            Assert.IsTrue(ReferenceEquals(serena, covert.SealedBy), "宿主＝瑟琳娜自身");
         }
 
         // ==================== JC076②：现身抓一张 ====================

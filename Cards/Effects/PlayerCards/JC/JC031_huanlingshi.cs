@@ -38,9 +38,18 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Predicate = "DiedAllyCharacter",          // 门禁：另一个本方角色死亡
                     BranchPredicate = "DiedVampireCharacter", // 分支：若死亡的是吸血鬼角色
+                    // 【2026-09·用户口径】卡文"则**可以**改为…"的那个"可以"＝死亡者是吸血鬼时，
+                    // **弹选择框让发动效果的玩家选**"是否要求随机弃"：
+                    //  · 选「是」→ `Actions`（随机弃）；选「否」→ `ElseBranch`（对手按原来的逻辑自己选）。
+                    // 用户拍板时机＝**结算时问**（选完目标玩家、真正弃牌之前）。
+                    // 非吸血鬼死亡时不弹框（门禁/分支判定不满足 → 直接走 ElseBranch）。
+                    AskBranch = true,
+                    AskPrompt = "死亡的是吸血鬼角色：是否改为令目标玩家**随机**弃一张手牌？（选『否』＝由该玩家自己选一张弃）",
+                    AskYesLabel = "要求随机弃牌",
+                    AskNoLabel = "由对手自选弃牌",
                     ElseBranch = new Array<EffectAction>
                     {
-                        // 非吸血鬼：由**目标玩家自己**选一张弃（自选）
+                        // 非吸血鬼（或发动者选"否"）：由**目标玩家自己**选一张弃（自选）
                         new EffectAction { Verb = ActionVerb.Discard, Args = new Array<string> { "1", "目标玩家", "自选" } },
                     },
                 },
@@ -48,7 +57,8 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Kind = TargetKind.Player,
                     NeedsSelection = true,
-                    Restrictions = new Array<TargetRestriction> { TargetRestriction.Enemy },
+                    // 【2026-09 用户裁定】**"目标玩家"＝任意玩家（含自己）** ⇒ **不加** `Restrictions`
+                    // （空＝任意；`Enemy`＝对手 / `Friendly`＝本方）。原先写 `Enemy` 属收窄，已按裁定移除。
                 },
                 Actions = new Array<EffectAction>
                 {

@@ -46,6 +46,10 @@ namespace Cards.Effects.PlayerCards.JC
                     // 【2026-09 修复】"在目标角色或附属上"未排除自身 ⇒ 可指定自身（JC008/JC069 同款约定）；
                     // 否则它是本地区唯一角色时该准备步骤触发被静默跳过（JC004 同类缺陷）。
                     CanTargetSelf = true,
+                    // 【2026-09 修复·A94】卡文只写"目标角色或附属"、**没有"本地区"限定** ⇒ 必须 `AllAreas`：
+                    // `TargetZonePool` 对附属是全场枚举，而"争夺区那一半"默认只取来源 SLOT ⇒ 否则只能高亮
+                    // **附属与本地区角色**（用户实测："只有附属卡和本地区角色高亮了，没有显示其他地区角色的高亮"）。
+                    AllAreas = true,
                 },
                 Actions = new Array<EffectAction>
                 {

@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -8,7 +8,6 @@ namespace Cards.Effects.PlayerCards.JC
     /// <summary>
     /// JC130 深入研究 效果（事务卡）。
     /// 卡文：行动：抓两张牌，然后弃一张手牌。
-    /// 实现：`LimitToActionPhaseOnly=true`（B 档门禁：只能行动阶段打出，不分先后手）+
     ///      `Draw{"2"}`（唯一抽牌收口，会广播 `OnDraw`）+ P2 新增 `Discard{"1","自己","自选"}`（唯一弃牌出口，广播 `OnDiscard`）。
     /// 注：弃牌由**弃牌者自己**选（选项语义见 §7.4 第 1 条）；无 UI 时走确定性兜底（弃第一张）。
     /// </summary>
@@ -19,7 +18,6 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
-            data.LimitToActionPhaseOnly = true;   // 行动：只能行动阶段打出
 
             data.EffectDataList.Add(new EffectData
             {

@@ -225,6 +225,29 @@ namespace Script.Tests
                 "条件不满足 → CanActivate=false（UI 置灰）");
         }
 
+        // ==================== ④-b 【2026-09 用户实测 JC053】按**能力粒度**置灰 ====================
+
+        /// <summary>用户口径："JC053 的快速行动①抽牌效果**不满足前置**的时候置灰"。
+        /// 要点：置灰必须按**能力粒度**——同卡另一条无前置的能力（①减费）不受影响；
+        /// 判定单一实现＝`ActivateEligibility.ConditionAllowsActivation`（候选侧门禁与单机/联机 UI 置灰共用）。</summary>
+        public void TestTurnMemory_JC053前置不满足按能力粒度置灰()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 2, (CardColor)6);
+            var badge = PlaceBadge(game, area, 1);
+
+            var e1 = FindEffect(badge.PlayerTemplate, "JC053_1_CostReduce");
+            var e2 = FindEffect(badge.PlayerTemplate, "JC053_2_DrawIfEnemyMarkRemoved");
+            Assert.IsNotNull(e1, "JC053 应有①减费能力");
+            Assert.IsNotNull(e2, "JC053 应有②抽牌能力");
+
+            Assert.IsTrue(ActivateEligibility.ConditionAllowsActivation(e1, badge),
+                "①减费无前置 ⇒ 不置灰（能力粒度，不被②的条件连坐）");
+            Assert.IsFalse(ActivateEligibility.ConditionAllowsActivation(e2, badge),
+                "②抽牌前置（本回合敌方势力标志被移除过）未满足 ⇒ 置灰");
+        }
+
         // ==================== ⑤ 端到端：敌方标志被移除 → 横置 + 付费 + 抓一张 ====================
 
         public void TestTurnMemory_条件满足则激活抓牌()

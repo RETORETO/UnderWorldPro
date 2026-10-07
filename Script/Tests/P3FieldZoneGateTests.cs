@@ -113,10 +113,35 @@ namespace Script.Tests
                 "P1 的声望角色数只算正面那一张（暗藏不计）");
             Assert.AreEqual(1, RenownRule.CountRenownCharacters(game.ZoneManager, area, 2), "P2 同样 1 张");
 
-            // 严格多于才 +1：1:1 平 → 不放置（修复前暗藏被计入 = 2:1 → 会误放标志）
-            int placed = RenownRule.ApplyIfMajority(game.ZoneManager, game.AreaManager, area);
-            Assert.AreEqual(0, placed, "双方声望角色相等（暗藏不计入）→ 不放势力标志");
+            // 严格多于才触发：1:1 平 → 不产生触发（修复前暗藏被计入 = 2:1 → 会误触发并放标志）
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
+            game.TurnManager.EmitPowerCombatEnded(area);
+            Assert.AreEqual(0, view.Collected.Count, "双方声望角色相等（暗藏不计入）→ **不产生声望触发**");
             Assert.AreEqual(0, game.AreaManager.GetPowerMark(area, 1), "未误放标志");
+        }
+
+        /// <summary>把收集到的触发全部入堆叠的视图（本套件只用于观察"是否产生触发"）。</summary>
+        private sealed class 推入触发视图 : Script.Interfaces.ITriggerView
+        {
+            public readonly System.Collections.Generic.List<StackEffectInstance> Collected
+                = new System.Collections.Generic.List<StackEffectInstance>();
+
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                System.Collections.Generic.List<StackEffectInstance> triggers,
+                System.Action<System.Collections.Generic.List<StackEffectInstance>> onEnterStack,
+                System.Action onDone)
+            {
+                if (triggers != null) Collected.AddRange(triggers);
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+
+            public void RequestTargetSelection(StackEffectInstance trigger,
+                System.Collections.Generic.List<string> validTargetUids, System.Action<string> onPicked)
+                => onPicked?.Invoke(null);
+
+            public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> entries) { }
         }
 
         // ==================== ② 撤回：暗藏者不被"救回手牌" ====================

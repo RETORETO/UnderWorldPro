@@ -51,6 +51,7 @@ namespace Script.Manager
                     + (isFirst ? card.GetAttribute("先手战斗") : 0),
                 // 【P1】势力改用实例值：原实现只读模板 GetTotalPower(isFirst)，导致"黑星=势力"（实例授予 CurrentPower）
                 // 与"白星=先手势力"（实时授予属性）完全不参与对抗结算。改读实例后与调查/战力口径统一。
+                // 【2026-09·JC051】卡面（`CardUI`）按**本行同一口径**补算先手势力，保证"卡面看到的 = 对抗用的"。
                 CombatManager.CombatType.Power => card.CurrentPower
                     + (isFirst ? card.GetAttribute("先手势力") : 0),
                 _ => 0

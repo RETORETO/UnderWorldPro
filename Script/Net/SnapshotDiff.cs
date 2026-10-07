@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace Script.Net
 {
@@ -133,6 +133,7 @@ namespace Script.Net
             CurrentInvestigation = c.CurrentInvestigation,
             CurrentStrength = c.CurrentStrength,
             CurrentPower = c.CurrentPower,
+            // 【2026-09·JC051】卡面显示势力（与 ZoneManager 同口径；diff 路径也必须填，否则客户端还原成 0）
             CurrentDefense = c.CurrentDefense,
             MagicDomains = c.MagicDomains,
         };

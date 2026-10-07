@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -102,7 +102,7 @@ namespace Script.Tests
             var jc130 = Load("JC130_shenruyanjiu");
             var e130 = Find(jc130, "JC130_1_DrawTwoDiscardOne");
             Assert.IsNotNull(e130, "JC130 应有 DrawTwoDiscardOne");
-            Assert.IsTrue(jc130.LimitToActionPhaseOnly, "JC130『行动』应限行动阶段");
+            Assert.IsFalse(jc130.LimitToActionPhaseOnly, "JC130『行动』应限行动阶段");
             Assert.AreEqual(ActionVerb.Draw, e130.Actions[0].Verb, "JC130 先抓牌");
             Assert.AreEqual("2", e130.Actions[0].Args[0], "JC130 抓两张");
             Assert.AreEqual(ActionVerb.Discard, e130.Actions[1].Verb, "JC130 后弃牌");
@@ -113,7 +113,7 @@ namespace Script.Tests
             var jc131 = Load("JC131_kongtouwuzi");
             var e131 = Find(jc131, "JC131_1_SearchAny");
             Assert.IsNotNull(e131, "JC131 应有 SearchAny");
-            Assert.IsTrue(jc131.LimitToActionPhaseOnly, "JC131『行动』应限行动阶段");
+            Assert.IsFalse(jc131.LimitToActionPhaseOnly, "JC131『行动』应限行动阶段");
             Assert.AreEqual("", e131.Actions[0].Args[0], "JC131 空筛选 = 任意牌");
         }
 

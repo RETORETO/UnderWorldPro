@@ -29,7 +29,7 @@ mouse_filter = 2
 
 [node name="ResultLabel" type="Label" parent="CenterArea" unique_id=2099100002]
 visible = false
-z_index = 4096
+z_index = 850
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -149,7 +149,7 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player1Area/DeckZone" unique_id=769952412]
-z_index = 600
+z_index = 860
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -178,7 +178,7 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player1Area/GraveyardZone" unique_id=308346305]
-z_index = 600
+z_index = 860
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -227,7 +227,7 @@ offset_right = 1390.0
 offset_bottom = 100.0
 
 [node name="ScoreLabel" type="Label" parent="Player2Area/ScoreZone" unique_id=950149439]
-z_index = 600
+z_index = 860
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 offset_left = 140.0
@@ -336,11 +336,10 @@ mouse_filter = 1
 metadata/_edit_use_anchors_ = true
 
 [node name="PhaseLabel" type="Label" parent="ActionPanel" unique_id=408338303]
-custom_minimum_size = Vector2(100, 92)
-custom_maximum_size = Vector2(100, -1)
+custom_minimum_size = Vector2(140, 92)
+custom_maximum_size = Vector2(140, -1)
 layout_mode = 1
-offset_left = 20.0
-offset_right = 120.0
+offset_right = 140.0
 offset_bottom = 100.0
 mouse_filter = 1
 text = "当前阶段"
@@ -387,11 +386,12 @@ mouse_filter = 1
 text = "投降"
 
 [node name="CommandInput" type="TextEdit" parent="." unique_id=1323374000]
+z_index = 900
 visible = false
 layout_mode = 0
 offset_right = 420.0
 offset_bottom = 220.0
-placeholder_text = "PM命令（每行一条）：Enter 换行，Shift+Enter 执行"
+placeholder_text = "PM命令（每行一条）：Enter 换行，Shift+Enter 执行，~ 关闭"
 
 [node name="StackPanel" type="Panel" parent="." unique_id=200001000]
 layout_mode = 0
@@ -421,7 +421,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="ArrowLayer" type="Control" parent="." unique_id=200001003]
-z_index = 4095
+z_index = 800
 z_as_relative = false
 layout_mode = 1
 anchors_preset = 15

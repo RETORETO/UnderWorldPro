@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot;
 
 namespace Script.Tests
@@ -126,6 +126,7 @@ namespace Script.Tests
                 new P3DeathSealTests(),                // P3·K3·死亡类第一批（触发路线）：JC105 噩梦领主②
                 new P3DrawFromBottomTests(),           // P3·非抓牌式取牌（不广播 OnDraw）：JC049 深渊细语②
                 new P3RulingBatchTests(),              // 用户口径批：JC022 战斗获胜近似判定 / JC074 快速行动授予 / JC122 锁定者禁现身
+                new JCCardTextAuditTests(),            // 【2026-09 整体复查】JC 包卡面自检（门禁/强制/关键字装载/时机/输入框；豁免表可审计）
                 new P3PathUniquenessTests(),           // P3·K25「道途」唯一性（与领袖同款：玩家选一个牺牲）：JC034①
                 new P3TemporaryManaTests(),            // P3·K19 临时费用池（优先花费 + 步骤结束清除）：JC115
                 new P3CounterCostTests(),              // P3·K5 计数器作发动代价（发动者选择）：JC044②
@@ -159,6 +160,7 @@ namespace Script.Tests
                 new CouncilEffectTests(),              // 秘社效果：MSJC001 按卡文落地（先手标志前提 / 独有检索 / 每局一次）＋【A57】每局上限 + 独有筛选
                 new CouncilEffectBatch2Tests(),        // 秘社效果批次2：MSJC010~017 按卡文落地 + 牌作代价/卡上标志门槛/磨牌/抓牌方向/静态子类别授予/开局效果
                 new CouncilAssignTests(),              // 秘社归属：双方各拿自己卡组的秘社 / 起手数各自取 / 无卡组方回退默认秘社 / 重开不串场 / 开局效果落最终实例
+                new DeckInstanceBindingTests(),        // 开局发牌必须沿用 View 绑定的同一批卡实例（单人模式"看不到起始手牌/PM draw 无 UI"根因回归）
                 new LocalHostTests(),                  // 增量 D：首页「建立主机」内嵌服务端（起/连自己/自动建房、端口顺延、Stop 同步释放端口）
             };
 

@@ -31,7 +31,7 @@ namespace Script.Manager
         /// `areaUid` 为空时用 `source.ZoneDetailId`（来源所在地区）。
         /// </summary>
         public static List<CardInstance> Collect(EffectData data, CardInstance source, string areaUid,
-            ZoneManager zm, CardManager cm = null, PlayerManager pm = null)
+            ZoneManager zm, CardManager cm = null, PlayerManager pm = null, int sourceVersionId = -1)
         {
             var result = new List<CardInstance>();
             var spec = data?.Target;
@@ -48,7 +48,7 @@ namespace Script.Manager
                 foreach (var c in zm.GetZoneCards(CardZone.AreaZone, 0, null))
                 {
                     if (c == null || c.IsDying) continue;
-                    if (c == source && !spec.CanTargetSelf) continue;
+                    if (IsSelfExcludedFromMass(spec, source, c, sourceVersionId)) continue;
                     if (!Matches(spec, c, srcCtrl, pm)) continue;
                     result.Add(c);
                 }
@@ -61,11 +61,26 @@ namespace Script.Manager
             foreach (var c in zm.GetZoneCards(CardZone.AreaZone, 0, area))
             {
                 if (c == null || c.IsDying) continue;
-                if (c == source && !spec.CanTargetSelf) continue;      // 卡文"其他角色" → CanTargetSelf=false
+                if (IsSelfExcludedFromMass(spec, source, c, sourceVersionId)) continue;   // 卡文"其他角色" → CanTargetSelf=false
                 if (!Matches(spec, c, srcCtrl, pm)) continue;
                 result.Add(c);
             }
             return result;
+        }
+
+        /// <summary>
+        /// 【2026-09·JC052 用户口径】集合动作里"来源卡自身是否被排除"的**单一判定**：
+        ///  · `c != source` → 不是自身，不排除；
+        ///  · `CanTargetSelf = true` → 不排除（卡文允许含自身）；
+        ///  · `VersionSkipsSelf = true` → **只有版本号相同（＝与收集该效果时同一张卡）才排除**；
+        ///    版本号已变（翻面/重新现身）或未知（<0，保守）都不排除 ⇒ 现存的"自己"可被老效果消灭。
+        /// </summary>
+        private static bool IsSelfExcludedFromMass(TargetSpec spec, CardInstance source, CardInstance c, int sourceVersionId)
+        {
+            if (c == null || source == null || c != source) return false;
+            if (spec.CanTargetSelf) return false;
+            if (spec.VersionSkipsSelf && sourceVersionId >= 0 && c.VersionId != sourceVersionId) return false;
+            return true;
         }
 
         /// <summary>集合成员是否合法：大类（含暗藏者放宽、`KindAlt` OR、【P3】`SpecAlt` 整条 OR）+ 文本筛选 + 精筛。</summary>

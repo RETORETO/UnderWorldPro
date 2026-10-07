@@ -235,8 +235,8 @@ namespace Script.Tests
             // 未接管：判定/浮层皆空 → 悬浮请求无副作用（不应抛异常）
             Script.UI.CardPreviewBus.Detach(null);
             Assert.IsTrue(Script.UI.CardPreviewBus.CanPreview == null, "未接管时判定为空");
-            Script.UI.CardPreviewBus.RequestHover(null);
-            Script.UI.CardPreviewBus.EndHover(null);
+            Script.UI.CardPreviewBus.RequestHover((Script.UI.CardUI)null);
+            Script.UI.CardPreviewBus.EndHover((Script.UI.CardUI)null);
             Assert.IsTrue(Script.UI.CardPreviewBus.CanPreview == null, "无接管时悬浮请求被静默忽略");
 
             // 接管（浮层留空＝模拟"没有浮层控件"的 headless 场景）：判定可被记录，但不显示任何东西

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Script.Enums;
 
 namespace Script.Net
@@ -82,6 +82,27 @@ namespace Script.Net
         public List<string> TargetUids = new List<string>();
     }
 
+    /// <summary>【2026-09】来源卡当前的一条**激活能力**（模板 ∪ 运行期授予）。
+    /// 必要性：客户端的 `ActivateEligibility.GetAllActivateAbilities` 依赖服务端才有的
+    /// "运行期授予"表（JC019 授予宿主的能力）⇒ 纯客户端看不到该能力，
+    /// 表现为"宿主拿到效果却无法拖拽/双击无菜单"。故由服务端把能力清单与
+    /// **可否用拖拽表达**（`ActivateEligibility.CanDragActivate`）一并投影下来，客户端只读不算。</summary>
+    public class ActivationAbilitySnap
+    {
+        public string SourceUid;
+        public string EffectId;
+        /// <summary>服务端结论：该能力**可用拖拽表达**（恰好 1 条能力 ＋ 需选场上卡目标）。</summary>
+        public bool Draggable;
+        /// <summary>展示名（服务端取 `FaqNote`，缺省回退 EffectId）——供客户端"效果选择窗"显示。</summary>
+        public string Label;
+        /// <summary>是否需要选择目标（`TargetSpec.NeedsSelection`）。</summary>
+        public bool NeedsSelection;
+        /// <summary>目标大类（`int` 承载 `TargetKind`）。</summary>
+        public int TargetKindValue;
+        /// <summary>目标是否为"玩家"（由服务端 `PlayerTargetPool.IsPlayerSpec` 判定）。</summary>
+        public bool PlayerTarget;
+    }
+
     /// <summary>
     /// 【P2·合法性投影】服务端算给某个查看者的"操作合法性"纯数据视图（已按查看者过滤）。
     /// 全部由服务端 Manager 层用生产规则函数算出，客户端只读不算。
@@ -101,6 +122,10 @@ namespace Script.Net
 
         /// <summary>手牌打出时的合法目标卡 UID 集合（含场上卡与秘社；地区目标仍由落点位置表达）。</summary>
         public List<PlayTargetSnap> PlayTargets = new List<PlayTargetSnap>();
+
+        /// <summary>【2026-09】各来源卡的**激活能力清单**（模板 ∪ 运行期授予；含"可否拖拽"）。
+        /// 客户端据此在"本地看不到运行期授予"时仍能起手拖拽并上行正确的 EffectId。</summary>
+        public List<ActivationAbilitySnap> ActivationAbilities = new List<ActivationAbilitySnap>();
     }
 
     /// <summary>一条玩家级费用修正的快照投影（纯数据，对应 EffectEngine.TimedMod 中 Kind==CostMod 的条目）。</summary>
@@ -162,6 +187,12 @@ namespace Script.Net
         public int CurrentInvestigation;
         public int CurrentStrength;
         public int CurrentPower;
+        /// <summary>【2026-09·JC051 终极修法】卡面要显示的势力＝服务端按与 AreaStatsCalculator 同一算式算好的标量
+        /// （CurrentPower ＋（先手 ? 先手势力 : 0））。客户端**原样显示**，不再本地拼算式 ⇒ 与地区总势力显示同构，
+        /// 不受客户端是否重算影响（此前卡面显示不对的结构性根因）。</summary>
+        
+/// <summary>【2026-09·JC051】本卡控制者最近一次重算时是否为先手玩家（服务端算；客户端算显示值时要用）。</summary>
+
         public int CurrentDefense;
         public List<MagicDomain> MagicDomains = new List<MagicDomain>();
 

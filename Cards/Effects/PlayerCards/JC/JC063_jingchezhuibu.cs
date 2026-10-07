@@ -32,13 +32,15 @@ namespace Cards.Effects.PlayerCards.JC
                 TargetRule.Make(TargetKind.Character),
                 TargetRule.Make(TargetKind.Covert),
             };
-            data.LimitToActionPhaseOnly = true;   // "快速行动"（与既有同类事务卡一致：限行动阶段）
+            // 【2026-09 修复·用户实测"JC063 门禁错误"】**快速行动 = C 档（可响应打出），不限行动阶段**：
+            // 与 JC062/JC065 同一口径（卡文含"快速行动"的效果 `PlayTiming = Response`）。
+            // 此前误写成 `LimitToActionPhaseOnly = true` + `PlayTiming = MainPhase` ⇒ 非行动阶段打不出来（门禁错误）。
 
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC063_1_TapOrBounceByMode",
                 Timing = EffectTiming.OnSorceryCast,
-                PlayTiming = PlayTiming.MainPhase,
+                PlayTiming = PlayTiming.Response,
                 Condition = new EffectCondition { Predicate = "Always" },
                 // 无模式分支时不用（以 Modes 为准）
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },

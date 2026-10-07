@@ -70,6 +70,39 @@ namespace Script.Tests
             public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> entries) { }
         }
 
+        /// <summary>把收集到的触发**全部入堆叠**的视图（用于"触发真的发生了吗/结算后状态"类断言）。</summary>
+        private sealed class 推入触发视图 : Script.Interfaces.ITriggerView
+        {
+            public readonly System.Collections.Generic.List<StackEffectInstance> Collected
+                = new System.Collections.Generic.List<StackEffectInstance>();
+
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                System.Collections.Generic.List<StackEffectInstance> triggers,
+                System.Action<System.Collections.Generic.List<StackEffectInstance>> onEnterStack,
+                System.Action onDone)
+            {
+                if (triggers != null) Collected.AddRange(triggers);
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+
+            public void RequestTargetSelection(StackEffectInstance trigger,
+                System.Collections.Generic.List<string> validTargetUids, System.Action<string> onPicked)
+                => onPicked?.Invoke(null);
+
+            public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> entries) { }
+        }
+
+        /// <summary>推进一次堆叠结算（双方连续让过）——与其它套件同款。</summary>
+        private static void ResolveStackOnce(GameInitializer game)
+        {
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+            {
+                int p = game.TurnManager.PriorityPlayerId;
+                game.TurnManager.Pass(p);
+            }
+        }
+
         private static CardInstance OnField(GameInitializer game, PlayerCardData tmpl, int controllerId, string areaUid)
         {
             var card = game.CardManager.CreateCardInstance(tmpl, controllerId);
@@ -306,6 +339,62 @@ namespace Script.Tests
             Assert.AreEqual(0, dog.Counters.Count, "不应放在警犬自己身上");
         }
 
+        /// <summary>
+        /// 【2026-09 用户口径·修复】JC069 警犬**现身触发**"在目标角色或暗藏者上放置一个锁定标志"：
+        /// 卡文**没有写"本地区"** ⇒ 用户实测报障并裁定"我希望**放开到任意地区**"。
+        /// 本引擎触发取目标**默认限同 AREASLOT**（`TurnManager.GetTargetUidsForSpec`）⇒ 目标声明必须
+        /// 显式 `AllAreas=true`；本用例用**捕获候选**的视图钉住"其他地区的角色/暗藏者也在候选里"。
+        /// </summary>
+        public void TestP3_JC069现身触发可指定任意地区的角色或暗藏者()
+        {
+            var game = new GameInitializer { DebugSeed = 71 };
+            game.InitializeAll();
+            game.StartMatch();
+            game.PlayerActionService.SetupInitialAreas(2);
+            var areas = game.AreaManager.GetOrderedAreaUids();
+            string a0 = areas[0], a1 = areas[1];
+
+            var nearChar = OnField(game, Probe("TS_p3_kw_near"), 2, a0);
+            var farChar = OnField(game, Probe("TS_p3_kw_far"), 2, a1);
+            var farCovert = game.CardManager.CreateCardInstance(Probe("TS_p3_kw_farcov"), 2);
+            game.ZoneManager.MoveToArea(farCovert, a1, 2);
+            farCovert.SetCovert(true);
+
+            var view = new 记录候选视图();
+            game.TurnManager.SetTriggerView(view);
+
+            var dog = game.CardManager.CreateCardInstance(Load("JC069_jingquan"), 1);
+            game.ZoneManager.MoveToArea(dog, a0, 1);
+            dog.SetCovert(true);
+            game.CardManager.RevealCard(dog);   // 现身 → 现身触发
+
+            Assert.IsNotNull(view.候选, "现身触发应要求选择目标");
+            Assert.IsTrue(view.候选.Contains(nearChar.UID), "同地区角色可选");
+            Assert.IsTrue(view.候选.Contains(farChar.UID), "**其他地区**的角色也可选（用户裁定：放开到任意地区）");
+            Assert.IsTrue(view.候选.Contains(farCovert.UID), "**其他地区**的暗藏者也可选（卡文『角色或暗藏者』）");
+        }
+
+        /// <summary>捕获候选的触发视图（不选目标，只为观察候选集合）。</summary>
+        private sealed class 记录候选视图 : Script.Interfaces.ITriggerView
+        {
+            public System.Collections.Generic.List<string> 候选;
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                System.Collections.Generic.List<StackEffectInstance> triggers,
+                System.Action<System.Collections.Generic.List<StackEffectInstance>> onEnterStack,
+                System.Action onDone)
+            {
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+            public void RequestTargetSelection(StackEffectInstance trigger,
+                System.Collections.Generic.List<string> validTargetUids, System.Action<string> onPicked)
+            {
+                候选 = new System.Collections.Generic.List<string>(validTargetUids ?? new System.Collections.Generic.List<string>());
+                onPicked?.Invoke(null);
+            }
+            public void RemoveOrderEntries(System.Collections.Generic.List<StackEffectInstance> entries) { }
+        }
+
         // ==================== 杀伤 X ====================
 
         public void TestP3_杀伤_授予属性并可累加()
@@ -368,59 +457,142 @@ namespace Script.Tests
             Assert.AreEqual(1, spirit.Damage, "双方图标相等 → 不防止");
         }
 
-        // ==================== 声望（势力对抗结束） ====================
+        // ==================== JC063 门禁 + 模式可用性（2026-09 用户口径） ====================
 
         /// <summary>
-        /// 【2026-09 修复·用户实测"JC011 声望没有生效"】声望结算是挂在"势力对抗**结束**"上的，
-        /// 与胜负**无关**（卡文：不依赖胜负；平局、甚至败方，只要本方声望角色更多就 +1）。
-        /// 此前该结算只写在"有胜方"的分支里 ⇒ **0:0 平局**（典型：本地区只有一个声望角色、其势力值为 0）
-        /// 与"破平被放弃/不可破平"时声望完全不结算。本例锁单机路径。
+        /// 【2026-09 修复·用户实测"JC063 门禁错误"】快速行动 ⇒ **C 档（可响应打出）、不限行动阶段**
+        /// （与 JC062/JC065 同口径）；且各模式**可用性按该模式自己的目标声明区分**
+        /// （用户口径："JC063 两个效果如果场上完全没有合法目标，置灰（注意两个效果要求的合法目标不一致）"）。
+        /// </summary>
+        public void TestP3_JC063门禁与模式可用性()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var tmpl = Load("JC063_jingchezhuibu");
+            Assert.IsNotNull(tmpl, "JC063 模板应可加载");
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly, "**快速行动 ⇒ 不限行动阶段**（此前误写 LimitToActionPhaseOnly=true）");
+            var effect = Script.Manager.MultiTargetSlots.FindModeEffect(tmpl, EffectTiming.OnSorceryCast);
+            Assert.IsNotNull(effect, "JC063 应有『选择一项』模式效果");
+
+            var faceUp = OnField(game, Probe("TS_jc063_face"), 1, area);
+            var covert = OnField(game, Probe("TS_jc063_cov"), 2, area);
+            covert.SetCovert(true);
+            var card = game.CardManager.CreateCardInstance(tmpl, 1);
+            game.ZoneManager.MoveToHand(card, 1);
+
+            var avail = game.TurnManager.GetModeAvailability(effect, card);
+            Assert.AreEqual(2, avail.Count, "两个模式各一项");
+            Assert.IsTrue(avail[0], "场上有正面角色 ⇒ 模式1（将目标角色潜伏）可用");
+            Assert.IsTrue(avail[1], "场上有暗藏者 ⇒ 模式2（将目标暗藏者移回手牌）可用");
+
+            // 只有正面角色、没有暗藏者 ⇒ 模式2 置灰（两个模式要求的合法目标不一致）
+            covert.SetCovert(false);
+            var avail2 = game.TurnManager.GetModeAvailability(effect, card);
+            Assert.IsTrue(avail2[0], "模式1 仍可用");
+            Assert.IsFalse(avail2[1], "**没有暗藏者 ⇒ 模式2 置灰**");
+
+            // 两个角色都翻面为暗藏者 ⇒ 模式1（需要正面角色）置灰，模式2（需要暗藏者）可用
+            faceUp.SetCovert(true);
+            covert.SetCovert(true);
+            var avail3 = game.TurnManager.GetModeAvailability(effect, card);
+            Assert.IsFalse(avail3[0], "没有正面角色 ⇒ 模式1 置灰");
+            Assert.IsTrue(avail3[1], "有暗藏者 ⇒ 模式2 可用");
+            // 场上清空（都回手牌）⇒ 两个模式都置灰
+            game.ZoneManager.MoveToHand(covert, 2);
+            game.ZoneManager.MoveToHand(faceUp, 1);
+            var avail4 = game.TurnManager.GetModeAvailability(effect, card);
+            Assert.IsFalse(avail4[0] && avail4[1], "场上完全没有合法目标 ⇒ 两个模式都置灰");
+
+            // 门禁：非行动阶段（后手行动）也能打出（快速行动 = 可响应）
+            // 费用/忠诚：JC063 需 2 费、颜色忠诚 4:2 → 先造两张"颜色4"的资产（本套件无 GiveAssets 辅助）
+            for (int i = 0; i < 2; i++)
+            {
+                var assetTmpl = new PlayerCardData
+                {
+                    UID = $"TS_jc063_asset{i}", CardName = $"探针资产{i}", Cost = 0,
+                    CategoryFlag = CardCategory.Attachment,
+                };
+                assetTmpl.Colors.Add((CardColor)4);
+                assetTmpl._effectsInjected = true;
+                var asset = game.CardManager.CreateCardInstance(assetTmpl, 1);
+                game.ZoneManager.MoveToAsset(asset, 1);
+            }
+            var faceUp2 = OnField(game, Probe("TS_jc063_face2"), 1, area);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionSecond;
+            Assert.IsTrue(game.TurnManager.PlayCard(1, card.UID, null, faceUp2.UID, null, 0),
+                "**非行动阶段也能打出**（快速行动 ⇒ 不限行动阶段）");
+        }
+
+
+        /// <summary>
+        /// 【2026-09 用户口径·声望改触发】声望**不再**在势力对抗出口立即结算（用户实测："声望是触发效果，
+        /// 现在实现成直接依附于势力对抗结算后立刻结算了"）：
+        /// ① 单机路径：一场 0:0 平局的势力对抗打完，**此时不放标志**（只等"该地区所有对抗结束"的触发）；
+        /// ② 到达触发点后由触发结算放置。
         /// </summary>
         public void TestP3_声望_零比零平局也结算_单机()
         {
             var game = NewGame();
             var area = FirstArea(game);
             MakeWithDomains(game, "TS_p3_renown_tie1", 1, area, MagicDomain.Mind, renown: true);   // 势力值 0 ⇒ 0:0 平局
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
 
             var before = game.AreaManager.GetMarks(area);
             bool done = false;
             game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Power, area, 1, () => done = true);
-            var after = game.AreaManager.GetMarks(area);
-
             Assert.IsTrue(done, "势力对抗流程走完（0:0 平局不可破平）");
-            Assert.AreEqual(before.p1 + 1, after.p1,
-                "0:0 平局同样是『势力对抗结束』⇒ 声望较多方 +1 势力标志（修复前这里不会结算）");
+            Assert.AreEqual(before.p1, game.AreaManager.GetMarks(area).p1,
+                "**声望不在对抗出口立即结算**（否则就是用户报障的『直接依附于势力对抗结算』）");
+
+            // 触发点：该地区三种对抗全部结束（TurnManager 在阶段推进时调用）
+            game.TurnManager.EmitPowerCombatEnded(area);
+            Assert.AreEqual(1, view.Collected.Count, "到达触发点后产生声望触发（与胜负无关，0:0 平局同样触发）");
+            ResolveStackOnce(game);
+            Assert.AreEqual(before.p1 + 1, game.AreaManager.GetMarks(area).p1, "触发结算 → 声望较多方 +1 势力标志");
         }
 
-        /// <summary>同上，锁**联机（权威）路径**：0:0 平局也必须结算声望。</summary>
+        /// <summary>同上，锁**联机（权威）路径**：声望同样只在"该地区所有对抗结束"时触发（不在对抗出口立即结算）。</summary>
         public void TestP3_声望_零比零平局也结算_联机()
         {
             var game = NewGame();
             var area = FirstArea(game);
             MakeWithDomains(game, "TS_p3_renown_tie2", 1, area, MagicDomain.Star, renown: true);
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
 
             var before = game.AreaManager.GetMarks(area);
             game.CombatManager.ResolveAreaCombatAsync(CombatManager.CombatType.Power, area, 1)
                 .GetAwaiter().GetResult();
-            var after = game.AreaManager.GetMarks(area);
+            Assert.AreEqual(before.p1, game.AreaManager.GetMarks(area).p1,
+                "联机路径同样**不在对抗出口立即结算**声望");
 
-            Assert.AreEqual(before.p1 + 1, after.p1,
-                "联机路径 0:0 平局同样结算声望（与单机同源收口 FinishPowerCombat）");
+            game.TurnManager.EmitPowerCombatEnded(area);
+            Assert.AreEqual(1, view.Collected.Count, "到达触发点后产生声望触发");
+            ResolveStackOnce(game);
+            Assert.AreEqual(before.p1 + 1, game.AreaManager.GetMarks(area).p1, "触发结算 → +1 势力标志");
         }
 
-        public void TestP3_声望_对抗结束由声望较多方加标记()
+        public void TestP3_声望_对抗阶段结束触发_较多方放标记()
         {
             var game = NewGame();
             var area = FirstArea(game);
             MakeWithDomains(game, "TS_p3_renown1", 1, area, MagicDomain.Mind, renown: true);
             MakeWithDomains(game, "TS_p3_plain", 2, area, MagicDomain.Death);
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
 
             var before = game.AreaManager.GetMarks(area);
-            int placer = RenownRule.ApplyIfMajority(game.ZoneManager, game.AreaManager, area);
-            var after = game.AreaManager.GetMarks(area);
+            // 触发点＝"该地区所有对抗结束"（TurnManager 在阶段推进时调用；这里直接走同一入口）
+            game.TurnManager.EmitPowerCombatEnded(area);
 
-            Assert.AreEqual(1, placer, "声望较多者（玩家1）应放置标记");
-            Assert.AreEqual(before.p1 + 1, after.p1, "玩家1 的势力标志 +1");
+            Assert.AreEqual(1, view.Collected.Count, "声望是**触发效果**：被收集为 1 个触发（不是立即结算）");
+            Assert.AreEqual(before.p1, game.AreaManager.GetMarks(area).p1, "只是收集，**尚未**放置标记（要等触发结算）");
+
+            ResolveStackOnce(game);
+            var after = game.AreaManager.GetMarks(area);
+            Assert.AreEqual(before.p1 + 1, after.p1, "触发结算后：声望较多方（玩家1）放置 1 个势力标志");
             Assert.AreEqual(before.p2, after.p2, "玩家2 的标记不变");
         }
 
@@ -430,9 +602,11 @@ namespace Script.Tests
             var area = FirstArea(game);
             MakeWithDomains(game, "TS_p3_renown2", 1, area, MagicDomain.Mind, renown: true);
             MakeWithDomains(game, "TS_p3_renown3", 2, area, MagicDomain.Death, renown: true);
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
 
-            Assert.AreEqual(0, RenownRule.ApplyIfMajority(game.ZoneManager, game.AreaManager, area),
-                "双方声望角色相等 → 不发生放置");
+            game.TurnManager.EmitPowerCombatEnded(area);
+            Assert.AreEqual(0, view.Collected.Count, "双方声望角色相等 → 条件不成立 ⇒ **不产生触发**（也就不会放置）");
         }
 
         public void TestP3_声望_多个声望只放一个()
@@ -442,12 +616,46 @@ namespace Script.Tests
             MakeWithDomains(game, "TS_p3_renown4", 1, area, MagicDomain.Mind, renown: true);
             MakeWithDomains(game, "TS_p3_renown5", 1, area, MagicDomain.Star, renown: true);
             MakeWithDomains(game, "TS_p3_renown6", 1, area, MagicDomain.Blood, renown: true);
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
 
             var before = game.AreaManager.GetMarks(area);
-            RenownRule.ApplyIfMajority(game.ZoneManager, game.AreaManager, area);
+            game.TurnManager.EmitPowerCombatEnded(area);
+            ResolveStackOnce(game);
             var after = game.AreaManager.GetMarks(area);
 
-            Assert.AreEqual(before.p1 + 1, after.p1, "3 个声望角色也只放 1 个势力标志");
+            Assert.AreEqual(before.p1 + 1, after.p1, "3 个声望角色也只放 1 个势力标志（同维度去重）");
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径·第二轮】声望改为**每个势力对抗后都触发**：
+        /// · 同一次势力对抗内**多个声望角色都触发**，但也**只加 1 个势力标志**（`PlaceToken` 的"声望"维度去重，参考威名）；
+        /// · 同一地区再打一次势力对抗（JC067「额外进行一次势力对抗」）⇒ **再触发并再加 1 个**。
+        /// </summary>
+        public void TestP3_声望_每次势力对抗触发_同一次只加一个()
+        {
+            var game = NewGame();
+            var area = FirstArea(game);
+            // 3 个声望角色（同一方）→ 同一次势力对抗内会收集出 3 个触发
+            MakeWithDomains(game, "TS_p3_renown7", 1, area, MagicDomain.Mind, renown: true);
+            MakeWithDomains(game, "TS_p3_renown8", 1, area, MagicDomain.Star, renown: true);
+            MakeWithDomains(game, "TS_p3_renown9", 1, area, MagicDomain.Blood, renown: true);
+            var view = new 推入触发视图();
+            game.TurnManager.SetTriggerView(view);
+
+            var before = game.AreaManager.GetMarks(area);
+            game.TurnManager.EmitPowerCombatEnded(area);   // 第 1 次势力对抗结束
+            Assert.AreEqual(3, view.Collected.Count, "3 个声望角色各产生 1 个触发（每个势力对抗后都触发）");
+            ResolveStackOnce(game);
+            Assert.AreEqual(before.p1 + 1, game.AreaManager.GetMarks(area).p1,
+                "**同一次势力对抗内多个声望角色也只加 1 个势力标志**（同维度去重，参考威名）");
+
+            // JC067：同一地区本回合再打一次势力对抗 ⇒ 再触发一次、再加 1 个
+            int afterFirst = game.AreaManager.GetMarks(area).p1;
+            game.TurnManager.EmitPowerCombatEnded(area);
+            ResolveStackOnce(game);
+            Assert.AreEqual(afterFirst + 1, game.AreaManager.GetMarks(area).p1,
+                "**第二次势力对抗各触发一次** ⇒ 再加 1 个（用户口径：每个势力对抗后都触发）");
         }
 
         /// <summary>构造带指定领域（可选灵体/声望词条）的场上角色。</summary>
@@ -475,6 +683,11 @@ namespace Script.Tests
                     EffectId = uid + "_renown", Timing = EffectTiming.Continuous, Scope = ZoneScope.AreaZone,
                     ContinuousGrants = new Array<EffectGrant> { new EffectGrant { Kind = "Keyword", Value = "声望", Amount = 1 } },
                 });
+                // 【2026-09 用户口径·声望改触发】声望的规则本体＝触发效果（`OnPowerCombatEnded`）：
+                // 与真实卡面同款，需**显式**声明触发条目（卡面固有关键字不会被模板通道重复合成）。
+                var renownTrigger = Script.Data.Effects.KeywordEffects.Renown();
+                renownTrigger.EffectId = uid + "_renown_trigger";
+                tmpl.EffectDataList.Add(renownTrigger);
             }
             tmpl._effectsInjected = true;
 

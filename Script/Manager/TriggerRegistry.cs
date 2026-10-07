@@ -66,6 +66,16 @@ namespace Script.Manager
         /// </summary>
         public Func<EffectTiming, TriggerContext, EffectEngine, List<StackEffectInstance>> DeckLevelCollector { get; set; }
 
+        /// <summary>
+        /// 【2026-09 修复·JC043】**"没有合法目标的效果不得加入触发排序窗口"**：
+        /// 收集阶段的前置判定（由 `TurnManager` 注入，复用 `GetTargetUidsForSpec` / `PlayerTargetPool`
+        /// 等**同一套候选枚举**，不新增第二套规则）。返回 `false` ⇒ 该触发**不收集**
+        /// （于是不进排序窗、不入堆叠）。未注入时视为"恒有目标"（行为与既有实现一致）。
+        ///
+        /// 用户实测："JC043 效果场上没有合法目标也在触发排序窗口中显示了，没有合法目标不能加入触发排序窗口"。
+        /// </summary>
+        public Func<CardInstance, EffectData, TriggerContext, bool> HasLegalTargetsForTrigger { get; set; }
+
         /// <summary>走排序窗口（RunTriggerPhase）的时机集合。</summary>
         /// 注意：进场触发(EnterTrigger)/现身触发(UncoverTrigger) 现已统一走 RunTriggerPhase 排序窗口
         /// （需求：触发效果收集后先经玩家排序窗口确认，再依次入堆叠，而非直接入栈）；
@@ -258,9 +268,56 @@ namespace Script.Manager
                         continue;
                     }
 
+                    // 【2026-09 修复·K23/A57·收集阶段次数门禁】触发类能力的次数上限（每回合/每局）必须
+                    // **在收集阶段**就拦下：此前只在"结算前"检查 ⇒ 已达上限的触发仍会入堆叠
+                    // （并弹触发排序窗 / 目标玩家窗），玩家看到的是"还能再发动一次"，只是结算时被跳过
+                    // （用户实测 JC031 唤灵师："可以一回合内多次发动效果，虽然只有一次生效了，
+                    //  但是需要后续直接不能发动"）。
+                    // 判据与结算前的检查**同源**（`CardInstance.IsAbilityLimitReached` /
+                    // `IsGameAbilityLimitReached`）；结算前那次保留为"同一批事件同时收集"的兜底。
+                    if (data.MaxUsesPerTurn > 0 && card.IsAbilityLimitReached(data.EffectId, data.MaxUsesPerTurn))
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ 本回合次数已用尽（EffectId={data.EffectId}, 来源={tmpl.CardName}，" +
+                                 $"已 {card.GetAbilityUsesThisTurn(data.EffectId)}/{data.MaxUsesPerTurn}）→ 不收集（不发动）");
+                        continue;
+                    }
+                    if (data.MaxUsesPerGame > 0 && card.IsGameAbilityLimitReached(data.EffectId, data.MaxUsesPerGame))
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ 本局次数已用尽（EffectId={data.EffectId}, 来源={tmpl.CardName}，" +
+                                 $"已 {card.GetAbilityUsesThisGame(data.EffectId)}/{data.MaxUsesPerGame}）→ 不收集（不发动）");
+                        continue;
+                    }
+
+                    // 【2026-09·K26 审计补口】阶段排除（`ExcludedPhases`）：与**候选侧**（`ActivateEligibility`）
+                    // 和**权威侧**（`EffectEngine.ActivateAbility`）同解 —— 处于被排除的阶段时**不收集**该触发。
+                    // 此前只在激活/结算侧判，触发类效果虽然当前没有卡声明该字段（审计确认），但属**潜在缺口**
+                    // （声明了却仍会进排序窗、只在结算时被跳过，与 A76/A82 同款"收集期该拦而没拦"）。
+                    if (PhaseGateRule.IsExcluded(data, EE?.TurnManagerRef))
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ 阶段排除（EffectId={data.EffectId}, 来源={tmpl.CardName}, 事件={evt}）→ 不收集");
+                        continue;
+                    }
+
+                    // 【2026-09 修复·JC043】"**没有合法目标的效果不得加入触发排序窗口**"（用户实测）：
+                    // 需要选目标、但当前**一个合法候选都没有** ⇒ 不收集（用户看到的"排序窗里躺着一条
+                    // 点了也没法选目标"的条目就此消失）。候选枚举复用 TurnManager 的同一套实现。
+                    if (HasLegalTargetsForTrigger != null && !HasLegalTargetsForTrigger(card, data, ctx))
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ 无合法目标（EffectId={data.EffectId}, 来源={tmpl.CardName}, 事件={evt}）→ 不收集（不进排序窗）");
+                        continue;
+                    }
+
                     // 【K1】动态值 X 预判（用户口径：X=0 时该效果**不算发动**）：
                     // 在**收集阶段**就用事件上下文求值，为 0（或表达式未登记/依赖未实现）→ 不收集该触发。
-                    if (EE != null && !string.IsNullOrWhiteSpace(data.ValueExpr))
+                    // 【2026-09·JC048 用户口径】`ValueAtResolve=true` 时**跳过本门禁**：该效果的 X 依赖
+                    // "同时间另一条效果先结算"的结果（JC048 先放时间标志、再按地区标志数造成伤害），
+                    // 收集发生在放标志**之前** ⇒ 首个准备步骤 X=0 会把整条伤害跳过（实测表现为
+                    // "只有牺牲那一回合才造成伤害"）。此类效果留到结算时求值（为 0 则自然不做任何事）。
+                    if (EE != null && !string.IsNullOrWhiteSpace(data.ValueExpr) && !data.ValueAtResolve)
                     {
                         var st = EE.EvaluateDynamicValue(data, card, conditionCard, ctx.TargetAreaId,
                             ctx.ExtraInt, out _, out string dynReason);

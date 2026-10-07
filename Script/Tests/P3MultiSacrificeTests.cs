@@ -70,6 +70,8 @@ namespace Script.Tests
         {
             public readonly List<int> AskedPlayers = new List<int>();
             public readonly List<int> AskedCounts = new List<int>();
+            /// <summary>最近一次询问下发的候选 UID（断言"地区/种类限定"用）。</summary>
+            public List<string> LastCandidateUids = new List<string>();
             public string PickUid;
             public bool ConfirmNumber;      // 数值输入桩：true＝确认（支付），false＝取消
             public int NumberCalls;
@@ -79,14 +81,18 @@ namespace Script.Tests
                 System.Action<CardInstance> onPicked) { }
             public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
                 bool allowCancel, System.Action<CardInstance> onPicked)
+                => onPicked?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : null);
+            /// <summary>【2026-09·A81】牺牲/自选改走"**场上高亮 + 点击**"（`PromptPlayTarget`，候选＝UID）。</summary>
+            public void PromptPlayTarget(int chooserPlayerId, string prompt, bool isArea, List<string> candidateUids,
+                System.Action<string> onPicked)
             {
                 AskedPlayers.Add(chooserPlayerId);
-                AskedCounts.Add(candidates?.Count ?? 0);
-                CardInstance picked = null;
-                if (!string.IsNullOrEmpty(PickUid) && candidates != null)
-                    foreach (var c in candidates) if (c.UID == PickUid) picked = c;
-                picked ??= (candidates != null && candidates.Count > 0 ? candidates[0] : null);
-                onPicked?.Invoke(picked);
+                AskedCounts.Add(candidateUids?.Count ?? 0);
+                LastCandidateUids = new List<string>(candidateUids ?? new List<string>());
+                string pick = null;
+                if (!string.IsNullOrEmpty(PickUid) && candidateUids != null && candidateUids.Contains(PickUid)) pick = PickUid;
+                pick ??= (candidateUids != null && candidateUids.Count > 0 ? candidateUids[0] : null);
+                onPicked?.Invoke(pick);
             }
             public void PromptCurbMarks(int curbedPlayerId, int remaining,
                 List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid) { }
@@ -135,6 +141,22 @@ namespace Script.Tests
             Assert.AreEqual("目标玩家", jc065.Actions[0].Args[1], "谁＝目标玩家（对手）");
             Assert.AreEqual("目标地区", jc065.Actions[0].Args[2], "地区＝目标地区");
             Assert.AreEqual(ActionVerb.Curb, jc065.Actions[1].Verb, "随后遏制");
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径·修复】JC065 卡文**快速行动** ⇒ 打出档位必须是 **C 档**（`PlayTiming.Response`）：
+        /// 任意有优先权时均可打出（含响应窗口 / 非行动阶段）。
+        /// 用户实测报障："JC065 的门禁疑似错误，现在不能在非行动阶段发动"——
+        /// 根因＝原先 `LimitToActionPhaseOnly=true`（B 档＝只允许行动阶段）＋ `PlayTiming.MainPhase`。
+        /// 与 JC049 的同类修复（卡文『快速』⇒ 快速（响应）档）同口径。
+        /// </summary>
+        public void TestMultiSacrifice_JC065为快速行动不限行动阶段()
+        {
+            var tmpl = Load("JC065_shenwenxianyiren");
+            Assert.IsTrue(tmpl.CanPlayAsResponse(),
+                "卡文『快速行动』⇒ 含 PlayTiming.Response 效果 ⇒ 可响应打出（C 档）");
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly,
+                "『快速行动』不得被『限行动阶段』门禁挡在非行动阶段之外（B 档）");
         }
 
         // ==================== ② 每位玩家各牺牲一个角色：先手先问 → 一起牺牲 ====================
@@ -305,15 +327,18 @@ namespace Script.Tests
         /// </summary>
         private sealed class AsyncPickStub : Script.Interfaces.IGameUIHooks
         {
-            public readonly List<(int PlayerId, List<CardInstance> Candidates, System.Action<CardInstance> Callback)> Pending
-                = new List<(int, List<CardInstance>, System.Action<CardInstance>)>();
+            public readonly List<(int PlayerId, List<string> Candidates, System.Action<string> Callback)> Pending
+                = new List<(int, List<string>, System.Action<string>)>();
 
             public void PromptPayOrTap(CardInstance source, int payAmount) { }
             public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
                 System.Action<CardInstance> onPicked) { }
             public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
-                bool allowCancel, System.Action<CardInstance> onPicked)
-                => Pending.Add((chooserPlayerId, candidates, onPicked));   // 不触发回调＝等待玩家点击
+                bool allowCancel, System.Action<CardInstance> onPicked) { }
+            /// <summary>【A81】牺牲自选＝"场上高亮 + 点击"：登记窗口与回调，**不立即回调**（等玩家点击）。</summary>
+            public void PromptPlayTarget(int chooserPlayerId, string prompt, bool isArea, List<string> candidateUids,
+                System.Action<string> onPicked)
+                => Pending.Add((chooserPlayerId, new List<string>(candidateUids ?? new List<string>()), onPicked));
             public void PromptCurbMarks(int curbedPlayerId, int remaining,
                 List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid)
                 => onPickedAreaUid?.Invoke(null);   // 不做分配（按兜底补齐）
@@ -334,15 +359,20 @@ namespace Script.Tests
                 Assert.IsTrue(Pending.Count > 0, "前置：应有一个等待玩家的窗口");
                 var (_, candidates, cb) = Pending[0];
                 Pending.RemoveAt(0);
-                CardInstance picked = null;
-                if (!string.IsNullOrEmpty(pickUid) && candidates != null)
-                    foreach (var c in candidates) if (c.UID == pickUid) picked = c;
+                string picked = null;
+                if (!string.IsNullOrEmpty(pickUid) && candidates != null && candidates.Contains(pickUid)) picked = pickUid;
                 picked ??= (candidates != null && candidates.Count > 0 ? candidates[0] : null);
                 cb?.Invoke(picked);
             }
         }
 
-        public void TestMultiSacrifice_异步窗口_未点击前不牺牲()
+        /// <summary>
+        /// 【2026-09·用户口径 A81】异步窗口下的**逐位立即落地**：
+        ///  · 未点击前绝不牺牲（回归 P0 缺陷）；
+        ///  · 先手玩家点击后**立即**进墓地（不再"全部选完才一起牺牲"）——后手此时能看到它已在墓地；
+        ///  · 随后才打开后手玩家的窗口。
+        /// </summary>
+        public void TestMultiSacrifice_异步窗口_逐位立即落地()
         {
             var game = NewGame();
             game.TurnManager.FirstPlayerId = 1;
@@ -363,21 +393,20 @@ namespace Script.Tests
                 "**玩家尚未点击 → 绝不允许牺牲任何卡**（回归：旧实现此刻已把第一候选牺牲掉）");
             Assert.AreEqual(CardZone.AreaZone, p1b.CurrentZone, "同上（第二候选同样不该被牺牲）");
 
-            // 玩家点击"第二个候选" → 记录选择；**按既定口径"全部选完再一起牺牲"**，此刻尚未落地
+            // 玩家点击"第二个候选" → **立即落地**（A81：不再"全部选完再一起牺牲"）
             stub.ClickOldest(p1b.UID);
-            Assert.AreEqual(CardZone.AreaZone, p1b.CurrentZone,
-                "选完 P1 后仍未落地牺牲（口径：全部选定后**一起**牺牲）");
-            Assert.AreEqual(1, stub.Pending.Count, "继续询问下一位玩家（P2）");
+            Assert.AreEqual(CardZone.Graveyard, p1b.CurrentZone,
+                "先手点击后**立即进墓地**（后手此刻已能看到）");
+            Assert.AreEqual(1, stub.Pending.Count, "随后才询问下一位玩家（P2）");
             Assert.AreEqual(2, stub.Pending[0].PlayerId, "被问的是后手玩家");
+            Assert.AreEqual(CardZone.AreaZone, p1a.CurrentZone, "未被点击的候选始终留在场上");
 
             stub.ClickOldest(p2a.UID);
-            Assert.AreEqual(CardZone.Graveyard, p1b.CurrentZone, "全部选完 → 按**玩家点击的候选**牺牲（不是第一候选）");
             Assert.AreEqual(CardZone.Graveyard, p2a.CurrentZone, "P2 的选择同样按点击落地");
-            Assert.AreEqual(CardZone.AreaZone, p1a.CurrentZone, "未被点击的候选始终留在场上（旧实现会误牺牲它）");
             Assert.AreEqual(0, stub.Pending.Count, "两位玩家都选完 → 不再有窗口");
         }
 
-        public void TestMultiSacrifice_异步窗口_全部选完才落地且动作链续算()
+        public void TestMultiSacrifice_异步窗口_落地后动作链续算()
         {
             var game = NewGame();
             var areas = game.AreaManager.GetOrderedAreaUids();

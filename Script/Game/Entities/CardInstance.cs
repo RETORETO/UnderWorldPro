@@ -1,4 +1,4 @@
-using Script.Data.Cards;
+﻿using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
 using System;
@@ -77,6 +77,8 @@ namespace Script.Game.Entities
         // ---------- 先手能力值（当前实际值，含持续效果加成） ----------
         // 白眼=先手调查能力：持续效果满足前提时，每"白眼"给 FirstStrikeInvestigation +1（对应卡文"白眼白眼"叠加）。
         public int CurrentFirstStrikeInvestigation { get; set; }
+        
+        
         public int CurrentFirstStrikeStrength { get; set; }
 
         // ---------- 静止/禁止标记（D19-⑤） ----------
@@ -276,6 +278,36 @@ namespace Script.Game.Entities
             return _counters.TryGetValue(type, out var cur) && cur > 0;
         }
 
+        /// <summary>
+        /// 【2026-09 修复·JC030/JC031】**死亡瞬间的"当前子类别"集合快照**。
+        /// 与 `_countersAtDeath` 同因同理：死亡触发在"卡仍在场上"时广播，但**结算发生在卡已进墓地之后**，
+        /// 而离场会 `ResetToBaseState()` 清空**运行期授予**（含 `SubCategory` 授予，如 JC030「血领域忠诚≥2
+        /// ⇒ 额外具有吸血鬼类别」）⇒ 以子类别为条件的死亡触发（`DiedVampireCharacter`）在结算阶段复检时
+        /// 恒不成立（用户实测："JC030 可以触发 JC031 让对手随机弃牌的效果，现在不行"）。
+        /// 由 `CardManager.ResolveDeath` 在**广播死亡事件之前**抓取；谓词读它。
+        /// （快照在**每一次**死亡时重写，不会残留上一次死亡的数据。）
+        /// </summary>
+        private List<string> _subCategoriesAtDeath = new List<string>();
+
+        /// <summary>【2026-09】死亡瞬间的"当前子类别"快照（只读；未死亡过为空）。</summary>
+        public IReadOnlyList<string> SubCategoriesAtDeath => _subCategoriesAtDeath;
+
+        /// <summary>【2026-09】在**广播死亡事件之前**抓取当前子类别快照（由 `CardManager.ResolveDeath` 调用）。</summary>
+        public void SnapshotSubCategoriesAtDeath()
+        {
+            _subCategoriesAtDeath.Clear();
+            foreach (var s in CurrentSubCategories)
+                if (!string.IsNullOrEmpty(s)) _subCategoriesAtDeath.Add(s);
+        }
+
+        /// <summary>【2026-09】死亡瞬间是否具有某子类别（快照优先；无快照则看当前集合）。</summary>
+        public bool HadSubCategoryAtDeath(string sub)
+        {
+            if (string.IsNullOrEmpty(sub)) return false;
+            if (_subCategoriesAtDeath.Count > 0) return _subCategoriesAtDeath.Contains(sub);
+            return HasSubCategory(sub);
+        }
+
         // ---------- 持续/修正效果动态授予（由 EffectEngine 持续注册表增删，离场/封印时还原） ----------
         // 与基础能力值(Current*)分离：此处记录"由效果赋予的"关键字/图标/标志属性，便于精确还原。
         private HashSet<string> _grantedKeywords = new HashSet<string>();   // 关键字：公开、先手、调查…
@@ -469,6 +501,7 @@ namespace Script.Game.Entities
 
                     // 白眼=先手调查：每"白眼"(Attribute="先手调查")给先手调查+1（卡文"白眼白眼"叠加）
                     if (value == "先手调查") CurrentFirstStrikeInvestigation += amount;
+                    // 【2026-09·JC051】白星=先手势力：与白眼同款即时叠加（重算时也会按属性重建，双保险）
                     // 黑眼=调查：每"黑眼"(Attribute="调查")给基础调查+1（JC030 等，不受先手限制）
                     else if (value == "调查") CurrentInvestigation += amount;
                     // 黑刀=战力：每"黑刀"(Attribute="战斗")给基础战力+1（JC060 光环，对称调查做法；实际结算经 AreaStatsCalculator 读 CurrentStrength）
@@ -534,6 +567,7 @@ namespace Script.Game.Entities
 
                     // 白眼=先手调查：撤销时回退先手调查
                     if (value == "先手调查") CurrentFirstStrikeInvestigation -= amount;
+                    // 【2026-09·JC051】白星=先手势力：撤销时同步回退
                     // 黑眼=调查：撤销时回退基础调查
                     else if (value == "调查") CurrentInvestigation -= amount;
                     // 黑刀=战力：撤销时回退基础战力
@@ -601,6 +635,7 @@ namespace Script.Game.Entities
             IEnumerable<string> grantedIcons,
             IDictionary<string, int> grantedAttributes,
             int currentFirstStrikeInvestigation,
+            // 【2026-09·JC051】先手临时势力（白星）投影字段（与"先手调查/先手战斗"并列）
             int currentFirstStrikeStrength)
         {
             _staticFlags.Clear();
@@ -638,6 +673,7 @@ namespace Script.Game.Entities
                     if (!string.IsNullOrEmpty(kv.Key) && kv.Value != 0) _grantedAttributes[kv.Key] = kv.Value;
 
             CurrentFirstStrikeInvestigation = currentFirstStrikeInvestigation;
+            // 【2026-09·JC051】先手临时势力（白星）同样随投影还原（联机客户端卡面靠它显示）
             CurrentFirstStrikeStrength = currentFirstStrikeStrength;
         }
 
@@ -746,7 +782,12 @@ namespace Script.Game.Entities
             }
             // 【P1】白刀/黑星：先手战力与势力同样按"基础 + 授予"重建（保持与 调查/战斗 对称）
             CurrentFirstStrikeStrength += GetAttribute("先手战斗");
+            // 【2026-09·JC051 用户口径】白星＝先手势力：与上面"先手调查/先手战斗"同款重建
+            // （基础 FirstStrikePower + 已授予的"先手势力"），否则授予的白星在重算后丢失、卡面/投影看不到。
             CurrentPower += GetAttribute("势力");
+            // 【2026-09·JC051 卡面 UI】记录"最近一次重算时本卡控制者是否为先手玩家"：卡面按**与对抗结算
+            // 同一口径**补算【先手势力】（`AreaStatsCalculator` 也是 `isFirst ? GetAttribute("先手势力") : 0`），
+            // 而**不改 `CurrentPower` 的既有语义**（避免影响对抗数值与既有用例）。
             // 实例魔法领域：模板固有（过滤-1哨兵）+ 运行时授予（_grantedDomains，JC060 光环等）两部分。
             // 对称 JC001 白眼机制：重算时从"模板固有 + 授予集合"直接重建，不依赖反推，避免每回合先手重算冲刷光环授予的域。
             // 【P3·K20】领域抑制期间（"失去所有魔法领域图标"）→ `RebuildDomains` 会跳过重填（否则重算会把图标复活）。
@@ -935,6 +976,7 @@ namespace Script.Game.Entities
                 CurrentPower = PlayerTemplate.Power;
                 CurrentDefense = PlayerTemplate.Defense >= 0 ? PlayerTemplate.Defense : -1;
                 CurrentFirstStrikeInvestigation = PlayerTemplate.FirstStrikeInvestigation;
+            // 【2026-09·JC051】先手临时势力（白星）：复位到印刷值
                 CurrentFirstStrikeStrength = PlayerTemplate.FirstStrikeStrength;
             }
 

@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -940,6 +940,7 @@ public partial class ZoneManager : Node
             CurrentInvestigation = c.CurrentInvestigation,
             CurrentStrength = c.CurrentStrength,
             CurrentPower = c.CurrentPower,
+            // 【2026-09·JC051】卡面显示势力：与 AreaStatsCalculator 同一算式（含先手势力的叠加）
             CurrentDefense = c.CurrentDefense,
             MagicDomains = new System.Collections.Generic.List<Script.Enums.MagicDomain>(c.MagicDomains),
             // 目标有效性/状态版本号补全（C/S 化·第一批）：之前 ToSnapshot 漏导出的三个运行时字段，
@@ -969,6 +970,7 @@ public partial class ZoneManager : Node
         if (c.GrantedAttributes != null)
             foreach (var kv in c.GrantedAttributes) r.GrantedAttributes[kv.Key] = kv.Value;
         r.CurrentFirstStrikeInvestigation = c.CurrentFirstStrikeInvestigation;
+        
         r.CurrentFirstStrikeStrength = c.CurrentFirstStrikeStrength;
         // 【K23】每回合每能力使用次数（客户端可发动判定要读；与服务端同解）
         if (c.AbilityUsesThisTurn.Count > 0)

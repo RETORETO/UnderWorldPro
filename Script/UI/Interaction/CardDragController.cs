@@ -35,6 +35,14 @@ namespace Script.UI.Interaction
         private ModalWindowCoordinator _modalCoordinator;
 
         private CardUI _draggingHandCard;
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测"多弹了一个选择框"】已经处理过"拖拽结束"的那张卡 UI：
+        /// `CardDragEnded` 可能被重复投递（多份订阅 / `CardUI._GuiInput` 与 Arena 全局输入两条路径），
+        /// 于是同一次拖拽会走多遍完整流程、每遍各弹一个选择框（实测 JC062 两框、JC063 三框）。
+        /// 本字段在 `TryBeginDragAt`（新拖拽开始）时清空，故"同一张卡再拖一次"不受影响。
+        /// </summary>
+        private CardUI _lastHandledDragEndUi;
         private CardUI _lastDragHoverTarget;
 
         // ===== D9 激活框架：场上卡激活拖拽状态 =====
@@ -66,6 +74,7 @@ namespace Script.UI.Interaction
                 if (hit != null && hit.CanDrag)
                 {
                     _draggingHandCard = hit;
+                    _lastHandledDragEndUi = null;   // 【2026-09】新的拖拽开始 ⇒ 允许本次拖拽结束时被处理一次
                     hit.BeginDrag();
                     return true;
                 }
@@ -92,6 +101,34 @@ namespace Script.UI.Interaction
 
         public void OnCardDragEnded(CardUI cardUI, bool dropped)
         {
+            // ============================================================
+            // 【2026-09 修复·用户实测"多弹出了一个选择框"（JC062 两个、JC063 三个）】
+            // 同一次鼠标释放可能被**送达多次**（`CardUI.CardDragEnded` 信号 + Arena 全局输入路径等），
+            // 于是本方法被重复调用。重复调用的**致命点**在原顺序：
+            //   ① 第一次调用开了选择窗并把卡从手牌移出（进入选择流程）；
+            //   ② 第二次调用先撞上"模态冻结"分支 → `ReturnCardToHand` ⇒ **把卡塞回手牌**；
+            //   ③ 于是再来一次调用又能通过"在手牌"判定 → **再走一遍完整流程** ⇒ 每遍各弹一个选择框。
+            // 修法：把"**卡已不在手牌 ⇒ 一律忽略**"提到最前（且**不再归位**），重复投递被就地吞掉。
+            // 注意：这**不影响**正常的"模态打开期间禁止拖拽出牌"——那时卡仍在手牌，会照常走下面的冻结分支。
+            // ============================================================
+            bool stillInHand = cardUI != null
+                               && (_arena.HandCardUIs.Contains(cardUI) || _arena.HandCardUIs2.Contains(cardUI));
+            if (!stillInHand)
+            {
+                GD.Print($"[DragController.DragEnd] 卡已不在手牌（重复的拖拽结束投递）→ 忽略：" +
+                         $"{cardUI?.Instance?.PlayerTemplate?.CardName}");
+                return;
+            }
+            // 同一张卡 UI 的**同一次拖拽**只处理一次：`CardDragEnded` 可能被重复投递（多份订阅/全局输入路径），
+            // 标记在 `TryBeginDragAt`（新的拖拽开始）时清除，故不影响"同一张卡再拖一次"。
+            if (ReferenceEquals(_lastHandledDragEndUi, cardUI))
+            {
+                GD.Print($"[DragController.DragEnd] 同一次拖拽已处理过 → 忽略重复投递：" +
+                         $"{cardUI.Instance?.PlayerTemplate?.CardName}");
+                return;
+            }
+            _lastHandledDragEndUi = cardUI;
+
             // 模态窗口（调查/战斗/触发排序）打开期间冻结出牌，避免原子操作执行期间被打断（核心需求 7.3）
             if (_arena.IsDragInteractionLocked)
             {
@@ -103,13 +140,10 @@ namespace Script.UI.Interaction
             var instance = cardUI.Instance;
             if (instance == null) return;
 
+            // 注：原先这里还有一次"非手牌卡 → 忽略"的判定；现已提到方法最前（见上方"重复投递"注释），
+            // 此处不再重复判定（避免两处守卫口径漂移）。
             bool inHand1 = _arena.HandCardUIs.Contains(cardUI);
             bool inHand2 = _arena.HandCardUIs2.Contains(cardUI);
-            if (!inHand1 && !inHand2)
-            {
-                GD.Print($"[DragController.DragEnd] 非手牌卡({instance.PlayerTemplate?.CardName})的拖拽被忽略，归位原位");
-                return;
-            }
 
             int playerId = inHand2 ? 2 : 1;
             List<CardUI> hand = playerId == 1 ? _arena.HandCardUIs : _arena.HandCardUIs2;
@@ -222,9 +256,30 @@ namespace Script.UI.Interaction
 
             // 事务卡（需选目标）：不再要求精确落在目标上，改为拖出后弹窗选目标（复用 JC012 激活弹窗模式）。
             // 若仍拖到了合法目标卡上（targetCardUid 非空），则沿用原有"落点即目标"快速路径。
-            if (isSorceryCard && requiresTarget
-                && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaName))
+            //
+            // 【2026-09 修复·用户实测 JC063】**"模式分支"与"多目标槽位"的事务卡必须走专用选择流程，
+            // 不能在落在目标上时走"落点即目标"快速路径**——那条路径直接 `PlayCard`（不带 modeIndex /
+            // 逐槽选择），于是：
+            //  · JC063「选择一项」：落点即目标 ⇒ `PlayCard(modeIndex=-1)` 被拒（"需要先选择一项模式"），
+            //    或即使能打出也不是按所选模式的目标类别（用户口径："选择一项以后才需要选择目标，
+            //    其中一个只能以角色为目标（潜伏）、另一个只能以暗藏者为目标（移回手牌）"）；
+            //  · JC021/JC092/JC133 等 `TargetSlots` 卡：同样被拒（"需要多目标选择（未提供逐槽选择）"）。
+            // 故对这两类卡，无论落点是什么，一律交给 `BeginSorceryTargetSelection`（它内部按
+            // 模式 → 该模式目标 / 逐槽取目标 → 确认面板 的正确顺序处理）。
+            bool needsSelectionFlow = isSorceryCard
+                && (Script.Manager.MultiTargetSlots.FindModeEffect(
+                        instance.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast) != null
+                    || Script.Manager.MultiTargetSlots.FindMultiTargetEffect(
+                        instance.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast) != null);
+            if (needsSelectionFlow
+                || (isSorceryCard && requiresTarget
+                    && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaName)))
             {
+                // 【诊断】把"为什么走专用流程"留在日志里：模式卡/多目标卡必须**先选模式/逐槽**再取目标，
+                // 不允许"落点即目标"（否则会被规则层拒：需要先选择一项模式 / 需要多目标选择）。
+                if (needsSelectionFlow)
+                    GD.Print($"[DragController.DragEnd] 『{instance.PlayerTemplate?.CardName}』声明了模式/多目标槽位 " +
+                             $"⇒ 一律走专用选择流程（先选模式/逐槽，再取目标）；本次落点 targetCard={targetCardUid} targetArea={targetAreaName}");
                 ClearDragTargetHighlights();
                 _arena.BeginSorceryTargetSelection(instance, cardUI, playerId, hand);
                 return;
@@ -528,7 +583,7 @@ namespace Script.UI.Interaction
             var arrow = _arena.StackArrowScene?.Instantiate<StackArrow>();
             if (arrow != null)
             {
-                arrow.ZIndex = 4095;
+                arrow.ZIndex = Layers.Arrows;
                 arrow.ZAsRelative = false;
                 _arena.ArrowLayer?.AddChild(arrow);
                 _activateArrow = arrow;

@@ -53,13 +53,18 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC124_1_PlacePhilosopherStone",
                 Timing = EffectTiming.CharacterActivated,
+                // 【2026-09 整体复查·修复】卡文"**行动3**"⇒ 必须显式声明行动窗口。
+                // 旧实现漏了 `ActivateWindow`（默认空串 ⇒ `ActivateEligibility` 的"行动"判定被跳过）
+                // ⇒ 该能力被当成"只需优先权"（响应窗口也能发动），与卡文的"行动"不符。
+                ActivateWindow = "行动",
                 Cost = 3,
                 Forced = false,
                 Target = new TargetSpec
                 {
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
-                    CanTargetSelf = false,
+                    // 【2026-09 整体复查·修复】卡文"目标角色"未排除自身 ⇒ 允许取自身（JC004 口径；在自身放哲人石标志是合法玩法）
+                    CanTargetSelf = true,
                     IncludeCovert = false,   // 卡文只写"目标角色"
                 },
                 Actions = new Array<EffectAction>

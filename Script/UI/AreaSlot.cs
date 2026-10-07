@@ -141,18 +141,37 @@ public partial class AreaSlot : Control
         SelfModulate = on ? new Color(1.2f, 1.2f, 0.4f) : Colors.White;
     }
 
+    /// <summary>
+    /// 【2026-09 用户口径 JC021】**"已选中"态**：与"可选"高亮（`SetHighlight`，走 `SelfModulate` 黄色）区分开，
+    /// 这里走 `Modulate` 绿色叠加 —— 于是"已被选中的地区"仍然看得见（否则选中后它不再是候选、
+    /// 高亮被撤掉，玩家会以为"地区没有高亮"）。
+    /// </summary>
+    public void SetSelected(bool on) => Modulate = on ? new Color(0.72f, 1f, 0.72f) : Colors.White;
+
     /// <summary>由 Arena 在选目标（地区槽位）激活时设置本槽位是否为可选目标。</summary>
     public bool IsTargetSelectable { get; set; }
+
+    /// <summary>【2026-09·JC021 多选】地区槽位**右键**回调（"左键选择、右键取消"的取消侧）。</summary>
+    public System.Action<string> OnAreaRightClicked;
 
     public override void _GuiInput(InputEvent @event)
     {
         // 仅当本槽位是"机动取目标"的可选目标时，点击才回传地区 UID。
         // 选目标窗口为 Control 叠加层（非独占模态 Window），不吞掉下层 _GuiInput，故此处可靠触发。
         if (!IsTargetSelectable) return;
-        if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
+        if (@event is InputEventMouseButton mb && mb.Pressed)
         {
-            OnAreaClicked?.Invoke(_areaUID);
-            GetViewport().SetInputAsHandled();
+            if (mb.ButtonIndex == MouseButton.Left)
+            {
+                OnAreaClicked?.Invoke(_areaUID);
+                GetViewport().SetInputAsHandled();
+            }
+            else if (mb.ButtonIndex == MouseButton.Right)
+            {
+                // 【2026-09·JC021】右键＝取消对该地区的选择（与卡的"左键选择右键取消"同口径）
+                OnAreaRightClicked?.Invoke(_areaUID);
+                GetViewport().SetInputAsHandled();
+            }
         }
     }
 

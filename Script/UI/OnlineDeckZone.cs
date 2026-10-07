@@ -53,7 +53,7 @@ namespace Script.UI
                 ui.ProcessMode = ProcessModeEnum.Disabled;
                 ui.AnchorLeft = 0; ui.AnchorRight = 0; ui.AnchorTop = 0; ui.AnchorBottom = 0;
                 ui.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
-                ui.Position = new Vector2(i * PILE_OFFSET, -i * PILE_OFFSET);   // 轻微错位叠放
+                ui.Position = new Vector2(i * PILE_OFFSET, i * PILE_OFFSET);   // 轻微错位叠放（右下，与单机 DeckZone/GraveyardZone 统一）
                 ui.ZIndex = i;
                 _backs.Add(ui);
             }

@@ -43,7 +43,10 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
                     IncludeCovert = true,                      // "目标角色或暗藏者"
-                    CanTargetSelf = false,
+                    // 【2026-09 整体复查·修复】卡文"消灭目标角色或暗藏者"**未排除自身**（也不限地区）⇒
+                    // 按 JC004 既定口径应允许取自身（`TargetSpec.CanTargetSelf` 默认 false，漏声明＝静默排除自身）；
+                    // 代价侧"另一个角色"的排除由 `SacrificeCost.ExcludeSource` 单独承担，与此无关。
+                    CanTargetSelf = true,
                 },
                 Actions = new Array<EffectAction>
                 {

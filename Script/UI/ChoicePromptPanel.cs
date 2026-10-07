@@ -106,6 +106,9 @@ namespace Script.UI
                 case ChoiceRequest.Kind.ConfirmTargets:
                     BuildConfirmTargets(request);
                     break;
+                case ChoiceRequest.Kind.FieldMultiPick:
+                    BuildFieldMultiPick(request);
+                    break;
                 case ChoiceRequest.Kind.SelectEffectMode:
                     BuildEffectMode(request);
                     break;
@@ -446,6 +449,34 @@ namespace Script.UI
             _buttonBox.AddChild(hint);
 
             var spins = new List<(string uid, SpinBox spin, int max)>();
+            // 【2026-09 用户口径·遏制分配钳制】`request.Amount` ＝遏制值 X（本玩家总共要移除的势力标志数）。
+            // 规则：① 多个框的分配之和达到 X 后 ⇒ **其余"增加分配"按钮/输入一律置灰**（不能再多分配）；
+            //       ② 某个框**手输/步进**超过 `X − 其他地区已分配` 时 ⇒ **立即钳制**为该上限
+            //          （同时仍不超过该地区自身上限 `cap`）。
+            // 实现：每次任一 SpinBox 变化都重算所有框的**动态上限** `min(cap, X − 其他框之和)`，
+            // 越界值当场回写，并把 `MaxValue` 收紧到该上限（SpinBox 的增减按钮与手输都会被 Godot 再钳一次），
+            // 上限为 0（已达 X）时置灰不可编辑。服务端仍会权威复检（防回包越界）。
+            bool reflowing = false;
+            System.Action refillLimits = null;
+            refillLimits = () =>
+            {
+                if (reflowing) return;                 // 防"回写 Value → ValueChanged → 再回写"的递归
+                reflowing = true;
+                int total = 0;
+                foreach (var (_, s, _) in spins) total += (int)Math.Round(s.Value);
+                foreach (var (_, s, cap) in spins)
+                {
+                    int mine = (int)Math.Round(s.Value);
+                    int others = total - mine;
+                    int allowedMax = Math.Max(0, Math.Min(cap, request.Amount - others));
+                    if (mine > allowedMax) s.Value = allowedMax;   // ② 越界当场钳制
+                    s.MinValue = 0;
+                    s.MaxValue = allowedMax;
+                    s.Editable = allowedMax > 0;                   // ① 该框已达上限 ⇒ 置灰（不可再增加/输入）
+                    s.Modulate = allowedMax > 0 ? Colors.White : new Color(1f, 1f, 1f, 0.45f);
+                }
+                reflowing = false;
+            };
             if (request.OptionUids != null)
             {
                 for (int i = 0; i < request.OptionUids.Count; i++)
@@ -469,12 +500,14 @@ namespace Script.UI
                     name.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
                     var spin = new SpinBox { MinValue = 0, MaxValue = cap, Value = 0 };
                     spin.SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd;
+                    spin.ValueChanged += _ => refillLimits();      // 任一框变化 → 重算所有框的动态上限
                     row.AddChild(name);
                     row.AddChild(spin);
                     _buttonBox.AddChild(row);
                     spins.Add((uid, spin, cap));
                 }
             }
+            refillLimits();   // 初始收口（把每框上限按"X − 其他框"收紧）
 
             var confirm = new Button { Text = "确认分配" };
             confirm.Pressed += () =>
@@ -561,8 +594,95 @@ namespace Script.UI
         }
 
         /// <summary>
+        /// 【2026-09 用户口径 JC062/JC021·联机】整窗多选的**按钮式兜底**（通用决策面板用）：
+        /// 卡候选与地区候选各列一组**可切换**按钮（再点一次取消该选择），并有"确认/取消"。
+        /// 图形客户端由 `ArenaOl.OpenOnlineFieldMultiPickWindow` 走"场上高亮 + 左键/右键"的同款窗；
+        /// 本分支只保证"没有场上 UI 的客户端（含机器人/无头端）也能回答"，避免请求无人应答而超时。
+        /// </summary>
+        private void BuildFieldMultiPick(ChoiceRequest request)
+        {
+            var pickedCards = new System.Collections.Generic.List<string>();
+            var pickedAreas = new System.Collections.Generic.List<string>();
+            var cardBtns = new System.Collections.Generic.List<(Button Btn, string Uid)>();
+            var areaBtns = new System.Collections.Generic.List<(Button Btn, string Uid)>();
+
+            System.Action refresh = null;
+            bool CanConfirm()
+                => pickedCards.Count >= request.MultiMinCards && pickedCards.Count <= request.MultiMaxCards
+                   && pickedAreas.Count <= System.Math.Max(0, request.MultiMaxAreas)
+                   && (!request.MultiAreaRequired || pickedAreas.Count >= 1);
+
+            System.Action<(Button Btn, string Uid), System.Collections.Generic.List<string>> toggle =
+                (entry, list) =>
+                {
+                    if (list.Contains(entry.Uid)) list.Remove(entry.Uid);
+                    else if (list.Count < (list == pickedAreas ? System.Math.Max(0, request.MultiMaxAreas) : request.MultiMaxCards))
+                    {
+                        if (list == pickedAreas && request.MultiMaxAreas <= 1) list.Clear();   // 至多 1 个 ⇒ 换选
+                        list.Add(entry.Uid);
+                    }
+                    refresh?.Invoke();
+                };
+
+            var cardUids = request.OptionUids ?? new System.Collections.Generic.List<string>();
+            for (int i = 0; i < cardUids.Count; i++)
+            {
+                string uid = cardUids[i];
+                if (string.IsNullOrEmpty(uid)) continue;
+                string label = (request.OptionLabels != null && i < request.OptionLabels.Count
+                    && !string.IsNullOrEmpty(request.OptionLabels[i])) ? request.OptionLabels[i] : _resolveLabel(uid);
+                var btn = new Button { Text = label };
+                var entry = (btn, uid);
+                btn.Pressed += () => toggle(entry, pickedCards);
+                cardBtns.Add(entry);
+                _buttonBox.AddChild(btn);
+            }
+            foreach (var uid in request.OptionAreaUids ?? new System.Collections.Generic.List<string>())
+            {
+                if (string.IsNullOrEmpty(uid)) continue;
+                var btn = new Button { Text = _resolveLabel(uid) };
+                var entry = (btn, uid);
+                btn.Pressed += () => toggle(entry, pickedAreas);
+                areaBtns.Add(entry);
+                _buttonBox.AddChild(btn);
+            }
+
+            var hint = new Label { Text = request.Prompt ?? "请选择目标" };
+            hint.MouseFilter = Control.MouseFilterEnum.Ignore;
+            _buttonBox.AddChild(hint);
+
+            Button confirm = null;
+            refresh = () =>
+            {
+                foreach (var (btn, uid) in cardBtns)
+                    btn.Text = (pickedCards.Contains(uid) ? "✔ " : "") + _resolveLabel(uid);
+                foreach (var (btn, uid) in areaBtns)
+                    btn.Text = (pickedAreas.Contains(uid) ? "✔ " : "") + _resolveLabel(uid);
+                if (confirm != null) confirm.Disabled = !CanConfirm();
+            };
+
+            confirm = new Button { Text = "确认" };
+            confirm.Pressed += () =>
+            {
+                if (!CanConfirm()) return;
+                var res = new ChoiceResult { Confirmed = true, Cancelled = false };
+                res.SelectedUids.AddRange(pickedCards);
+                res.SelectedAreaUids.AddRange(pickedAreas);
+                Complete(res);
+            };
+            _buttonBox.AddChild(confirm);
+
+            var cancel = new Button { Text = "取消" };
+            cancel.Pressed += () => Complete(new ChoiceResult { Cancelled = true });
+            _buttonBox.AddChild(cancel);
+            refresh();
+        }
+
+        /// <summary>
         /// 【K16·模式分支】"选择一项"：把各模式列成按钮，点选即回包 `SelectedIndices[0]＝模式下标`；
         /// "取消（不打出）"回 `Cancelled=true`（服务端不扣费、不入堆叠）。
+        /// 【2026-09 用户口径 JC063】`OptionDisabled[i] == true` ⇒ 该模式**当前没有合法目标** ⇒ 按钮**置灰**
+        /// （点击无效；服务端仍会复检）。
         /// </summary>
         private void BuildEffectMode(ChoiceRequest request)
         {
@@ -570,9 +690,12 @@ namespace Script.UI
             for (int i = 0; i < labels.Count; i++)
             {
                 int captured = i;
-                var btn = new Button { Text = labels[i] ?? $"选项{captured + 1}" };
+                bool disabled = request.OptionDisabled != null && captured < request.OptionDisabled.Count
+                                && !request.OptionDisabled[captured];
+                var btn = new Button { Text = labels[i] ?? $"选项{captured + 1}", Disabled = disabled };
                 btn.Pressed += () =>
                 {
+                    if (disabled) return;   // 置灰项：点击不产生选择
                     var r = new ChoiceResult { Cancelled = false };
                     r.SelectedIndices.Add(captured);
                     Complete(r);
@@ -590,11 +713,46 @@ namespace Script.UI
         /// 输入框初值＝`NumberDefault`（钳制到 [`NumberMin`,`NumberMax`]）；确认回 `SelectedAmounts[0]＝N`，
         /// 取消回 `Cancelled=true`（支付场景＝"不支付"）。
         /// </summary>
+        /// <summary>
+        /// 【2026-09 用户实测·JC064】该数值请求是否其实是"**是/否二选一**"（值域恒为 {0,1} 且带两个按钮文案）：
+        /// 是 ⇒ 客户端应渲染**两个按钮**而不是输入框（用户口径："JC064 支付费用的触发弹窗不需要输入框，
+        /// 参考 JC061"）。单一判定入口（`BuildNumberInput` 消费）。
+        /// </summary>
+        public static bool IsYesNoChoice(ChoiceRequest request)
+            => request != null && request.NumberMin == 0 && request.NumberMax == 1
+               && request.OptionLabels != null && request.OptionLabels.Count >= 2
+               && !string.IsNullOrEmpty(request.OptionLabels[0]) && !string.IsNullOrEmpty(request.OptionLabels[1]);
+
         private void BuildNumberInput(ChoiceRequest request)
         {
             int min = request.NumberMin;
             int max = System.Math.Max(min, request.NumberMax);
             int def = System.Math.Clamp(request.NumberDefault, min, max);
+
+            // 【2026-09 用户实测·JC064】"0/1 二选一"（如 `PayOrSacrificeSelf`＝"支付 N"/"牺牲"）**不要输入框**：
+            // 直接给两个按钮（标签取 `OptionLabels[0]/[1]`）——用户口径："JC064 支付费用的触发弹窗不需要输入框，
+            // 参考 JC061"。`ChoicePromptPanel.IsYesNoChoice` 为单一判定（单机 `NumberInputWindow` 之外的兜底面）。
+            if (IsYesNoChoice(request))
+            {
+                var yes = new Button { Text = request.OptionLabels[0] };
+                yes.Pressed += () =>
+                {
+                    var r = new ChoiceResult { Cancelled = false };
+                    r.SelectedAmounts.Add(1);
+                    Complete(r);
+                };
+                _buttonBox.AddChild(yes);
+
+                var no = new Button { Text = request.OptionLabels[1] };
+                no.Pressed += () =>
+                {
+                    var r = new ChoiceResult { Cancelled = false };
+                    r.SelectedAmounts.Add(0);   // 显式回 0＝"否"（与 `AskZeroOrOneViaGatewayAsync` 的 `chosen > 0` 判定一致）
+                    Complete(r);
+                };
+                _buttonBox.AddChild(no);
+                return;
+            }
 
             var row = new HBoxContainer();
             row.AddThemeConstantOverride("separation", 8);

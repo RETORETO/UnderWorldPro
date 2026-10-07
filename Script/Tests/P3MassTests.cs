@@ -165,6 +165,9 @@ namespace Script.Tests
             var e = FindEffect(shikoudi.PlayerTemplate, "JC052_1_DestroyAllOthersInArea");
             Assert.IsNotNull(e, "JC052 应有群体消灭效果");
             Assert.AreEqual(MassMode.AllInArea, e.Target.MassMode, "应声明群体模式");
+            // 【2026-09 修复·用户口径】卡文没有"你可以" ⇒ **非强制**（原先误写成强制触发）
+            Assert.IsFalse(e.Forced, "JC052 进场触发**不是**强制触发（用户实测报障）");
+            Assert.IsTrue(e.Target.VersionSkipsSelf, "『其他』＝与收集触发时**同一张卡**（版本号敏感的排除自身）");
 
             EffectEngine.Instance.ResolveEffect(e, shikoudi, null, a1);
 
@@ -173,6 +176,57 @@ namespace Script.Tests
             Assert.AreEqual(CardZone.Graveyard, covert.CurrentZone, "本地区暗藏者被消灭");
             Assert.AreEqual(CardZone.AreaZone, faraway.CurrentZone, "其他地区的角色不受影响");
             Assert.AreEqual(CardZone.AreaZone, shikoudi.CurrentZone, "卡文『其他』→ 来源自身不被消灭");
+        }
+
+        /// <summary>
+        /// 【2026-09 修复·用户口径】**版本号不同的自己照常被消灭**：
+        /// 用户举例："JC052 进场 → 进场触发 A 收集 → 翻面（版本号刷新）→ 重新现身 → 进场触发 B；
+        /// 两个进场触发都结算，**进场 A 应当消灭 JC052**（A 是版本号更老的 JC052 发动的）"。
+        /// 即"其他角色"里的"其他"＝**与收集该触发时同一张卡**；版本已变则现存这张"自己"可被消灭。
+        /// </summary>
+        public void TestK2_JC052_版本号不同的自己会被老触发消灭()
+        {
+            var game = NewGame(1);
+            string area = Areas(game)[0];
+            game.SetInputGateway(new EnterAllGateway());
+
+            var foe = OnField(game, Probe("TS_k2_52v_foe"), 2, area);
+            var shikoudi = OnField(game, Load("JC052_zhongyandeshikoudi"), 1, area);   // 进场触发入堆叠（记录版本号）
+            int collectedVersion = shikoudi.VersionId;
+
+            shikoudi.SetCovert(true);   // 翻面 → 版本号刷新（模拟"进场A 收集后翻面/重新现身"）
+            Assert.IsFalse(collectedVersion == shikoudi.VersionId, "前置：翻面刷新版本号");
+
+            ResolveStackOnce(game);
+
+            Assert.AreEqual(CardZone.Graveyard, shikoudi.CurrentZone,
+                "版本号已变 ⇒ 老触发把现存的这张『自己』一并消灭（用户口径）");
+            Assert.AreEqual(CardZone.Graveyard, foe.CurrentZone, "本地区其他角色照常被消灭");
+        }
+
+        /// <summary>【2026-09】JC047：**只有一方**在场上有角色时也照常结算（不该因另一方为空而整段不生效）。</summary>
+        public void TestK2_JC047_单方有角色也照常结算()
+        {
+            var game = NewGame(2);
+            var areas = Areas(game);
+            game.SetInputGateway(new EnterAllGateway());
+
+            // 所选地区只有**敌方**角色（施术者一方无角色）
+            var enemyOnly = OnField(game, Probe("TS_k2_47_enemyonly"), 2, areas[0]);
+            var card = game.CardManager.CreateCardInstance(Load("JC047_liehuozhongwei"), 1);
+            var e = FindEffect(card.PlayerTemplate, "JC047_1_DamageAllInChosenArea");
+            EffectEngine.Instance.ResolveEffect(e, card, null, areas[0]);
+            Assert.AreEqual(1, enemyOnly.Damage, "所选地区只有敌方角色 → 照样各受 1 点伤害");
+
+            // 反向：所选地区只有**本方**角色
+            var game2 = NewGame(2);
+            var areas2 = Areas(game2);
+            game2.SetInputGateway(new EnterAllGateway());
+            var mineOnly = OnField(game2, Probe("TS_k2_47_mineonly"), 1, areas2[0]);
+            var card2 = game2.CardManager.CreateCardInstance(Load("JC047_liehuozhongwei"), 1);
+            var e2 = FindEffect(card2.PlayerTemplate, "JC047_1_DamageAllInChosenArea");
+            EffectEngine.Instance.ResolveEffect(e2, card2, null, areas2[0]);
+            Assert.AreEqual(1, mineOnly.Damage, "所选地区只有本方角色 → 各受 1 点伤害");
         }
 
         /// <summary>群体动作**完整执行**：集合内全部死亡，且死亡触发出现在堆叠（触发窗口在效果之后）。</summary>
@@ -234,7 +288,7 @@ namespace Script.Tests
             Assert.IsNotNull(tmpl, "JC050 模板应可加载");
             Assert.IsNotNull(tmpl.TargetRules, "JC050 打出目标应为地区");
             Assert.AreEqual(TargetKind.Area, tmpl.TargetRules[0].Kind, "打出时选择目标地区");
-            Assert.IsTrue(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段打出");
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段打出 ⇒ **非快速**：不得在响应窗口打出（A档＝自己行动步骤且堆叠为空）");
 
             var e = FindEffect(tmpl, "JC050_1_DestroyAllInChosenArea");
             Assert.IsNotNull(e, "JC050 应有群体消灭效果");
@@ -328,6 +382,18 @@ namespace Script.Tests
             Assert.IsFalse(plain.IsTapped, "正面角色不受影响");
         }
 
+        /// <summary>
+        /// 【2026-09 用户口径·修复】JC056 进场触发**不是强制触发**：卡文只写"进场触发：横置…"，
+        /// 没有"强制"语义 ⇒ `Forced=false`（玩家可在触发排序窗口把它拖入放弃区）。
+        /// 用户实测报障："JC056 的进场触发效果不是强制触发"（原先误写成 `Forced=true` ⇒ 排序窗不能放弃）。
+        /// </summary>
+        public void TestK2_JC056非强制触发()
+        {
+            var e = FindEffect(Load("JC056_diqujingyuan"), "JC056_1_TapAllCovert");
+            Assert.IsNotNull(e, "JC056 应有『横置所有暗藏者』效果");
+            Assert.IsFalse(e.Forced, "JC056 进场触发不是强制触发（Forced=false，可放弃）");
+        }
+
         /// <summary>JC132 行动：选地区 → 横置该地区所有角色。</summary>
         public void TestK2_JC132_横置所选地区所有角色()
         {
@@ -371,9 +437,15 @@ namespace Script.Tests
             Assert.AreEqual(0, other.Damage, "未选择地区的角色不受伤害");
         }
 
-        /// <summary>触发排序全部入堆叠的网关。</summary>
-        private sealed class EnterAllGateway : Script.Net.IInputGateway
+        /// <summary>连续让过直到堆叠清空（群体效果/死亡触发的结算收尾）。</summary>
+        private static void ResolveStackOnce(GameInitializer game)
         {
+            for (int i = 0; i < 6 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+        }
+
+        /// <summary>触发排序全部入堆叠的网关。</summary>
+        private sealed class EnterAllGateway : Script.Net.IInputGateway        {
             public System.Threading.Tasks.Task<Script.Net.ChoiceResult> RequestChoice(int playerId, Script.Net.ChoiceRequest req)
             {
                 var r = new Script.Net.ChoiceResult { RequestId = req?.RequestId, Cancelled = false };

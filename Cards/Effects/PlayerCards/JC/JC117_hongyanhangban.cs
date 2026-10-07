@@ -39,6 +39,11 @@ namespace Cards.Effects.PlayerCards.JC
                 EffectId = "JC117_1_MoveFriendlyToTargetArea",
                 Timing = EffectTiming.AttachmentActivated,
                 ActivateWindow = "行动",                       // 卡文"只能在行动阶段发动"
+                // 【2026-09 整体复查·修复】卡文末句"**该能力只能在行动阶段发动**"再显式声明一次**阶段白名单**
+                // （`EffectData.OnlyPhases`）：`ActivateWindow="行动"` 管的是"行动窗口"（自己行动步骤 + 空堆叠 + 有行动权），
+                // 而白名单由 `PhaseGateRule` 统一判定（`ActivateEligibility` 高亮/候选 + `EffectEngine.ActivateAbility`
+                // 权威门禁都消费）⇒ 两层一致，且卡文规则有了独立的、可单测的落点。
+                OnlyPhases = "行动阶段",                         // = ActionFirst | ActionSecond
                 Cost = 1,                                      // "快速行动1"
                 ActivateCondition = "横置本角色",               // 横置此附属
                 Forced = false,

@@ -10,7 +10,10 @@ namespace Cards.Effects.PlayerCards.JC
     /// 卡文：公开（该角色不能被秘密派遣为暗藏者）持续：位于本地区的所有其他本方角色获得+1防御力。
     ///
     /// 实现（P3·E）：
-    ///  · 「公开」由引擎级词条提供（打出门禁，本卡无需额外声明）；
+    ///  · 【2026-09 整体复查·修复】**「公开」必须由本脚本显式装载**（`KeywordEffects.Public()`）：
+    ///    旧注释写的"由引擎级词条提供、本卡无需声明"是**错的**——`PlayerCardData.HasInherentKeyword`
+    ///    只读 `EffectDataList` 的 `ContinuousGrants`，**没有任何"按卡面文本自动装载关键字"的机制**
+    ///    ⇒ 不声明则 `HasPublicKeyword=false`，"不能被秘密派遣为暗藏者"门禁完全不生效（与 JC061/JC064 同类缺陷）。
     ///  · **持续光环**：`IsAura` + **`AuraLocalZoneOnly=true`**（只影响**本地区**＝与来源同一地区的角色）
     ///    + `ContinuousGrants{Attribute:"防御", 1}`（`CardInstance.Grant` 会把它折进 `CurrentDefense`，
     ///    语义与 `Gain{"防御"}` 一致）。范围＝"其他本方角色"（排除自身；非本方不受影响）。
@@ -22,6 +25,10 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            var publicKw = KeywordEffects.Public();
+            publicKw.EffectId = "JC059_0_Public";
+            data.EffectDataList.Add(publicKw);
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC059_A_AuraDefenseLocalZone",

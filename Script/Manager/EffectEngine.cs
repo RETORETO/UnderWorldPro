@@ -233,14 +233,42 @@ namespace Script.Manager
         /// 口径（用户 2026-09）：允许指定任意对手（甚至自己），目标在**入堆叠时锁定**；
         /// 动作参数里写 `"目标玩家"`（如 `Shuffle{"目标玩家"}`、`Inspect{"目标玩家牌库顶"}`）即指向它。
         /// </summary>
+        /// <summary>
+        /// 【2026-09·JC062/JC057 用户口径·检视结果呈现】**最外层结算的收尾外壳**：
+        /// 只负责"本次结算检视到的牌**合并成一个窗**呈现给检视者，等其点『确认』后再继续结算"
+        /// （`FlushInspectBatch`）；嵌套调用（效果里再结算效果）由 `_resolveDepth` 保证**只弹一次窗**。
+        /// 实际语义见 `ResolveEffectCore`（与改造前完全一致）。
+        /// </summary>
         public void ResolveEffect(EffectData data, CardInstance source, CardInstance target, string targetAreaId,
             int winnerId, int targetVersionId, int eventAmount,
-            System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId)
+            System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId,
+            int sourceVersionId = -1)
+        {
+            _resolveDepth++;
+            try
+            {
+                ResolveEffectCore(data, source, target, targetAreaId, winnerId, targetVersionId, eventAmount,
+                    choices, modeIndex, targetPlayerId, sourceVersionId);
+            }
+            finally
+            {
+                _resolveDepth--;
+            }
+            if (_resolveDepth <= 0) FlushInspectBatch();
+        }
+
+        private void ResolveEffectCore(EffectData data, CardInstance source, CardInstance target, string targetAreaId,
+            int winnerId, int targetVersionId, int eventAmount,
+            System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId,
+            int sourceVersionId = -1)
         {
             if (data == null) return;
             _currentEffectData = data;   // 【P3·K4】供动词读取本效果的声明（如 `FormChange`）
             // 【K24】本次结算的目标玩家（动作里 `"目标玩家"` 的解析来源）：必须在动作序列执行前设定。
             _currentTargetPlayerId = targetPlayerId;
+            // 【2026-09·JC052】**收集该效果时来源卡的版本号**（触发路径由 `StackEntry.SourceVersionId` 透传）：
+            // 群体集合据此判断"现存的自某某是否仍是当初那一张卡"（版本已变 ⇒ 可被老效果消灭）。
+            _currentSourceVersionId = sourceVersionId;
 
             // 【K1·"玩家选择"型动态值】前置取值：本效果声明 `ValueExpr="玩家选择"` 且本次尚无玩家给定的数字
             // → **先弹数值输入窗**（用户口径 A36：复用既有数值输入窗），把"待续结算"上下文存下并挂起；
@@ -263,7 +291,15 @@ namespace Script.Manager
 
             // 【K1】动态值 X 求值：为 0（或求值失败）→ **该效果不算发动**（不执行动作，直接返回）。
             var valueState = EvaluateDynamicValue(data, source, target, targetAreaId, eventAmount, out int dynValue, out string dynReason);
-            if (valueState == DynamicValueState.Blocked)
+            if (valueState == DynamicValueState.Blocked && data.ValueAtResolve)
+            {
+                // 【2026-09·JC048 用户口径】`ValueAtResolve=true`：X 依赖"同一条效果里更早的动作"的结果
+                // （先放时间标志、再按地区标志数造成伤害）⇒ 结算开头 X=0 **不得**判成"不算发动"。
+                // 此处放行，并在**每个动作执行前**重算 X（见 `ExecuteSequentialMassActions`），
+                // 使 `$X` 反映该动作执行**当时**的状态（含动作①刚放下的标志）。
+                GD.Print($"[EffectEngine] ↻ 动态值 X 结算时求值（开头不可用）：{data.EffectId} → 继续执行动作（{dynReason}）");
+            }
+            else if (valueState == DynamicValueState.Blocked)
             {
                 GD.Print($"[EffectEngine] ⏹ 动态值 X 不可用：{data.EffectId} → 不发动（{dynReason}）");
                 return;
@@ -291,7 +327,16 @@ namespace Script.Manager
             // 两者任一不满足都走 ElseBranch（JC031："另一个本方角色死亡"为门禁，"死亡的是吸血鬼角色"为分支）。
             // 【2026-09 修复·JC004】`Predicate == "Always"`（无门禁）时**仍要**求值 `BranchPredicate`：
             //   此前整段被 `Predicate != "Always"` 跳过 ⇒ 声明"门禁恒真 + 纯分支"的效果（JC004）**分支永不生效**。
-            if (data.Condition != null
+            if (_askBranchAnsweredYes)
+            {
+                // 【2026-09·JC031 用户口径】"…则**可以**改为…"：玩家已在 0/1 询问窗里选「是」→
+                // 本次是**复入结算**（`BeginAskBranchPrompt` 的回调重入）。此时**不得重算条件**：
+                // `TriggerContextCard` 是引擎级临时字段，回调（可能跨帧/被其它结算覆盖）里已不可靠，
+                // 重算 BranchPredicate 会把已确认的"是"判成不满足而落回 ElseBranch。
+                _askBranchAnsweredYes = false;
+                GD.Print($"[EffectEngine] ⇄ 分支询问已确认『是』→ 直接执行主分支 Actions（{data.EffectId}）");
+            }
+            else if (data.Condition != null
                 && (data.Condition.Predicate != "Always" || !string.IsNullOrEmpty(data.Condition.BranchPredicate)))
             {
                 // winnerId 透传给条件判定（供 WinnerIsSelf 使用）；targetAreaId 透传（供 WinnerInSameArea 使用）。
@@ -322,6 +367,16 @@ namespace Script.Manager
                     ExecuteActions(data.Condition.ElseBranch, source, target, data.Duration, targetAreaId);
                     return;
                 }
+                // 【2026-09·JC031 用户口径】"…则**可以**改为…"的"可以"＝由**发动者**在**结算时**决定
+                // 是否改用主分支（用户拍板：结算时问，即选完目标玩家、真正弃牌之前问）。
+                // 交互原语＝0/1 二选一（与 `SacrificeSelfOptional`/`PrepareUpkeep` 同款）；
+                // 无 UI 且无网关（headless/测试）→ 不做询问、照既有行为走主分支。
+                if (data.Condition.AskBranch && (UIHooks != null || InputGateway != null)
+                    && BeginAskBranchPrompt(data, source, target, targetAreaId, winnerId, targetVersionId,
+                        eventAmount, choices, modeIndex, targetPlayerId))
+                {
+                    return;   // 已开窗/已下行请求：等答复后复入结算
+                }
             }
 
             GD.Print($"[EffectEngine] 执行动作序列: EffectId={data.EffectId}, Actions数量={effActions?.Count ?? -1}");
@@ -351,6 +406,16 @@ namespace Script.Manager
                 return;
             }
             // 【K2】群体动作：对"地区内符合条件的所有卡"逐张执行同一动作序列（一次结算内全部完成）
+            // 【2026-09·JC048 用户口径】"**一条效果、动作按顺序执行**"模式（`TargetSpec.MassSequential`）：
+            // **不**走"整条动作序列对每个群体目标各跑一遍"，而是动作**按声明顺序**执行：
+            // 普通动作只执行一次；声明 `MassInArea` 的动作对群体集合各执行一次；声明 `RequirePredicate`
+            // 的动作条件不满足时跳过（表达卡文"然后若…则…"）。必须在下面的 IsMass 分支**之前**判定。
+            if (data?.Target?.MassSequential == true)
+            {
+                ExecuteSequentialMassActions(effActions, data, source, targetAreaId, data.Duration, target);
+                RegisterPendingFor(data, source);
+                return;
+            }
             if (MassTargetPool.IsMass(data))
             {
                 ExecuteMassActions(effActions, data, source, targetAreaId, durationText: data.Duration);
@@ -401,13 +466,126 @@ namespace Script.Manager
 
         private PendingResolve _pendingResolve;
 
+        /// <summary>【2026-09·JC031】"分支询问"已由玩家确认走**主分支**：复入 `ResolveEffect` 时据此
+        /// **跳过条件重算**（`TriggerContextCard` 在回调时已不可靠），见 `ResolveEffect` 开头。</summary>
+        private bool _askBranchAnsweredYes;
+
+        /// <summary>【2026-09·JC052】本次结算对应的"收集时来源卡版本号"（触发路径透传；未知＝-1）。
+        /// 仅供群体集合判定"现存的自某某是否仍是同一张卡"（`MassTargetPool.IsSelfExcludedFromMass`）。</summary>
+        private int _currentSourceVersionId = -1;
+
+        /// <summary>
+        /// 【2026-09·JC031 用户口径】`EffectCondition.AskBranch` 的落地：门禁与分支**都满足**时，
+        /// 弹 **0/1 二选一**窗口问**发动者**（来源控制者）"是否**改为**执行主分支"。
+        ///  · 选「是」→ 复入 `ResolveEffect`（`_askBranchAnsweredYes` → 跳过条件重算）走 `Actions`；
+        ///  · 选「否」/取消 → 直接走 `ElseBranch`（＝原来的基础行为，如"由对手自选弃一张"）；
+        ///  · 返回 true＝已开窗/已下行请求（调用方**必须立即 return**，等答复后复入）。
+        ///
+        /// 三条路径与 `BeginPlayerValuePrompt` 同款：单机 `IGameUIHooks.PromptNumberInput(0/1)` ＋
+        /// 挂起续算；联机 `AskZeroOrOneViaGatewayAsync`（`Kind.NumberInput`）；无 UI/网关不走本方法
+        /// （调用方按既有行为直接走主分支）。
+        /// </summary>
+        private bool BeginAskBranchPrompt(EffectData data, CardInstance source, CardInstance target,
+            string targetAreaId, int winnerId, int targetVersionId, int eventAmount,
+            System.Collections.Generic.IList<TargetChoice> choices, int modeIndex, int targetPlayerId)
+        {
+            int chooser = source?.ControllerId ?? -1;
+            if (chooser < 0) return false;
+            var cond = data.Condition;
+            string name = source?.PlayerTemplate?.CardName ?? data.EffectId;
+            string prompt = string.IsNullOrEmpty(cond.AskPrompt)
+                ? $"{name}：是否改为执行主分支？"
+                : cond.AskPrompt;
+            string yesLabel = string.IsNullOrEmpty(cond.AskYesLabel) ? "是" : cond.AskYesLabel;
+            string noLabel = string.IsNullOrEmpty(cond.AskNoLabel) ? "否" : cond.AskNoLabel;
+
+            _pendingResolve = new PendingResolve
+            {
+                Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
+                WinnerId = winnerId, TargetVersionId = targetVersionId, EventAmount = eventAmount,
+                Choices = choices, ModeIndex = modeIndex, TargetPlayerId = targetPlayerId,
+            };
+            if (UIHooks == null)
+            {
+                // 联机（服务端无 View）：网关下发**列表二选一**（`Kind.SelectEffectMode`，
+                // 与"选择一项"同一面板——用户 2026-09 口径：**不要数值输入框**，要按钮列表窗）；
+                // 回包 0=是 / 1=否（取消/超时 → 否）。
+                if (InputGateway == null) { _pendingResolve = null; return false; }
+                _ = AskTwoOptionListViaGatewayAsync(chooser, prompt, yesLabel, noLabel, LandAskBranch);
+                return true;
+            }
+            // 单机：复用"选择一项"按钮列表窗（`PromptEffectMode` 读 `data.Modes` 的 Label），
+            // 合成一个仅含两个选项的临时效果 → 下标 0=是 / 1=否；窗口自带的"取消"项 → -1 视为"否"。
+            var askData = new EffectData
+            {
+                EffectId = data.EffectId + "#AskBranch",
+                Modes = new Array<EffectMode>
+                {
+                    new EffectMode { Label = yesLabel },
+                    new EffectMode { Label = noLabel },
+                },
+            };
+            UIHooks.PromptEffectMode(source, askData, chosen => LandAskBranch(chosen == 0));
+            return true;
+        }
+
+        /// <summary>
+        /// 【2026-09·JC031】"列表二选一"的**联机落地**：下发 `Kind.SelectEffectMode`（与"选择一项"同一面板，
+        /// 客户端渲染为**按钮列表**，不带数值输入框——用户实测："选择框多了一个输入框，可能复用了错误的选择框"）；
+        /// 回包 `SelectedIndices[0]`：0＝是、1＝否；取消/超时/越界 → 否（fail-safe：不替玩家选"随机弃"）。
+        /// </summary>
+        private async System.Threading.Tasks.Task AskTwoOptionListViaGatewayAsync(int chooser, string prompt,
+            string yesLabel, string noLabel, System.Action<bool> onDecided)
+        {
+            Script.Net.ChoiceResult res = null;
+            try
+            {
+                var req = new Script.Net.ChoiceRequest
+                {
+                    PlayerId = chooser,
+                    RequestKind = Script.Net.ChoiceRequest.Kind.SelectEffectMode,
+                    Prompt = prompt,
+                    ForceChoice = true,
+                    Amount = 2,
+                };
+                req.OptionLabels.Add(yesLabel);
+                req.OptionLabels.Add(noLabel);
+                res = await InputGateway.RequestChoice(chooser, req);
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 联机 0/1 列表询问异常：{ex.GetType().Name}: {ex.Message} → 按『否』处理");
+            }
+            int chosen = (res != null && !res.Cancelled && res.SelectedIndices != null && res.SelectedIndices.Count > 0)
+                ? res.SelectedIndices[0] : 1;
+            onDecided?.Invoke(chosen == 0);
+        }
+
+        /// <summary>分支询问落地（单机回调 / 联机回包共用）：是 → 复入结算走主分支；否/取消 → 走 ElseBranch。</summary>
+        private void LandAskBranch(bool takeMainBranch)
+        {
+            var p = _pendingResolve;
+            _pendingResolve = null;
+            if (p == null) return;
+            if (!takeMainBranch)
+            {
+                GD.Print($"[EffectEngine] ⇄ 分支询问『否』→ 走 ElseBranch（{p.Data.EffectId}）");
+                ExecuteActions(p.Data.Condition?.ElseBranch, p.Source, p.Target, p.Data.Duration, p.TargetAreaId);
+                return;
+            }
+            GD.Print($"[EffectEngine] ⇄ 分支询问『是』→ 复入结算走主分支（{p.Data.EffectId}）");
+            _askBranchAnsweredYes = true;
+            ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
+                p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
+        }
+
         /// <summary>该效果是否声明了"玩家选择"型动态值。</summary>
         private static bool IsPlayerChoiceValue(EffectData data)
             => data != null && !string.IsNullOrWhiteSpace(data.ValueExpr)
                && data.ValueExpr.Trim() == "玩家选择";
 
         /// <summary>【JC055②】该效果是否声明了"代价数量"型动态值（X＝本次激活已支付的标志代价数量）。</summary>
-        private static bool IsCostPaidValue(EffectData data)
+        public static bool IsCostPaidValue(EffectData data)
             => data != null && !string.IsNullOrWhiteSpace(data.ValueExpr)
                && (data.ValueExpr.Trim() == "代价数量" || data.ValueExpr.Trim() == "已付代价数量");
 
@@ -633,10 +811,66 @@ namespace Script.Manager
         ///  · 各目标死亡产生的死亡触发按既有触发管线收集（多条触发后续由玩家排序）；
         ///  · 集合为空 → 不执行任何动作（不报错）。
         /// </summary>
+        /// <summary>
+        /// 【2026-09·JC048 用户口径】"**一条效果、动作按顺序执行**"（`TargetSpec.MassSequential`）：
+        /// 动作按声明顺序执行——普通动作只执行一次；`MassInArea` 动作对"本效果 Target 声明的群体集合"
+        /// 各执行一次；`RequirePredicate` 不满足的动作**跳过**（表达卡文"然后若…则…"）。
+        /// 集合枚举与 `ExecuteMassActions` 完全同源（`MassTargetPool.Collect`）。
+        /// </summary>
+        private void ExecuteSequentialMassActions(Array<EffectAction> actions, EffectData data, CardInstance source,
+            string targetAreaId, string durationText, CardInstance target)
+        {
+            var mass = MassTargetPool.Collect(data, source, targetAreaId, ZoneManagerRef, CM,
+                TurnManagerRef?.PlayerManagerRef, _currentSourceVersionId);
+            GD.Print($"[EffectEngine] 【顺序群体】{data.EffectId}：地区={(string.IsNullOrEmpty(targetAreaId) ? source?.ZoneDetailId : targetAreaId)} " +
+                     $"→ 集合 {mass.Count} 张（{MassTargetPool.Describe(mass)}）");
+            if (actions == null) return;
+            int idx = 0;
+            foreach (var action in actions)
+            {
+                idx++;
+                if (action == null) continue;
+                // 【2026-09·JC048】每个动作执行**前**重算动态值 X：`$X` 必须反映"更早动作已产生的状态"
+                // （先放标志 → 再按（含刚放的）地区标志数造成伤害）。为 0/失败时按 0 处理（该动作自然无效）。
+                if (!string.IsNullOrWhiteSpace(data.ValueExpr))
+                {
+                    var st = EvaluateDynamicValue(data, source, target, targetAreaId, -1, out int xNow, out _);
+                    _hasCurrentValue = st == DynamicValueState.Ok;
+                    _currentValue = _hasCurrentValue ? xNow : 0;
+                }
+                if (!ActionConditionMet(action, source, target, targetAreaId))
+                {
+                    GD.Print($"[EffectEngine] 【顺序群体】动作#{idx} {action.Verb} 条件不满足" +
+                             $"（{action.RequirePredicate}{(string.IsNullOrEmpty(action.RequireParam) ? "" : ":" + action.RequireParam)}）→ 跳过");
+                    continue;
+                }
+                var single = new Array<EffectAction>();
+                single.Add(action);
+                if (!action.MassInArea)
+                {
+                    ExecuteActions(single, source, target, durationText, targetAreaId);
+                    continue;
+                }
+                foreach (var c in mass)
+                {
+                    if (c == null || c.IsDying) continue;
+                    ExecuteActions(single, source, c, durationText, targetAreaId);
+                }
+            }
+        }
+
+        /// <summary>动作级"然后若…"条件（`EffectAction.RequirePredicate`）：空＝无条件；复用 `EvaluateCondition`。</summary>
+        private bool ActionConditionMet(EffectAction action, CardInstance source, CardInstance target, string targetAreaId)
+        {
+            if (action == null || string.IsNullOrWhiteSpace(action.RequirePredicate)) return true;
+            return EvaluateCondition(action.RequirePredicate, source, target, source, -1, targetAreaId, action.RequireParam);
+        }
+
         private void ExecuteMassActions(Array<EffectAction> actions, EffectData data, CardInstance source,
             string targetAreaId, string durationText)
         {
-            var mass = MassTargetPool.Collect(data, source, targetAreaId, ZoneManagerRef, CM, TurnManagerRef?.PlayerManagerRef);
+            var mass = MassTargetPool.Collect(data, source, targetAreaId, ZoneManagerRef, CM,
+                TurnManagerRef?.PlayerManagerRef, _currentSourceVersionId);
             GD.Print($"[EffectEngine] 【K2 群体】{data.EffectId}：地区={(string.IsNullOrEmpty(targetAreaId) ? source?.ZoneDetailId : targetAreaId)} " +
                      $"→ 集合 {mass.Count} 张（{MassTargetPool.Describe(mass)}）");
             if (mass.Count == 0) return;
@@ -850,6 +1084,10 @@ namespace Script.Manager
             public string AreaId;
             /// <summary>【2026-09】本次挂起是否持有"决策持锁"（用于配对释放；见 `SuspendChainForInput`）。</summary>
             public bool HoldsLock;
+            /// <summary>【2026-09·检视】"**回调型**"挂起标记：挂起不由动作链中断点产生（没有"剩余动作"可续），
+            /// 确认后只需做一次结算收尾（`OnEngineChainSettled`，其中会继续 `_deferredSorcery`）。
+            /// 见 `SuspendChainForCallback` / `ContinuePendingChain`。</summary>
+            public bool CallbackType;
         }
 
         private PendingChain _pendingChain;
@@ -877,6 +1115,22 @@ namespace Script.Manager
             }
         }
 
+        /// <summary>
+        /// 【2026-09·检视】"回调型"挂起：**不在动作链中断点**上等输入（如最外层结算收尾时的检视窗），
+        /// 故不记录"剩余动作"，只登记决策持锁；确认后由 `ContinuePendingChain` 直接做结算收尾。
+        /// 已有挂起（动作链续算点或另一次回调型）时不覆盖。
+        /// </summary>
+        private void SuspendChainForCallback()
+        {
+            if (_pendingChain != null) return;
+            _pendingChain = new PendingChain { CallbackType = true };
+            if (TurnManagerRef != null)
+            {
+                TurnManagerRef.BeginDecisionHold();
+                _pendingChain.HoldsLock = true;
+            }
+        }
+
         /// <summary>【2026-09】释放某挂起链持有的决策持锁（幂等：`HoldsLock` 置位后只释放一次）。</summary>
         private void ReleasePendingChainHold(PendingChain chain)
         {
@@ -901,7 +1155,16 @@ namespace Script.Manager
         {
             var chain = _pendingChain;
             _pendingChain = null;
-            if (chain?.Actions == null)
+            if (chain == null) return;
+            // 【2026-09·检视】"回调型"挂起（无剩余动作）：确认完成后补做一次结算收尾
+            // （`OnEngineChainSettled` 会继续 `_deferredSorcery`：JC062 的"抓一张牌"排在确认之后）。
+            if (chain.CallbackType)
+            {
+                ReleasePendingChainHold(chain);
+                if (_pendingChain == null) TurnManagerRef?.OnEngineChainSettled();
+                return;
+            }
+            if (chain.Actions == null)
             {
                 // 无续算点（同步回调场景）：不做续算，但要释放本次挂起取得的决策持锁
                 ReleasePendingChainHold(chain);
@@ -933,6 +1196,21 @@ namespace Script.Manager
             => await ResolveEffectAsync(data, source, target, targetAreaId, winnerId, -1);
 
         public async System.Threading.Tasks.Task ResolveEffectAsync(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId, int targetVersionId)
+        {
+            // 【2026-09·检视】与同步入口同款收尾：最外层结算结束后把整批检视合并呈现（`FlushInspectBatch`）。
+            _resolveDepth++;
+            try
+            {
+                await ResolveEffectAsyncCore(data, source, target, targetAreaId, winnerId, targetVersionId);
+            }
+            finally
+            {
+                _resolveDepth--;
+            }
+            if (_resolveDepth <= 0) FlushInspectBatch();
+        }
+
+        private async System.Threading.Tasks.Task ResolveEffectAsyncCore(EffectData data, CardInstance source, CardInstance target, string targetAreaId, int winnerId, int targetVersionId)
         {
             if (data == null) return;
             GD.Print($"[EffectEngine] 结算效果(Async) {data.EffectId} (Timing={data.Timing})");
@@ -1037,37 +1315,9 @@ namespace Script.Manager
         /// </summary>
         private async System.Threading.Tasks.Task ExecuteVerbAsync(EffectAction action, CardInstance source, CardInstance target, string durationText = "", string targetAreaId = "")
         {
-            // 【P3·H】检视（联机）：把被检视卡的面**只下发给检视者本人**（网关按座位寻址），await 确认后继续。
-            // 语义：检视不改变任何状态，故即使超时/未确认也照常继续后续结算。
-            if (action.Verb == ActionVerb.Inspect && InputGateway != null)
-            {
-                var cards = ResolveInspectTargets(action, source, target);
-                int inspector = source?.ControllerId ?? -1;
-                if (cards.Count == 0 || inspector < 0)
-                {
-                    GD.Print("[EffectEngine] ⚠ Inspect（联机）跳过：对象/检视者无效");
-                    return;
-                }
-                var req = new Script.Net.ChoiceRequest
-                {
-                    PlayerId = inspector,
-                    RequestKind = Script.Net.ChoiceRequest.Kind.InspectCards,
-                    SourceUid = source?.UID,
-                    Prompt = cards.Count == 1
-                        ? $"检视：{cards[0].PlayerTemplate?.CardName ?? cards[0].UID}"
-                        : $"检视 {cards.Count} 张牌",
-                };
-                foreach (var c in cards)
-                {
-                    req.OptionUids.Add(c.UID);
-                    req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
-                }
-                var res = await InputGateway.RequestChoice(inspector, req);
-                if (res == null || res.Cancelled)
-                    GD.Print($"[EffectEngine] Inspect（联机）：玩家{inspector} 未确认/超时（不影响后续结算）");
-                foreach (var c in cards) InspectCardPrivately(c, inspector);
-                return;
-            }
+            // 注：【2026-09 用户口径·JC062/JC057】检视**不再走本异步分支**（已从 `VerbNeedsGateway` 移除）：
+            // 联机检视由最外层结算收尾的 `FlushInspectBatch` → `FlushInspectBatchOnlineAsync` 一次性下发
+            // （整批合并、一个窗、一个确认），见 `Inspect` 的同步分支与 `_deferredSorcery`。
 
             // 【K11】可选支付（联机）：经输入网关下发**数值输入框**请求，await 玩家输入的 N 后续算。
             if (action.Verb == ActionVerb.PayOptional && InputGateway != null)
@@ -1329,7 +1579,9 @@ namespace Script.Manager
             if (InputGateway == null || a == null) return false;
             return a.Verb switch
             {
-                ActionVerb.Inspect => true,                          // 检视：把卡面只下发给检视者本人
+                // 【2026-09·JC062/JC057 用户口径】检视**不再走异步分支**：它在两种模式下都只"登记"，
+                // 由最外层结算收尾统一合并呈现（`FlushInspectBatch`：单机窗 / 联机一次 `Kind.InspectCards`），
+                // 从而"多目标检视合并成一个窗"且"确认后再继续结算"（见 `ResolveEffect` 外壳与 `_deferredSorcery`）。
                 ActionVerb.PayOptional => true,                      // K11 可选支付：数值输入框
                 ActionVerb.PrepareUpkeep => true,                    // JC068 支付/横置二选一
                 ActionVerb.Discard => true,                          // 弃牌（自选走选牌请求；随机在异步分支内自行处理）
@@ -1647,15 +1899,16 @@ namespace Script.Manager
                     if (UIHooks == null && BeginGatewayFlow(() => AskZeroOrOneViaGatewayAsync(targetPlayer, bribePrompt, "移除标志", "改为牺牲",
                             pay => landBribe(pay))))
                         break;
-                    // ② 单机：数值输入窗（0/1）
+                    // ② 单机：**二选一确认窗**（"移除标志" / "改为牺牲"）——用户 2026-09 口径：
+                    //    这类"是/否"决策**不用输入框**（旧实现走 `PromptNumberInput(needMarks,needMarks,needMarks)`
+                    //    ＝退化的数值框，与 JC061/JC064 同类缺陷）。
                     //    ⚠ 原实现**未挂起动作链**：窗口是回调式异步的，代码却在同一帧按 `payChosen=false`
                     //    直接走了牺牲路线 ⇒ 玩家在窗口里的选择被丢弃（现有单测用同步桩，长期掩盖）。
                     if (UIHooks != null)
                     {
                         SuspendChainForInput();
-                        UIHooks.PromptNumberInput(targetPlayer, bribePrompt, needMarks, needMarks, needMarks,
-                            "移除标志", "改为牺牲",
-                            chosen => { landBribe(chosen >= needMarks); ContinuePendingChain(); });
+                        UIHooks.PromptTwoChoice(targetPlayer, bribePrompt, "移除标志", "改为牺牲",
+                            pay => { landBribe(pay); ContinuePendingChain(); });
                         break;   // 已挂起：ExecuteActionsFrom 记录续算点
                     }
                     // ③ 无 UI / 无网关：确定性兜底＝能付则付（与既有同类兜底口径一致）
@@ -1879,11 +2132,18 @@ namespace Script.Manager
                         break;
                     }
                     if (TurnManagerRef == null) { GD.Print("[EffectEngine] ⚠ Discard 跳过：TurnManagerRef 未注入"); break; }
-                    foreach (var pid in ResolvePlayerSide(source, who))
+                    var discarders = ResolvePlayerSide(source, who);
+                    if (discarders.Count == 0) break;
+                    if (discarders.Count == 1)
                     {
-                        int chooser = (how == "由施术者指定") ? (source?.ControllerId ?? pid) : pid;
-                        PromptOrFallbackDiscard(pid, chooser, count, batchSize);
+                        int chooser = (how == "由施术者指定") ? (source?.ControllerId ?? discarders[0]) : discarders[0];
+                        PromptOrFallbackDiscard(discarders[0], chooser, count, batchSize);
+                        break;
                     }
+                    // 【2026-09 修复·用户实测】多玩家（"双方"）必须是**严格串行**：前一位弃完（真正落地）
+                    // 才给下一位弹框。此前逐个 `PromptOrFallbackDiscard` 同步返回 ⇒ 单机下**两个选择窗同时弹出**
+                    // （实测：首次结算后"已打开窗口=[1,2]、待回应=2"），玩家会看到两个弃牌框、且顺序无从保证。
+                    PromptDiscardForAllInOrder(discarders, how, count, batchSize, source);
                     break;
                 }
 
@@ -1899,6 +2159,18 @@ namespace Script.Manager
                     if (cnt <= 0) { GD.Print("[EffectEngine] PlaceCounter 数量<=0，跳过"); break; }
                     var subject = ArgAt(action, 2, "自身") == "目标" ? (target ?? source) : source;
                     if (subject == null) { GD.Print("[EffectEngine] ⚠ PlaceCounter 跳过：对象为空"); break; }
+                    // 【2026-09 修复·用户口径 A90】"所有需要放置时间标志的效果，如果结算时需要放置的卡
+                    // **不在场上**，效果不结算"——`PlaceCounter` 是"场上卡的状态变更"，对已离场（墓地/手牌/
+                    // 牌库/已进堆叠）的卡放标志毫无意义；而死亡触发等**结算晚于离场** ⇒ 必须在此把关。
+                    // 典型：JC045「每当一个角色死亡时在钟摆祭司上放一个时间标志」——JC045 **自身**同时死亡时，
+                    // 触发结算时它已进墓地 ⇒ 不该再放（用户实测口径："JC045 同时和其他角色一起死亡，这个效果
+                    // 不需要触发"）。与 A61（效果只在场上提供）同源。
+                    if (!IsInPlayZone(subject.CurrentZone))
+                    {
+                        MarkActionIneffective("PlaceCounter",
+                            $"{subject.PlayerTemplate?.CardName} 不在场上（{subject.CurrentZone}）→ 放置标志不结算");
+                        break;
+                    }
                     CM?.AddCounter(subject, marker, cnt);
                     int now = subject.Counters.TryGetValue(marker, out var cv) ? cv : 0;
                     GD.Print($"[EffectEngine] 放置标志：{subject.PlayerTemplate?.CardName} +{cnt} 个「{marker}」（当前 {now}）");
@@ -1982,9 +2254,13 @@ namespace Script.Manager
                     break;
                 }
 
-                // 【K11】可选支付：**弹数值输入框**问玩家"是否支付 N"（用户 2026-09 口径：输入的数字即为 N）。
+                // 【K11】可选支付：问玩家"是否支付 N"；**是/否二选一窗**（不再用数值输入框）。
                 // Args：[默认金额(缺省1), 最小(缺省0), 最大(缺省=默认金额)]。
                 // 语义：支付 → 扣 N 点无色费用并继续后续动作；**不支付/N=0/费用不足 → 置链式中止**（"若你如此做…"整段跳过）。
+                // 【2026-09 整体复查·修复】卡文"你可以支付N，若你如此做…"（JC100/JC105）本就是**是/否**选择，
+                // 旧实现走 `PromptNumberInput`（数值框）＝用户实测报障的"不需要输入框"（JC061/JC064 同类）。
+                // 现：**固定金额（hardMin==hardMax）走二选一窗** `PromptOptionalPay`（`支付 N`/`不支付`，
+                // 与联机 `AskZeroOrOneViaGatewayAsync` 同语义）；只有当 min<max（真的需要选一个数字）时才保留数值输入。
                 case ActionVerb.PayOptional:
                 {
                     int defAmt = (action.Args != null && action.Args.Count > 0 && int.TryParse(action.Args[0], out var d0)) ? d0 : 1;
@@ -2003,26 +2279,39 @@ namespace Script.Manager
                     int hardMin = System.Math.Max(0, System.Math.Min(minAmt, hardMax));
                     string prompt = $"{source?.PlayerTemplate?.CardName}：是否支付？可支付 0～{hardMax}（当前可用 {avail}）";
 
+                    // 落地（二选一窗与数值输入框共用）：支付则扣费，不支付/扣费失败 → 中止后续动作
+                    void LandOptionalPay(int chosen)
+                    {
+                        if (chosen <= 0)
+                        {
+                            GD.Print($"[EffectEngine] 玩家{payer2} 选择不支付 → 中止后续动作（PayOptional）");
+                            _actionChainAborted = true;
+                        }
+                        else
+                        {
+                            bool ok2 = pm2.SpendMana(payer2, chosen);
+                            GD.Print($"[EffectEngine] {(ok2 ? "✓" : "✗")} 玩家{payer2} 可选支付 {chosen}（PayOptional）");
+                            if (!ok2) _actionChainAborted = true;
+                        }
+                        ContinuePendingChain();
+                    }
+
                     if (UIHooks != null)
                     {
                         // 挂起当前动作链：回调里扣费并续算剩余动作（不支付 → 置中止标志，后续整段跳过）
                         SuspendChainForInput();
-                        UIHooks.PromptNumberInput(payer2, prompt, hardMin, hardMax, System.Math.Clamp(defAmt, hardMin, hardMax),
-                            "支付", "不支付", chosen =>
-                            {
-                                if (chosen <= 0)
-                                {
-                                    GD.Print($"[EffectEngine] 玩家{payer2} 选择不支付 → 中止后续动作（PayOptional）");
-                                    _actionChainAborted = true;
-                                }
-                                else
-                                {
-                                    bool ok2 = pm2.SpendMana(payer2, chosen);
-                                    GD.Print($"[EffectEngine] {(ok2 ? "✓" : "✗")} 玩家{payer2} 可选支付 {chosen}（PayOptional）");
-                                    if (!ok2) _actionChainAborted = true;
-                                }
-                                ContinuePendingChain();
-                            });
+                        // 【2026-09 整体复查·修复】付不起（hardMax==0）⇒ **不弹窗**、视为不支付并中止后续动作
+                        // （旧实现会弹一个 0..0 的输入框让玩家"支付 0"，纯属噪音）。
+                        if (hardMax <= 0)
+                        {
+                            GD.Print($"[EffectEngine] 玩家{payer2} 可用费用不足 ⇒ 不开窗，视为不支付（PayOptional）");
+                            LandOptionalPay(0);
+                        }
+                        else if (hardMin == hardMax)
+                            UIHooks.PromptOptionalPay(payer2, prompt, hardMax, pay => LandOptionalPay(pay ? hardMax : 0));
+                        else
+                            UIHooks.PromptNumberInput(payer2, prompt, hardMin, hardMax, System.Math.Clamp(defAmt, hardMin, hardMax),
+                                "支付", "不支付", LandOptionalPay);
                         break;   // 已挂起：ExecuteActionsFrom 会因 _pendingChain 非空而停止并记录续算点
                     }
                     // 无 UI（测试/headless）：确定性兜底＝不支付（绝不替玩家花钱），中止后续动作
@@ -2210,12 +2499,14 @@ namespace Script.Manager
                     // ① 联机：经网关下发 0/1 二选一
                     if (UIHooks == null && BeginGatewayFlow(() => AskZeroOrOneViaGatewayAsync(payer3, posPrompt, $"支付 {amount}", "牺牲", landPay)))
                         break;
-                    // ② 单机：数值输入窗（0/1）
+                    // ② 单机：**二选一确认窗**（"支付 N" / "牺牲它"）——用户 2026-09 口径：
+                    // "JC064 支付费用的触发弹窗**不需要输入框**，参考 JC061"（旧实现走 `PromptNumberInput`
+                    // 数值输入框，被用户实测报障）。
                     if (UIHooks != null)
                     {
                         SuspendChainForInput();
-                        UIHooks.PromptNumberInput(payer3, posPrompt, 0, 1, 1, $"支付 {amount}", "牺牲",
-                            chosen => { landPay(chosen > 0); ContinuePendingChain(); });
+                        UIHooks.PromptPayOrSacrifice(payer3, source.PlayerTemplate?.CardName, amount,
+                            pay => { landPay(pay); ContinuePendingChain(); });
                         break;   // 已挂起
                     }
                     // ③ 无 UI / 无网关：确定性兜底＝**能付就付**（不替玩家放弃已能支付的代价）
@@ -2762,14 +3053,59 @@ namespace Script.Manager
                     list.Add(self == 1 ? 2 : 1);
                     break;
                 case "双方":
-                    list.Add(self);
-                    list.Add(self == 1 ? 2 : 1);
+                    // 【2026-09 修复·用户口径】多玩家情形一律**先手优先**顺序（与 `SacrificeChoice` 的
+                    // 「每位玩家」同款，`TurnManager.FirstPlayerId` 先、另一位后）——此前写成
+                    // "来源控制者先" ⇒ 效果来源是后手玩家时，弃牌/选择顺序与规则相反。
+                    {
+                        int first = TurnManagerRef?.FirstPlayerId ?? 1;
+                        list.Add(first);
+                        list.Add(first == 1 ? 2 : 1);
+                    }
                     break;
                 default:                     // "自己"（缺省）
                     list.Add(self);
                     break;
             }
             return list;
+        }
+
+        /// <summary>
+        /// 【2026-09·用户口径】**多玩家弃牌**（`Discard{…,"双方",…}`）的编排：按传入顺序（＝先手优先）
+        /// **逐个玩家串行**询问——前一位的弃牌**真正落地**后才发起下一位的询问（对应卡文/规则
+        /// 「每位玩家各弃一张」，用户实测要求"第一个玩家弃牌结束才会给第二个需要弃牌的玩家弹出弃牌框"）。
+        ///
+        /// 与 `SacrificeChoice` 的差别（有意）：那边是"全部选定后**一起**牺牲"，这边是"逐位弃牌**立即**落地"
+        /// （否则下一位的候选里会混入"上一位已选但尚未弃掉"的牌）。
+        ///
+        /// 挂起：只要存在 UI，就**只挂起一次**（`SuspendChainForInput`），在最后一位选完后
+        /// `ContinuePendingChain()` 续算一次；无 UI（headless/测试）走 `CollectDiscardPicks` 的确定性兜底，全程同步。
+        /// 联机路径在 `ExecuteVerbAsync` 里逐位 `await`（同一顺序源），无需本方法。
+        /// </summary>
+        private void PromptDiscardForAllInOrder(System.Collections.Generic.List<int> discarders, string how,
+            int count, int batchSize, CardInstance source)
+        {
+            if (TurnManagerRef == null || discarders == null || discarders.Count == 0) return;
+            bool suspended = UIHooks != null;
+            if (suspended) SuspendChainForInput();
+            int index = 0;
+            System.Action next = null;
+            next = () =>
+            {
+                if (index >= discarders.Count)
+                {
+                    if (suspended) ContinuePendingChain();   // 全部选完 → 只续算一次
+                    return;
+                }
+                int pid = discarders[index++];
+                int chooser = (how == "由施术者指定") ? (source?.ControllerId ?? pid) : pid;
+                var acc = new System.Collections.Generic.List<CardInstance>();
+                CollectDiscardPicks(pid, chooser, count, acc, () =>
+                {
+                    if (acc.Count > 0) TurnManagerRef.DiscardCards(pid, acc, batchSize);
+                    next();   // 本玩家已落地 → 询问下一位（回调式递归，保证严格串行）
+                });
+            };
+            next();
         }
 
         /// <summary>
@@ -3848,16 +4184,117 @@ namespace Script.Manager
             return result;
         }
 
+        // ==================== 【2026-09·JC062/JC057】检视结果的"合并呈现" ====================
+        // 用户口径（原文）：
+        //  · "JC062 选择查看的暗藏者应该选择场上的高亮暗藏者，而不是弹出选择框"（取目标，见 Arena 侧）；
+        //  · "JC062 的查看结果方式是结算的时候弹出一个弹窗，里面**列出所有看到的信息**，这个框的按钮
+        //    只有**一个确认**，点击后关闭弹窗"；
+        //  · "JC057 的查看方式和 JC062 一致"；
+        //  · 裁定补问："等点确认后再继续结算（JC062 的抓牌排在确认之后）；两个目标合并为同一个窗；
+        //    单机与联机都改"。
+        // 实现：`Inspect` 动词只**登记**（不改任何状态）；一次最外层结算结束时 `FlushInspectBatch`
+        // 把整批**一个窗**呈现（单机 `PromptInspectCards` / 联机一次 `Kind.InspectCards`），
+        // 并**挂起-续算**（`PendingChain.Resume`）等确认；同一张事务卡尚未结算的其余效果
+        // （JC062 的"抓一张牌"）由 `_deferredSorcery` 延后到确认之后（见 `ResolveSorceryFrom`）。
+
+        /// <summary>一次结算内"被检视到的牌"批次（同一窗列出全部；呈现后清空）。</summary>
+        private readonly System.Collections.Generic.List<CardInstance> _inspectBatch
+            = new System.Collections.Generic.List<CardInstance>();
+
+        /// <summary>批次对应的检视者（-1＝无）。</summary>
+        private int _inspectBatchViewer = -1;
+
+        /// <summary>`ResolveEffect` 嵌套深度：只在**最外层**做批次呈现（中间层不弹窗）。</summary>
+        private int _resolveDepth;
+
+        /// <summary>【检视·续算】同一张事务卡"确认之后才继续结算"的剩余效果（JC062「检视→确认→抓一张牌」）。</summary>
+        private (CardInstance Sorcery, string TargetUid, int TargetVersionId, string TargetAreaUid,
+                 System.Collections.Generic.IList<string> TargetCardUids, int ModeIndex, int NextSpell)? _deferredSorcery;
+
+        /// <summary>登记一张"被私下检视"的牌（单机/联机同一入口，见 `InspectCardPrivately`）。</summary>
+        private void QueueInspectedCard(CardInstance card, int viewerPlayerId)
+        {
+            if (card == null || viewerPlayerId < 0) return;
+            // 换检视者（罕见）：先把上一批呈现掉，避免"把 A 看到的牌列给 B 看"
+            if (_inspectBatch.Count > 0 && _inspectBatchViewer != viewerPlayerId) FlushInspectBatch();
+            _inspectBatchViewer = viewerPlayerId;
+            if (!_inspectBatch.Contains(card)) _inspectBatch.Add(card);
+        }
+
+        /// <summary>
+        /// 把当前批次**合并成一个窗**呈现给检视者，并**等其点『确认』后再继续结算**：
+        ///  · 单机（有 `UIHooks`）→ `IGameUIHooks.PromptInspectCards`（一个窗、一个确认）；
+        ///  · 联机（有 `InputGateway`）→ **一次** `ChoiceRequest.Kind.InspectCards`（含整批卡面引用）；
+        ///  · 两者都无（headless/测试）→ 不弹窗、不阻塞（既有 `UiNotificationBus` 通知照常发出）。
+        /// 已有别的决策在等（`_pendingChain != null`）时**不叠窗**：本批留到下一次最外层结算收尾再呈现。
+        /// </summary>
+        private void FlushInspectBatch()
+        {
+            if (_inspectBatch.Count == 0) return;
+            if (_pendingChain != null) return;   // 不叠窗（本批保留，下一次最外层收尾再呈现）
+            var cards = new System.Collections.Generic.List<CardInstance>(_inspectBatch);
+            int viewer = _inspectBatchViewer;
+            _inspectBatch.Clear();
+            _inspectBatchViewer = -1;
+            if (viewer < 0 || cards.Count == 0) return;
+            string title = cards.Count == 1
+                ? $"检视：{cards[0]?.PlayerTemplate?.CardName ?? cards[0]?.UID}"
+                : $"检视 {cards.Count} 张牌";
+
+            if (UIHooks != null)
+            {
+                // 单机：登记"回调型"续算点（`PendingChain.Resume`），回包即 `ContinuePendingChain` 收尾
+                SuspendChainForCallback();
+                UIHooks.PromptInspectCards(viewer, title, cards, () => ContinuePendingChain());
+                return;
+            }
+            if (InputGateway != null)
+            {
+                if (BeginGatewayFlow(() => FlushInspectBatchOnlineAsync(cards, viewer, title))) return;
+                GD.PrintErr("[EffectEngine] ⚠ 检视（联机）无法下发请求 → 只走既有通知，不阻塞结算");
+            }
+        }
+
+        /// <summary>联机：整批被检视牌**一次**下发（`Kind.InspectCards`），await 确认后继续（不影响状态）。</summary>
+        private async System.Threading.Tasks.Task FlushInspectBatchOnlineAsync(
+            System.Collections.Generic.List<CardInstance> cards, int viewer, string title)
+        {
+            var req = new Script.Net.ChoiceRequest
+            {
+                PlayerId = viewer,
+                RequestKind = Script.Net.ChoiceRequest.Kind.InspectCards,
+                Prompt = title,
+            };
+            foreach (var c in cards)
+            {
+                if (c == null) continue;
+                req.OptionUids.Add(c.UID);
+                req.OptionCardRefs.Add(global::ZoneManager.ProjectCard(c, c.CurrentZone, c.OwnerId));
+            }
+            try
+            {
+                var res = await InputGateway.RequestChoice(viewer, req);
+                if (res == null || res.Cancelled)
+                    GD.Print($"[EffectEngine] 检视（联机）：玩家{viewer} 未确认/超时（不影响后续结算）");
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[EffectEngine] ⚠ 检视（联机）请求异常：{ex.GetType().Name}: {ex.Message}（不影响后续结算）");
+            }
+        }
+
         /// <summary>
         /// 【P3·H】检视（**私密**查看）：仅把该卡的面呈现给 `inspectorPlayerId` 本人，不改变任何对局状态
-        /// （§规则：检视不是展示、也不是翻面）。单机经 `UiNotificationBus.NotifyCardInspected`（View 私下呈现），
-        /// 联机经 `ChoiceRequest.Kind.InspectCards`（只把卡面下发给检视者，见 `ExecuteVerbAsync` 分支）。
+        /// （§规则：检视不是展示、也不是翻面）。
+        /// 呈现通道：① 既有总线通知 `UiNotificationBus.NotifyCardInspected`（悬浮/日志等消费点保留）；
+        /// ② 【2026-09 用户口径】入"合并呈现"批次 → 最外层结算收尾时**一个窗列全部**（单机/联机同解）。
         /// </summary>
         private void InspectCardPrivately(CardInstance card, int inspectorPlayerId)
         {
             if (card == null) return;
             GD.Print($"[EffectEngine] 👁 检视（私密）：玩家{inspectorPlayerId} 检视「{card.PlayerTemplate?.CardName ?? card.UID}」" +
                      $"（控制者=P{card.ControllerId}，区域={card.CurrentZone}，暗藏={card.IsCovert}）");
+            QueueInspectedCard(card, inspectorPlayerId);
             Script.Manager.UiNotificationBus.Instance?.NotifyCardInspected(card, inspectorPlayerId);
         }
 
@@ -4860,9 +5297,15 @@ namespace Script.Manager
                 {
                     if (contextCard == null) return false;
                     bool isChar = (contextCard.PlayerTemplate?.CategoryFlag & CardCategory.Character) != 0;
-                    bool vampire = isChar && contextCard.HasSubCategory("吸血鬼");
+                    // 【2026-09 修复·JC030/JC031】读**死亡瞬间的子类别快照**（`HadSubCategoryAtDeath`）——
+                    // 运行期授予的子类别（JC030「血领域忠诚≥2 ⇒ 额外具有吸血鬼类别」）会在**离场时被清空**，
+                    // 而死亡触发在"卡已进墓地之后"才结算 ⇒ 直接读当前集合恒为 false
+                    // （用户实测："JC030 可以触发 JC031 让对手随机弃牌的效果，现在不行"）。
+                    // 无快照（同步路径/未走死亡流程的手工结算）时回落到当前集合，行为与既有实现一致。
+                    bool vampire = isChar && contextCard.HadSubCategoryAtDeath("吸血鬼");
                     GD.Print($"[EffectEngine] 条件「DiedVampireCharacter」：死亡卡={contextCard.PlayerTemplate?.CardName} " +
-                             $"是否角色={isChar} 是否吸血鬼={vampire} → {(vampire ? "满足" : "不满足")}");
+                             $"是否角色={isChar} 是否吸血鬼={vampire}（死亡瞬间快照={'有' + contextCard.SubCategoriesAtDeath.Count + '项'}）" +
+                             $" → {(vampire ? "满足" : "不满足")}");
                     return vampire;
                 }
                 // 【JC124】语义：**刚死亡的那张卡在死亡瞬间具有指定"卡上标志/指示物"**
@@ -5195,27 +5638,18 @@ namespace Script.Manager
                 if (target > 0) choosers.Add(target);
             }
 
-            var picked = new System.Collections.Generic.List<CardInstance>();
-            // 【P0·异步窗口修复】选卡窗是**回调式异步**窗口（`Arena.PromptPickCard` 打开窗口后立即返回，
-            // 玩家点击时才回调）。原实现在发起询问后**同一帧内**就执行 `chosen ??= candidates[0]` 并立刻
-            // `ResolveDeath` ⇒ 单机下选择窗刚弹出、第一候选就已经被牺牲，玩家的点击完全无效
-            // （现有单测用**同步桩**，因此长期掩盖了该缺陷）。
-            // 修法：改为"逐位收集 + 全部收齐后才落地牺牲"的回调递归；若第一次询问确实是异步的
-            // （回调未同步触发），则**挂起动作链** `SuspendChainForInput()`，在最终回调里
-            // `ContinuePendingChain()` 续算后续动作（与 PayOptional/封印/检索同一套机制）。
+            // 【2026-09 修复·用户口径 A81】"每位玩家"＝**先手优先 + 严格串行 + 逐位立即落地**：
+            //  · 顺序＝先手优先（先问先手，再问后手）；
+            //  · **前一位的牺牲真正落进墓地之后**，等 View 刷新一帧，才向后手发起询问
+            //    （用户实测口径："优先玩家选择后…后手玩家能看到牺牲的卡进入墓地后再进行后续选择"）；
+            //  · 此前是"全部收齐后一起牺牲" ⇒ 后手在选的时候看不到先手的牺牲（只在最后一起进墓地）。
+            // 挂起-续算仍沿用既有机制（单机首次异步窗口挂起；联机由 `BeginGatewayFlow` 统一负责）。
             var state = new SacrificePickState();
-            CollectSacrificePicks(choosers, 0, kind, areaScope, areaUid, picked, state, () =>
+            System.Action onAllDone = () =>
             {
-                if (picked.Count == 0) { GD.Print("[EffectEngine] SacrificeChoice：无人可选 → 无效果"); }
-                else
-                {
-                    // 全部选定后**一起牺牲**（原子锁期间不区分先后）
-                    foreach (var card in picked)
-                        CM.ResolveDeath(card, CardManager.DeathCause.Sacrifice);
-                    Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
-                }
-                if (state.ChainSuspended && !state.ResumeByGateway) ContinuePendingChain();   // 只在此处续算一次（见上方说明）
-            });
+                if (state.ChainSuspended && !state.ResumeByGateway) ContinuePendingChain();   // 只在此处续算一次
+            };
+            CollectSacrificePicks(choosers, 0, kind, areaScope, areaUid, state, onAllDone);
         }
 
         /// <summary>【P0】牺牲选择收集期的状态（引用持有，供闭包读写）。</summary>
@@ -5228,16 +5662,16 @@ namespace Script.Manager
         }
 
         /// <summary>
-        /// 【P0】逐位收集"由该玩家自己选择牺牲的对象"（回调递归）：
-        ///  · 有 UI → `PromptPickCard`（不可取消）；**回调同步触发**（测试桩/无窗口兜底）→ 在回调内继续递归；
-        ///    **回调异步**（真实窗口）→ 挂起动作链并返回，等玩家点击后从回调继续；
-        ///  · 无 UI（headless/测试）→ 确定性兜底取第一个候选；
-        ///  · 无合法候选的玩家直接跳过（什么都不付出，口径 A11）；
-        ///  · 全部收齐后调用 `onAllDone`（落地牺牲 + 续算动作链）。
+        /// 【P0/A81】逐位收集"由该玩家自己选择牺牲的对象"（回调递归）：
+        ///  · 有 UI → `PromptPlayTarget`（**场上高亮 + 点击**；用户口径：不要"弹出窗口列卡名"），
+        ///    回调同步触发（测试桩/无窗口兜底）→ 在回调内继续；回调异步（真实交互）→ 挂起动作链并返回；
+        ///  · 联机 → 逐位 `await` 网关（`Kind.SelectTarget`，客户端同样走"场上高亮 + 点击"）；
+        ///  · 无 UI/网关（headless/测试）→ 确定性兜底取第一个候选；
+        ///  · **每位选定后立即落地牺牲**（`LandSacrifice`），并 `await` 一帧 UI 刷新后才问下一位（A81）；
+        ///  · 无合法候选的玩家直接跳过（什么都不付出，口径 A11）。
         /// </summary>
         private void CollectSacrificePicks(System.Collections.Generic.List<int> choosers, int index,
-            string kind, string areaScope, string areaUid,
-            System.Collections.Generic.List<CardInstance> picked, SacrificePickState state,
+            string kind, string areaScope, string areaUid, SacrificePickState state,
             System.Action onAllDone)
         {
             for (int i = index; i < choosers.Count; i++)
@@ -5249,45 +5683,64 @@ namespace Script.Manager
                     GD.Print($"[EffectEngine] SacrificeChoice：玩家{playerId} 无合法候选 → 跳过（什么都不付出）");
                     continue;
                 }
+                string prompt = $"{KindName(kind)}：请选择你要牺牲的{KindName(kind)}（{candidates.Count} 个候选）";
                 if (UIHooks != null)
                 {
                     bool firedSynchronously = false;
-                    UIHooks.PromptPickCard(playerId,
-                        $"{KindName(kind)}：请选择你要牺牲的{KindName(kind)}（{candidates.Count} 个候选）",
-                        candidates, allowCancel: false,
-                        p =>
-                        {
-                            firedSynchronously = true;
-                            var chosen = p ?? candidates[0];
-                            picked.Add(chosen);
-                            GD.Print($"[EffectEngine] SacrificeChoice：玩家{playerId} 选定牺牲 {chosen.PlayerTemplate?.CardName}");
-                            // 继续收集下一位（可能再开一个窗口）；全部收齐后 onAllDone 落地
-                            CollectSacrificePicks(choosers, i + 1, kind, areaScope, areaUid, picked, state, onAllDone);
-                        });
-                    // 同步回调（桩/兜底）：上面的递归已把剩下的人全部处理完（含 onAllDone）→ 直接返回
+                    var uids = new System.Collections.Generic.List<string>();
+                    foreach (var c in candidates) uids.Add(c.UID);
+                    UIHooks.PromptPlayTarget(playerId, prompt, isArea: false, uids, uid =>
+                    {
+                        firedSynchronously = true;
+                        var chosen = candidates.Find(c => c != null && c.UID == uid) ?? candidates[0];
+                        LandSacrifice(chosen, playerId);
+                        // 本玩家已落地 → 等一帧 UI 刷新（后手能看到它进墓地）→ 询问下一位
+                        _ = RefreshThenNextSacrificeAsync(choosers, i + 1, kind, areaScope, areaUid, state, onAllDone);
+                    });
+                    // 同步回调（桩/兜底）：上面的异步续跑已同步完成（含 onAllDone）→ 直接返回
                     if (firedSynchronously) return;
                     // 异步回调（真实窗口）：挂起动作链，等玩家点击；后续由回调链续跑
                     if (!state.ChainSuspended)
                     {
-                        GD.Print($"[EffectEngine] SacrificeChoice：等待玩家{playerId} 在窗口中选择（动作链挂起）");
+                        GD.Print($"[EffectEngine] SacrificeChoice：等待玩家{playerId} 在场上高亮卡中选择（动作链挂起）");
                         SuspendChainForInput();
                         state.ChainSuspended = true;
                     }
                     return;
                 }
-                // 【A55】联机：逐位向该玩家下发 `SelectTarget`（顺序与单机一致：先手优先），全部收齐后 onAllDone。
-                // 挂起-续算由 `BeginGatewayFlow` 统一负责 ⇒ 告知 onAllDone 不要再自行续算。
-                if (BeginGatewayFlow(() => CollectSacrificePicksViaGatewayAsync(
-                        choosers, i, kind, areaScope, areaUid, picked, state, onAllDone)))
+                // 【A55】联机：逐位向该玩家下发 `SelectTarget`（顺序与单机一致：先手优先），
+                // 每位选定即落地；挂起-续算由 `BeginGatewayFlow` 统一负责 ⇒ onAllDone 不再自行续算。
+                if (InputGateway != null)
                 {
                     state.ResumeByGateway = true;
-                    return;
+                    if (BeginGatewayFlow(() => CollectSacrificePicksViaGatewayAsync(
+                            choosers, i, kind, areaScope, areaUid, state, onAllDone)))
+                        return;
+                    state.ResumeByGateway = false;
                 }
                 var fallback = candidates[0];   // 无 UI/网关（headless/测试）：确定性兜底
-                picked.Add(fallback);
                 GD.Print($"[EffectEngine] SacrificeChoice：无 UI/网关 → 玩家{playerId} 确定性兜底选择 {fallback.PlayerTemplate?.CardName}");
+                LandSacrifice(fallback, playerId);
             }
             onAllDone();
+        }
+
+        /// <summary>【A81】等 View 完成一帧刷新后再询问下一位（无 UI 时同步续跑，行为与既有实现一致）。</summary>
+        private async System.Threading.Tasks.Task RefreshThenNextSacrificeAsync(
+            System.Collections.Generic.List<int> choosers, int index, string kind, string areaScope,
+            string areaUid, SacrificePickState state, System.Action onAllDone)
+        {
+            await (UIHooks != null ? UIHooks.WaitForUIRefresh() : System.Threading.Tasks.Task.CompletedTask);
+            CollectSacrificePicks(choosers, index, kind, areaScope, areaUid, state, onAllDone);
+        }
+
+        /// <summary>【A81】牺牲落地（**逐位立即**执行，照常广播死亡时机）。</summary>
+        private void LandSacrifice(CardInstance card, int playerId)
+        {
+            if (card == null) return;
+            GD.Print($"[EffectEngine] SacrificeChoice：玩家{playerId} 牺牲 {card.PlayerTemplate?.CardName}（立即落地）");
+            CM?.ResolveDeath(card, CardManager.DeathCause.Sacrifice);
+            Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
         }
 
         /// <summary>
@@ -5297,7 +5750,7 @@ namespace Script.Manager
         /// </summary>
         private async System.Threading.Tasks.Task CollectSacrificePicksViaGatewayAsync(
             System.Collections.Generic.List<int> choosers, int startIndex, string kind, string areaScope, string areaUid,
-            System.Collections.Generic.List<CardInstance> picked, SacrificePickState state, System.Action onAllDone)
+            SacrificePickState state, System.Action onAllDone)
         {
             for (int i = startIndex; i < choosers.Count; i++)
             {
@@ -5335,8 +5788,8 @@ namespace Script.Manager
                                 " → 确定性兜底取第一个候选");
                     chosen = candidates[0];
                 }
-                picked.Add(chosen);
-                GD.Print($"[EffectEngine] SacrificeChoice（联机）：玩家{playerId} 选定牺牲 {chosen.PlayerTemplate?.CardName}");
+                LandSacrifice(chosen, playerId);          // 【A81】逐位立即落地
+                await (UIHooks != null ? UIHooks.WaitForUIRefresh() : System.Threading.Tasks.Task.CompletedTask);
             }
             onAllDone();
         }
@@ -5393,6 +5846,14 @@ namespace Script.Manager
             }
             return result;
         }
+
+        /// <summary>【2026-09·A90】该区域是否属于"在场"（可以承载卡上标志的放置）：
+        /// 争夺区 / 附属（含结附秘社/地区）/ **秘社** / 封印 / **资产区**都算在场（都渲染在场上、可被效果影响）；
+        /// 墓地 / 手牌 / 牌库 / 计分区 / 堆叠 = **不在场**（放置毫无意义，且死亡触发等结算晚于离场）。
+        /// 用途：`PlaceCounter` 的"结算时不在场则不结算"门禁。</summary>
+        private static bool IsInPlayZone(CardZone zone)
+            => zone is CardZone.AreaZone or CardZone.AttachedZone or CardZone.CouncilZone
+                     or CardZone.SealedZone or CardZone.AssetZone;
 
         /// <summary>【P3·K4】`FormCategory` → 实例类别位（`None`＝不改类别）。</summary>
         private static CardCategory ToCardCategory(FormCategory form) => form switch
@@ -7284,7 +7745,14 @@ namespace Script.Manager
                         bool alreadyActive = _continuousRegistry.ContainsKey(key);
                         // 【P3·图标镜像】镜像量随"封印牌集合"变化 → 即使 mult==1 也必须撤销重算
                         bool mirrorIcons = e.PrereqSpec?.MirrorSealedIcons == true;
-                        if (alreadyActive && mult == 1 && !mirrorIcons) continue; // 非缩放且已生效：维持
+                        // 【2026-09 修复·缩放量降回 1 时不重算】"已生效就维持"的判据必须看该效果**是否声明了缩放**，
+                        // **不能**看"本次算得的 N 是否为 1"：旧写法 `mult == 1` 把"缩放计数降到 1"误判成"非缩放效果"
+                        // ⇒ 跳过"先按旧量撤销、再按新量授予"，授予量停在旧 N 上
+                        // （实测：JC037 有 2 个暗藏者时 +2 调查，其中一个翻面后仍是 +2；手动
+                        //   `ReevaluatePrereqs` 也修不回来）。
+                        bool scaled = !string.IsNullOrWhiteSpace(e.PrereqSpec?.ScaleExpr)
+                                      || e.PrereqSpec?.ScaleByLoyalty == true;
+                        if (alreadyActive && !scaled && !mirrorIcons) continue; // 非缩放且已生效：维持
 
                         // 已生效的线性计量效果：先按旧量撤销，再按新量授予，避免 CurrentStrength 等重复叠加
                         if (alreadyActive)
@@ -7446,8 +7914,11 @@ namespace Script.Manager
         /// 全部满足才授予：
         ///  · 不是源卡自身（"其他"）；
         ///  · 目标在场上且**正面朝上**（暗藏者不受光环）；
-        ///  · 领域筛选（沿用既有 JC060 口径）：`AuraRequiresNoDomain=true` → 目标必须没有任何魔法领域；
-        ///    否则排除已含 `AuraFilterExcludeDomain` 者；
+        ///  · 领域筛选（【2026-09 修复·JC059】改为**显式声明才生效**）：
+        ///    `AuraRequiresNoDomain=true` → 目标必须**没有任何**魔法领域（JC060"未印刷魔法领域图标"）；
+        ///    否则仅在 `AuraFilterExcludeDomain` **显式声明**（≠ `EffectData.AuraNoDomainFilter`）时，
+        ///    排除"实例 MagicDomains 已含该域"者——**未声明＝不筛领域**（原默认值 Mind==0 会让所有光环
+        ///    静默排除心灵领域角色，JC059 对 JC066 不生效即此因）；
         ///  · 【P3·E】**组织筛选**：`AuraFilterOrganization` 非空 → 目标模板 `Organization` 须与其相同；
         ///  · 【P3·E】**关键词筛选**：`AuraFilterKeyword` 非空 → 目标须具有该关键字（运行期授予 ∪ 卡面固有）；
         ///  · 【P3·E】**仅本地区**：`AuraLocalZoneOnly=true` → 目标须与来源卡在同一地区。
@@ -7457,9 +7928,17 @@ namespace Script.Manager
             if (auraEffect == null || t == null || src == null) return false;
             if (ReferenceEquals(t, src)) return false;
             if (t.IsCovert) return false;
-            bool excludedByDomain = auraEffect.AuraRequiresNoDomain
-                ? t.MagicDomains.Count > 0
-                : t.MagicDomains.Contains(auraEffect.AuraFilterExcludeDomain);
+            bool excludedByDomain;
+            if (auraEffect.AuraRequiresNoDomain)
+            {
+                excludedByDomain = t.MagicDomains.Count > 0;
+            }
+            else
+            {
+                // 【2026-09 修复·JC059】"未声明"（-1 哨兵）＝不做领域筛选；显式声明才排除该域
+                int exclude = (int)auraEffect.AuraFilterExcludeDomain;
+                excludedByDomain = exclude >= 0 && t.MagicDomains.Contains(auraEffect.AuraFilterExcludeDomain);
+            }
             if (excludedByDomain) return false;
             if (!string.IsNullOrEmpty(auraEffect.AuraFilterOrganization))
             {
@@ -7572,6 +8051,29 @@ namespace Script.Manager
 
         /// <summary>持续光环重算（D19-③）：某玩家区域变动（角色进场/离场/夺控）后调用，对所有含光环的源卡重算其受影响集合。
         /// 差量：新符合条件者补授；已不符合者（离场/夺控/已获领域）撤销本源授予。挂在 ZoneManager.OnPostMove / 夺控后。</summary>
+        /// <summary>
+        /// 【2026-09 用户实测·JC051】**统一的持续/光环"重算 + 自愈补授"入口**（幂等，双方各做一遍）：
+        ///  · `ReevaluateAuras`：光环授予（JC051 白星 / JC060 黑刀 / JC105 …）撤销失效者、补授缺失者；
+        ///  · `ReapplyMissingContinuousGrants`：持续**数值型**授予补回（换区/重置会清空运行期授予）；
+        ///  · `ReapplyGrantedAbilities` / `ReapplySuppressions` / `ReevaluateCouncilStaticGrants`：运行期授予能力、
+        ///    持续抑制、秘社静态授予。
+        ///
+        /// **为什么要独立入口**：上述重算原先只挂在"**任何卡牌移动**"的后置钩子（`ZoneManager.OnPostMove`）上，
+        /// 而**回合切换没有移动** ⇒ 若回合切换还原了运行期授予，自愈补授永不触发
+        /// （实测："JC051 第一回合能正常显示，再过两回合先手交移回来了没有正常显示"）。
+        /// 故回合开始（`TurnManager.OnTurnStarted`）与移动后钩子使用同一份实现。
+        /// </summary>
+        public void RealignAllContinuousGrants()
+        {
+            ReevaluateAuras(1);
+            ReevaluateAuras(2);
+            ReapplyMissingContinuousGrants(1);
+            ReapplyMissingContinuousGrants(2);
+            ReapplyGrantedAbilities();
+            ReapplySuppressions();
+            ReevaluateCouncilStaticGrants();
+        }
+
         public void ReevaluateAuras(int playerId)
         {
             var zm = ZoneManagerRef;
@@ -7634,6 +8136,25 @@ namespace Script.Manager
             // 光环补授/撤销已改写 MagicDomains/攻击力/调查力等数据，经总线通知表现层刷新
             // StatsLabel 与卡面动态标签（夺控场景下 OnPostMove 的 SyncDerivedUI 早于本调用，故需此处二次收口）。
             Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
+            // 【2026-09 修复·用户实测 JC059】撤销"防御"这类授予会让**当前防御力下降**：若该角色已经受伤，
+            // 此时可能刚好满足"伤害＋创伤 ≥ 当前防御力" ⇒ 必须像受伤一样补做死亡判定，否则会赖着不死。
+            RecheckDeathsAfterDefenseDrop();
+        }
+
+        /// <summary>
+        /// 【2026-09·用户口径 JC059】"**减防 ⇒ 补死亡判定**"：扫场上有防御力的卡（争夺区＋附属区，双方），
+        /// 交给 `CardManager.RecheckDeathAfterDefenseDrop`（满足判据才真的走死亡流程）。
+        /// 调用点＝所有可能"让当前防御力变低"的路径尾部（光环撤销/注销、时效到期、形态还原…）。
+        /// </summary>
+        private void RecheckDeathsAfterDefenseDrop()
+        {
+            var cm = CardManagerRef;
+            var zm = ZoneManagerRef;
+            if (cm == null || zm == null) return;
+            foreach (var c in zm.GetZoneCards(CardZone.AreaZone, 0))
+                cm.RecheckDeathAfterDefenseDrop(c);
+            foreach (var c in zm.GetZoneCards(CardZone.AttachedZone, 0))
+                cm.RecheckDeathAfterDefenseDrop(c);
         }
 
         // 兼容别名（旧调用点 RegisterContinuous / UnregisterContinuous 仍可用）
@@ -7804,6 +8325,16 @@ namespace Script.Manager
         /// 则恢复逐槽选择并逐个目标执行动作。</summary>
         public void ResolveSorcery(CardInstance sorcery, string targetUid, int targetVersionId = -1,
             string targetAreaUid = "", System.Collections.Generic.IList<string> targetCardUids = null, int modeIndex = -1)
+            => ResolveSorceryFrom(sorcery, targetUid, targetVersionId, targetAreaUid, targetCardUids, modeIndex,
+                startSpell: 0, validateTargets: true);
+
+        /// <summary>
+        /// 【2026-09·检视·续算】事务卡效果逐条结算的实现体：`startSpell` 供"**确认之后**继续剩余效果"复用
+        /// （JC062「检视 → （窗） → 抓一张牌」，用户口径："抓牌排在确认之后"）；续算时不再重复目标丢失校验。
+        /// </summary>
+        private void ResolveSorceryFrom(CardInstance sorcery, string targetUid, int targetVersionId,
+            string targetAreaUid, System.Collections.Generic.IList<string> targetCardUids, int modeIndex,
+            int startSpell, bool validateTargets)
         {
             if (sorcery?.PlayerTemplate is not PlayerCardData tmpl) return;
             var spells = new System.Collections.Generic.List<EffectData>();
@@ -7815,18 +8346,22 @@ namespace Script.Manager
             CardInstance target = string.IsNullOrEmpty(targetUid) ? null : CM?.GetInstance(targetUid);
 
             // D16 新方案：结算前校验，任一需目标效果的目标已丢失（版本号不一致）→ 整张事务卡不结算并直接进墓地（用户铁律）
-            foreach (var spell in spells)
+            if (validateTargets)
             {
-                if (ValidateTargetAtResolve(spell, sorcery, target, targetAreaUid, targetVersionId, modeIndex) == TargetValidation.Lost)
+                foreach (var spell in spells)
                 {
-                    GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {tmpl.CardName} 目标丢失 → 整张不结算，卡进墓地");
-                    CM?.MoveCardToGraveyard(sorcery);
-                    return;
+                    if (ValidateTargetAtResolve(spell, sorcery, target, targetAreaUid, targetVersionId, modeIndex) == TargetValidation.Lost)
+                    {
+                        GD.Print($"[EffectEngine] ⚑ [D16] 事务卡 {tmpl.CardName} 目标丢失 → 整张不结算，卡进墓地");
+                        CM?.MoveCardToGraveyard(sorcery);
+                        return;
+                    }
                 }
             }
 
-            foreach (var spell in spells)
+            for (int si = System.Math.Max(0, startSpell); si < spells.Count; si++)
             {
+                var spell = spells[si];
                 // 【K15】多目标效果：把"地区槽 + 有序卡目标"恢复成逐槽选择后结算
                 var choices = MultiTargetSlots.IsMultiTarget(spell)
                     ? MultiTargetSlots.Reconstruct(spell, targetAreaUid, targetCardUids)
@@ -7837,7 +8372,32 @@ namespace Script.Manager
                 if (choices != null) choices = PruneIllegalMultiChoices(spell, choices, sorcery);
                 // 【K16】模式分支：把入堆叠时选定的模式传下去（结算只执行该模式）
                 ResolveEffect(spell, sorcery, target, targetAreaUid, -1, targetVersionId, -1, choices, modeIndex);
+
+                // 【2026-09·JC062 用户口径】本轮结算**挂起了"检视结果确认"**（`FlushInspectBatch` 的
+                // 回调型续算点）⇒ **剩余效果延后**到玩家点『确认』之后（"抓一张牌排在确认之后"）；
+                // 确认完成经 `TurnManager.OnEngineChainSettled` → `ContinueDeferredSettlement` 续跑。
+                if (_pendingChain != null)
+                {
+                    _deferredSorcery = (sorcery, targetUid, targetVersionId, targetAreaUid, targetCardUids,
+                        modeIndex, si + 1);
+                    GD.Print($"[EffectEngine] 👁 {tmpl.CardName}：检视呈现等待『确认』→ 剩余 {spells.Count - si - 1} 条效果延后");
+                    return;
+                }
             }
+        }
+
+        /// <summary>
+        /// 【2026-09·检视·续算】玩家在检视窗点了『确认』之后，继续同一张事务卡尚未结算的效果
+        /// （由 `TurnManager.OnEngineChainSettled` 调用；无延后工作时不做事）。
+        /// </summary>
+        public void ContinueDeferredSettlement()
+        {
+            var d = _deferredSorcery;
+            _deferredSorcery = null;
+            if (d == null) return;
+            GD.Print($"[EffectEngine] 👁 检视确认完成 → 继续 {d.Value.Sorcery?.PlayerTemplate?.CardName} 的剩余效果（从第 {d.Value.NextSpell + 1} 条起）");
+            ResolveSorceryFrom(d.Value.Sorcery, d.Value.TargetUid, d.Value.TargetVersionId, d.Value.TargetAreaUid,
+                d.Value.TargetCardUids, d.Value.ModeIndex, d.Value.NextSpell, validateTargets: false);
         }
 
         /// <summary>

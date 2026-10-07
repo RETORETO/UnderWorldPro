@@ -271,6 +271,167 @@ namespace Script.Tests
             Assert.AreEqual("检视：探针", back.Prompt, "Prompt 往返");
         }
 
+        // ==================== ⑤ 检视结果窗：合并成一个窗 + 只有一个确认 + 确认后才继续结算 ====================
+
+        /// <summary>
+        /// UI 桩：记录"检视结果窗"里列出的卡并**先不确认**（`Confirm()` 才模拟玩家点『确认』）；
+        /// 同时给出玩家目标的自动答复（JC057 现身触发在入堆叠前要选目标玩家）。
+        /// </summary>
+        private sealed class InspectStub : Script.Interfaces.IGameUIHooks
+        {
+            public int Calls;
+            public List<CardInstance> LastCards;
+            public string LastTitle;
+            public int LastViewer = -1;
+            private System.Action _pending;
+
+            public void PromptInspectCards(int viewerPlayerId, string title, List<CardInstance> cards,
+                System.Action onConfirmed)
+            {
+                Calls++;
+                LastViewer = viewerPlayerId;
+                LastTitle = title;
+                LastCards = new List<CardInstance>(cards ?? new List<CardInstance>());
+                _pending = onConfirmed;   // 不立即确认：模拟"玩家还没点"
+            }
+
+            /// <summary>模拟玩家点『确认』。</summary>
+            public void Confirm()
+            {
+                var cb = _pending;
+                _pending = null;
+                cb?.Invoke();
+            }
+
+            public void PromptPayOrTap(CardInstance source, int payAmount) { }
+            public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
+                System.Action<CardInstance> onPicked) { }
+            public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
+                bool allowCancel, System.Action<CardInstance> onPicked)
+                => onPicked?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : null);
+            public void PromptCurbMarks(int curbedPlayerId, int remaining,
+                List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid) { }
+            public void PromptPrediction(int predictorId, int count, List<CardInstance> cards,
+                System.Action<List<CardInstance>, List<CardInstance>> onConfirmed) { }
+            public void PromptMultiTargets(CardInstance source, EffectData data,
+                System.Func<int, List<TargetChoice>, SlotCandidates> candidatesForSlot,
+                System.Action<List<TargetChoice>> onConfirmed) { }
+            public void PromptEffectMode(CardInstance source, EffectData data, System.Action<int> onChosen)
+                => onChosen?.Invoke(-1);
+            public void PromptNumberInput(int chooserPlayerId, string prompt, int min, int max, int defaultValue,
+                string confirmLabel, string cancelLabel, System.Action<int> onChosen)
+                => onChosen?.Invoke(-1);
+            /// <summary>JC057 入堆叠前的目标玩家：桩自动取第一个候选。</summary>
+            public void PromptPlayerTarget(int chooserPlayerId, string prompt, List<int> candidates,
+                System.Action<int> onChosen)
+                => onChosen?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : -1);
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径·修复】(1) **两个目标合并成同一个窗**（"JC062 的查看结果方式是结算的时候弹出一个
+        /// 弹窗，里面列出所有看到的信息"）；(2) **确认后才继续结算**——"抓一张牌"排在确认之后（补问裁定）。
+        /// </summary>
+        public void TestInspect_JC062合并一个窗且确认后才抓牌()
+        {
+            var game = NewGame();
+            var areas = Areas(game);
+            GiveAssets(game, 1, 1, (CardColor)4);   // JC062 费用 1、颜色忠诚 4:1
+
+            var c1 = game.CardManager.CreateCardInstance(Probe("TS_win_c1"), 2);
+            game.ZoneManager.MoveToArea(c1, areas[0], 2);
+            c1.SetCovert(true);
+            var c2 = game.CardManager.CreateCardInstance(Probe("TS_win_c2"), 2);
+            game.ZoneManager.MoveToArea(c2, areas[1], 2);
+            c2.SetCovert(true);
+
+            var card = game.CardManager.CreateCardInstance(Load("JC062_diaochadangan"), 1);
+            game.ZoneManager.MoveToHand(card, 1);
+            game.TurnManager.PriorityPlayerId = 1;
+
+            var stub = new InspectStub();
+            EffectEngine.Instance.UIHooks = stub;
+            try
+            {
+                int handBefore = game.TurnManager.GetHandOf(1).Count;   // 含这张事务卡
+                var choices = new List<TargetChoice> { TargetChoice.Card(c1.UID), TargetChoice.Card(c2.UID) };
+                Assert.IsTrue(game.TurnManager.PlayCard(1, card.UID, null, null, choices), "应能打出 JC062");
+                ResolveStackOnce(game);
+
+                Assert.AreEqual(1, stub.Calls, "**整批只弹一个窗**（两个目标合并，不再一次目标一个窗）");
+                Assert.AreEqual(2, stub.LastCards.Count, "窗里**列出全部**看到的牌（2 张）");
+                Assert.IsTrue(stub.LastCards.Exists(x => ReferenceEquals(x, c1))
+                              && stub.LastCards.Exists(x => ReferenceEquals(x, c2)), "两张目标都在同一个窗里");
+                Assert.AreEqual(1, stub.LastViewer, "只有检视者本人看到（私密）");
+                Assert.AreEqual(handBefore - 1, game.TurnManager.GetHandOf(1).Count,
+                    "**确认之前**：抓一张牌尚未结算（只打出 1 张）");
+
+                stub.Confirm();   // 玩家点『确认』（唯一的按钮）
+
+                Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count,
+                    "**确认之后**：抓一张牌才结算（打出 1 张 + 抓 1 张 → 手牌数不变）");
+                Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "事务卡进墓地");
+                Assert.IsTrue(c1.IsCovert && c2.IsCovert, "检视不翻面");
+            }
+            finally
+            {
+                EffectEngine.Instance.UIHooks = null;
+            }
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径·修复】JC057 的查看方式与 JC062 一致：**一个窗列出全部**看到的信息
+        /// （＝目标玩家的**全部手牌**）、框里只有一个『确认』。
+        /// </summary>
+        public void TestInspect_JC057一个窗列出全部手牌()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+
+            var monitor = game.CardManager.CreateCardInstance(Load("JC057_jiankongyuan"), 1);
+            game.ZoneManager.MoveToArea(monitor, area, 1);
+            monitor.SetCovert(true);                       // 从暗藏者现身 → 现身触发
+            game.TurnManager.SetTriggerView(new PushAllTriggerView());
+
+            int hand2 = game.TurnManager.GetHandOf(2).Count;
+            Assert.IsTrue(hand2 >= 2, $"前置：对手手牌 ≥2（实际 {hand2}）");
+
+            var stub = new InspectStub();
+            EffectEngine.Instance.UIHooks = stub;
+            try
+            {
+                game.CardManager.RevealCard(monitor);          // 现身 → 现身触发（选目标玩家 → 检视其手牌）
+                ResolveStackOnce(game);
+
+                Assert.AreEqual(1, stub.Calls, "只弹一个窗");
+                Assert.AreEqual(hand2, stub.LastCards.Count, "**一个窗列出目标玩家的全部手牌**（与 JC062 同款）");
+                Assert.AreEqual(1, stub.LastViewer, "只有检视者本人看到");
+
+                stub.Confirm();   // 收尾（唯一的按钮），释放决策持锁
+            }
+            finally
+            {
+                EffectEngine.Instance.UIHooks = null;
+            }
+        }
+
+        /// <summary>触发视图桩：排序窗口**全部入堆叠**（JC057 现身触发需要真的入堆叠才会结算）。</summary>
+        private sealed class PushAllTriggerView : Script.Interfaces.ITriggerView
+        {
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId,
+                List<StackEffectInstance> triggers,
+                System.Action<List<StackEffectInstance>> onEnterStack, System.Action onDone)
+            {
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+
+            public void RequestTargetSelection(StackEffectInstance trigger, List<string> validTargetUids,
+                System.Action<string> onPicked)
+                => onPicked?.Invoke(validTargetUids != null && validTargetUids.Count > 0 ? validTargetUids[0] : null);
+
+            public void RemoveOrderEntries(List<StackEffectInstance> pushed) { }
+        }
+
         private static void ResolveStackOnce(GameInitializer game)
         {
             for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)

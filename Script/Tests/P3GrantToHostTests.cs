@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -86,7 +86,7 @@ namespace Script.Tests
             var e73 = FindEffect(dream, "JC073_A_GrantWhiteEyeAndBarrierToHost");
             Assert.IsNotNull(e73, "JC073 应有『宿主获得白眼与屏障』持续效果");
             Assert.IsTrue(e73.GrantToHost, "授予落点＝宿主");
-            Assert.AreEqual(2, e73.ContinuousGrants.Count, "白眼 + 屏障");
+            Assert.AreEqual(3, e73.ContinuousGrants.Count, "白眼（Icon）+ 先手调查（Attribute）+ 屏障");
         }
 
         // ==================== ② JC116：宿主获得黑刀，附属自身不获得 ====================

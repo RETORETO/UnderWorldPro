@@ -264,6 +264,37 @@ namespace Script.Tests
 
         // ==================== 5) 蒙版技能资格静态函数 ====================
 
+        /// <summary>
+        /// 【2026-09 用户实测·JC064】"支付 N，否则牺牲本卡"在联机侧走 `AskZeroOrOneViaGatewayAsync`
+        /// （`Kind.NumberInput`，值域 0..1 + 两个按钮文案）⇒ 客户端**应渲染两个按钮，而不是输入框**
+        /// （用户口径："JC064 支付费用的触发弹窗**不需要输入框**，参考 JC061"）。判定收口在
+        /// `Script.UI.ChoicePromptPanel.IsYesNoChoice`（单一入口，`BuildNumberInput` 消费）。
+        /// </summary>
+        public void TestYesNoChoice_0到1带按钮文案应渲染两个按钮()
+        {
+            var req = new ChoiceRequest
+            {
+                RequestKind = ChoiceRequest.Kind.NumberInput,
+                NumberMin = 0, NumberMax = 1, NumberDefault = 1,
+            };
+            req.OptionLabels.Add("支付 1");
+            req.OptionLabels.Add("牺牲");
+            Assert.IsTrue(Script.UI.ChoicePromptPanel.IsYesNoChoice(req), "0..1 + 两个按钮文案 ⇒ **是/否二选一**（渲染按钮，不渲染输入框）");
+
+            var numReq = new ChoiceRequest { NumberMin = 0, NumberMax = 5, NumberDefault = 0 };
+            numReq.OptionLabels.Add("支付");
+            numReq.OptionLabels.Add("取消");
+            Assert.IsFalse(Script.UI.ChoicePromptPanel.IsYesNoChoice(numReq), "值域 0..5 ⇒ 真数值输入，保留输入框");
+
+            var noLabels = new ChoiceRequest { NumberMin = 0, NumberMax = 1, NumberDefault = 0 };
+            Assert.IsFalse(Script.UI.ChoicePromptPanel.IsYesNoChoice(noLabels), "没有按钮文案 ⇒ 不当作二选一");
+
+            var singleLabel = new ChoiceRequest { NumberMin = 0, NumberMax = 1, NumberDefault = 0 };
+            singleLabel.OptionLabels.Add("确认");
+            Assert.IsFalse(Script.UI.ChoicePromptPanel.IsYesNoChoice(singleLabel), "只有一个按钮文案 ⇒ 不当作二选一");
+            Assert.IsFalse(Script.UI.ChoicePromptPanel.IsYesNoChoice(null), "空请求安全返回 false");
+        }
+
         public void TestDeployCovertEligibilityRule()
         {
             var charTmpl = new PlayerCardData { UID = "T_char", CardName = "角色", CategoryFlag = CardCategory.Character };

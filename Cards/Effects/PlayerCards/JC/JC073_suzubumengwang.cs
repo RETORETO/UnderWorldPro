@@ -22,6 +22,13 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 整体复查·修复】卡文"**结附于目标角色**"⇒ 声明打出目标大类（否则附属默认允许全部目标，
+            // 可被结附到地区/秘社/附属上）。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Character),
+            };
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC073_A_GrantWhiteEyeAndBarrierToHost",
@@ -32,6 +39,7 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousGrants = new Array<EffectGrant>
                 {
                     new EffectGrant { Kind = "Icon", Value = "白眼", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手调查", Amount = 1 },
                     // 屏障＝运行期关键字（`TargetValidity.IsBarrierBlocking` 消费"授予的关键字 屏障"）：
                     // 授予**宿主**后，敌方来源不能把宿主指定为目标（"先被指定、后获屏障"在结算复检时判不合法）。
                     new EffectGrant { Kind = "Keyword", Value = "屏障", Amount = 1 },

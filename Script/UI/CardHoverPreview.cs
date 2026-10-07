@@ -32,6 +32,22 @@ namespace Script.UI
         /// <summary>预览层是否可见（测试/诊断用）。</summary>
         public bool IsShowing => _frame != null && _frame.Visible;
 
+        /// <summary>
+        /// 【2026-09·检视窗】本浮层的**专用**"能否预览"判定（非空时优先于 `CardPreviewBus` 的全局判定）。
+        /// 用途：检视窗里列出的卡**已经由效果授权**给检视者（可能属于"默认不可看"的区域——对手手牌、
+        /// 对手暗藏者），故窗口自带的浮层用"本窗列出的卡一律可看"作为判定。
+        /// </summary>
+        public System.Func<CardInstance, bool> CanPreviewOverride;
+
+        /// <summary>
+        /// 【2026-09】浮层缩放（默认 1＝战场里的原尺寸 260×364）。子窗口（如检视窗）空间有限时按比例缩小，
+        /// 避免浮层被窗口边界裁掉（浮层是窗口的子节点，超出窗口的部分会被裁）。
+        /// </summary>
+        public float PreviewScale = 1f;
+
+        private float ScaledWidth => PREVIEW_WIDTH * (PreviewScale > 0f ? PreviewScale : 1f);
+        private float ScaledHeight => PREVIEW_HEIGHT * (PreviewScale > 0f ? PreviewScale : 1f);
+
         public override void _Ready()
         {
             // 浮层自身不吃鼠标事件（否则会挡住底下的卡，导致悬浮抖动/点不到牌）
@@ -41,8 +57,8 @@ namespace Script.UI
 
             _frame = new PanelContainer();
             _frame.MouseFilter = MouseFilterEnum.Ignore;
-            _frame.CustomMinimumSize = new Vector2(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-            _frame.Size = new Vector2(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+            _frame.CustomMinimumSize = new Vector2(ScaledWidth, ScaledHeight);
+            _frame.Size = new Vector2(ScaledWidth, ScaledHeight);
             AddChild(_frame);
 
             var box = new VBoxContainer();
@@ -54,7 +70,7 @@ namespace Script.UI
                 MouseFilter = MouseFilterEnum.Ignore,
                 ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
                 StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
-                CustomMinimumSize = new Vector2(PREVIEW_WIDTH - 8f, PREVIEW_HEIGHT - 30f),
+                CustomMinimumSize = new Vector2(ScaledWidth - 8f, ScaledHeight - 30f),
             };
             box.AddChild(_image);
 
@@ -62,14 +78,33 @@ namespace Script.UI
             box.AddChild(_caption);
         }
 
-        /// <summary>显示某张卡的整张卡图（调用方需已确认"允许查看"）。</summary>
+        /// <summary>显示某张卡的整张卡图（调用方需已确认"允许查看"）。
+        /// 兼容玩家卡（PlayerTemplate）与秘社卡（CouncilTemplate）：秘社卡卡图路径用
+        /// CouncilCardData.CardImagePath（非 PlayerCards 目录），卡名取 CouncilTemplate.CardName。</summary>
         public void ShowFor(CardInstance card, Vector2 anchorGlobalPos, string areaHint = null)
         {
-            if (card?.PlayerTemplate == null) { HidePreview(); return; }
+            if (card == null) { HidePreview(); return; }
             if (_frame == null) return;   // 尚未 _Ready
 
             _current = card;
-            string path = CardUI.ResolveCardImagePath(card.PlayerTemplate.UID);
+            string path;
+            string cardName;
+            if (card.PlayerTemplate != null)
+            {
+                path = CardUI.ResolveCardImagePath(card.PlayerTemplate.UID);
+                cardName = card.PlayerTemplate.CardName;
+            }
+            else if (card.CouncilTemplate != null)
+            {
+                path = card.CouncilTemplate.CardImagePath;
+                cardName = card.CouncilTemplate.CardName;
+            }
+            else
+            {
+                HidePreview();
+                return;
+            }
+
             var tex = ResourceLoader.Load<Texture2D>(path);
             if (tex == null)
             {
@@ -79,8 +114,8 @@ namespace Script.UI
             }
             _image.Texture = tex;
             _caption.Text = string.IsNullOrEmpty(areaHint)
-                ? card.PlayerTemplate.CardName
-                : $"{card.PlayerTemplate.CardName}（{areaHint}）";
+                ? cardName
+                : $"{cardName}（{areaHint}）";
 
             Visible = true;
             _frame.Visible = true;
@@ -95,15 +130,18 @@ namespace Script.UI
             if (_frame != null) _frame.Visible = false;
         }
 
-        /// <summary>把浮层放到被悬浮卡的一侧（优先右侧；贴边则改放左侧/上方），并钳制在视口内。</summary>
+        /// <summary>把浮层放到被悬浮卡的一侧（优先右侧；贴边则改放左侧/上方），并钳制在视口内。
+        /// 注：浮层若是**某个子窗口的子节点**（检视窗），`GetViewportRect()` 与 `anchorGlobalPos` 都是
+        /// **该窗口内容区**的坐标，故本算式一字不改即正确（跨视口混用才会偏到很远，见 `CardPreviewBus`）。</summary>
         private void PositionFrame(Vector2 anchorGlobalPos)
         {
             var vp = GetViewportRect().Size;
+            float w = ScaledWidth, h = ScaledHeight;
             float x = anchorGlobalPos.X + 110f;                     // 卡面宽 100 → 右侧留 10px 间隙
-            if (x + PREVIEW_WIDTH > vp.X - 8f) x = anchorGlobalPos.X - PREVIEW_WIDTH - 10f;
+            if (x + w > vp.X - 8f) x = anchorGlobalPos.X - w - 10f;
             float y = anchorGlobalPos.Y - 40f;
-            x = Mathf.Clamp(x, 8f, Mathf.Max(8f, vp.X - PREVIEW_WIDTH - 8f));
-            y = Mathf.Clamp(y, 8f, Mathf.Max(8f, vp.Y - PREVIEW_HEIGHT - 8f));
+            x = Mathf.Clamp(x, 8f, Mathf.Max(8f, vp.X - w - 8f));
+            y = Mathf.Clamp(y, 8f, Mathf.Max(8f, vp.Y - h - 8f));
             _frame.GlobalPosition = new Vector2(x, y);
         }
     }

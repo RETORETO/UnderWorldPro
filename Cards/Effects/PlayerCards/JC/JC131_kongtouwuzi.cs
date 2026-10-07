@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -8,7 +8,6 @@ namespace Cards.Effects.PlayerCards.JC
     /// <summary>
     /// JC131 空投物资 效果（事务卡）。
     /// 卡文：行动：从你的牌库中寻找一张牌，将该牌置于你的手中，然后洗牌。
-    /// 实现：`LimitToActionPhaseOnly=true`（行动阶段）+ P2 `ActionVerb.Search`，
     ///      筛选串为**空**（= 任意牌，见 `DeckSearchFilter`），去向 `手牌`，无"展示"（卡文未要求）；
     ///      洗牌口径由引擎统一处理（取到/没找到 → 洗牌；放弃 → 不洗牌）。
     /// </summary>
@@ -19,7 +18,6 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
-            data.LimitToActionPhaseOnly = true;
 
             data.EffectDataList.Add(new EffectData
             {

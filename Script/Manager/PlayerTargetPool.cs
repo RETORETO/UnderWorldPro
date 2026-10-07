@@ -37,15 +37,21 @@ namespace Script.Manager
         }
 
         /// <summary>
-        /// 取候选玩家（按玩家号升序）。
+        /// 取候选玩家（**顺序：其他玩家优先，来源控制者自己排最后**）。
         /// `sourceController` ＝ 来源卡控制者（"自己/对手"的比较基准）；&lt;0 时视为未定 → **空候选**（fail-closed）。
+        ///
+        /// 【2026-09 用户裁定·JC111】卡文"目标玩家"（未写"敌方玩家/对手"）＝**任意玩家，含自己**
+        /// ⇒ 不声明 `Restrictions`。**合法性不变**，仅把"自己"排在最后：窗口列表更符合直觉，
+        /// 且无 UI（headless/AI）的确定性兜底取 `[0]` 时**不会自我指定**（如 JC111 洗自己牌库、JC031 令自己弃牌）。
         /// </summary>
         public static List<int> Collect(TargetSpec spec, int sourceController, PlayerManager pm)
         {
             var result = new List<int>();
             if (!IsPlayerSpec(spec)) return result;
             foreach (int pid in AllPlayers(pm))
-                if (Matches(spec, pid, sourceController, pm, out _)) result.Add(pid);
+                if (pid != sourceController && Matches(spec, pid, sourceController, pm, out _)) result.Add(pid);
+            foreach (int pid in AllPlayers(pm))
+                if (pid == sourceController && Matches(spec, pid, sourceController, pm, out _)) result.Add(pid);
             return result;
         }
 

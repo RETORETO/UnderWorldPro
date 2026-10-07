@@ -201,5 +201,23 @@ namespace Script.Data.Effects
 
         /// <summary>动作参数列表（数值/图标/属性类型/区域等，由具体 Verb 解释）。</summary>
         [Export] public Array<string> Args { get; set; } = new Array<string>();
+
+        /// <summary>
+        /// 【2026-09·JC048 用户口径】**动作级群体**：本动作对"所属效果 `Target` 声明的群体集合"
+        /// **各执行一次**（集合由 `MassTargetPool.Collect` 按同一份 `TargetSpec` 枚举）。
+        /// 仅在效果声明 `TargetSpec.MassSequential = true` 时生效；`false`（缺省）＝该动作只执行一次。
+        /// 用途：一条效果里表达"先放 1 个标志（一次）→ 再对地区内每个角色各造成伤害（逐个）"。
+        /// </summary>
+        [Export] public bool MassInArea { get; set; } = false;
+
+        /// <summary>
+        /// 【2026-09·JC048 用户口径】**动作级"然后若…"条件**（谓词名，复用 `EffectEngine.EvaluateCondition`）：
+        /// 空＝无条件；不满足时**跳过本动作**、继续执行后续动作。用于卡文"然后**若**该地区上有三个或更多
+        /// 时间标志，**则**牺牲诅咒沙漏"这类"动作序列中途的条件"。
+        /// </summary>
+        [Export] public string RequirePredicate { get; set; } = "";
+
+        /// <summary>动作级条件参数（与 `EffectCondition.Param` 同格式，如 `"时间标志,3"`）。</summary>
+        [Export] public string RequireParam { get; set; } = "";
     }
 }

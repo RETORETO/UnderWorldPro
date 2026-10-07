@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -74,9 +74,34 @@ namespace Script.Manager
                 bool activatable = ActivateEligibility.CanActivate(card, tm, pm, cm, ignoreAtomicLock: true);
                 if (activatable) view.ActivatableUids.Add(card.UID);
 
+                // 【2026-09 修复·JC019 宿主无法拖拽】"能否用拖拽表达"由服务端算一次并投影：
+                // 客户端拿不到"运行期授予"表（服务端 EffectEngine 才有），
+                // 故必须把结论（含 EffectId）下发，否则客户端的 `GetAllActivateAbilities` 只有模板项
+                // ⇒ JC019 授予宿主的能力在客户端**不可见**（拖拽起手直接 return false）。
+                bool canDrag = ActivateEligibility.CanDragActivate(card, out var dragAbility);
                 foreach (var e in EnumerateActivationEffects(card))
                 {
-                    if (e?.Target == null || !e.Target.NeedsSelection) continue;
+                    if (e == null) continue;
+                    // 【2026-09 修复·JC053 用户口径】**只投影"当前确实可发动"的能力**：声明的结算条件
+                    // （`EffectCondition.Predicate`）当前不满足的能力**不下发** ⇒ 客户端据"投影有该卡条目、
+                    // 但缺本能力"把它**置灰**（A103），实现用户要求"一项可选、一项置灰"。
+                    // （服务端有引擎实例，可在此真实求值；客户端没有，故结论必须由投影给出。）
+                    if (!ActivateEligibility.ConditionAllowsActivation(e, card))
+                    {
+                        Godot.GD.Print($"[LegalityProjection] 不投影能力（前置不满足）：{card.PlayerTemplate?.CardName} {e.EffectId}");
+                        continue;
+                    }
+                    view.ActivationAbilities.Add(new ActivationAbilitySnap
+                    {
+                        SourceUid = card.UID,
+                        EffectId = e.EffectId,
+                        Draggable = canDrag && ReferenceEquals(dragAbility, e),
+                        Label = string.IsNullOrEmpty(e.FaqNote) ? e.EffectId : e.FaqNote,
+                        NeedsSelection = e.Target?.NeedsSelection == true,
+                        TargetKindValue = (int)(e.Target?.Kind ?? TargetKind.None),
+                        PlayerTarget = PlayerTargetPool.IsPlayerSpec(e.Target),
+                    });
+                    if (e.Target == null || !e.Target.NeedsSelection) continue;
                     var entry = new AbilityTargetSnap { SourceUid = card.UID, EffectId = e.EffectId };
                     foreach (var t in candidates)
                     {
@@ -102,17 +127,20 @@ namespace Script.Manager
                 if (c != null && c.ControllerId == viewerPlayerId) yield return c;
         }
 
-        /// <summary>一张卡的激活类效果（角色/附属 ActivationOptions 与秘社 ActivationOptions 统一枚举）。</summary>
+        /// <summary>一张卡的激活类效果（角色/附属 ActivationOptions 与秘社 ActivationOptions 统一枚举）。
+        /// 【2026-09 修复·JC019】玩家卡侧改用 `ActivateEligibility.GetAllActivateAbilities`
+        /// （**模板 ∪ 运行期授予**）——此前只读模板 `EffectDataList` ⇒ JC019 授予宿主的激活能力
+        /// **完全不在投影里**（实测：宿主有 1 条授予能力，投影 `AbilityTargets` 为 0 条）。</summary>
         private static IEnumerable<EffectData> EnumerateActivationEffects(CardInstance card)
         {
             if (card == null) yield break;
-            if (card.PlayerTemplate is PlayerCardData tmpl && tmpl.EffectDataList != null)
+            if (card.PlayerTemplate is PlayerCardData)
             {
-                foreach (var e in tmpl.EffectDataList)
-                    if (e != null && e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated)
-                        yield return e;
+                foreach (var e in ActivateEligibility.GetAllActivateAbilities(card))
+                    if (e != null) yield return e;
+                yield break;
             }
-            else if (card.CouncilTemplate is CouncilCardData council && council.ActivationOptions != null)
+            if (card.CouncilTemplate is CouncilCardData council && council.ActivationOptions != null)
             {
                 foreach (var opt in council.ActivationOptions)
                 {

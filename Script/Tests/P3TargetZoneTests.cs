@@ -59,7 +59,7 @@ namespace Script.Tests
         {
             var tmpl = Load("JC107_bengtadeshikong");
             Assert.IsNotNull(tmpl, "JC107 模板应可加载");
-            Assert.IsTrue(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段打出");
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段打出 ⇒ **非快速**：不得在响应窗口打出（A档＝自己行动步骤且堆叠为空）");
             Assert.AreEqual(2, tmpl.TargetRules.Count, "打出目标＝两条规则（附属 / 资产，OR）");
             Assert.AreEqual(TargetKind.Attachment, tmpl.TargetRules[0].Kind, "第一条＝附属");
             Assert.AreEqual(TargetKind.Asset, tmpl.TargetRules[1].Kind, "第二条＝资产");

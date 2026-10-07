@@ -10,9 +10,10 @@ namespace Cards.Effects.PlayerCards.JC
     /// 卡文：声望（当一个地区的所有对抗结束后，在该地区上若你比对手操控更多未横置的声望角色，
     ///            则你可以在该地区额外放置一个本方势力标志。）
     ///      现身触发：抓一张牌。
-    /// 实现（效果级推进）：**只做现身触发**（`Draw`，唯一抽牌收口，会广播 `OnDraw`）。
-    /// ⛔ 未做「声望」词条：声望的完整规则（对抗结束后比较未横置声望角色 → 额外放势力标志）属未实现的机制，
-    ///    且用户已说明将在 P5 给出完整词条规则 → 见进度表该行的 ⛔ 说明。
+    /// 实现：**现身触发**（`Draw`，唯一抽牌收口，会广播 `OnDraw`）＋
+    ///      【2026-09 用户口径·声望改触发】**声望词条**：关键字（供"声望角色"计数）＋ 触发效果
+    ///      （该地区所有对抗结束后，声望角色较多的一方放置 1 个势力标志；不依赖对抗胜负）。
+    ///      口径（用户已确认的默认值）：**不要求未横置**、不要求参与该次对抗，只数该地区的声望角色数量。
     /// </summary>
     public static class JC076_wudaosengren_Effects
     {
@@ -21,6 +22,13 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            var renown = KeywordEffects.RenownKeyword();
+            renown.EffectId = "JC076_A_Renown";
+            data.EffectDataList.Add(renown);
+
+            var renownTrigger = KeywordEffects.Renown();
+            renownTrigger.EffectId = "JC076_A2_RenownTrigger";
+            data.EffectDataList.Add(renownTrigger);
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC076_2_UncoverDraw",

@@ -68,6 +68,10 @@ namespace Script.UI
             // 回车＝确认
             _input.TextSubmitted += _ => Confirm();
             CloseRequested += Cancel;
+
+            // 【2026-09 修复·同 InspectWindow】**显式定窗口尺寸**：Godot `Window` 默认 100×100 且
+            // `wrap_controls=false` 不会按内容撑开，而 `PopupCentered()` 只按当前 `Size` ⇒ 不设就会被裁。
+            Size = new Vector2I(420, 200);
         }
 
         private void Confirm()

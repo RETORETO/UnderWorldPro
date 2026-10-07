@@ -28,6 +28,24 @@ namespace Script.UI
         /// <summary>查看者玩家号（仅用于日志/诊断）。</summary>
         public static int ViewerPlayerId;
 
+        /// <summary>
+        /// 【2026-09·检视窗】"窗口内自带浮层"的节点名：**子窗口**（检视窗等）里挂一个同名 `CardHoverPreview`
+        /// 子节点，悬浮该窗口内的卡时优先用它。原因（用户实测"检视窗内的卡悬浮UI偏离原本卡面有点远"）：
+        ///  · 子窗口里的卡属于**窗口自己的视口**，`ui.GlobalPosition` 是窗口内容区坐标，
+        ///    而主视口的浮层按主视口坐标定位 ⇒ 偏出整个窗口位置（几百像素）；
+        ///  · 且 Godot 的 `Window` **永远渲染在所有 Control 之上** ⇒ 主视口浮层压在窗下，坐标修对也看不见。
+        /// 找不到该子节点时**回退全局浮层**（战场/手牌等主视口场景行为逐字不变）。
+        /// </summary>
+        public const string WindowOverlayName = "CardHoverPreview";
+
+        /// <summary>解析"该节点所属窗口自带的浮层"；没有则回退全局 `Overlay`。</summary>
+        private static CardHoverPreview ResolveOverlay(Node node)
+            => node?.GetWindow()?.GetNodeOrNull<CardHoverPreview>(WindowOverlayName) ?? Overlay;
+
+        /// <summary>解析该浮层的"能否预览"判定：窗口自带浮层的专用判定优先，否则用总线全局判定。</summary>
+        private static System.Func<CardInstance, bool> ResolvePredicate(CardHoverPreview overlay)
+            => overlay?.CanPreviewOverride ?? CanPreview;
+
         /// <summary>由战场视图装配时调用（重复调用＝覆盖，后装配的视图生效）。</summary>
         public static void Attach(System.Func<CardInstance, bool> canPreview, CardHoverPreview overlay, int viewerPlayerId)
         {
@@ -50,26 +68,50 @@ namespace Script.UI
         public static void RequestHover(CardUI ui)
         {
             if (ui == null) return;
-            var card = ui.Instance;
-            if (card == null) { Hide(); return; }
-            if (CanPreview == null || Overlay == null) return;         // 未接管：不弹（无副作用）
-            if (!CanPreview(card))
-            {
-                // 不允许查看（对手手牌 / 对手暗藏者且无 JC057 授权）→ 不弹
-                Hide();
-                return;
-            }
-            Overlay.ShowFor(card, ui.GlobalPosition);
+            RequestHoverCore(ui, ui.Instance, ui.GlobalPosition);
         }
 
         /// <summary>`CardUI` 鼠标离开时调用。</summary>
         public static void EndHover(CardUI ui)
         {
-            if (Overlay == null) return;
-            if (ui != null && Overlay.Current != null && !ReferenceEquals(Overlay.Current, ui.Instance)) return;
-            Hide();
+            var overlay = ResolveOverlay(ui);
+            if (overlay == null) return;
+            if (ui != null && overlay.Current != null && !ReferenceEquals(overlay.Current, ui.Instance)) return;
+            overlay.HidePreview();
         }
 
-        private static void Hide() => Overlay?.HidePreview();
+        /// <summary>`CouncilCardUI`（秘社卡）鼠标进入时调用。判定与显示路径与 `CardUI` 完全一致。</summary>
+        public static void RequestHover(CouncilCardUI ui)
+        {
+            if (ui == null) return;
+            RequestHoverCore(ui, ui.Instance, ui.GlobalPosition);
+        }
+
+        /// <summary>`CouncilCardUI`（秘社卡）鼠标离开时调用。</summary>
+        public static void EndHover(CouncilCardUI ui)
+        {
+            var overlay = ResolveOverlay(ui);
+            if (overlay == null) return;
+            if (ui != null && overlay.Current != null && !ReferenceEquals(overlay.Current, ui.Instance)) return;
+            overlay.HidePreview();
+        }
+
+        /// <summary>公共悬浮请求：按注入判定决定是否弹出整张卡图浮层（玩家卡与秘社卡共用）。
+        /// 【2026-09】浮层与判定都按"悬浮卡所在窗口"解析（子窗口自带浮层优先，否则回退全局）。</summary>
+        private static void RequestHoverCore(Node sourceNode, CardInstance card, Vector2 anchorGlobalPos)
+        {
+            var overlay = ResolveOverlay(sourceNode);
+            if (card == null) { overlay?.HidePreview(); return; }
+            if (overlay == null) return;                                  // 未接管：不弹（无副作用）
+            var predicate = ResolvePredicate(overlay);
+            if (predicate == null) return;
+            if (!predicate(card))
+            {
+                // 不允许查看（对手手牌 / 对手暗藏者且无 JC057 授权）→ 不弹
+                overlay.HidePreview();
+                return;
+            }
+            overlay.ShowFor(card, anchorGlobalPos);
+        }
     }
 }

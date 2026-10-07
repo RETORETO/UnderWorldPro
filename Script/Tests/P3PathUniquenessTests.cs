@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -128,6 +128,36 @@ namespace Script.Tests
             Assert.IsNotNull(e.StaticEffects, "有静止效果声明");
             Assert.AreEqual(StaticKind.UniquePathAtMostOne, e.StaticEffects[0].Kind, "静止种类＝道途唯一性");
             Assert.IsTrue(tmpl.SubCategories.Contains("道途"), "本卡自身是『道途』子类别");
+        }
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测】"JC034 现在无法正常打出结附于秘社"。
+        /// 根因：JC034 的 C# 构建器**从未声明打出目标规则**（`TargetRules` 为空），而
+        /// `CardManager.IsLegalPlayTarget` 逐条裁决 `TargetRules` ⇒ 空表＝**任何目标都不合法**、卡永远打不出。
+        /// 本用例锁定：① 打出目标含秘社且限本方；② 本方秘社实例是合法打出目标。
+        /// </summary>
+        public void TestPath_JC034可结附本方秘社()
+        {
+            var tmpl = Load("JC034_xinshouzhidao");
+            Assert.IsTrue(tmpl.TargetRules != null && tmpl.TargetRules.Count > 0,
+                "『结附于本方秘社』必须由 TargetRules 承担（空表 ⇒ 永远打出不了）");
+            Assert.AreEqual(TargetKind.Council, tmpl.TargetRules[0].Kind, "打出目标大类＝秘社");
+            Assert.IsTrue(tmpl.TargetRules[0].Restrictions.Contains(TargetRestriction.Friendly), "限**本方**秘社");
+            Assert.IsTrue(tmpl.GetAllowedTargets().Contains(TargetKind.Council), "允许目标大类应含秘社");
+
+            var cm = new CardManager();
+            cm._Ready();
+            var src = new CardInstance(tmpl, "TS_path_src") { OwnerId = 1, ControllerId = 1 };
+            src.CurrentZone = CardZone.Hand;
+            var selfCouncil = new CardInstance(new CouncilCardData { CardName = "本方秘社" }, "TS_path_c1")
+            { OwnerId = 1, ControllerId = 1 };
+            selfCouncil.CurrentZone = CardZone.CouncilZone;
+            var enemyCouncil = new CardInstance(new CouncilCardData { CardName = "敌方秘社" }, "TS_path_c2")
+            { OwnerId = 2, ControllerId = 2 };
+            enemyCouncil.CurrentZone = CardZone.CouncilZone;
+
+            Assert.IsTrue(cm.IsLegalPlayTarget(src, selfCouncil), "本方秘社必须是合法打出目标");
+            Assert.IsFalse(cm.IsLegalPlayTarget(src, enemyCouncil), "敌方秘社不得作为目标");
         }
 
         // ==================== ② 两张道途 → 立刻牺牲掉多余的那张（无 UI 确定性兜底） ====================

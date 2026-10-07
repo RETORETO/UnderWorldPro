@@ -10,16 +10,16 @@ namespace Cards.Effects.PlayerCards.JC
     /// 卡文：结附于目标地区。准备步骤强制触发：在诅咒沙漏上放置一个时间标志。然后该地区每有一个时间标志，
     ///      就对位于该地区的所有角色造成1点伤害。然后若该地区上有三个或更多时间标志，则牺牲诅咒沙漏。
     ///
-    /// 实现（三步拆成两条同时机效果，按序结算——事务/触发类效果按声明顺序执行，正好表达卡文的"然后…然后…"）：
-    ///  · **① 放标志 + 按地区标志数造成群体伤害**：时机 `OnTurnStarted`（＝**准备步骤**）+ `Forced = true`
-    ///    （卡文"**强制**触发"）：
-    ///    - `PlaceCounter{"时间标志","1","自身"}`（先放，故本次伤害计数**含刚放下的这一个**，符合卡文顺序）；
-    ///    - 群体伤害：`Target{Kind=Character, MassMode=AllInArea, CanTargetSelf=true}` + `DealDamage{"$X"}`
-    ///      其中 `ValueExpr = "计数:地区内卡上标志:时间标志:本地区"`（**本批新增的取值写法**：该地区内所有卡上的
-    ///      时间标志之和；与条件谓词 `AreaMarkerAtLeast` 共用同一统计实现）；
-    ///  · **② 若该地区时间标志 ≥ 3 → 牺牲自身**：时机 `OnTurnStarted` +
-    ///    `Condition{Predicate="AreaMarkerAtLeast", Param="时间标志,3"}`（地区取自**来源卡所在地区**）
-    ///    + `Sacrifice`（牺牲＝死亡，走死亡时机）。
+    /// **【2026-09 用户口径·A95】整条卡文是"一条效果里按顺序处理的三个动作"，不得拆成三条强制效果**：
+    /// 原先拆成 3 条同时间效果时，①「放标志」与②「按地区标志数伤害」的收集/结算次序无法保证，
+    /// 且②的 X 在**收集阶段**求值（那时标志还没放）会被 K1 门禁整条跳过 ⇒ 实测"只有牺牲那一回合才造成伤害"。
+    /// 现改写为**一条** `OnTurnStarted` + `Forced` 效果，用新的**动作级**原语表达顺序：
+    ///  · ① `PlaceCounter{"时间标志","1","自身"}`（普通动作 ⇒ 只执行一次）；
+    ///  · ② `DealDamage{"$X"}` + `MassInArea = true`（**动作级群体** ⇒ 对该地区内每个角色各执行一次），
+    ///    X ＝ `ValueExpr = "计数:地区内卡上标志:时间标志:本地区"`（**结算时**求值 ⇒ 含刚放下的这一个）；
+    ///  · ③ `Sacrifice` + `RequirePredicate = "AreaMarkerAtLeast"` / `RequireParam = "时间标志,3"`
+    ///    （**动作级条件** ⇒ 卡文"然后**若**…则…"，不满足则跳过本动作、不影响后续）；
+    /// 动作顺序＝数组声明顺序，由 `EffectEngine.ExecuteSequentialMassActions` 保证（`TargetSpec.MassSequential`）。
     /// </summary>
     public static class JC048_zuzhoushalou_Effects
     {
@@ -28,73 +28,56 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
-            // ①a 准备步骤强制触发：先在诅咒沙漏上放 1 个时间标志
-            // ⚠ 必须与"群体伤害"**分成两条效果**：K2 群体动作的语义是"对**每个**目标各执行一次整条动作序列"，
-            //   若放在同一条里，放标志会被重复执行（每个目标各放一次）——本轮实测踩到。
+            // 【2026-09 整体复查·修复】卡文"**结附于目标地区**"⇒ 声明打出目标大类（否则附属默认允许全部目标）。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Area),
+            };
+
             data.EffectDataList.Add(new EffectData
             {
-                EffectId = "JC048_A_PlaceTimeMarkerOnSelf",
+                EffectId = "JC048_1_PreparePlaceDamageSacrifice",
                 Timing = EffectTiming.OnTurnStarted,     // 准备步骤
                 Forced = true,                           // 卡文"强制触发"
-                Condition = new EffectCondition { Predicate = "Always" },
-                Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
-                Actions = new Array<EffectAction>
-                {
-                    new EffectAction
-                    {
-                        Verb = ActionVerb.PlaceCounter,
-                        Args = new Array<string> { "时间标志", "1", "自身" },
-                    },
-                },
-                Duration = "瞬时",
-                FaqNote = "准备步骤：在诅咒沙漏上放置一个时间标志。",
-            });
-
-            // ①b 然后该地区每有 1 个时间标志 → 对位于该地区的所有角色各造成 1 点伤害
-            data.EffectDataList.Add(new EffectData
-            {
-                EffectId = "JC048_B_AreaDamagePerMarker",
-                Timing = EffectTiming.OnTurnStarted,
-                Forced = true,
-                ValueExpr = "计数:地区内卡上标志:时间标志:本地区",   // X ＝ 该地区内所有卡上的时间标志之和（含刚放下的）
+                // X ＝ 该地区内所有卡上的时间标志之和；**结算时**求值（动作①刚放下的那个也算）
+                ValueExpr = "计数:地区内卡上标志:时间标志:本地区",
+                ValueAtResolve = true,
                 Condition = new EffectCondition { Predicate = "Always" },
                 Target = new TargetSpec
                 {
                     Kind = TargetKind.Character,
-                    MassMode = MassMode.AllInArea,       // 位于该地区的所有角色
+                    MassMode = MassMode.AllInArea,       // "位于该地区的所有角色"
+                    MassSequential = true,               // 【A95】动作按声明顺序执行（一条效果，三个动作）
                     CanTargetSelf = true,                // 不分敌我
                     NeedsSelection = false,
                 },
                 Actions = new Array<EffectAction>
                 {
+                    // ① 在诅咒沙漏上放 1 个时间标志（只执行一次 —— 不声明 MassInArea）
+                    new EffectAction
+                    {
+                        Verb = ActionVerb.PlaceCounter,
+                        Args = new Array<string> { "时间标志", "1", "自身" },
+                    },
+                    // ② 该地区每有一个时间标志 → 对位于该地区的所有角色各造成 1 点伤害（逐个执行）
                     new EffectAction
                     {
                         Verb = ActionVerb.DealDamage,
                         Args = new Array<string> { "$X" },
+                        MassInArea = true,
+                    },
+                    // ③ 然后若该地区时间标志 ≥ 3 → 牺牲自身（动作级条件，不满足则跳过）
+                    new EffectAction
+                    {
+                        Verb = ActionVerb.Sacrifice,
+                        RequirePredicate = "AreaMarkerAtLeast",
+                        RequireParam = "时间标志,3",
                     },
                 },
                 Duration = "瞬时",
-                FaqNote = "该地区每有一个时间标志，就对位于该地区的所有角色造成 1 点伤害。",
-            });
-
-            // ② 若该地区时间标志 ≥ 3 → 牺牲自身
-            data.EffectDataList.Add(new EffectData
-            {
-                EffectId = "JC048_C_SacrificeSelfIfThreeMarkers",
-                Timing = EffectTiming.OnTurnStarted,
-                Forced = true,
-                Condition = new EffectCondition
-                {
-                    Predicate = "AreaMarkerAtLeast",     // 【P3·K5】地区内卡上标志合计 ≥ N
-                    Param = "时间标志,3",
-                },
-                Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
-                Actions = new Array<EffectAction>
-                {
-                    new EffectAction { Verb = ActionVerb.Sacrifice },
-                },
-                Duration = "瞬时",
-                FaqNote = "随后若该地区上有三个或更多时间标志，则牺牲诅咒沙漏。",
+                FaqNote = "准备步骤强制触发：在诅咒沙漏上放置一个时间标志 → 该地区每有一个时间标志，"
+                        + "就对位于该地区的所有角色造成 1 点伤害 → 然后若该地区有三个或更多时间标志，则牺牲诅咒沙漏。"
+                        + "（一条效果内的三个动作按序处理。）",
             });
         }
     }

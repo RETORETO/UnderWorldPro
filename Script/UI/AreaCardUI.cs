@@ -163,8 +163,8 @@ namespace Script.UI
                         _isDragging = true;
                         _initialPosition = Position;
                         _dragOffset = GetGlobalMousePosition() - GlobalPosition;
-                        // 提升层级
-                        ZIndex = 10;
+                        // 提升层级（区域内卡牌拖拽态；层号由 Script.UI.Layers 统一分配）
+                        ZIndex = Layers.CardDragging;
                         EmitSignal(SignalName.AreaCardDragStarted, this);
                         AcceptEvent();
                         GD.Print($"[AreaCardUI] 拖拽开始: {_data?.CardName}");

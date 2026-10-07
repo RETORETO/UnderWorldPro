@@ -51,6 +51,7 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousGrants = new Array<EffectGrant>
                 {
                     new EffectGrant { Kind = "Icon", Value = "白星", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手势力", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Duration = "常驻",

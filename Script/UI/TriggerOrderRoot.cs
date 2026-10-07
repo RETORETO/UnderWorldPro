@@ -111,7 +111,7 @@ namespace Script.UI
             _dragEntry = hit;
             _dragFromZone = hit.GetParent() as Control;
             _entryDragOffset = globalMouse - _dragEntry.GlobalPosition;
-            _dragEntry.ZIndex = 100;
+            _dragEntry.ZIndex = Layers.TriggerOrderDrag;   // 层号由 Script.UI.Layers 统一分配
             GD.Print($"[触发排序] 开始拖拽条目 Name={_dragEntry.NameLabel?.Text} from={(_dragFromZone == OrderZoneContainer ? "Order" : "Discard")}");
             return true;
         }

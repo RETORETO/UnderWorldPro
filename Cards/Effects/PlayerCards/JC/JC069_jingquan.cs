@@ -40,6 +40,11 @@ namespace Cards.Effects.PlayerCards.JC
                     NeedsSelection = true,
                     CanTargetSelf = false,
                     IncludeCovert = true,   // 卡文"目标角色或暗藏者"
+                    // 【2026-09 用户口径·修复】卡文「在目标角色或暗藏者上放置一个锁定标志」**没有写"本地区"**
+                    // ⇒ 用户实测报障并裁定："现在只能选本地区，我希望**放开到任意地区**"。
+                    // 本引擎触发取目标默认限"同 AREASLOT"（`TurnManager.GetTargetUidsForSpec`），
+                    // 故必须显式声明 `AllAreas=true`。
+                    AllAreas = true,
                 },
                 Actions = new Array<EffectAction>
                 {

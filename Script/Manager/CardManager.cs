@@ -215,6 +215,10 @@ public partial class CardManager : Node
             // 【JC124】死亡瞬间的计数器快照（必须在广播**之前**抓）：死亡触发的结算晚于"进墓地"，
             // 而进墓地会 ResetToBaseState() 清空计数器 —— 没有快照则"具哲人石标志的角色死亡时…"类条件永不成立。
             instance.SnapshotCountersAtDeath();
+            // 【2026-09 修复·JC030/JC031】同一原因：离场会清空**运行期授予的子类别**（如 JC030 由
+            // "血领域忠诚≥2"授予的「吸血鬼」）⇒ 以子类别为条件的死亡触发在结算复检时恒不成立。
+            // 故同样在广播前抓一份"死亡瞬间的当前子类别"快照，供谓词 `DiedVampireCharacter` 读取。
+            instance.SnapshotSubCategoriesAtDeath();
             instance.OnDeath?.Invoke(instance);   // Model 纯数据死亡事件（供其他订阅方）
             OnCardDied?.Invoke(instance);         // Controller 层既有 C# 事件（UI 订阅）
             // 触发总线：带上"死亡那一刻"的区域/地区（此即规则要求的"触发时所在地区"，与去向无关）
@@ -669,6 +673,36 @@ public partial class CardManager : Node
         foreach (var instance in GetAreaCards())
             instance.ResetDamage();
         GD.Print("✅ 所有角色伤害标记已重置 (逻辑层)");
+    }
+
+    /// <summary>
+    /// 【2026-09·用户口径 JC059】**防御力下降后的补死亡判定**。
+    ///
+    /// 死亡判据是"伤害＋创伤 ≥ **当前**防御力"（`CardInstance.IsDead()`），因此除了"受伤"，
+    /// 任何让**当前防御力变低**的路径（光环撤销、时效到期、形态还原、-N 防御效果…）都必须和伤害一样
+    /// 跑一次死亡检查 —— 否则已经受伤的角色会在防御掉回去后**赖着不死**。
+    /// 用户实测报障原文："JC059 移动地区后，原有地区的角色防御总值下降，如果已经受伤可能会导致死亡，
+    /// 现在没有因为这个原因死亡，需要修正"。
+    ///
+    /// 由 Controller（光环重算 / 时效还原等"减防"路径尾部）调用；**只在真的满足死亡判据时**才走既有
+    /// 死亡流程 `HandleInstanceDeath`（含死亡时机广播与墓地处理），与伤害入口同口径地排除暗藏者。
+    /// </summary>
+    /// <returns>true ＝ 本次判定导致该卡死亡。</returns>
+    public bool RecheckDeathAfterDefenseDrop(CardInstance instance)
+    {
+        if (instance == null) return false;
+        // 只有在场卡参与死亡判定（争夺区/附属区；手牌/牌库/墓地等不在此列）
+        if (instance.CurrentZone != CardZone.AreaZone && instance.CurrentZone != CardZone.AttachedZone) return false;
+        if (instance.IsCovert) return false;          // 暗藏者免疫伤害/不参与死亡判定（与 `DealDamageToInstance` 同口径）
+        // **必须已经受伤**才谈"减防致死"（用户口径："如果已经受伤可能会导致死亡"）。
+        // 为什么不能只看 `IsDead()`：形态转换等过渡态会出现"`CurrentDefense == -1`（当前无防御）但模板仍有印刷防御"
+        // 的组合，此时 `IsDead()` 的 `0 >= -1` 会**把毫发无伤的卡判死**（实测踩到 JC028 鲜血奴仆变附属后被打死）。
+        if (instance.Damage + instance.Trauma <= 0) return false;
+        if (!instance.IsDead()) return false;
+        GD.Print($"[CardManager] 💀 {instance.PlayerTemplate?.CardName} **防御力下降**后满足死亡判据" +
+                 $"（伤害{instance.Damage}＋创伤{instance.Trauma} ≥ 防御{instance.CurrentDefense}）→ 死亡");
+        HandleInstanceDeath(instance);
+        return true;
     }
 
     /// <summary>重置步骤：解除所有区域（争夺区/手牌/资产/结附卡/**秘社**）卡牌的横置。

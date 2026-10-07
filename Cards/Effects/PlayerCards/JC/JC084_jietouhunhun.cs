@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -37,6 +37,7 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousGrants = new Array<EffectGrant>
                 {
                     new EffectGrant { Kind = "Icon", Value = "白星", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手势力", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Duration = "常驻",
@@ -58,6 +59,7 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousGrants = new Array<EffectGrant>
                 {
                     new EffectGrant { Kind = "Icon", Value = "白眼", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手调查", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Duration = "常驻",

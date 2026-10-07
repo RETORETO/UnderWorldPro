@@ -16,7 +16,8 @@ namespace Cards.Effects.PlayerCards.JC
     ///    存在多个道途时由该玩家选择一个牺牲**）：任何区域变更后（`ZoneManager.OnPostMove`）若该控制者场上
     ///    道途数 &gt; 1 且场上存在印了本规则的卡 → 立刻让该控制者选一个牺牲（不入堆叠、不可被响应；
     ///    牺牲＝死亡并广播死亡触发）；单机 `PromptPickCard`／联机 `Kind.SelectTarget`／无 UI 确定性兜底。
-    ///  · 前缀「结附于本方秘社」由卡数据的目标规则承担（引擎已支持结附限制）。
+    ///  · 前缀「结附于本方秘社」＝**打出目标规则** `TargetRules = Council + Friendly`（与 JC012/JC039 等同款；
+    ///    2026-09 修复：原先误以为"卡数据里已声明"，实际 .tres 不含 TargetRules ⇒ 该卡**无法打出**）。
     ///  · **第二条（战斗对抗获胜 → 若本方吸血鬼角色参与该次对抗 → 令目标对手弃一张手牌）已实现**：
     ///    新谓词 `WinnerIsSelfWithAllySubCategoryInCombatArea`（`Param="吸血鬼"`，按 A14 的近似口径
     ///    "位于战斗地区且属于获胜方"）＋ K24 玩家目标（目标对手）＋ `Discard{"1","目标玩家","自选"}`
@@ -29,6 +30,15 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 修复·实测】"结附于本方秘社"必须由**打出目标规则**承担：
+            // `CardManager.IsLegalPlayTarget` 逐条裁决 `TargetRules`，**空表＝任何目标都不合法**
+            // ⇒ 缺这一行时 JC034 **完全无法打出**（实测 `IsLegalPlayTarget(本方秘社)=False`、
+            // `TargetRules.Count=0`）。与其余 9 张「结附于本方秘社」的卡（JC009/012/025/033/039/053/068/082/117）同款。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Council, TargetRestriction.Friendly),
+            };
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC034_A_UniquePathAtMostOne",

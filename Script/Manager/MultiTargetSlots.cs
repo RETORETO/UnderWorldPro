@@ -66,6 +66,15 @@ namespace Script.Manager
         /// <summary>【K24】候选玩家号（升序）。</summary>
         public List<int> PlayerIds = new List<int>();
 
+        /// <summary>
+        /// 【2026-09 用户口径·A86】该槽的候选**在场上看得见**吗（决定取目标的交互形态）：
+        ///  · 地区槽 → 看得见（地区槽位有高亮通道）；
+        ///  · 卡槽 → 非"区域牌堆"候选（争夺区角色/暗藏者等），或声明了 `IsFieldVisibleSpec`
+        ///    （附属/封印/秘社等**有场上卡 UI** 的区）。
+        /// 消费点＝`ShouldPickOnField`（单机 `Arena.PromptMultiTargets` / 联机 `ArenaOl`）。
+        /// </summary>
+        public bool FieldVisible;
+
         public int Count => IsArea ? AreaUids.Count : (IsPlayer ? PlayerIds.Count : Cards.Count);
         public bool IsEmpty => Count == 0;
     }
@@ -120,6 +129,7 @@ namespace Script.Manager
             if (result.IsArea)
             {
                 result.AreaUids = CollectAreaUids(areaManager);
+                result.FieldVisible = true;   // 地区槽位有"高亮 + 点击"通道
                 return result;
             }
             if (result.IsPlayer)
@@ -127,10 +137,274 @@ namespace Script.Manager
                 // 【K24】玩家槽：候选＝满足"任意/本方/对手"限制的玩家（已在本效果其它槽选中的玩家不再出现）。
                 foreach (int pid in PlayerTargetPool.Collect(slot.Spec, sourceController, pm))
                     if (!ChosenContainsPlayer(chosen, pid, slotIndex)) result.PlayerIds.Add(pid);
-                return result;
+                return result;   // 玩家不是场上节点（无卡 UI）→ FieldVisible 保持 false（走按钮窗）
             }
+            result.FieldVisible = !TargetZonePool.IsZonePileSpec(slot.Spec)
+                                  || TargetZonePool.IsFieldVisibleSpec(slot.Spec);
             result.Cards = CollectCards(data, slotIndex, sourceController, chosen, zm, cm, pm, source, areaManager);
             return result;
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径·A86】该槽是否应当走"**场上高亮 + 点击**"取目标，而**不是**弹出按钮列表窗：
+        ///  · 地区槽 / 场上看得见的卡槽（`SlotCandidates.FieldVisible`）→ true；
+        ///  · **候选为空时一律 false**——必须保留按钮列表窗的"留空 / 取消（不打出）"出口，
+        ///    否则玩家会卡在一个点不动的提示窗上（无候选 ⇒ 无选择 ⇒ 必须能退出）。
+        ///  · 玩家槽恒 false（玩家不是场上卡节点，只能列成按钮）。
+        /// 用户实测口径（JC062）："选择查看的暗藏者应该选择**场上的高亮暗藏者**，而不是弹出选择框"。
+        /// </summary>
+        public static bool ShouldPickOnField(SlotCandidates cand)
+        {
+            if (cand == null || cand.IsPlayer) return false;
+            if (cand.Count == 0) return false;
+            return cand.IsArea ? cand.AreaUids.Count > 0 : cand.FieldVisible;
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径 JC062/JC021】多目标槽位的**取目标窗形状**：
+        ///  · `FieldMultiPick` ＝"**一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消**"：
+        ///    所有槽都是"地区槽"或"**场上看得见的卡槽**"（争夺区角色/暗藏者…），且**至少一个卡槽**；
+        ///    · JC062：两个"目标暗藏者"卡槽（可留空、至少 0 个）⇒ 只选卡、至多 2 张；
+        ///    · JC021：一个"目标地区"槽（必选）＋"本方角色"/"敌方角色"卡槽（各自可留空、至少 1 个角色）
+        ///      ⇒ 选卡（**每个玩家场上至多 1 个**）＋选地区，且"没有地区或没有角色时不能确认"；
+        ///  · `PerSlot` ＝ 其余形状（含**区域牌堆**槽：墓地/手牌/牌库…这些没有场上 UI）→ 既有逐槽流程。
+        /// </summary>
+        public enum MultiSlotShape
+        {
+            /// <summary>既有逐槽流程（逐槽高亮/列表窗 → 确认面板）。</summary>
+            PerSlot,
+            /// <summary>一个窗多选（场上高亮 + 左键选择/右键取消 + 确认/取消）。</summary>
+            FieldMultiPick,
+        }
+
+        /// <summary>见 <see cref="MultiSlotShape"/>：判定该效果该用哪种取目标窗（单一实现，View 只调用不重算）。</summary>
+        public static MultiSlotShape ClassifyShape(EffectData data)
+        {
+            var slots = data?.TargetSlots;
+            if (slots == null || slots.Count == 0) return MultiSlotShape.PerSlot;
+            int areaSlots = 0, cardSlots = 0;
+            foreach (var s in slots)
+            {
+                var spec = s?.Spec;
+                if (spec == null || spec.Kind == TargetKind.None) return MultiSlotShape.PerSlot;
+                if (IsPlayerSlot(s)) return MultiSlotShape.PerSlot;
+                if (IsAreaSlot(s)) { areaSlots++; continue; }
+                // 卡槽：必须"在场上看得见"（区域牌堆如墓地/手牌/牌库只能列按钮）
+                if (TargetZonePool.IsZonePileSpec(spec) && !TargetZonePool.IsFieldVisibleSpec(spec))
+                    return MultiSlotShape.PerSlot;
+                cardSlots++;
+            }
+            if (cardSlots >= 1 && areaSlots <= 1) return MultiSlotShape.FieldMultiPick;
+            return MultiSlotShape.PerSlot;
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径 JC062/JC021】**"一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"取目标的计划**：
+        /// 形状判定（`ClassifyShape == FieldMultiPick`）后，由本类统一给出分组文案、上限/下限，
+        /// 以及"**已选卡＋已选地区 → 逐槽 `TargetChoice`**"的映射与"哪些还能点"的重算。
+        ///
+        /// **单机 UI（`Arena.TryPromptFieldMultiPick`）与服务端联机（`TurnManager` 聚合请求）共用本实现**，
+        /// 保证两端"每个玩家场上的角色只能选一个""地区必选""不能原地移动"等口径完全一致（单一真相源）。
+        /// 规则要点：
+        ///  · 每张被选中的卡归入**第一个"空着且接受它"的卡槽**（JC021 的"本方角色/敌方角色"两槽都带本方/敌方限制，
+        ///    因此天然"每个玩家场上的角色至多 1 个"；JC062 两个同大类槽则等价于"至多 2 张、不可重复"）；
+        ///  · **禁止原地移动**：已经选了地区之后，位于该地区的角色不再是候选（`ExcludeInChosenArea`），
+        ///    已选中的会被自动剔除。
+        /// </summary>
+        public sealed class FieldPickPlan
+        {
+            public EffectData Effect;
+            public CardInstance Source;
+            public int SourceController;
+            public ZoneManager ZoneManager;
+            public CardManager CardManager;
+            public PlayerManager PlayerManager;
+            public AreaManager AreaManager;
+
+            /// <summary>卡槽下标（有序；顺序即"归槽"的优先顺序）。</summary>
+            public readonly List<int> CardSlotIndexes = new List<int>();
+            /// <summary>地区槽下标（-1＝无地区槽）。</summary>
+            public int AreaSlotIndex = -1;
+
+            /// <summary>卡槽组标题（JC062＝"目标暗藏者"；JC021＝"目标角色"）。</summary>
+            public string CardLabel = "目标角色";
+            /// <summary>地区槽组标题（如"目标地区"）；无地区槽时为空。</summary>
+            public string AreaLabel;
+            /// <summary>至多可选几张卡（＝卡槽数）。</summary>
+            public int MaxCards => CardSlotIndexes.Count;
+            /// <summary>至多可选几个地区（0/1）。</summary>
+            public int MaxAreas => AreaSlotIndex >= 0 ? 1 : 0;
+            /// <summary>至少需要选几张卡（`EffectData.MinChosenSlots`；JC062＝0、JC021＝1）。</summary>
+            public int MinCards;
+            /// <summary>地区槽是否必选。</summary>
+            public bool AreaRequired;
+            /// <summary>是否"每个玩家场上的角色只能选择一个"（卡槽自带阵营限制时成立，如 JC021）。</summary>
+            public bool SameControllerOnce;
+
+            private FieldPickPlan() { }
+
+            /// <summary>构建计划；返回 null ＝ 该效果不是 `FieldMultiPick` 形状（调用方走既有逐槽流程）。</summary>
+            public static FieldPickPlan Build(EffectData data, CardInstance source, int sourceController,
+                ZoneManager zm, CardManager cm, PlayerManager pm, AreaManager am)
+            {
+                if (data?.TargetSlots == null || data.TargetSlots.Count == 0) return null;
+                if (ClassifyShape(data) != MultiSlotShape.FieldMultiPick) return null;
+
+                var plan = new FieldPickPlan
+                {
+                    Effect = data,
+                    Source = source,
+                    SourceController = sourceController,
+                    ZoneManager = zm,
+                    CardManager = cm,
+                    PlayerManager = pm,
+                    AreaManager = am,
+                    MinCards = System.Math.Max(0, data.MinChosenSlots),
+                };
+                for (int i = 0; i < data.TargetSlots.Count; i++)
+                {
+                    var s = data.TargetSlots[i];
+                    if (IsAreaSlot(s))
+                    {
+                        plan.AreaSlotIndex = i;
+                        plan.AreaLabel = CleanSlotLabel(s.Label, "目标地区");
+                        plan.AreaRequired = !s.Optional;
+                        continue;
+                    }
+                    plan.CardSlotIndexes.Add(i);
+                }
+                if (plan.CardSlotIndexes.Count == 0) return null;
+                // 卡槽组标题：同大类且**都不带阵营限制**时用首槽标签（JC062"目标暗藏者"）；
+                // 带阵营限制（JC021"本方角色/敌方角色"）时用统称"目标角色"（用户窗面样例即如此）。
+                bool restricted = false;
+                foreach (var si in plan.CardSlotIndexes)
+                    if ((data.TargetSlots[si].Spec?.Restrictions?.Count ?? 0) > 0) restricted = true;
+                plan.SameControllerOnce = restricted && plan.CardSlotIndexes.Count > 1;
+                plan.CardLabel = restricted ? "目标角色" : CleanSlotLabel(data.TargetSlots[plan.CardSlotIndexes[0]].Label, "目标角色");
+                return plan;
+            }
+
+            /// <summary>槽位标签去掉"（第 N 个，可留空）"这类括注（用户窗面样例写作"目标暗藏者"/"目标地区"）。</summary>
+            private static string CleanSlotLabel(string label, string fallback)
+            {
+                if (string.IsNullOrEmpty(label)) return fallback;
+                int idx = label.IndexOf('（');
+                string cleaned = idx > 0 ? label.Substring(0, idx) : label;
+                return string.IsNullOrEmpty(cleaned) ? fallback : cleaned;
+            }
+
+            private List<TargetChoice> EmptyChoices()
+            {
+                var list = new List<TargetChoice>();
+                for (int i = 0; i < Effect.TargetSlots.Count; i++) list.Add(TargetChoice.Empty);
+                return list;
+            }
+
+            /// <summary>
+            /// 把"已选卡（有序）＋已选地区"折算成逐槽 `TargetChoice`。
+            /// `areaFirst`：是否先落地区（影响卡槽候选的"禁止原地移动"过滤；默认 true＝与逐槽流程一致）。
+            /// </summary>
+            public List<TargetChoice> MapPicks(List<string> pickedCards, List<string> pickedAreas,
+                bool areaFirst = true)
+            {
+                var choices = EmptyChoices();
+                if (AreaSlotIndex >= 0 && pickedAreas != null && pickedAreas.Count > 0)
+                    choices[AreaSlotIndex] = TargetChoice.Area(pickedAreas[0]);
+                if (pickedCards == null) return choices;
+                var filled = new System.Collections.Generic.HashSet<int>();
+                foreach (var uid in pickedCards)
+                {
+                    if (string.IsNullOrEmpty(uid)) continue;
+                    int found = -1;
+                    foreach (var si in CardSlotIndexes)
+                    {
+                        if (filled.Contains(si)) continue;
+                        var cand = CollectSlot(Effect, si, SourceController, choices, ZoneManager,
+                            CardManager, PlayerManager, Source, AreaManager);
+                        if (cand == null) continue;
+                        bool accepts = false;
+                        foreach (var c in cand.Cards) if (c != null && c.UID == uid) { accepts = true; break; }
+                        if (!accepts) continue;
+                        found = si;
+                        break;
+                    }
+                    if (found < 0) continue;      // 找不到归宿（地区变化后被剔除等）→ 跳过（服务端仍会 Validate）
+                    filled.Add(found);
+                    choices[found] = TargetChoice.Card(uid);
+                }
+                return choices;
+            }
+
+            /// <summary>"哪些卡还能被左键点选"：**已选中且仍然合法**的卡 ∪ **尚未填满的卡槽**能接受的卡之并集。
+            ///
+            /// 【2026-09 修复·用户实测 JC021"多次点选/取消后再点确定，效果没有加入堆叠"】**必须把"已选中且仍然合法"
+            /// 的卡也算进候选**：协调器用"不在候选里 ⇒ 已失效 ⇒ 剔除"来清理选择，而"尚未填满的槽能接受的卡"
+            /// 天然**不包含**刚被选中的那些卡 ⇒ 旧实现会在每次刷新时把玩家刚选的卡删掉（选择永远攒不起来 ⇒
+            /// 确认门槛过不去 ⇒ 效果入不了堆叠）。剔除（如"选了地区后该地区内的角色"）由 `MapPicks` 的
+            /// 归槽结果体现：归不进任何槽的卡不会出现在这里的并集里。
+            /// </summary>
+            public List<string> OpenCardCandidates(List<string> pickedCards, List<string> pickedAreas)
+            {
+                var res = new List<string>();
+                var choices = MapPicks(pickedCards, pickedAreas);
+                // ① 已选中且仍然合法（能归入某个槽）的卡 ⇒ 留在候选里（＝"仍然被选中"）
+                foreach (var ch in choices)
+                    if (!ch.IsEmpty && !ch.IsArea && !ch.IsPlayer && !res.Contains(ch.Uid)) res.Add(ch.Uid);
+                // ② 尚未填满的槽还能接受哪些卡
+                var filled = new System.Collections.Generic.HashSet<int>();
+                for (int i = 0; i < choices.Count; i++) if (!choices[i].IsEmpty) filled.Add(i);
+                foreach (var si in CardSlotIndexes)
+                {
+                    if (filled.Contains(si)) continue;
+                    var cand = CollectSlot(Effect, si, SourceController, choices, ZoneManager,
+                        CardManager, PlayerManager, Source, AreaManager);
+                    if (cand?.Cards == null) continue;
+                    foreach (var c in cand.Cards)
+                        if (c != null && !res.Contains(c.UID)) res.Add(c.UID);
+                }
+                return res;
+            }
+
+            /// <summary>"哪些地区还能点"：地区槽未填时全部地区候选。</summary>
+            public List<string> OpenAreaCandidates(List<string> pickedCards, List<string> pickedAreas)
+            {
+                var res = new List<string>();
+                if (AreaSlotIndex < 0) return res;
+                var choices = MapPicks(pickedCards, pickedAreas);
+                if (!choices[AreaSlotIndex].IsEmpty) return res;   // 已选地区（上限 1）⇒ 不再重复高亮
+                var cand = CollectSlot(Effect, AreaSlotIndex, SourceController, choices, ZoneManager,
+                    CardManager, PlayerManager, Source, AreaManager);
+                if (cand?.AreaUids != null) res.AddRange(cand.AreaUids);
+                return res;
+            }
+
+            /// <summary>该卡能否被左键加选（＝"存在一个空着且接受它的卡槽"；JC021 因此每方至多 1 张）。</summary>
+            public bool CanAddCard(List<string> pickedCards, List<string> pickedAreas, string uid)
+            {
+                if (string.IsNullOrEmpty(uid)) return false;
+                foreach (var u in pickedCards ?? new List<string>()) if (u == uid) return false;
+                return OpenCardCandidates(pickedCards, pickedAreas).Contains(uid);
+            }
+
+            /// <summary>"确认"是否可用：选卡数落在 [MinCards, MaxCards] 且（地区必选时）已选地区。</summary>
+            public bool CanConfirm(List<string> pickedCards, List<string> pickedAreas)
+            {
+                int cards = pickedCards?.Count ?? 0;
+                int areas = pickedAreas?.Count ?? 0;
+                return cards >= MinCards && cards <= MaxCards && areas <= MaxAreas
+                       && (!AreaRequired || areas >= 1);
+            }
+
+            /// <summary>窗面标题（与用户样例逐字一致：
+            /// 有地区槽 → `请选择目标角色（0/2）和目标地区（0/1）`；无地区槽 → `请选择目标暗藏者：已选择（0/2）`）。</summary>
+            public string Title(List<string> pickedCards, List<string> pickedAreas)
+            {
+                int cards = pickedCards?.Count ?? 0;
+                int areas = pickedAreas?.Count ?? 0;
+                return AreaSlotIndex >= 0
+                    ? $"请选择{CardLabel}（{cards}/{MaxCards}）和{AreaLabel}（{areas}/{MaxAreas}）"
+                    : $"请选择{CardLabel}：已选择（{cards}/{MaxCards}）";
+            }
         }
 
         /// <summary>

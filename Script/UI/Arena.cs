@@ -295,9 +295,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         // ---- 1.5 获取堆叠区节点 ----
         _stackContainer = GetNode<Control>("StackPanel/StackContainer");
         _arrowLayer = GetNode<Control>("ArrowLayer");
-        // 箭头层强制置顶：地区槽位/手牌等会设置正 ZIndex，ArrowLayer 必须高于它们才能不被遮挡。
-        // Godot 4 ZIndex 有效范围 -4096~4095。设为上限确保箭头层在所有节点之上。
-        _arrowLayer.ZIndex = 4095;
+        // 箭头层抬高：地区槽位/手牌等会设置正 ZIndex，ArrowLayer 必须高于它们才能不被遮挡；
+        // 具体层号由 Script.UI.Layers 统一分配（压住所有卡与附属，但低于卡面悬浮预览与命令框）。
+        _arrowLayer.ZIndex = Layers.Arrows;
         _arrowLayer.ZAsRelative = false;   // 绝对 ZIndex，不受父节点影响
 
         // ---- 2. 配置 ActionPanel ----
@@ -374,7 +374,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         //  · 公开卡（场上正面/附属/秘社/资产/墓地/地区）→ 弹；
         //  · **对手手牌 / 对手暗藏者** → 不弹，**除非**查看者有一张**未横置**且**与该暗藏者同地区**的
         //    JC057 类卡（"随时检视本地区任一暗藏者"，判定＝`CovertInspectRule` 单一真相源）。
-        _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = 4096 };
+        _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = Layers.CardHoverPreview };
         AddChild(_hoverPreview);
         CardPreviewBus.Attach(card => CovertInspectRule.CanViewerSeeCardFace(card, 1, _cardManager),
             _hoverPreview, viewerPlayerId: 1);
@@ -549,11 +549,21 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         {
             if (c?.Instance == null) return;
             var inst = c.Instance;
-            // 来源判定（附属 / 争夺区正面角色 / 手牌行动卡）＝`ActivateEligibility.IsDoubleClickActivationSource`
-            // （单一实现，见其注释；修复 JC019 宿主角色与 JC024 无目标自指激活双击无反应）。
-            if (!ActivateEligibility.IsDoubleClickActivationSource(inst)) return;
+            // 【2026-09 诊断】原先本转发器**多处静默 return**（双击毫无反应且零日志，用户实测难定位）——
+            // 现每一条提前返回都留下可读日志（含"为什么不能发动"，见 `DiagnoseActivateBlock`）。
+            if (!ActivateEligibility.IsDoubleClickActivationSource(inst))
+            {
+                GD.Print($"[Arena] 双击忽略：{inst.PlayerTemplate?.CardName} 不是『双击激活』来源" +
+                         $"（当前区={inst.CurrentZone} 附属={inst.IsAttached} 暗藏={inst.IsCovert}）");
+                return;
+            }
             // 能力判定＝**模板 ∪ 运行期授予**（与候选枚举/门禁同一入口）；无任何可激活能力则忽略双击。
-            if (ActivateEligibility.GetAllActivateAbilities(inst).Count == 0) return;
+            if (ActivateEligibility.GetAllActivateAbilities(inst).Count == 0)
+            {
+                GD.Print($"[Arena] 双击忽略：{inst.PlayerTemplate?.CardName} 没有任何激活能力（模板∪运行期授予）");
+                return;
+            }
+            GD.Print($"[Arena] 双击激活请求：{inst.PlayerTemplate?.CardName}（能力 {ActivateEligibility.GetAllActivateAbilities(inst).Count} 条）");
             OpenAttachmentActivateChoice(c);
         };
 
@@ -950,6 +960,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         for (int i = 0; i < data.TargetSlots.Count; i++) choices.Add(TargetChoice.Empty);
         int slotCount = data.TargetSlots.Count;
 
+        // 【2026-09 用户口径 JC062/JC021】**一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消**：
+        // 形状判定见 `MultiTargetSlots.ClassifyShape`（全槽＝地区槽或"场上看得见的卡槽"，且至少一个卡槽）：
+        //  · JC062（两个"目标暗藏者"槽，至少 0 个）：`请选择目标暗藏者：已选择（0/2）`＋`左键选择右键取消`；
+        //  · JC021（"目标地区"必选 ＋"本方/敌方角色"）：`请选择目标角色（0/2）和目标地区（0/1）`，
+        //    每个玩家场上的角色只能选一个，"没有地区或没有角色时不能确认"。
+        // 其余形状（含区域牌堆槽，如 JC092/JC133 的墓地角色牌）仍走既有逐槽流程。
+        if (MultiTargetSlots.ClassifyShape(data) == MultiTargetSlots.MultiSlotShape.FieldMultiPick
+            && TryPromptFieldMultiPick(source, data, candidatesForSlot, onConfirmed))
+            return;
+
         AskSlot(0);
 
         void AskSlot(int index)
@@ -958,6 +978,22 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             var cand = candidatesForSlot?.Invoke(index, choices);
             string label = (cand != null && !string.IsNullOrEmpty(cand.Label))
                 ? cand.Label : MultiTargetSlots.SlotLabel(data, index);
+
+            // 【2026-09 用户口径·A86】"场上看得见的卡一律用场上高亮选，不用列表窗"：
+            // 该槽的候选若在场上可见（争夺区角色/暗藏者/附属/秘社…或地区槽），改走"**高亮 + 点击**"，
+            // **不再弹按钮列表窗**（用户实测 JC062："选择查看的暗藏者应该选择场上的高亮暗藏者，
+            // 而不是弹出选择框"）。候选为空 / 玩家槽 / 区域牌堆（墓地/手牌/牌库…）仍走按钮窗
+            // ——那里必须保留"留空 / 取消（不打出）"出口，否则玩家会卡住（见 `ShouldPickOnField`）。
+            // 选目标窗不可用（编辑器未挂场景等）→ 返回 false，就地回退按钮窗（绝不静默卡住流程）。
+            if (MultiTargetSlots.ShouldPickOnField(cand) && AskSlotByFieldClick(index, cand, label)) return;
+
+            AskSlotByListWindow(index, cand, label);
+        }
+
+        /// <summary>【K15】单槽的**候选按钮列表窗**（区域牌堆/玩家槽/无候选时的唯一可行形态：
+        /// 那里有"留空 / 取消（不打出）"出口）。</summary>
+        void AskSlotByListWindow(int index, SlotCandidates cand, string label)
+        {
             var items = new System.Collections.Generic.List<ActivationChoiceItem>();
             if (cand != null && cand.IsArea)
             {
@@ -1001,6 +1037,47 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             OpenChoiceWindow($"选择{label}（第 {index + 1}/{slotCount} 个目标槽）", items, force: true);
         }
 
+        /// <summary>
+        /// 【2026-09·K15 多目标·场上点选】单槽的"**场上高亮 + 点击**"取目标（用户口径 A86）：
+        /// 复用既有选目标通道（`TriggerInteractionCoordinator.RequestActivateTargetSelection`：
+        /// 卡目标＝场上卡高亮 + 点击；地区目标＝地区槽高亮 + 点击），**不弹候选列表窗**。
+        /// 窗口自带的备用按钮＝该槽的出口：可留空 → "不选（留空该槽）"；必选 → "取消（不打出）"。
+        /// 返回 false ＝ 选目标窗不可用（调用方回退按钮列表窗）。
+        /// </summary>
+        bool AskSlotByFieldClick(int index, SlotCandidates cand, string label)
+        {
+            var uids = new System.Collections.Generic.List<string>();
+            if (cand.IsArea)
+            {
+                uids.AddRange(cand.AreaUids);
+            }
+            else
+            {
+                foreach (var c in cand.Cards) if (c != null) uids.Add(c.UID);
+            }
+            string prompt = $"{source?.PlayerTemplate?.CardName}：{label}（第 {index + 1}/{slotCount} 槽）";
+            string extraLabel = cand.Optional ? "不选（留空该槽）" : "取消（不打出）";
+            return _triggerCoordinator.RequestActivateTargetSelection(prompt, cand.IsArea, uids,
+                uid =>
+                {
+                    choices[index] = cand.IsArea ? TargetChoice.Area(uid) : TargetChoice.Card(uid);
+                    AskSlot(index + 1);
+                },
+                extraLabel,
+                () =>
+                {
+                    if (cand.Optional)
+                    {
+                        choices[index] = TargetChoice.Empty;   // 留空本槽，继续下一槽
+                        AskSlot(index + 1);
+                    }
+                    else
+                    {
+                        onConfirmed?.Invoke(null);             // 必选槽取消 → 整次不打出
+                    }
+                });
+        }
+
         void Confirm()
         {
             var items = new System.Collections.Generic.List<ActivationChoiceItem>
@@ -1021,6 +1098,117 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【2026-09 用户口径 JC062/JC021】**"一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"**取目标。
+    ///
+    /// 分组文案/上限下限/候选重算/回包映射**全部委托** `MultiTargetSlots.FieldPickPlan`（单一真相源，
+    /// 与服务端联机聚合请求 `ChoiceRequest.Kind.FieldMultiPick` 同源）；本方法只做"把计划接到选目标窗上"。
+    /// 用户给出的两个窗面（由计划里的 `Title` 逐字生成）：
+    /// <code>
+    /// 请选择目标暗藏者：已选择（0/2）           ← JC062（两个"目标暗藏者"槽，至少 0 个）
+    /// 左键选择右键取消
+    /// 确认   取消
+    ///
+    /// 请选择目标角色（0/2）和目标地区（0/1）    ← JC021（地区必选 ＋"本方/敌方角色"）
+    /// 左键选择右键取消
+    /// 确认   取消
+    /// </code>
+    /// 返回 false ＝ 该效果不是 `FieldMultiPick` 形状 / 选目标窗不可用 → 调用方回退既有逐槽流程。
+    /// </summary>
+    private bool TryPromptFieldMultiPick(CardInstance source, Script.Data.Effects.EffectData data,
+        System.Func<int, System.Collections.Generic.List<TargetChoice>, SlotCandidates> candidatesForSlot,
+        System.Action<System.Collections.Generic.List<TargetChoice>> onConfirmed)
+    {
+        if (_triggerCoordinator == null) return false;
+        var plan = MultiTargetSlots.FieldPickPlan.Build(data, source, source?.ControllerId ?? -1,
+            _zoneManager, _cardManager, _playerManager, _areaManager);
+        if (plan == null) return false;
+
+        Script.UI.Interaction.FieldCandidates CandidatesOf(Script.UI.Interaction.FieldPickState st)
+        {
+            var res = new Script.UI.Interaction.FieldCandidates();
+            res.Cards.AddRange(plan.OpenCardCandidates(st.Cards, st.Areas));
+            res.Areas.AddRange(plan.OpenAreaCandidates(st.Cards, st.Areas));
+            return res;
+        }
+
+        return _triggerCoordinator.RequestFieldMultiPick(
+            "左键选择右键取消", CandidatesOf, plan.MaxCards, plan.MaxAreas,
+            st => plan.Title(st.Cards, st.Areas),
+            st => plan.CanConfirm(st.Cards, st.Areas),
+            (st, uid) => plan.CanAddCard(st.Cards, st.Areas, uid),
+            (pickedCards, pickedAreas) => onConfirmed?.Invoke(plan.MapPicks(pickedCards, pickedAreas)),
+            () => onConfirmed?.Invoke(null));
+    }
+
+    /// <summary>
+    /// 【2026-09·JC062/JC057 用户口径】**检视结果窗**：把本次结算中被私下检视到的**全部**牌面
+    /// **列在同一个窗**里（`InspectWindow`：卡面 + **只有一个『确认』按钮**，点击即关闭）。
+    /// 用户口径（原文）："…结算的时候弹出一个弹窗，里面列出所有看到的信息，这个框的按钮只有一个确认，
+    /// 点击后关闭弹窗"＋"JC057 的查看方式和 JC062 一致"＋"等点确认后再继续结算（抓牌排在确认之后）"。
+    /// View 只展示与收集一次确认；**续算（含 JC062 的抓牌）由 Controller 经回调执行**（View 不写 Model）。
+    /// </summary>
+    public void PromptInspectCards(int viewerPlayerId, string title, System.Collections.Generic.List<CardInstance> cards,
+        System.Action onConfirmed)
+    {
+        var win = new InspectWindow();
+        // 【配对纪律】先解锁、再交回 Controller 续算（与 NumberInputWindow 同款；关闭窗口亦走同一回调）
+        win.OnConfirmed = () => { UnlockChoiceWindow(win); onConfirmed?.Invoke(); };
+        // 【2026-09 修复·用户实测"卡面显示成卡背"】**必须先入树、再 Init**：Init 里实例化 CardUI 时会
+        // `Setup()+SetFace(true)`，若窗口还没入树，`CardUI._Ready()` 里的 `SetFace(false)` 会后跑把正面盖掉。
+        AddChild(win);
+        win.Init(title, cards);
+        LockChoiceWindow(win);
+        win.PopupCentered();
+    }
+
+    /// <summary>
+    /// 【K11·触发版】UI：触发入堆叠前的"可选固定费用"——**是否为 N 付费**。
+    /// 只有"**支付 N**"/"**不支付**"两个按钮（**不出现数值输入框**；用户实测报障："支付弹窗只需要是否两个选项，
+    /// 不需要输入支付的费用"）；放弃整条触发请用**触发排序窗**，故本窗不提供"取消"。
+    /// View 只收集选择，扣费/入堆叠由 Controller（`TurnManager.EnsureOptionalPayThenPush`）执行（View 不写 Model）。
+    /// </summary>
+    public void PromptOptionalPay(int chooserPlayerId, string prompt, int amount, System.Action<bool> onChosen)
+    {
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>
+        {
+            new ActivationChoiceItem { Label = $"支付 {amount}", OnChosen = () => onChosen?.Invoke(true) },
+            new ActivationChoiceItem { Label = "不支付", OnChosen = () => onChosen?.Invoke(false) },
+        };
+        OpenChoiceWindow(string.IsNullOrEmpty(prompt) ? $"是否支付 {amount}？" : prompt, items, force: true);
+    }
+
+    /// <summary>
+    /// 【2026-09 用户实测·JC064】"支付 N，否则牺牲本卡"＝**两个按钮**（"支付 N" / "牺牲它"），
+    /// **不出现数值输入框**（用户口径："JC064 支付费用的触发弹窗不需要输入框，参考 JC061"）。
+    /// View 只收集选择，扣费/牺牲由 Controller（`EffectEngine` 的 `PayOrSacrificeSelf`）执行。
+    /// </summary>
+    public void PromptPayOrSacrifice(int chooserPlayerId, string sourceName, int amount, System.Action<bool> onChosen)
+    {
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>
+        {
+            new ActivationChoiceItem { Label = $"支付 {amount}", OnChosen = () => onChosen?.Invoke(true) },
+            new ActivationChoiceItem { Label = "牺牲它", OnChosen = () => onChosen?.Invoke(false) },
+        };
+        OpenChoiceWindow($"{sourceName}：支付 {amount}，否则牺牲它", items, force: true);
+    }
+
+    /// <summary>
+    /// 【2026-09 整体复查·修复·JC128】通用**二选一确认窗**（两个按钮、无输入框）：`yesLabel` / `noLabel`
+    /// 由调用方给出（如"移除标志"/"改为牺牲"），与联机 `AskZeroOrOneViaGatewayAsync` 同语义。
+    /// 用户口径（JC061/JC064 同类）："这类是/否选择**不需要输入框**"。
+    /// </summary>
+    public void PromptTwoChoice(int chooserPlayerId, string prompt, string yesLabel, string noLabel,
+        System.Action<bool> onChosen)
+    {
+        var items = new System.Collections.Generic.List<ActivationChoiceItem>
+        {
+            new ActivationChoiceItem { Label = yesLabel, OnChosen = () => onChosen?.Invoke(true) },
+            new ActivationChoiceItem { Label = noLabel, OnChosen = () => onChosen?.Invoke(false) },
+        };
+        OpenChoiceWindow(string.IsNullOrEmpty(prompt) ? "请选择" : prompt, items, force: true);
+    }
+
+    /// <summary>
     /// 【K11·可选支付 / 数值输入】UI：弹出**数值输入框**（输入 N → 确认/取消）。
     /// 口径（用户 2026-09）：输入的数字即为 N；取消/不支付 → 回调 -1。
     /// View 只收集数字；扣费与后续动作由 Controller 执行（View 不写 Model）。
@@ -1029,10 +1217,13 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         string confirmLabel, string cancelLabel, System.Action<int> onChosen)
     {
         var win = new NumberInputWindow();
+        // 【2026-09 修复·同 InspectWindow 的两个坑】**先入树再 Init**（否则 `Init` 里建的控件会被
+        // `_Ready` 覆盖）+ **窗口显式定尺寸**（`Window` 默认 100×100 且不按内容撑开，`PopupCentered()`
+        // 只按当前 `Size`）——此前这个数值输入窗同样是 100×100。
+        AddChild(win);
         win.Init(prompt, min, max, defaultValue, confirmLabel, cancelLabel);
         // 【2026-09】先解锁、再交回 Controller（配对纪律；取消亦会回调 -1，见 NumberInputWindow.Cancel）
         win.OnConfirmed = value => { UnlockChoiceWindow(win); onChosen?.Invoke(value); };
-        AddChild(win);
         LockChoiceWindow(win);
         win.PopupCentered();
     }
@@ -1042,19 +1233,34 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     /// View 只收集选择（回传下标；取消 = -1），付费/入堆叠由 Controller 执行（View 不写 Model）。
     /// </summary>
     public void PromptEffectMode(CardInstance source, Script.Data.Effects.EffectData data, System.Action<int> onChosen)
+        => PromptEffectModeWithAvailability(source, data, null, onChosen);
+
+    /// <summary>
+    /// 【2026-09 用户口径 JC063】"选择一项" + **各模式可用性**：`availability[i] == false` ⇒ 该模式
+    /// **当前没有合法目标**（可用性由 Controller 用与取目标**同一份枚举**算好）⇒ 按钮**置灰**
+    /// （`ActivationChoiceItem.Disabled`，点击不触发 OnChosen）。用户口径："JC063 两个效果如果场上完全
+    /// 没有合法目标，置灰（注意两个效果要求的合法目标不一致）"。
+    /// </summary>
+    public void PromptEffectModeWithAvailability(CardInstance source, Script.Data.Effects.EffectData data,
+        System.Collections.Generic.List<bool> availability, System.Action<int> onChosen)
     {
         if (data?.Modes == null || data.Modes.Count == 0) { onChosen?.Invoke(-1); return; }
         var items = new System.Collections.Generic.List<ActivationChoiceItem>();
+        int unavailable = 0;
         for (int i = 0; i < data.Modes.Count; i++)
         {
             int captured = i;
+            bool enabled = availability == null || captured >= availability.Count || availability[captured];
+            if (!enabled) unavailable++;
             items.Add(new ActivationChoiceItem
             {
-                Label = data.Modes[i]?.Label ?? $"选项{captured + 1}",
+                Label = (data.Modes[i]?.Label ?? $"选项{captured + 1}") + (enabled ? "" : "（场上没有合法目标）"),
+                Disabled = !enabled,
                 OnChosen = () => onChosen?.Invoke(captured),
             });
         }
         items.Add(new ActivationChoiceItem { Label = "取消（不打出）", OnChosen = () => onChosen?.Invoke(-1) });
+        GD.Print($"[Arena] 【K16 模式分支】{source?.PlayerTemplate?.CardName}：{data.Modes.Count} 个模式，其中 {unavailable} 个因『场上没有合法目标』置灰");
         OpenChoiceWindow($"{source?.PlayerTemplate?.CardName}：选择一项", items, force: true);
     }
 
@@ -1192,7 +1398,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             {
                 // 创建箭头实例（不在此设端点，端点交由 UpdateArrowEndpoints 每帧跟随）
                 var arrow = _stackArrowScene.Instantiate<StackArrow>();
-                arrow.ZIndex = 4095;
+                arrow.ZIndex = Layers.Arrows;
                 arrow.ZAsRelative = false;   // 绝对 ZIndex
                 _arrowLayer.AddChild(arrow);
                 arrow.SetColor(col);
@@ -1403,7 +1609,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             () => _areaSlots.Select(s => s.AreaUID).ToList(),
             (int playerId, int count) => _actionService.DrawCards(playerId, count),
             _zoneManager,
-            () => { ArrangeAllCards(); RefreshArenaStats(); },
+            // 【2026-10】`onZoneChanged` 是所有 PM 命令的"UI 收尾"出口：除整场重排与派生统计外，
+            // 还需刷新卡面**伤害/创伤数字** —— 否则 `damage`/`trauma`/`kill`/`heal` 这类只改模型的命令
+            // 在界面上毫无变化（用户实测"kill/damage 无法使用"）。
+            () => { ArrangeAllCards(); RefreshDamageDisplay(); RefreshArenaStats(); },
             (string uid) =>   // 仅刷新指定卡的 UI（横置/数值同步），不返回 UI 实例
             {
                 var ui = FindCardUIByUID(uid);
@@ -1433,7 +1642,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (_commandInput != null)
         {
             _commandInput.Visible = false;
-            // 多行输入：Enter 换行，Shift+Enter 执行（在 _GuiInput 中拦截）
+            _commandInput.ZIndex = CommandInputZIndex;   // 拉到最上层：否则秘社/卡牌会压在命令框上方
+            // 多行输入：Enter 换行，Shift+Enter 执行，` / ~ 开关（均在 _GuiInput 中拦截）
             _commandInput.GuiInput += OnCommandInputGuiInput;
         }
         else
@@ -1800,7 +2010,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             if (cardUI == null || cardUI.Instance == null) return;
             var inst = cardUI.Instance;
             if (!ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager))
+            {
+                // 【2026-09 修复·用户实测"卡有高亮，双击完全没有 LOG"】原先此处**静默 return**：
+                // 高亮是上一次刷新算的，点击那一刻门禁可能已不满足（原子锁/优先权/费用/次数/代价/阶段）——
+                // 表现为"高亮着却怎么点都没反应、也不打日志"。现打可读原因日志，并**立即刷新高亮**
+                // 让 UI 与规则自洽（该卡会当即取消高亮，玩家一眼看出"此刻不能发动"）。
+                string why = ActivateEligibility.DiagnoseActivateBlock(inst, _turnManager, _playerManager, _cardManager);
+                GD.PrintErr($"[Arena] ⛔ 双击激活被拒：{inst.PlayerTemplate?.CardName} → {why}");
+                RefreshActivateHighlights();
                 return;
+            }
 
             var abilities = new List<EffectData>();
             foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
@@ -1809,7 +2028,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     abilities.Add(e);
             }
             if (abilities.Count == 0)
+            {
+                GD.PrintErr($"[Arena] ⛔ 双击激活被拒：{inst.PlayerTemplate?.CardName} 无 CharacterActivated/AttachmentActivated 能力");
                 return;
+            }
 
             // 单选项：直接发动，不走弹窗（与原本拖拽激活一致，避免多余点击）。
             // 若该效果"以横置本角色为代价"且本卡已横置（无法执行横置代价），或需要目标但无合法目标，则不发动。
@@ -1821,7 +2043,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 bool noTargetOnly = only.Target is { NeedsSelection: true }
                                     && !ActivateEligibility.HasLegalTarget(inst, only, _cardManager);
                 if (noTargetOnly || (needsTapOnly && inst.IsTapped))
+                {
+                    GD.PrintErr($"[Arena] ⛔ 双击激活被拒：{inst.PlayerTemplate?.CardName} → " +
+                                (noTargetOnly ? "该能力需要目标但当前无合法目标" : "该能力需横置自身但已横置"));
                     return;
+                }
                 if (only.Target is { NeedsSelection: true })
                 {
                     BeginActivateWithTarget(inst, only);
@@ -2365,6 +2591,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     {
         if (_cardManager == null || _zoneManager == null || _triggerCoordinator == null) return;
 
+        // 【2026-09 修复·用户实测"多弹出了一个原本流程中固有的选择框"】**一次只允许一个选择流程**：
+        // 已有模态选择窗开着（模式窗/多选窗/选目标窗…）⇒ 本次是对同一次拖拽的**重复投递**，直接忽略。
+        // （根因见 `CardDragController.OnCardDragEnded` 顶部注释：重复投递曾在"模态冻结"分支把卡塞回手牌，
+        //  导致后续重复投递又能走完整流程，于是 JC062 弹 2 个框、JC063 弹 3 个框。）
+        if (IsDragInteractionLocked)
+        {
+            GD.Print($"[Arena] ⛔ 已有选择窗/模态开着 → 忽略对『{sorcery.PlayerTemplate?.CardName}』的重复取目标请求（防重复弹窗）");
+            return;
+        }
+
         // 弹窗前预校验费用（与 TurnManager.PlayCard 一致，含时效费用修正），不足则直接退回手牌、不弹选目标窗。
         // 【P1】传实例：与 TurnManager.PlayCard 同一重载，保证"子类别:/域:/有域图标"类过滤串两端一致。
         int cost = sorcery.PlayerTemplate.Cost
@@ -2502,7 +2738,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         RefreshDamageDisplay();
     }
 
-    private void RefreshDamageDisplay()
+    /// <summary>刷新全场卡面的伤害/创伤数字。
+    /// 【2026-10】改为 `internal`：PM 命令的 `onZoneChanged` 回调需要它 —— 伤害/治疗类命令只改模型，
+    /// 若不刷新伤害数字，玩家在界面上看到的就是"命令没用"（用户实测）。</summary>
+    internal void RefreshDamageDisplay()
     {
         foreach (var cardUI in _areaCardUIs)
             cardUI.RefreshDamageDisplay();
@@ -2514,16 +2753,60 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     /// 多行命令框输入拦截：
     ///   Enter        → 换行（TextEdit 默认行为，不拦截）
     ///   Shift+Enter  → 执行全部命令
+    ///   ` / ~        → 关闭命令框并**吞掉该次按键**（命令框不接受 `~` 字符输入）
     /// </summary>
     private void OnCommandInputGuiInput(InputEvent @event)
     {
         if (@event is not InputEventKey key || !key.Pressed || key.Echo) return;
+
+        // 反引号/波浪线键：不插入字符，直接关闭命令框（与 _Input 的开关行为一致）
+        if (IsCommandToggleKey(key))
+        {
+            ToggleCommandInput();
+            _commandInput?.AcceptEvent();
+            return;
+        }
+
         if (key.Keycode != Key.Enter && key.Keycode != Key.KpEnter) return;
         if (!key.ShiftPressed) return;   // 无 Shift 时交给 TextEdit 换行
 
         OnCommandSubmitted();
         _commandInput?.AcceptEvent();
     }
+
+    /// <summary>
+    /// 命令框开关键判定：物理键位为反引号/波浪线键（`Keycode == 96`，即 `` ` `` / `~` 同键），
+    /// 或本次按键产生的字符就是 `~`（非美式键盘布局下的兜底）。
+    /// </summary>
+    private static bool IsCommandToggleKey(InputEventKey key)
+        => (int)key.Keycode == 96 || key.Unicode == '~';
+
+    /// <summary>
+    /// 切换 PM 命令输入框可见性（`~` / `` ` `` 键；单机与联机行为一致）。
+    /// 打开时清空内容、聚焦并置光标到开头；关闭时释放焦点。面板层级由 `CommandInputZIndex` 保证在最上层。
+    /// </summary>
+    private void ToggleCommandInput()
+    {
+        if (_commandInput == null) return;
+        bool show = !_commandInput.Visible;
+        _commandInput.Visible = show;
+        _commandInput.ZIndex = CommandInputZIndex;   // 始终高于卡牌/秘社/悬浮预览
+        _commandInput.Text = "";
+        if (show)
+        {
+            _commandInput.GrabFocus();
+            _commandInput.SetCaretLine(0);
+            _commandInput.SetCaretColumn(0);
+        }
+        else
+        {
+            _commandInput.ReleaseFocus();
+        }
+    }
+
+    /// <summary>PM 命令输入框的面板层级：战场内最高层（高于卡牌、附属、箭头与卡面悬浮预览）。
+    /// 层号统一由 Script.UI.Layers 分配（Godot z_index 上限 4096，旧值 4100 会被截断）。</summary>
+    private const int CommandInputZIndex = Layers.CommandInput;
 
     private void OnCommandSubmitted()
     {
@@ -2602,33 +2885,23 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
 
         // 触发效果选目标窗口激活时，路由场上卡点击（最新需求：选目标提示窗口）
         // 【MVC 修复 M-08】选目标状态与命中逻辑已迁移至 TriggerInteractionCoordinator，此处转发。
+        // 【2026-09 用户口径 JC062/JC021】多选窗："**左键选择、右键取消**" ⇒ 右键也要转发（`rightClick:true`）。
         if (_triggerCoordinator != null && _triggerCoordinator.IsTargetSelectionActive
-            && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
+            && @event is InputEventMouseButton tsMb && tsMb.Pressed
+            && (tsMb.ButtonIndex == MouseButton.Left || tsMb.ButtonIndex == MouseButton.Right))
         {
-            _triggerCoordinator.HandleTargetSelectionClick(tsMb.GlobalPosition);
+            _triggerCoordinator.HandleTargetSelectionClick(tsMb.GlobalPosition,
+                rightClick: tsMb.ButtonIndex == MouseButton.Right);
             AcceptEvent();
             return;
         }
 
-        if (@event is InputEventKey key && key.Pressed && key.Keycode == (Key)96)
+        // `~` / `` ` `` 键切换 PM 命令输入框可见性（同一个键：按一下打开、再按一下关闭；
+        // 打开时该键被吞掉，因此命令框里不会出现 `~` 字符）
+        if (@event is InputEventKey key && key.Pressed && !key.Echo && IsCommandToggleKey(key))
         {
-            if (_commandInput != null)
-            {
-                bool isVisible = _commandInput.Visible;
-                _commandInput.Visible = !isVisible;
-                _commandInput.Text = "";
-                if (!isVisible)
-                {
-                    _commandInput.GrabFocus();
-                    _commandInput.SetCaretLine(0);
-                    _commandInput.SetCaretColumn(0);
-                }
-                else
-                {
-                    _commandInput.ReleaseFocus();
-                }
-                AcceptEvent();
-            }
+            ToggleCommandInput();
+            AcceptEvent();
         }
     }
 

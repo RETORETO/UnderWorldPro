@@ -29,14 +29,20 @@ namespace Script.Data.Effects
         ///
         /// 只登记"关键词本身就等价于一条触发效果"的词：
         ///  · `机动` → `ManeuverTrigger`（对抗前窗口，选择另一地区移动过去）；
-        ///  · `威名` → `OnCombatWon`（战斗对抗获胜，在本地区放置一个势力标志）。
-        /// 不在表内的（`袭击` 由收集阶段的**数值合并**单独处理；`声望` 由引擎级 `RenownRule` 统一消费）
-        /// 一律不经本通道，避免重复结算。
+        ///  · `威名` → `OnCombatWon`（战斗对抗获胜，在本地区放置一个势力标志）；
+        ///  · `声望` → `OnPowerCombatEnded`（**该地区所有对抗结束后**，本地区声望角色较多的一方放置一个势力标志）。
+        /// 不在表内的（`袭击` 由收集阶段的**数值合并**单独处理）一律不经本通道，避免重复结算。
+        ///
+        /// 【2026-09 用户口径·声望改触发】**声望从"引擎级立即结算"改为"触发效果"**（与威名同款，走本表）：
+        /// 用户口径原文："声望是触发效果……应为势力对抗结算后**触发**声望，参考威名（但是不需要势力对抗获胜，
+        /// 只需要计算声望角色数量）"。故本表新增 `声望`，同时**删除**原先在势力对抗出口直接调用
+        /// `RenownRule.ApplyIfMajority` 的立即结算路径（否则会各放一次 = 重复）。
         /// </summary>
         private static readonly System.Collections.Generic.Dictionary<string, EffectData> _triggerTemplates = new()
         {
             { "机动", Maneuver() },
             { "威名", WeiMing() },
+            { "声望", Renown() },
         };
 
         /// <summary>见 <see cref="_triggerTemplates"/>：运行期授予的关键字 → 触发形态模板（只读遍历用）。</summary>
@@ -333,10 +339,12 @@ namespace Script.Data.Effects
 
         /// <summary>
         /// 【P3】声望（Renown）= 触发效果（用户 2026-09 规则文本）：
-        /// **每个势力对抗结束后**，由该地区中**拥有较多声望角色的一方**触发，给该地区添加一个势力标志；
-        /// 多个声望角色在场也只添加一个（去重与威名同款）；**不依赖势力对抗获胜**。
-        /// 实现：`Timing = OnPowerCombatEnded`（新时机，CombatManager 势力分支广播，含平局）+
-        ///      条件谓词 `RenownMajority`（该卡控制者在该地区的声望角色数 **严格多于** 对手）+ `PlaceToken{势力标志,1,声望}`。
+        /// **一个地区的所有对抗结束后**（不是"每次势力对抗结束"，故 JC067 让本地区多打一次势力对抗也只触发一次），
+        /// 由该地区中**拥有较多声望角色的一方**触发，给该地区添加一个势力标志；
+        /// 多个声望角色在场也只添加一个（去重与威名同款）；**不依赖势力对抗获胜**（平局/败方只要声望角色更多就触发）。
+        /// 实现：`Timing = OnPowerCombatEnded`（触发点＝`TurnManager` 在"该地区三种对抗全部结算完毕"时广播）
+        ///       ＋ 条件谓词 `RenownMajority`（该卡控制者在该地区的声望角色数 **严格多于** 对手）
+        ///       ＋ `PlaceToken{势力标志,1,声望}`（Args[2] 启用同维度去重：同一方多个声望只放一个标志）。
         /// 口径（已确认）：声望角色**不要求未横置**、**不要求参与该次对抗**，只要在该地区即可；双方相等/均为 0 → 不触发。
         /// </summary>
         public static EffectData Renown()
@@ -359,14 +367,15 @@ namespace Script.Data.Effects
         }
 
         /// <summary>
-        /// 【P4】声望的**关键字形式**（只授予 `Keyword="声望"`，不挂卡级触发）：
-        /// 「声望」的规则本体已由 `RenownRule.ApplyIfMajority` 在**势力对抗结束时**统一消费
-        /// （消费点 = `CombatManager` 的势力对抗结束分支；按该地区双方"声望角色"数量比较，较多的一方 +1 势力标志）。
-        /// `RenownRule.CountRenownCharacters` 读取的就是"运行期授予的 `声望` 关键字 ∪ 卡面固有"。
+        /// 【P4】声望的**关键字形式**（只授予 `Keyword="声望"`，不挂卡级触发）。
         ///
-        /// ⚠️ 与 <see cref="Renown"/> 的区别：`Renown()` 是**卡级触发形式**（OnPowerCombatEnded + PlaceToken），
-        /// 与引擎级规则并存时会**各放一次**势力标志（重复 +2）。故卡面只印"声望"、且引擎级规则已开时，
-        /// 一律用本方法宣告关键字，不要用 `Renown()`。
+        /// 【2026-09 用户口径·声望改触发】**规则本体已改为触发效果**（与威名同款，见 `Renown()`）：
+        /// 该触发由 `_triggerTemplates` 按关键字 `声望` **合成**（`TriggerRegistry` 收集时），
+        /// 或由卡面显式声明的 `Renown()` 条目收集；**不再**有引擎级"立即结算"。
+        /// 因此卡面印"声望"时，应同时：
+        ///  · 用本方法宣告关键字（供计数 `RenownRule.CountRenownCharacters` 与其他"声望角色"规则使用）；
+        ///  · 显式添加 `Renown()` 触发条目（卡面固有关键字不会被 `_triggerTemplates` 通道重复合成，
+        ///    见 `TriggerRegistry` 的 `tmpl.HasInherentKeyword` 跳过）。
         /// </summary>
         public static EffectData RenownKeyword()
         {

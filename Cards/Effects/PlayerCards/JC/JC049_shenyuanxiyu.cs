@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -43,7 +43,7 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 EffectId = "JC049_A_TakeBottomTwoToHand",
                 Timing = EffectTiming.OnSorceryCast,     // 事务卡"打出即结算"
-                PlayTiming = PlayTiming.MainPhase,       // 卡文"快速行动"
+                PlayTiming = PlayTiming.Response,       // 【2026-09 审计修复】卡文「快速」⇒ 快速（响应）档：可插队响应打出（原先误配 MainPhase ⇒ 快速不生效）
                 Condition = new EffectCondition { Predicate = "Always" },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Actions = new Array<EffectAction>

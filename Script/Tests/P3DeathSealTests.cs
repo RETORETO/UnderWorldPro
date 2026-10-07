@@ -122,7 +122,16 @@ namespace Script.Tests
             public int LastNumberMax = -1;
 
             public int PayOrTapCalls;
+            /// <summary>【2026-09 整体复查】固定金额的"你可以支付N"改走**二选一窗**（不再用数值输入框）。</summary>
+            public int OptionalPayCalls;
+            public int LastOptionalPayAmount = -1;
             public void PromptPayOrTap(CardInstance source, int payAmount) => PayOrTapCalls++;
+            public void PromptOptionalPay(int chooserPlayerId, string prompt, int amount, System.Action<bool> onChosen)
+            {
+                OptionalPayCalls++;
+                LastOptionalPayAmount = amount;
+                onChosen?.Invoke(PayAmount > 0);
+            }
             public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
                 System.Action<CardInstance> onPicked) { }
             public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
@@ -200,9 +209,9 @@ namespace Script.Tests
 
             ResolveStack(game);                          // 结算死亡触发
 
-            Assert.AreEqual(1, hooks.NumberCalls, "询问过一次『是否支付2』");
-            Assert.AreEqual(2, hooks.LastNumberMin, "支付下限＝2");
-            Assert.AreEqual(2, hooks.LastNumberMax, "支付上限＝2");
+            Assert.AreEqual(1, hooks.OptionalPayCalls, "询问过一次『是否支付2』（**二选一窗**）");
+            Assert.AreEqual(2, hooks.LastOptionalPayAmount, "询问金额＝2");
+            Assert.AreEqual(0, hooks.NumberCalls, "**不再使用数值输入框**（用户口径：这类是/否选择不需要输入框）");
             Assert.AreEqual(manaBefore - 2, game.PlayerManager.GetAvailableMana(1), "支付了 2 点费用");
 
             Assert.AreEqual(CardZone.SealedZone, victim.CurrentZone, "死亡的角色被封印（离开墓地）");
@@ -234,7 +243,8 @@ namespace Script.Tests
             game.CardManager.DestroyInstance(victim);
             ResolveStack(game);
 
-            Assert.AreEqual(1, hooks.NumberCalls, "询问过一次『是否支付2』");
+            Assert.AreEqual(1, hooks.OptionalPayCalls, "询问过一次『是否支付2』（**二选一窗**）");
+            Assert.AreEqual(0, hooks.NumberCalls, "**不再使用数值输入框**");
             Assert.AreEqual(manaBefore, game.PlayerManager.GetAvailableMana(1), "不支付 → 不扣费");
             Assert.AreEqual(CardZone.Graveyard, victim.CurrentZone, "不支付 → 角色照常留在墓地");
             Assert.IsNull(victim.SealedBy, "未被封印");

@@ -33,7 +33,8 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
-                    CanTargetSelf = false,
+                    // 【2026-09 整体复查·修复】卡文"目标角色或暗藏者"未排除自身 ⇒ 允许取自身（JC004 口径）
+                    CanTargetSelf = true,
                     IncludeCovert = true,
                 },
                 Actions = new Array<EffectAction>

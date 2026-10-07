@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -68,11 +68,22 @@ namespace Script.Tests
             Assert.IsNotNull(e37, "JC037 应有『每操控一个暗藏者 → 黑眼』持续效果");
             Assert.AreEqual("计数:区域:争夺区:暗藏者:自己", e37.PrereqSpec.ScaleExpr, "缩放表达式＝本方争夺区暗藏者数");
             Assert.AreEqual("黑眼", e37.ContinuousGrants[0].Value, "授予黑眼");
+            Assert.AreEqual("Attribute", e37.ContinuousGrants[1].Kind, "数值必须走属性通道（A65）");
+            Assert.AreEqual("调查", e37.ContinuousGrants[1].Value, "黑眼=调查（图标→属性映射）");
 
             var e45 = FindEffect(Load("JC045_zhongbaijisi"), "JC045_2_BlackStarPerTimeMarker");
             Assert.IsNotNull(e45, "JC045 应有『每有一个时间标志 → 黑星』持续效果");
             Assert.AreEqual("计数:卡上标志:时间标志:自身", e45.PrereqSpec.ScaleExpr, "缩放表达式＝卡上时间标志数");
             Assert.AreEqual("黑星", e45.ContinuousGrants[0].Value, "授予黑星");
+            // 【2026-09 修复·A65】"获得一个［黑星］"＝**数值**（黑星=势力）：只写 `Icon` 时数值恒 0
+            // （用户实测："JC045 的增加势力效果没有生效"）⇒ 必须补属性通道。
+            Assert.AreEqual("Attribute", e45.ContinuousGrants[1].Kind, "数值必须走属性通道（黑星=势力）");
+            Assert.AreEqual("势力", e45.ContinuousGrants[1].Value, "黑星=势力");
+
+            var e045death = FindEffect(Load("JC045_zhongbaijisi"), "JC045_1_DeathPlaceTimeMarker");
+            Assert.IsNotNull(e045death, "JC045 应有『每当一个角色死亡时放时间标志』触发");
+            // 【2026-09 修复·用户口径】"每当一个角色死亡时…"**不是强制触发**（用户可以放弃）
+            Assert.IsFalse(e045death.Forced, "JC045 放时间标志不是强制触发（用户实测报障）");
 
             var e109 = FindEffect(Load("JC109_chenlundebadelei"), "JC109_2_BlackBladePerSealed");
             Assert.IsNotNull(e109, "JC109 应有『每有一张封印牌 → 黑刀』持续效果");
@@ -99,19 +110,24 @@ namespace Script.Tests
             var c1 = game.CardManager.CreateCardInstance(Probe("TS_sg_c1"), 1);
             c1.SetCovert(true);
             game.ZoneManager.MoveToArea(c1, a1, 1);
+            // 【2026-09 修复·A65】"获得一个［黑眼］"＝**数值**（黑眼=调查）：必须走 `Attribute:调查`
+            // 通道。此前只写 `Icon:黑眼` ⇒ 图标存在但数值恒 0（用户实测："己方派遣暗藏者没有增加黑眼数量"）。
+            Assert.AreEqual(1, kristina.GetAttribute("调查"), "1 个暗藏者 → 黑眼 1 个（调查 +1）");
             var c2 = game.CardManager.CreateCardInstance(Probe("TS_sg_c2"), 1);
             c2.SetCovert(true);
             game.ZoneManager.MoveToArea(c2, a2, 1);
+            Assert.AreEqual(2, kristina.GetAttribute("调查"), "2 个暗藏者 → 黑眼 2 个（调查 +2）");
             Assert.IsTrue(kristina.HasIcon("黑眼"), "有暗藏者 → 获得黑眼");
-            Assert.IsTrue(kristina.HasIcon("黑眼"), "N=2 → 仍有黑眼（图标授予不折进调查属性；属性映射只在 Gain 动词里）");
+            Assert.IsTrue(kristina.HasIcon("黑眼"), "N=2 → 仍有黑眼（图标授予不折进调查属性；属性由 Attribute 通道独立承担）");
 
             // 一个暗藏者翻面 → N 减到 1
             game.CardManager.RevealCard(c1);
             Assert.IsTrue(kristina.HasIcon("黑眼"), "暗藏者翻面 → N=1 → 黑眼仍生效");
+            Assert.AreEqual(1, kristina.GetAttribute("调查"), "N=1 → 调查 +1（缩放量随暗藏者数重算）");
 
             // 另一个离场 → N=0（前提不成立，黑眼清空）
             game.ZoneManager.MoveToHand(c2, 1);
-            Assert.AreEqual(0, kristina.GetAttribute("调查"), "暗藏者离场 → N=0（未登记属性授予，属性为 0）");
+            Assert.AreEqual(0, kristina.GetAttribute("调查"), "暗藏者离场 → N=0（授予被精确撤销，调查回 0）");
             Assert.IsFalse(kristina.HasIcon("黑眼"), "N=0 时不再有黑眼");
         }
 
@@ -127,18 +143,23 @@ namespace Script.Tests
             EffectEngine.Instance.RegisterPersistent(priest);
 
             Assert.IsFalse(priest.HasIcon("黑星"), "前置：无时间标志 → 无黑星");
+            Assert.AreEqual(0, priest.GetAttribute("势力"), "前置：无时间标志 → 势力 +0");
 
             game.CardManager.AddCounter(priest, "时间标志", 1);
             Assert.IsTrue(priest.HasIcon("黑星"), "有 1 个时间标志 → 获得黑星");
+            Assert.AreEqual(1, priest.GetAttribute("势力"), "1 个时间标志 → 势力 +1（A65：数值走属性通道）");
 
             game.CardManager.AddCounter(priest, "时间标志", 2);
             Assert.IsTrue(priest.HasIcon("黑星"), "N=3 → 黑星仍生效（缩放倍数经授予量体现，图标为集合语义）");
+            Assert.AreEqual(3, priest.GetAttribute("势力"), "3 个时间标志 → 势力 +3");
 
             game.CardManager.RemoveCounter(priest, "时间标志", 2);
             Assert.IsTrue(priest.HasIcon("黑星"), "移除 2 个（剩 1）→ N=1 → 黑星仍生效");
+            Assert.AreEqual(1, priest.GetAttribute("势力"), "N 降回 1 也必须重算（A75）→ 势力 +1");
 
             game.CardManager.RemoveCounter(priest, "时间标志", 1);
             Assert.IsFalse(priest.HasIcon("黑星"), "标志清空 → N=0 → 黑星被撤销");
+            Assert.AreEqual(0, priest.GetAttribute("势力"), "标志清空 → 势力归 0");
         }
 
         // ==================== ④ JC109：其上封印牌数缩放 ====================

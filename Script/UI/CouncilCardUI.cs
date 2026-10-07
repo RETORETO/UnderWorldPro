@@ -81,7 +81,16 @@ namespace Script.UI
 
             SetFace(true); // 默认正面朝上（需求①）
             GuiInput += OnGuiInput;
+
+            // 【鼠标悬浮预览】秘社卡同样接入：鼠标进入/离开 → 经 CardPreviewBus 请求整张卡图浮层
+            // （判定与 CardUI 一致，View 注入的 CovertInspectRule 已对秘社等公开信息放行）。
+            MouseEntered += OnMouseEnteredPreview;
+            MouseExited += OnMouseExitedPreview;
         }
+
+        private void OnMouseEnteredPreview() => CardPreviewBus.RequestHover(this);
+
+        private void OnMouseExitedPreview() => CardPreviewBus.EndHover(this);
 
         public override void _Process(double delta)
         {

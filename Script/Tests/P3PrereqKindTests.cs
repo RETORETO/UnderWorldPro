@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -160,12 +160,12 @@ namespace Script.Tests
             Assert.IsNotNull(own, "应有『有本方势力标志 → 白星』");
             Assert.AreEqual(PrereqKind.AreaMarkOwner, own.PrereqSpec.Kind, "前提＝所在地区有势力标志");
             Assert.AreEqual("自己", own.PrereqSpec.Param, "归属＝自己");
-            Assert.AreEqual(1, own.ContinuousGrants.Count, "授予白星");
+            Assert.AreEqual(2, own.ContinuousGrants.Count, "授予白星（Icon + Attribute 两条通道）");
 
             var foe = FindEffect(tmpl, "JC084_B_EnemyMarkWhiteEye");
             Assert.IsNotNull(foe, "应有『有敌方势力标志 → 白眼』");
             Assert.AreEqual("对手", foe.PrereqSpec.Param, "归属＝对手");
-            Assert.AreEqual(1, foe.ContinuousGrants.Count, "授予白眼");
+            Assert.AreEqual(2, foe.ContinuousGrants.Count, "授予白眼（Icon + Attribute）");
         }
 
         /// <summary>本方标志 → 白星；敌方标志 → 白眼；标志被移除 → 对应图标收回。</summary>

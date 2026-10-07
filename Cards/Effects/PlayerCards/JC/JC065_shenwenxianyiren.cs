@@ -26,13 +26,18 @@ namespace Cards.Effects.PlayerCards.JC
             {
                 TargetRule.Make(TargetKind.Area),        // "选择目标地区"
             };
-            data.LimitToActionPhaseOnly = true;          // 卡文"快速行动"（与既有同类事务卡一致口径）
+            // 【2026-09 修复·用户口径】卡文**快速行动** ⇒ 取 **C 档**（`PlayTiming.Response`）：
+            // 任意有优先权时均可打出（含响应窗口 / 堆叠非空 / 非行动阶段），**不限行动阶段**。
+            // 用户实测："JC065 的门禁疑似错误，现在不能在非行动阶段发动"——
+            // 根因是原先写成 `LimitToActionPhaseOnly=true`（B 档＝只允许行动阶段）＋ `PlayTiming.MainPhase`。
+            // 与 JC049 的同类修复（"卡文『快速』⇒ 快速（响应）档：可插队响应打出"）以及
+            // JC062/JC008/JC106/JC135 的既有口径完全一致。
 
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC065_A_OpponentSacrificesCovertInArea",
                 Timing = EffectTiming.OnSorceryCast,
-                PlayTiming = PlayTiming.MainPhase,
+                PlayTiming = PlayTiming.Response,        // 快速行动：有优先权即可打出（C 档，不限行动阶段）
                 Condition = new EffectCondition { Predicate = "Always" },
                 Target = new TargetSpec { Kind = TargetKind.Area, NeedsSelection = true },
                 Actions = new Array<EffectAction>

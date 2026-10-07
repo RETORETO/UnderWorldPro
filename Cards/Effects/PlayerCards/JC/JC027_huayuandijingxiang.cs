@@ -26,6 +26,13 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 整体复查·修复】卡文"**结附于目标地区**"⇒ 必须声明打出目标大类，
+            // 否则附属默认允许 角色/附属/秘社/地区/暗藏者 全部目标（可被结附到角色身上）。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Area),
+            };
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC027_A_BecomeGoblinCharacter",

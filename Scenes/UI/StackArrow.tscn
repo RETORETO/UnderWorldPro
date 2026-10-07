@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://76tcolo5uhwr" path="res://Script/UI/StackArrow.cs" id="1_arrow"]
 
 [node name="StackArrow" type="Control" unique_id=200000100]
-z_index = 4095
+z_index = 800
 layout_mode = 3
 anchors_preset = 0
 offset_right = 100.0

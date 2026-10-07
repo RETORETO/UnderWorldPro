@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -201,6 +201,64 @@ namespace Script.Tests
             Assert.IsTrue(victim.IsCovert, "模式1 生效：目标角色被翻面为暗藏者");
             Assert.AreEqual(CardZone.AreaZone, victim.CurrentZone, "翻面不移场（仍在争夺区）");
             Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "事务卡结算后进墓地");
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径】JC063"**两个效果选择一项以后才需要选择目标**"，且**每个模式只能以对应大类
+        /// 的卡为目标**：模式1（将目标角色潜伏）→ 只能选**角色**；模式2（将目标暗藏者移回手牌）→ 只能选
+        /// **暗藏者**（用户实测口径原文："选择其中一个效果只能以角色为目标，其中一个只能以暗藏者为目标"）。
+        /// 本用例用**捕获候选**的视图钉住"按所选模式的 `Target` 声明枚举候选"这条实现。
+        /// </summary>
+        public void TestK16_模式目标类别按所选模式限定()
+        {
+            foreach (var (modeIndex, expectCharacter) in new[] { (0, true), (1, false) })
+            {
+                var game = NewGame();
+                string area = Areas(game)[0];
+                GiveAssets(game, 1, 3);
+
+                var character = game.CardManager.CreateCardInstance(Probe($"TS_mb_kind_c{modeIndex}"), 2);
+                game.ZoneManager.MoveToArea(character, area, 2);              // 正面角色
+                var covert = game.CardManager.CreateCardInstance(Probe($"TS_mb_kind_v{modeIndex}"), 2);
+                game.ZoneManager.MoveToArea(covert, area, 2);
+                covert.SetCovert(true);                                      // 暗藏者
+
+                var card = game.CardManager.CreateCardInstance(Load("JC063_jingchezhuibu"), 1);
+                game.ZoneManager.MoveToHand(card, 1);
+                game.TurnManager.PriorityPlayerId = 1;
+                game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+                EffectEngine.Instance.UIHooks = new ModeStub { Answer = modeIndex };
+                var view = new CaptureView();
+                game.TurnManager.SetTriggerView(view);
+
+                game.TurnManager.BeginModeCardPlay(1, card.UID);
+
+                Assert.IsNotNull(view.Last, $"模式{modeIndex + 1}：选完模式后**才**要求选择目标");
+                string what = modeIndex == 0 ? "角色" : "暗藏者";
+                Assert.AreEqual(1, view.Last.Count, $"模式{modeIndex + 1} 的候选只有 {what}");
+                Assert.AreEqual(expectCharacter ? character.UID : covert.UID, view.Last[0],
+                    $"模式{modeIndex + 1} 只能以{what}为目标（另一个大类不得出现在候选里）");
+            }
+        }
+
+        /// <summary>捕获候选的视图桩：记录 `RequestTargetSelection` 下发的候选，并选第一个续跑。</summary>
+        private sealed class CaptureView : Script.Interfaces.ITriggerView
+        {
+            public List<string> Last;
+            public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<Script.Data.Effects.StackEffectInstance> triggers,
+                System.Action<List<Script.Data.Effects.StackEffectInstance>> onEnterStack, System.Action onDone)
+            {
+                onEnterStack?.Invoke(triggers);
+                onDone?.Invoke();
+            }
+            public void RequestTargetSelection(Script.Data.Effects.StackEffectInstance trigger,
+                List<string> validTargetUids, System.Action<string> onPicked)
+            {
+                Last = new List<string>(validTargetUids ?? new List<string>());
+                onPicked?.Invoke(Last.Count > 0 ? Last[0] : null);
+            }
+            public void RemoveOrderEntries(List<Script.Data.Effects.StackEffectInstance> pushed) { }
         }
 
         /// <summary>选模式2（暗藏者回手）→ 目标暗藏者回到拥有者手牌。</summary>

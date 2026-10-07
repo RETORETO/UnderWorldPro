@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -15,7 +15,10 @@ namespace Cards.Effects.PlayerCards.JC
     ///  · `EffectData.DamageRedirect = DamageRedirectVictim.AttachedHost` + `Timing = Continuous`（前提常驻）：
     ///    本卡**处于结附状态**期间，其**结附的宿主**将受到的伤害**改由本卡承受**；
     ///  · 消费点＝`CardManager.DealDamageToInstance` → `EffectEngine.ResolveDamageRedirect`（一次伤害只重定向一次）；
-    ///  · 前缀"灵体"由既有词条通道承担；"不能移动"前缀见进度表该行（人工归类）。
+    ///  · 【2026-09 整体复查·修复】前缀"公开"**必须显式装载**（`KeywordEffects.Public()`，见下）——
+    ///    旧注释写的"由既有词条通道承担"是**错的**（`HasInherentKeyword` 只读 `EffectDataList`）；
+    ///    "灵体"本脚本已用 `ContinuousGrants` 显式声明（`JC121_A_Spirit`）；"不能移动"已由
+    ///    `StaticKind.CannotMoveWhileUnattached` 实现（`JC121_D_...`）。
     /// **第一条（进场触发：自行选结附目标）仍未实现**——需"附属进场时选结附目标"的路径（见进度表该行）。
     /// </summary>
     public static class JC121_kongmingyushou_Effects
@@ -25,6 +28,11 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 整体复查·修复】前缀"公开"（手牌期不可被秘密派遣为暗藏者）
+            var publicKw = KeywordEffects.Public();
+            publicKw.EffectId = "JC121_0_Public";
+            data.EffectDataList.Add(publicKw);
+
             // 灵体（关键词：与 JC111 同款"持续关键字授予"，引擎级 `DamageRules.IsSpirit` 消费）。
             // 附属卡：Scope 用 AttachTarget（与"受此结附的…"同区），保障结附期间生效。
             data.EffectDataList.Add(new EffectData

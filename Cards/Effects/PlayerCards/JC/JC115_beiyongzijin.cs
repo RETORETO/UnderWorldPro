@@ -23,6 +23,12 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 整体复查·修复】卡文"**结附于本方秘社**"⇒ 声明打出目标大类（本方秘社）。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Council, TargetRestriction.Friendly),
+            };
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC115_A_TapForTemporaryMana",

@@ -134,14 +134,21 @@ namespace Script.Manager
         }
 
         /// <summary>
-        /// 【P3】势力对抗结束触发（OnPowerCombatEnded）：**一次势力对抗结束时**广播（含平局）。
+        /// 【P3】势力对抗/对抗阶段结束触发（OnPowerCombatEnded）：**一个地区的所有对抗结束后**广播（含平局）。
         /// 供【声望】响应：条件谓词 `RenownMajority` 会按该地区双方"声望角色"数量比较，
         /// 由较多的一方在该地区放置一个势力标记（多个声望角色也只放一个，去重与威名同款）。
         /// 与 `OnCombatWon` 的区别：本时机不要求"分出胜者"，`TriggeringPlayerId` 传 0（无胜者语义）。
+        ///
+        /// 【2026-09 用户口径·声望改触发】触发点＝`TurnManager` 在"该地区三种对抗全部结算完毕"
+        /// （含 JC067 追加的那次势力对抗之后）时调用一次；并且**同一地区每回合只广播一次**
+        /// （用户口径："不管势力对抗进行几次（JC067效果多次战斗对抗）声望都只触发一次"）——
+        /// 本方法自带幂等守卫，任何重复调用都会被吞掉（不依赖调用方时序）。
         /// </summary>
         public void PowerCombatEnded(string areaUid)
         {
-            // 与威名同款：进入本次"势力对抗"维度前清空放置去重表（同一方多个声望只放一个标记）。
+            if (string.IsNullOrEmpty(areaUid)) return;
+            // 与威名同款：进入本次"势力对抗"维度前清空放置去重表
+            // ⇒ **一次势力对抗内**同一方多个声望角色也只放一个标志（用户 2026-09 口径）。
             EE.ResetCombatWonDedup();
 
             _bus.Emit(GameEvent.OnPowerCombatEnded, new TriggerContext
@@ -152,6 +159,8 @@ namespace Script.Manager
                 TriggeringPlayerId = 0,   // 无胜者语义：声望不依赖对抗胜负
             });
         }
+
+
 
         /// <summary>
         /// 回合开始/准备步骤触发（OnTurnStarted）：准备阶段为双方共有步骤，

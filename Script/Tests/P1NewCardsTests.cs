@@ -339,6 +339,92 @@ namespace Script.Tests
             var bell = new CardInstance(bellTmpl, "p1_bell_1") { OwnerId = 2, ControllerId = 2 };
             Assert.AreEqual(-2, ee2.GetCostModification(2, bell, bellTmpl.CardName, bellTmpl.Organization),
                 "JC042：同时满足『鸣钟教派』与『血图标』时只应减 2（不叠加为 -4）");
+
+            // 【2026-09 用户实测·JC042】用户报"降低费用效果变成给**多张**卡降低费用了，只降低**下一张**"。
+            // 这里把"一次性"语义钉死：消费（＝打出那张牌）之后，同一条修正必须消失，另一张命中牌不得再享受。
+            ee2.ConsumeCostModification(2, bell, bellTmpl.Organization);
+            Assert.AreEqual(0, ee2.GetCostModification(2, bell, bellTmpl.CardName, bellTmpl.Organization),
+                "【一次性】消费后该修正被移除 ⇒ 同一张牌不再减费");
+
+            var ee3 = new EffectEngine();
+            ee3.ApplyCostModification(2, -2, 99, a42[2], consumeOnce: true);
+            var bell2Tmpl = new PlayerCardData
+            {
+                UID = "P1_bell2", CardName = "鸣钟牌2", CategoryFlag = CardCategory.Sorcery, Organization = "鸣钟教派",
+            };
+            bell2Tmpl.MagicDomains = new Array<MagicDomain> { MagicDomain.Blood };
+            bell2Tmpl._effectsInjected = true;
+            var bell2 = new CardInstance(bell2Tmpl, "p1_bell2_1") { OwnerId = 2, ControllerId = 2 };
+            Assert.AreEqual(-2, ee3.GetCostModification(2, bell2, bell2Tmpl.CardName, bell2Tmpl.Organization),
+                "第一张命中牌享受 -2");
+            ee3.ConsumeCostModification(2, bell2, bell2Tmpl.Organization);   // ＝打出第一张
+            var bell3 = new CardInstance(bell2Tmpl, "p1_bell3_1") { OwnerId = 2, ControllerId = 2 };
+            Assert.AreEqual(0, ee3.GetCostModification(2, bell3, bell2Tmpl.CardName, bell2Tmpl.Organization),
+                "【用户实测回归】打掉第一张后，第二张命中牌**不得**再减费（一次性只作用于下一张）");
+            Assert.AreEqual(0, ee3.GetCostModification(2, bell2, bell2Tmpl.CardName, bell2Tmpl.Organization),
+                "已打出的那张自身也不应残留减免");
+        }
+
+        // ==================== 行为：JC039② 令本方【王座会】角色潜伏（端到端） ====================
+
+        /// <summary>
+        /// 用户实测「让己方王座会角色潜伏的效果没有生效」的**规则侧回归**：结附本方秘社的 JC039
+        /// 激活②后，目标本方王座会角色必须翻面为暗藏者（`IsCovert`）。
+        /// （UI 侧"原地翻面没刷卡面"由 `Arena.Events.OnCardStateChangedHandler` 修，headless 覆盖不到。）
+        /// </summary>
+        public void TestP1Card_JC039_令本方王座会角色潜伏_端到端()
+        {
+            var game = NewGame();
+            string area = FirstAreaUid(game);
+
+            // 费用：给 P1 三张资产（每张 1 费）
+            for (int i = 0; i < 4; i++)
+            {
+                var assetTmpl = new PlayerCardData
+                {
+                    UID = $"P1_jc039_asset{i}", CardName = "探针资产", Cost = 0,
+                    CategoryFlag = CardCategory.Attachment, Defense = -1,
+                };
+                assetTmpl._effectsInjected = true;
+                var asset = game.CardManager.CreateCardInstance(assetTmpl, 1);
+                game.ZoneManager.MoveToAsset(asset, 1);
+            }
+
+            // 结附于**本方秘社**（与本方秘社实例建立双向引用，与结算落地同款）
+            var emblemTmpl = Load("JC039_wangzuohuihuiji");
+            var emblem = game.CardManager.CreateCardInstance(emblemTmpl, 1);
+            game.ZoneManager.MoveToHand(emblem, 1);
+            var councils = game.ZoneManager.GetZoneCards(CardZone.CouncilZone, 1);
+            Assert.IsTrue(councils.Count > 0, "开局 P1 应有 1 张秘社");
+            emblem.IsAttached = true;
+            emblem.AttachedTo = councils[0];
+            councils[0].AttachedCards.Add(emblem);
+            game.ZoneManager.MoveToAttachedZone(emblem, councils[0].ZoneDetailId ?? "", 1);
+
+            // 目标：本方【王座会】角色
+            var allyTmpl = new PlayerCardData
+            {
+                UID = "P1_jc039_ally", CardName = "王座会角色", Cost = 0,
+                CategoryFlag = CardCategory.Character, Defense = 1, Organization = "王座会",
+            };
+            allyTmpl._effectsInjected = true;
+            var ally = game.CardManager.CreateCardInstance(allyTmpl, 1);
+            game.ZoneManager.MoveToArea(ally, area, 1);
+
+            var e = Find(emblemTmpl, "JC039_2_LatentAlly");
+            game.TurnManager.PriorityPlayerId = 1;
+            Assert.IsTrue(ActivateEligibility.IsLegalActivateTarget(emblem, e, ally, game.CardManager, game.PlayerManager),
+                "本方王座会角色应是合法目标（Organization + Friendly 限制）");
+            Assert.IsTrue(ActivateEligibility.CanActivate(emblem, game.TurnManager, game.PlayerManager, game.CardManager),
+                "结附本方秘社的徽记②应可发动");
+
+            game.EffectEngine.ActivateAbility(emblem, e, ally);
+            Assert.IsFalse(game.StackManager.IsEmpty, "已入堆叠");
+            for (int i = 0; i < 2 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+
+            Assert.IsTrue(ally.IsCovert, "目标本方【王座会】角色应被潜伏（翻面为暗藏者）");
+            Assert.AreEqual(CardZone.AreaZone, ally.CurrentZone, "潜伏不改变所在区域");
         }
     }
 }

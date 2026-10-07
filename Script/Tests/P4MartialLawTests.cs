@@ -94,7 +94,8 @@ namespace Script.Tests
         private sealed class Stub : Script.Interfaces.IGameUIHooks
         {
             public int Answer = 1;      // 1＝支付
-            public int Calls;
+            public int Calls;               // 数值输入框调用次数（JC064 应为 **0**）
+            public int PayOrSacrificeCalls; // "支付 / 牺牲"二选一窗调用次数
 
             public void PromptPayOrTap(CardInstance source, int payAmount) { }
             public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
@@ -117,6 +118,14 @@ namespace Script.Tests
             {
                 Calls++;
                 onChosen?.Invoke(Answer);
+            }
+
+            /// <summary>【2026-09 用户实测·JC064】"支付 N，否则牺牲本卡"＝**二选一窗**（不是数值输入框）。</summary>
+            public void PromptPayOrSacrifice(int chooserPlayerId, string sourceName, int amount,
+                System.Action<bool> onChosen)
+            {
+                PayOrSacrificeCalls++;
+                onChosen?.Invoke(Answer > 0);
             }
         }
 
@@ -218,7 +227,8 @@ namespace Script.Tests
             game.EffectEngine.UIHooks = stub;
             int manaBefore = game.PlayerManager.GetAvailableMana(1);
             game.EffectEngine.ResolveEffect(upkeep, law, null, "", -1, -1, -1);
-            Assert.AreEqual(1, stub.Calls, "弹了一次选择窗");
+            Assert.AreEqual(1, stub.PayOrSacrificeCalls, "弹了一次『支付 / 牺牲』**二选一**窗");
+            Assert.AreEqual(0, stub.Calls, "**不出现数值输入框**（用户实测 JC064 口径，参考 JC061）");
             Assert.AreEqual(manaBefore - 1, game.PlayerManager.GetAvailableMana(1), "支付 1 费");
             Assert.AreEqual(CardZone.AttachedZone, law.CurrentZone, "戒严留在场上");
 

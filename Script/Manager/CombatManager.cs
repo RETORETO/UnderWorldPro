@@ -115,8 +115,6 @@ public partial class CombatManager : Node
             if (firstValue == 0)
             {
                 GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：0:0 平局，不可使用先手破平");
-                // 【2026-09 修复·声望】势力对抗"结束"即结算声望（与胜负无关，0:0 平局同样要结算）
-                FinishPowerCombat(type, areaUid);
                 onComplete?.Invoke();
                 return;
             }
@@ -127,7 +125,6 @@ public partial class CombatManager : Node
                 if (OnTieBreakRequired == null)
                 {
                     GD.Print($"  ⚠️ 无 UI 订阅破平窗口事件，按平局继续");
-                    FinishPowerCombat(type, areaUid);
                     onComplete?.Invoke();
                     return;
                 }
@@ -146,8 +143,6 @@ public partial class CombatManager : Node
                     {
                         // 取消：平局无效果，继续下一步
                         GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：玩家取消破平，平局无效果");
-                        // 【2026-09 修复·声望】放弃破平＝势力对抗结束 ⇒ 声望照常结算
-                        FinishPowerCombat(type, areaUid);
                         onComplete?.Invoke();
                     }
                 });
@@ -155,7 +150,6 @@ public partial class CombatManager : Node
             }
 
             GD.Print($"  📍 地区{areaNo}({areaUid}) {TypeName(type)}：平局，先手玩家不可破平（无费用或次数耗尽），无获胜方");
-            FinishPowerCombat(type, areaUid);
             onComplete?.Invoke();
             return;
         }
@@ -163,19 +157,6 @@ public partial class CombatManager : Node
         ResolveWinner(type, areaUid, areaNo, winner, diff, onComplete);
     }
 
-    /// <summary>
-    /// 【2026-09 修复·用户实测"JC011 声望没有生效"】**势力对抗结束时一律结算声望规则**。
-    /// 卡文口径：声望**不依赖势力对抗胜负**（平局、甚至败方，只要本方在该地区的声望角色**更多**就 +1 势力标志）。
-    /// 此前该结算只写在"有胜方"的分支里 ⇒ **0:0 平局**（典型：本地区只有一个声望角色、其势力值为 0）与
-    /// "破平被放弃/不可破平"时**声望完全不结算**。现把单机/联机两条路径的**每个势力对抗出口**都收口到本方法
-    /// （先发 `PowerCombatEnded` 触发点，再跑引擎级规则；两者共用同一计数实现）。
-    /// </summary>
-    private void FinishPowerCombat(CombatType type, string areaUid)
-    {
-        if (type != CombatType.Power || string.IsNullOrEmpty(areaUid)) return;
-        _triggerEmitPoints?.PowerCombatEnded(areaUid);
-        Script.Manager.RenownRule.ApplyIfMajority(_zoneManager, _areaManager, areaUid);
-    }
 
     // ==================== C/S 化：联机对抗网络化结算（与单机事件路径并列） ====================
     /// <summary>
@@ -194,8 +175,6 @@ public partial class CombatManager : Node
             int firstValue = SumPlayerValue(areaUid, firstPlayer, type);
             if (firstValue == 0)
             {
-                // 【2026-09 修复·声望】0:0 平局同样是"势力对抗结束" ⇒ 声望照常结算（不依赖胜负）
-                FinishPowerCombat(type, areaUid);
                 return;   // 0:0 不可破平
             }
 
@@ -221,14 +200,10 @@ public partial class CombatManager : Node
                 }
                 else
                 {
-                    // 【2026-09 修复·声望】放弃破平＝势力对抗结束 ⇒ 声望照常结算
-                    FinishPowerCombat(type, areaUid);
                 }
             }
             else
             {
-                // 【2026-09 修复·声望】不可破平（无费用/次数耗尽）＝对抗结束 ⇒ 声望照常结算
-                FinishPowerCombat(type, areaUid);
             }
             return;
         }
@@ -251,8 +226,6 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
-            // 【P3·声望】势力对抗结束触发（联机路径，与单机同源；含声望引擎级规则）
-            FinishPowerCombat(type, areaUid);
             return;
         }
 
@@ -419,7 +392,10 @@ public partial class CombatManager : Node
     ///   —— 这同时修好了旧 PM 命令"直调窗口协调器、绕过 `ResolveWinner` ⇒ 不广播获胜触发"的缺陷。
     /// · 联机（`InputGateway != null`）→ 经决策协议下发真实窗口（`ResolveStrengthDamageAsync` /
     ///   `ResolveInvestigationPlacementAsync`），**不**走 `ResolveWinner`（避免与事件路径重复弹窗）。
-    /// · `Power` 为瞬时结算（加势力标记 + 声望），不弹窗。
+    /// · `Power` 为瞬时结算（按势力值加势力标记），不弹窗。
+    ///   【2026-09 声望改触发】声望**不在**此处结算：它改为触发效果，触发点＝`TurnManager` 在
+    ///   "该地区三种对抗全部结算完毕"（含 JC067 追加的那次势力对抗之后）时广播一次
+    ///   （`TriggerEmitPoints.PowerCombatEnded`）⇒ 一个地区无论打几次势力对抗都只触发一次。
     /// </summary>
     public void ResolveCombatFromDebug(CombatType type, int areaNo, int winner, int diff)
     {
@@ -437,7 +413,6 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
-            FinishPowerCombat(type, areaUid);
             return;
         }
 
@@ -469,8 +444,6 @@ public partial class CombatManager : Node
         if (type == CombatType.Power)
         {
             _areaManager?.AddPowerMark(areaUid, winner, diff);
-            // 【P3·声望】势力对抗结束触发（含胜负；声望不依赖对抗胜负）+ 引擎级落地（该地区声望角色较多的一方 +1）
-            FinishPowerCombat(type, areaUid);
             onComplete?.Invoke();
             return;
         }

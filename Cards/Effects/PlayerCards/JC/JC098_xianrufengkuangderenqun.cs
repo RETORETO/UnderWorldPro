@@ -18,7 +18,9 @@ namespace Cards.Effects.PlayerCards.JC
     ///    （与"无对抗管理器"的降级路径同款，保持"每个步骤都有优先权"的节奏不变）。
     ///  · 判定按卡**当前**所在地实时匹配地区（`EffectEngine.AreaSkipsCombat`），故卡在争夺区之间移动时自动跟随。
     ///
-    /// 前缀"公开"由既有词条通道承担（`HasPublicKeyword`），本脚本不再重复声明。
+    /// 【2026-09 整体复查·修复】前缀"公开"**必须显式装载**（`KeywordEffects.Public()`）：旧注释写的
+    /// "由既有词条通道承担（`HasPublicKeyword`），本脚本不再重复声明"是**错的**——`HasInherentKeyword`
+    /// 只读 `EffectDataList`，没有按卡面文本自动装载关键字的机制 ⇒ 不声明则"不能被秘密派遣为暗藏者"门禁失效。
     /// </summary>
     public static class JC098_xianrufengkuangderenqun_Effects
     {
@@ -27,6 +29,10 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            var publicKw = KeywordEffects.Public();
+            publicKw.EffectId = "JC098_0_Public";
+            data.EffectDataList.Add(publicKw);
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC098_A_SkipInvestigationStep",

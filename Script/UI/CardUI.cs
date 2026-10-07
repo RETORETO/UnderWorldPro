@@ -16,6 +16,8 @@ namespace Script.UI
         [Export] private Label _investigationLabel;
         [Export] private Label _subCategoriesLabel;   // 子类型显示（如"子类型：鸟/魔宠"，含运行时授予）
         [Export] private Label _magicDomainsLabel;     // 魔法领域显示（如"领域：心灵"，JC060 光环运行时授予"心"）
+        [Export] private Label _instanceIdLabel;       // 实例ID显示（inst_xx）
+        [Export] private Label _categoryLabel;         // 类别显示（角色/事务/附属/任务/地区/指示物，复合类别用"/"连接）
         [Export] private Label _combatLabel;
         [Export] private Label _powerLabel;
         [Export] private Label _defenseLabel;
@@ -154,7 +156,16 @@ namespace Script.UI
         }
         // GuiInput 处理按下/释放（Godot 命中分发正常时走这里；若命中失败则由 Arena 全局 _Input 驱动）
         private void OnGuiInput(InputEvent @event)
-        {            // 暗藏者现身：争夺区内背面朝上的卡，双击（任意拖拽态均可）即请求现身；
+        {            // 【2026-09 诊断】"卡有高亮但双击完全没日志"（用户实测，单机）：需要区分
+            // "事件压根没到卡 UI（被上层遮挡/吞掉）"与"到了但链路静默 return"。
+            // 故对**可发动的场上卡**记一条左键日志（量极小：只在高亮激活卡上落笔）。
+            if (@event is InputEventMouseButton diagMouse && diagMouse.ButtonIndex == MouseButton.Left
+                && diagMouse.Pressed && CanActivate && _instance != null)
+            {
+                GD.Print($"[CardUI] 左键到达卡 UI：{_instance.PlayerTemplate?.CardName} 双击={diagMouse.DoubleClick} " +
+                         $"区={_instance.CurrentZone} 附属={_instance.IsAttached} →{(diagMouse.DoubleClick ? "请求激活" : "（等待第二次点击）")}");
+            }
+            // 暗藏者现身：争夺区内背面朝上的卡，双击（任意拖拽态均可）即请求现身；
             // 先于 CanDrag 判断，因为暗藏者通常 CanDrag=false（背面不可拖拽出牌）。
             if (@event is InputEventMouseButton revealMouse
                 && revealMouse.ButtonIndex == MouseButton.Left
@@ -223,7 +234,7 @@ namespace Script.UI
             _initialGlobalPosition = GlobalPosition;
             _dragOffset = GetGlobalMousePosition() - GlobalPosition;
             GetParent()?.MoveChild(this, -1);
-            ZIndex = 1000;   // 拖拽时置于最上层（高于布局 ZIndex=i）
+            ZIndex = Layers.CardDragging;   // 拖拽态层号（压住所有卡，仍低于附属/封印与浮层）
             EmitSignal(SignalName.CardDragStarted, this);
             GD.Print($"[CardUI] 拖拽开始 {_instance?.PlayerTemplate?.CardName}");
         }
@@ -267,17 +278,24 @@ namespace Script.UI
             // 实时显示减后费用，并以绿色提示"可减费"。减费由 EffectEngine 费用修正栈驱动，TurnManager 读取。
             RefreshCostReduction();
 
-            // 能力值（使用动态值）
+            // 能力值（使用动态值）——与 `RefreshStats` 同一函数来源，保证"调/战/势"三项对称
             if (_investigationLabel != null)
-                _investigationLabel.Text = $"调 {instance.CurrentInvestigation}";
+                _investigationLabel.Text = $"调 {ComputeDisplayed(CombatManager.CombatType.Investigation)}";
+
+            // 实例ID（inst_xx，用于调试/规则定位，唯一标识一张卡实例）
+            if (_instanceIdLabel != null)
+                _instanceIdLabel.Text = instance.UID;
+
+            // 类别（取实例有效类别 EffectiveCategoryFlag，含形态覆盖；复合类别用"/"连接）
+            if (_categoryLabel != null)
+                _categoryLabel.Text = CategoryText(instance.EffectiveCategoryFlag);
 
             // 子类型（静态模板 + 运行时授予），如"子类型：鸟/魔宠"
             RefreshSubCategoriesLabel();
             RefreshMagicDomainsLabel();
             if (_combatLabel != null)
-                _combatLabel.Text = $"战 {instance.CurrentStrength}";
-            if (_powerLabel != null)
-                _powerLabel.Text = $"势 {instance.CurrentPower}";
+                _combatLabel.Text = $"战 {ComputeDisplayed(CombatManager.CombatType.Strength)}";
+            if (_powerLabel != null) _powerLabel.Text = $"势 {ComputeDisplayed(CombatManager.CombatType.Power)}";
             if (_defenseLabel != null)
                 _defenseLabel.Text = instance.HasDefense ? $"防 {instance.CurrentDefense}" : "无防";
 
@@ -320,21 +338,18 @@ namespace Script.UI
     {
         if (!GodotObject.IsInstanceValid(this)) return;   // 节点已释放（QueueFree 后）则不刷新
         if (_instance == null || _instance.PlayerTemplate == null) return;
-            // 先手调查（白眼）加成：仅当白眼生效（CurrentFirstStrikeInvestigation 超过基础 FirstStrike 时）显示，
-            // 让玩家直观看到 JC001 等「白眼」持续效果（D19：先手调查接入 UI 展示）。
-            int fsInvest = _instance.CurrentFirstStrikeInvestigation;
-            int baseFsInvest = _instance.PlayerTemplate.FirstStrikeInvestigation;
-            string whiteEyeTag = (fsInvest > baseFsInvest) ? $" (先手+{fsInvest - baseFsInvest})" : "";
-            // 黑眼=调查：无条件叠加的持续授予（JC030 等），与白眼（先手调查）对称显示
-            int blackEyes = _instance.GetAttribute("调查");
-            string blackEyeTag = (blackEyes > 0) ? $" (调查+{blackEyes})" : "";
-            if (_investigationLabel != null) _investigationLabel.Text = $"调 {_instance.CurrentInvestigation}{whiteEyeTag}{blackEyeTag}";
-            if (_combatLabel != null) _combatLabel.Text = $"战 {_instance.CurrentStrength}";
+            // 【2026-09·JC051 用户口径】**三项数值完全对称**：调/战/势一律读**地区合计逐卡同一函数**
+            // `AreaStatsCalculator.ValueOf(card, type, playerManager)`（其内部按 `IsFirstPlayer` 判先手）：
+            //   先手回合 ＝ 基础值 ＋【先手值】＋ 临时授予（调查/战斗/势力）＋【先手值】临时先手授予（白眼/白刀/白星）
+            //   后手回合 ＝ 基础值 ＋ 临时授予
+            // 于是不再需要" (先手+N) / (调查+N)" 之类文本标签（数值里已含，标签会造成"数字＋标签"双计的错觉）。
+            if (_investigationLabel != null) _investigationLabel.Text = $"调 {ComputeDisplayed(CombatManager.CombatType.Investigation)}";
+            if (_combatLabel != null) _combatLabel.Text = $"战 {ComputeDisplayed(CombatManager.CombatType.Strength)}";
             // 子类型随持续效果授予/撤销刷新（如 JC030 在场获得"吸血鬼"）
             RefreshSubCategoriesLabel();
             // 魔法领域随光环授予/撤销刷新（如 JC060 给无领域角色加"心"=心灵领域）
             RefreshMagicDomainsLabel();
-            if (_powerLabel != null) _powerLabel.Text = $"势 {_instance.CurrentPower}";
+            if (_powerLabel != null) _powerLabel.Text = $"势 {ComputeDisplayed(CombatManager.CombatType.Power)}";
             if (_defenseLabel != null && _instance.HasDefense) _defenseLabel.Text = $"防 {_instance.CurrentDefense}";
         }
 
@@ -345,6 +360,30 @@ namespace Script.UI
             _externalCostMod = mod;
             RefreshCostReduction();
         }
+
+        // ============================================================
+        // 【2026-09·JC051 用户口径】卡面势力显示所需依赖与取值（**复用既有实现，不新增机制**）
+        // ------------------------------------------------------------
+        // 取值单一来源＝`AreaStatsCalculator.ValueOf(card, Power, playerManager)`——与**地区合计逐卡**同一个函数、
+        // 同一先手判定（`playerManager.IsFirstPlayer(card.ControllerId)`），故卡面数值 ≡ 该卡在地区合计中的贡献：
+        //   先手回合：能力 ＋ 先手能力 ＋ 临时能力（“势力”）＋ 临时先手能力（“先手势力”）
+        //   后手回合：能力 ＋ 临时能力
+        // 注入范式照抄 `AreaSlot.SetStatsDependencies(ZoneManager, PlayerManager)`（本处只需 PlayerManager）。
+        // 未注入（测试/未就绪）时 `ValueOf` 内部 isFirst=false，自然退化为“能力＋临时能力”，不崩不叠加。
+        // ============================================================
+
+        /// <summary>注入统计依赖（单机取 `Arena._playerManager`；联机取 `_matchClient.ClientPlayerManager`）。</summary>
+        public void SetStatsDependencies(PlayerManager playerManager) => _playerManager = playerManager;
+
+        private PlayerManager _playerManager;
+
+        /// <summary>本卡当前应显示的**调查/战斗/势力**（三者对称）＝地区合计逐卡用的同一函数
+        /// `AreaStatsCalculator.ValueOf(card, type, playerManager)`（内部按 `IsFirstPlayer` 判先手）。
+        /// 未注入 `PlayerManager`（测试/未就绪）时其内部 isFirst=false，自然退化为"基础值＋临时授予"。</summary>
+        private int ComputeDisplayed(CombatManager.CombatType type)
+            => _instance == null
+                ? 0
+                : Script.Manager.AreaStatsCalculator.ValueOf(_instance, type, _playerManager);
         private int? _externalCostMod;
 
         /// <summary>刷新费用显示：若有玩家级费用修正（JC012 等"下一张帷幕守望牌-1"），实时显示减后费用并绿色提示；否则显示原始费用。</summary>
@@ -391,6 +430,8 @@ namespace Script.UI
             if (_investigationLabel != null) _investigationLabel.Visible = isFaceUp;
             if (_subCategoriesLabel != null) _subCategoriesLabel.Visible = isFaceUp;
             if (_magicDomainsLabel != null) _magicDomainsLabel.Visible = isFaceUp;
+            if (_instanceIdLabel != null) _instanceIdLabel.Visible = isFaceUp;
+            if (_categoryLabel != null) _categoryLabel.Visible = isFaceUp;
             if (_combatLabel != null) _combatLabel.Visible = isFaceUp;
             if (_powerLabel != null) _powerLabel.Visible = isFaceUp;
             if (_defenseLabel != null) _defenseLabel.Visible = isFaceUp;
@@ -625,6 +666,27 @@ namespace Script.UI
             _magicDomainsLabel.Text = $"领域：{string.Join("/", names)}";
         }
 
+        /// <summary>类别枚举（单一身份位）→ 中文名（与 DeckBuilder.CategoryCn 同解，保持全项目口径一致）。</summary>
+        private static readonly Dictionary<CardCategory, string> CategoryCn = new Dictionary<CardCategory, string>
+        {
+            { CardCategory.Character, "角色" }, { CardCategory.Sorcery, "事务" }, { CardCategory.Attachment, "附属" },
+            { CardCategory.Quest, "任务" }, { CardCategory.Land, "地区" }, { CardCategory.Token, "指示物" },
+        };
+        /// <summary>类别位掩码 → 中文串（按枚举定义顺序展开；只取"单一位"基础类别，复合组合用"/"连接）。</summary>
+        private static string CategoryText(CardCategory flag)
+        {
+            if (flag == CardCategory.None) return "无";
+            var parts = new List<string>();
+            foreach (CardCategory v in System.Enum.GetValues(typeof(CardCategory)))
+            {
+                if (v == CardCategory.None) continue;
+                if ((((int)v) & (((int)v) - 1)) != 0) continue;   // 单一位才算基础类别，复合组合跳过
+                if ((flag & v) == 0) continue;
+                parts.Add(CategoryCn.TryGetValue(v, out var cn) ? cn : v.ToString());
+            }
+            return parts.Count > 0 ? string.Join("/", parts) : flag.ToString();
+        }
+
         private void ClearLabels()
         {
             if (_nameLabel != null) _nameLabel.Text = "";
@@ -632,6 +694,8 @@ namespace Script.UI
             if (_investigationLabel != null) _investigationLabel.Text = "";
             if (_subCategoriesLabel != null) _subCategoriesLabel.Text = "";
             if (_magicDomainsLabel != null) _magicDomainsLabel.Text = "";
+            if (_instanceIdLabel != null) _instanceIdLabel.Text = "";
+            if (_categoryLabel != null) _categoryLabel.Text = "";
             if (_combatLabel != null) _combatLabel.Text = "";
             if (_powerLabel != null) _powerLabel.Text = "";
             if (_defenseLabel != null) _defenseLabel.Text = "";
@@ -644,6 +708,8 @@ namespace Script.UI
             if (_investigationLabel == null) GD.PrintErr("[CardUI] ❌ _investigationLabel 未绑定");
             if (_subCategoriesLabel == null) GD.PrintErr("[CardUI] ❌ _subCategoriesLabel 未绑定");
             if (_magicDomainsLabel == null) GD.PrintErr("[CardUI] ❌ _magicDomainsLabel 未绑定");
+            if (_instanceIdLabel == null) GD.PrintErr("[CardUI] ❌ _instanceIdLabel 未绑定");
+            if (_categoryLabel == null) GD.PrintErr("[CardUI] ❌ _categoryLabel 未绑定");
             if (_combatLabel == null) GD.PrintErr("[CardUI] ❌ _combatLabel 未绑定");
             if (_powerLabel == null) GD.PrintErr("[CardUI] ❌ _powerLabel 未绑定");
             if (_defenseLabel == null) GD.PrintErr("[CardUI] ❌ _defenseLabel 未绑定");

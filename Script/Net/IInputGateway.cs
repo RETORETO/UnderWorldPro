@@ -40,6 +40,11 @@ namespace Script.Net
             SelectDeckCard,    // 【P2】从牌库中选一张（检索取牌；候选随 OptionCardRefs 下发，因牌库对双方不可见）
             SelectTriggerOrder,// 触发排序窗口
             ForceChoice,       // 强制二选一/多选一
+                               //   【2026-09 起亦用于】触发入堆叠前的"**是否支付 N**"（`EffectData.OptionalPayCost`，
+                               //   见 `TurnManager.EnsureOptionalPayThenPushAsync`）：`OptionUids` 用哨兵
+                               //   `__optpay_yes`/`__optpay_no`，`OptionLabels` 给出按钮文案（"支付 N"/"不支付"），
+                               //   `ForceChoice=true` ⇒ 面板（`BuildOptions`）**不追加"取消"按钮**，
+                               //   严格只有两个选项；回包 `SelectedUid`；取消/超时/非法 → 按"不支付"（fail-closed）。
             Concede,           // 认输
             CombatInvestigation,// 调查对抗：胜者分配牌库顶 X 张（OptionUids=候选卡，Amount=X）
             CombatStrength,    // 战斗对抗：败者分配 Amount 点伤害（OptionUids=合法承伤目标）
@@ -64,6 +69,17 @@ namespace Script.Net
                                //   OptionLabels=逐槽摘要（如"目标地区=地区2"），OptionUids=已选卡目标（可空），
                                //   OptionCardRefs=已选卡的展示引用；
                                //   回包：Confirmed=true＝确认；false/Cancelled=true＝取消（不打出）
+            FieldMultiPick,    // 【2026-09 用户口径 JC062/JC021】多目标**一次性整窗选择**（服务端聚合下发）：
+                               //   与单机 `Arena.TryPromptFieldMultiPick` **同款交互与文案**——"一个窗 + 场上高亮 +
+                               //   左键选择/右键取消 + 确认/取消"（`MultiTargetSlots.ClassifyShape == FieldMultiPick` 的形状才走本请求）：
+                               //   · OptionUids/OptionCardRefs/OptionLabels ＝ 全部**卡槽**候选（各未占用槽候选的并集）；
+                               //   · OptionAreaUids ＝ **地区槽**候选（地区 UID）；
+                               //   · MultiCardLabel/MultiAreaLabel ＝ 两组标题文案（如"目标暗藏者"／"目标角色"＋"目标地区"）；
+                               //   · MultiMaxCards/MultiMaxAreas/MultiMinCards/MultiAreaRequired ＝ 上限/下限/地区是否必选；
+                               //   · MultiSameControllerOnce ＝"每个玩家场上的角色至多 1 个"（JC021 口径）；
+                               //   回包：SelectedUids＝已选**卡**（有序）、SelectedAreaUids＝已选**地区**；
+                               //        Cancelled=true＝取消整次打出。
+                               //   口径：本请求的"确认"**就是最终确认** ⇒ 不再另发 `ConfirmTargets` 面板（与单机一致）。
             NumberInput,       // 【K11】数值输入框（"你可以支付N" / "选择一个数字" / "展示任意数量"）：
                                //   NumberMin/NumberMax/NumberDefault＝输入范围与初值；
                                //   OptionLabels[0]/OptionTexts[0] 可携带确认/取消按钮文案；
@@ -140,6 +156,15 @@ namespace Script.Net
         /// </summary>
         public bool PayAllowed;
         /// <summary>
+        /// 【2026-09 用户口径 JC063】`SelectEffectMode`：与 `OptionLabels` 同序的**置灰表**
+        /// （true ＝ 该模式**当前没有合法目标**，客户端应置灰且点击无效）。
+        /// 用户口径："JC063 两个效果如果场上完全没有合法目标，置灰（注意两个效果要求的合法目标不一致）"
+        /// —— 由服务端按**与真正取目标同一份枚举**（`TurnManager.GetModeAvailability`）算好后下发；
+        /// 未下发（旧服务端）＝全 false → 客户端不置灰（不静默丢选择）。
+        /// </summary>
+        public List<bool> OptionDisabled = new List<bool>();
+
+        /// <summary>
         /// SelectTriggerOrder：与 <see cref="OptionUids"/> 同序的"是否强制"标记（真=不可放弃/不可拖入放弃区）。
         /// </summary>
         public List<bool> OptionForced = new List<bool>();
@@ -159,15 +184,41 @@ namespace Script.Net
         /// </summary>
         public List<int> OptionMaxAmounts = new List<int>();
 
-        // ---- 【K15】多目标：逐槽选择 / 确认面板 ----
+        // ---- 【K15·多目标】逐槽选择 / 确认面板 ----
         /// <summary>MultiTargetSlot：当前槽序号（0-based）。</summary>
         public int SlotIndex;
+        /// <summary>
+        /// 【K15·多目标·2026-09 用户口径 A86】当前槽的候选**在场上看得见**吗——
+        /// 服务端用**同一份判定**（`MultiTargetSlots.ShouldPickOnField`：地区槽 / 非区域牌堆的卡槽，且候选非空）
+        /// 算好后下发，客户端据此把该槽渲染成"**场上高亮 + 点击**"（与单机
+        /// `Arena.PromptMultiTargets` 的 `AskSlotByFieldClick` 同款），而不是候选按钮列表。
+        /// 兜底：未下发（旧服务端）=false → 客户端继续用按钮列表（不静默丢选择）。
+        /// </summary>
+        public bool SlotFieldVisible;
         /// <summary>MultiTargetSlot：本效果的槽总数。</summary>
         public int SlotCount;
         /// <summary>MultiTargetSlot：该槽是否可留空（true 时客户端应提供"留空"入口）。</summary>
         public bool SlotOptional;
         /// <summary>MultiTargetSlot：槽位提示（如"目标地区""本方角色""敌方角色"）。</summary>
         public string SlotLabel;
+
+        // ---- 【2026-09·FieldMultiPick】"一个窗多选取目标"（JC062/JC021；服务端聚合下发）----
+        /// <summary>FieldMultiPick：**地区槽**候选（地区 UID）。卡槽候选仍走 `OptionUids`。</summary>
+        public List<string> OptionAreaUids = new List<string>();
+        /// <summary>FieldMultiPick：卡槽组标题（JC062＝"目标暗藏者"；JC021＝"目标角色"）。</summary>
+        public string MultiCardLabel;
+        /// <summary>FieldMultiPick：地区槽组标题（如"目标地区"）；无地区槽时为空。</summary>
+        public string MultiAreaLabel;
+        /// <summary>FieldMultiPick：至多可选几张卡（＝卡槽数）。</summary>
+        public int MultiMaxCards;
+        /// <summary>FieldMultiPick：至多可选几个地区（0 或 1）。</summary>
+        public int MultiMaxAreas;
+        /// <summary>FieldMultiPick：至少需要选几张卡（JC062＝0「只为抓一张牌」；JC021＝1）。</summary>
+        public int MultiMinCards;
+        /// <summary>FieldMultiPick：地区槽是否**必选**（JC021=true ⇒ 没选地区时"确认"应置灰）。</summary>
+        public bool MultiAreaRequired;
+        /// <summary>FieldMultiPick：是否"**每个玩家场上的角色只能选择一个**"（JC021 口径；JC062=false）。</summary>
+        public bool MultiSameControllerOnce;
 
         // ---- 【K11】数值输入框 ----
         /// <summary>NumberInput：允许的最小值。</summary>
@@ -215,5 +266,11 @@ namespace Script.Net
         /// 【K24】`SelectPlayer` 的回包：选中的**玩家号**；≤0 视同未选（配合 `Cancelled` 一起判）。
         /// </summary>
         public int SelectedPlayerId = -1;
+
+        /// <summary>
+        /// 【2026-09·FieldMultiPick】回包：已选**地区** UID（与 `SelectedUids`＝已选**卡**分开表达，
+        /// 因为两者是不同类别的槽，且同一列表混装会丢失类别信息）。
+        /// </summary>
+        public List<string> SelectedAreaUids = new List<string>();
     }
 }

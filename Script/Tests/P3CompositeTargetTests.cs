@@ -85,16 +85,53 @@ namespace Script.Tests
 
         private sealed class AbandonTriggerView : Script.Interfaces.ITriggerView
         {
+            /// <summary>被收集（＝进入排序窗）的 EffectId 记录。</summary>
+            public readonly List<string> Collected = new List<string>();
+
             public void OpenTriggerOrderForPlayer(int ownerPlayerId,
                 List<Script.Data.Effects.StackEffectInstance> triggers,
                 System.Action<List<Script.Data.Effects.StackEffectInstance>> onEnterStack, System.Action onDone)
-                => onDone?.Invoke();
+            {
+                foreach (var t in triggers) Collected.Add(t?.EffectDataRef?.EffectId ?? "?");
+                onDone?.Invoke();
+            }
 
             public void RequestTargetSelection(Script.Data.Effects.StackEffectInstance trigger, List<string> validTargetUids,
                 System.Action<string> onPicked)
                 => onPicked?.Invoke(null);
 
             public void RemoveOrderEntries(List<Script.Data.Effects.StackEffectInstance> pushed) { }
+        }
+
+        /// <summary>
+        /// 【2026-09 修复·用户实测】"JC043 效果场上没有合法目标也在触发排序窗口中显示了，
+        /// **没有合法目标不能加入触发排序窗口**"：
+        /// 收集阶段即用与实际取目标同一套候选枚举判定 ⇒ 无候选时不收集（排序窗里不再出现该条目）。
+        /// </summary>
+        public void TestCompositeTarget_无合法目标不入触发排序窗()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            var view = new AbandonTriggerView();
+            game.TurnManager.SetTriggerView(view);
+
+            // 场上**没有任何附属** → JC043 无合法目标
+            var pyromaniac = game.CardManager.CreateCardInstance(Load("JC043_zonghuokuang"), 1);
+            game.ZoneManager.MoveToArea(pyromaniac, area, 1);
+            Assert.AreEqual(0, view.Collected.Count,
+                "无合法目标 ⇒ **不收集**（不进触发排序窗）");
+            Assert.IsTrue(game.StackManager.IsEmpty, "同样不入堆叠");
+
+            // 对照组：场上有一个"结附于本地区"的附属 → 应照常收集
+            var game2 = NewGame();
+            string area2 = Areas(game2)[0];
+            var view2 = new AbandonTriggerView();
+            game2.TurnManager.SetTriggerView(view2);
+            MakeAttachment(game2, "TS_ct_none", null, area2, 2);
+            var pyromaniac2 = game2.CardManager.CreateCardInstance(Load("JC043_zonghuokuang"), 1);
+            game2.ZoneManager.MoveToArea(pyromaniac2, area2, 1);
+            Assert.AreEqual(1, view2.Collected.Count, "有合法目标 ⇒ 照常收集（进排序窗）");
+            Assert.AreEqual("JC043_1_DestroyAttachmentOnCouncilOrArea", view2.Collected[0], "收集的是 JC043 主效果");
         }
 
         // ==================== ① 结构 ====================

@@ -20,7 +20,9 @@ namespace Cards.Effects.PlayerCards.JC
     ///  · 数据修正：该卡文写"**1分值**"，但卡数据与导出 JSON 里 `Score` 都是 0 → 已把
     ///    `JC079_shengying.tres` 的 `Score` 置为 1（否则"置入计分区"不产生任何分数，效果无意义）。
     ///
-    /// 前缀"公开"由既有词条通道承担（`HasPublicKeyword`）。
+    /// 【2026-09 整体复查·修复】前缀"公开"**必须显式装载**（`KeywordEffects.Public()`）：旧注释写的
+    /// "由既有词条通道承担（`HasPublicKeyword`）"是**错的**——`HasInherentKeyword` 只读 `EffectDataList`，
+    /// 没有按卡面文本自动装载关键字的机制 ⇒ 不声明则"不能被秘密派遣为暗藏者"门禁失效。
     /// </summary>
     public static class JC079_shengying_Effects
     {
@@ -29,6 +31,10 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            var publicKw = KeywordEffects.Public();
+            publicKw.EffectId = "JC079_0_Public";
+            data.EffectDataList.Add(publicKw);
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC079_A_WinAreaToScorePile",

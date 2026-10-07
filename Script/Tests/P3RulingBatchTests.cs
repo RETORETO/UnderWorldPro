@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -195,9 +195,11 @@ namespace Script.Tests
         {
             var tmpl = Load("JC074_tiankongdejiaohui");
             Assert.IsNotNull(tmpl, "JC074 模板应可加载");
-            Assert.IsTrue(tmpl.LimitToActionPhaseOnly, "卡文『快速行动』→ 限行动阶段（与既有同类事务卡一致）");
+            // 【2026-09 整体复查·修复】卡文只印"快速行动"（无"只能在行动阶段打出"）⇒ C 档：可响应、**不限行动阶段**
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly, "快速行动 ⇒ **不限**行动阶段（旧实现误设 LimitToActionPhaseOnly=true）");
             var e = FindEffect(tmpl, "JC074_A_BlackEye2AndRenown");
             Assert.IsNotNull(e, "JC074 应有『目标角色 +黑眼×2 +声望』效果");
+            Assert.AreEqual(PlayTiming.Response, e.PlayTiming, "快速行动 C 档 ⇒ PlayTiming.Response");
             Assert.AreEqual(TargetKind.Character, e.Target.Kind, "目标＝角色");
             Assert.AreEqual("黑眼", e.Actions[0].Args[0], "第 1 笔＝黑眼（＝调查图标）");
             Assert.AreEqual("2", e.Actions[0].Args[1], "黑眼 ×2");

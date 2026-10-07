@@ -59,7 +59,11 @@ namespace Script.Manager
                         if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
 
                         // 【K1】动态值 X 求值为 0（或表达式未登记）→ 该效果不算发动 → 不可发动
-                        if (Script.Manager.EffectEngine.Instance != null
+                        // 【2026-09 修复·JC055②】例外：`代价数量` 的 X 来自**本次激活已支付的代价**
+                        // （逐卡分配标志、入堆叠前才产生）⇒ 候选侧**不能**按"X 不可用"拦，
+                        // 否则该能力**永远不亮、永远不可发动**（用户实测："JC055 可以激活行动效果时 UI 没有高亮"）。
+                        if (!Script.Manager.EffectEngine.IsCostPaidValue(e)
+                            && Script.Manager.EffectEngine.Instance != null
                             && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
                                == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
 
@@ -128,10 +132,33 @@ namespace Script.Manager
         /// <param name="ignoreAtomicLock">【仅投影生成用】忽略"原子操作进行中"这一时序门禁：
         /// 服务端生成客户端视图（快照）时可能正处于原子段内，若照实返回 false，客户端会整块失去"可发动"高亮。
         /// 时序门禁由服务端在意图入口（ActivateAbility）强制，不依赖本查询。</param>
+        /// <summary>
+        /// 【2026-09·诊断】"此刻为什么不能发动"的**可读原因**（**仅供日志/UI 提示，不参与任何规则判定**）。
+        ///
+        /// 背景（用户实测）："JC042/JC044 偶尔出现无法双击唤醒效果，**卡有高亮，而且双击完全没有程序 LOG**"。
+        /// 根因是单机双击链路 `Arena.OpenAttachmentActivateChoice` 里 `CanActivate` 不通过时**静默 return**
+        /// —— 而高亮是**上一次刷新**（优先权变化/视觉脏标记）算好的；点击那一刻若门禁变为不满足
+        /// （原子操作进行中 / 优先权转移 / 费用或次数不够 / 已横置 / 代价候选耗尽 / 阶段窗口已过…），
+        /// 就表现为"高亮着却怎么点都没反应、也不打日志"。本方法按 `CanActivate` 的门禁顺序粗查一遍，
+        /// 返回第一条不满足的说明（全部通过返回 `null`），供调用方**打日志 + 刷新高亮**（让 UI 与规则自洽）。
+        /// 注：与 `CanActivate` 的细分门禁相比本方法更粗（只用于解释），**规则判定仍以 `CanActivate` 为准**。
+        /// </summary>
+        public static string DiagnoseActivateBlock(CardInstance card, TurnManager tm, PlayerManager pm, CardManager cm)
+        {
+            if (card == null) return "卡实例为空";
+            if (card.IsCovert) return "暗藏/背面朝上，不可作为激活来源";
+            if (Script.Manager.EffectEngine.Instance?.IsTextBlank(card) == true) return "印刷文本视作空白（失去效果）";
+            var playerId = card.ControllerId;
+            if (tm != null && tm.PriorityPlayerId != playerId)
+                return $"当前没有优先权（优先权在 P{tm.PriorityPlayerId}，本卡控制者 P{playerId}）";
+            if (tm != null && tm.IsAtomicLocked) return "原子操作进行中（结算/决策未闭合，规则层原子锁）";
+            if (CanActivate(card, tm, pm, cm)) return null;
+            return "该卡当前没有任何可发动的激活能力（费用/阶段窗口/每回合次数/发动代价/目标不满足）";
+        }
+
         public static bool CanActivate(CardInstance card, TurnManager tm, PlayerManager pm, CardManager cm,
             bool ignoreAtomicLock = false)
-        {
-            if (card?.PlayerTemplate is not PlayerCardData tmpl)
+        {            if (card?.PlayerTemplate is not PlayerCardData tmpl)
             {
                 // 秘社卡：PlayerTemplate==null，改用 CouncilTemplate 的 ActivationOptions 判定
                 if (card?.CouncilTemplate is CouncilCardData councilTmpl)
@@ -172,7 +199,9 @@ namespace Script.Manager
                 if (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)) continue;
                 if (card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame)) continue;   // 【A57】每局游戏次数上限（不随回合/离场重置）
                 // 【K1】动态值 X 不可用（0 或求值失败）→ 不可发动
-                if (Script.Manager.EffectEngine.Instance != null
+                // 【2026-09 修复·JC055②】`代价数量` 例外（X 在入堆叠前才由支付产生）→ 不拦（见上文同款说明）。
+                if (!Script.Manager.EffectEngine.IsCostPaidValue(e)
+                    && Script.Manager.EffectEngine.Instance != null
                     && Script.Manager.EffectEngine.Instance.EvaluateDynamicValue(e, card, null, null, -1, out _, out _)
                        == Script.Manager.EffectEngine.DynamicValueState.Blocked) continue;
                 // 【P3·K21·JC041】来源前提（暗藏者限定 / 地区子类别）
@@ -509,11 +538,23 @@ namespace Script.Manager
         /// 条件为空/`Always` → 放行；否则按谓词求值（如 JC053 的 `EnemyPowerMarkRemovedThisTurn`）。
         /// UI 的高亮/候选据此置灰，避免"点了却因条件不满足被拒"。
         /// </summary>
-        private static bool ConditionAllowsActivation(EffectData e, CardInstance card)
+        /// <summary>激活类效果声明的**结算条件**（`EffectCondition.Predicate`，非 `Always`）是否满足；
+        /// 不满足 ⇒ 该能力不是合法发动项。**同时供候选侧门禁与 UI 置灰判定使用**（单一实现，避免两套口径）。
+        /// 【2026-09 修复·JC053】UI 的"多能力选择窗"此前只判"需横置已横置 / 需目标无候选"，
+        /// 漏了本前置条件 ⇒ 用户实测"快速行动①抽牌效果**不满足前置**时没有置灰"。</summary>
+        public static bool ConditionAllowsActivation(EffectData e, CardInstance card)
         {
             if (e?.Condition == null || string.IsNullOrEmpty(e.Condition.Predicate)) return true;
             if (e.Condition.Predicate == "Always") return true;
-            return EffectEngine.Instance.EvaluateCondition(e.Condition.Predicate, card, null, null, -1, null);
+            // 【2026-09 修复·**回归**】纯客户端**没有 `EffectEngine.Instance`**（联机客户端的规则判定一律来自
+            // 服务端投影，见 A78）⇒ 这里必须判空。原先直接 `.Instance.EvaluateCondition(...)`：本方法被
+            // UI 置灰判定调用（`ArenaOl.IsActivationEffectDisabled`）⇒ 客户端双击时抛 NullReferenceException，
+            // **整个双击处理器中断**，表现为"卡有高亮、双击毫无反应、控制台只有 .err 里一条 NRE"
+            // （用户实测 JC053；日志已定位到本行）。
+            // 客户端不能本地求值 ⇒ 返回 true（**不本地置灰**），由"服务端投影清单里有没有这条能力"决定置灰。
+            var ee = EffectEngine.Instance;
+            if (ee == null) return true;
+            return ee.EvaluateCondition(e.Condition.Predicate, card, null, null, -1, null);
         }
     }
 }

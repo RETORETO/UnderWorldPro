@@ -719,6 +719,30 @@ namespace Script.Data.Effects
         [Export] public bool CanTargetSelf { get; set; } = false;
 
         /// <summary>
+        /// 【2026-09·JC052 用户口径】群体/集合动作里"排除来源卡自身"的**版本敏感**写法：
+        /// 卡文的"消灭所有本地区的**其他**角色和暗藏者"里的"其他"＝**与收集该效果时同一张卡**。
+        /// 若来源卡在此期间**版本号已变**（如进场触发 A 收集后本卡翻面／重新现身），
+        /// 现存的这张"自己"对老效果而言**已不是同一张卡** ⇒ 应当**纳入集合（可被消灭）**。
+        ///
+        /// 语义（`MassTargetPool.Collect` 消费）：
+        ///  · `CanTargetSelf = true` → 本标志无意义（本就不排除自身）；
+        ///  · `VersionSkipsSelf = false`（缺省）→ 一律排除来源自身（既有行为，绝大多数"其他角色"效果）；
+        ///  · `VersionSkipsSelf = true` → **仅当**"来源卡版本号 == 收集该效果时的版本号"才排除；
+        ///    版本号未知（如打出/激活路径未记录）时保守排除（与缺省一致）。
+        /// 用途：JC052 终焉的诗寇蒂「进场触发：消灭所有本地区的其他角色和暗藏者」。
+        /// </summary>
+        [Export] public bool VersionSkipsSelf { get; set; } = false;
+
+        /// <summary>
+        /// 【2026-09·JC048 用户口径】**"一条效果、动作按顺序执行"模式**：
+        /// `true` 时 `ResolveEffect` **不**按"整条动作序列对每个群体目标各跑一遍"执行，而是
+        /// **动作按声明顺序**依次执行：普通动作只执行一次；声明了 `EffectAction.MassInArea` 的动作
+        /// 对该群体集合各执行一次；声明了 `EffectAction.RequirePredicate` 的动作在条件不满足时跳过。
+        /// 缺省 `false` ＝维持既有群体语义（JC050/JC052/JC011 等不变）。
+        /// </summary>
+        [Export] public bool MassSequential { get; set; } = false;
+
+        /// <summary>
         /// 【P3·复合目标限制】第二条**完整**目标声明，与本体构成 **OR**（卡文"目标**……或……**"且两侧条件不同时用，
         /// 如 JC043「消灭目标**结附于秘社**或**本地区**上的附属」——两者都是附属，但一靠宿主种类、
         /// 一靠"本地区"，无法用 `KindAlt`（只表达大类 OR）或 `Restrictions`（AND）表达）。
@@ -919,6 +943,17 @@ namespace Script.Data.Effects
         /// 单一判定实现见 `PhaseGateRule`；未登记的阶段名按"不排除"处理并告警（防拼错静默失效）。
         /// </summary>
         [Export] public string ExcludedPhases { get; set; } = "";
+        /// <summary>
+        /// 【2026-09·JC117】**只允许在指定阶段发动**（多个用 `,` 分隔，空=不限制）——与 `ExcludedPhases` 互补的白名单。
+        /// 已登记的阶段名（`PhaseGateRule` 统一判定）：
+        ///  · `"行动阶段"` = `TurnPhase.ActionFirst | ActionSecond`（先手/后手行动步骤）；
+        ///  · `"对抗阶段"` = `PreCombat | CombatInvestigation | CombatStrength | CombatPower`。
+        /// **只作用于"发动/激活"**（`ActivateEligibility` 高亮/候选 + `EffectEngine.ActivateAbility` 权威门禁）；
+        /// **不作用于卡牌打出**——打出侧的"只能在行动阶段打出"用 `PlayerCardData.LimitToActionPhaseOnly`
+        /// （两者不要混用，避免同一句卡文有两份实现）。
+        /// 未登记的阶段名按"不满足"处理（⇒ 该效果不可发动）并告警一次（防拼错静默放开）。
+        /// </summary>
+        [Export] public string OnlyPhases { get; set; } = "";
         [Export] public string ActivateCondition { get; set; } = ""; // 发动许可（横置本角色+快速行动2…）
         [Export] public int Cost { get; set; } = 0;                 // 费用数字（快速行动N 中的 N）
         /// <summary>
@@ -952,6 +987,18 @@ namespace Script.Data.Effects
         /// 表达式未登记或依赖未实现（如"玩家选择"缺数值输入 UI）同样按"不发动"处理（fail-closed）。
         /// </summary>
         [Export] public string ValueExpr { get; set; } = "";
+
+        /// <summary>
+        /// 【2026-09·JC048 用户口径】"X 在**结算时**求值，不要用收集时的值卡'是否发动'"：
+        /// `false`（缺省）→ 维持既有口径（K1/A39：`X=0` 的**数量型**效果**不算发动**，收集阶段即跳过）；
+        /// `true` → **跳过收集阶段的 X=0 门禁**，X 留到结算时求值（结算时若仍为 0，则自然什么也不做）。
+        ///
+        /// 用途：JC048 诅咒沙漏②「该地区每有一个时间标志就对地区内所有角色造成 1 点伤害」——
+        /// 它与①「在诅咒沙漏上放一个时间标志」是**两条同时间的效果**：收集发生在**放标志之前**，
+        /// 于是首个准备步骤收集时 X=0 被整条跳过 ⇒ 表现成"**只有牺牲那一回合才造成伤害**"
+        /// （用户实测："JC048 效果给自己放置标记，每次放置都要造成伤害，不是只有 JC048 牺牲的时候造成伤害"）。
+        /// </summary>
+        [Export] public bool ValueAtResolve { get; set; } = false;
         [Export] public CovertTriggerMode TriggerCovertMode { get; set; } = CovertTriggerMode.FaceUp; // 触发对暗藏状态的要求（默认仅正面朝上可触发）
         /// <summary>结算前校验【来源卡版本号】是否未变（默认 false）。设 true 时，入栈时记录来源卡 VersionId，
         /// 结算时若来源卡 VersionId 已变（离场/翻面/进手牌/进墓地等触发 BumpVersion），则跳过结算。
@@ -969,11 +1016,25 @@ namespace Script.Data.Effects
         [Export] public Array<EffectGrant> ContinuousGrants { get; set; } = new Array<EffectGrant>(); // 持续授予结构化（关键字/图标/属性）
 
         // ---- 持续光环（D19-③ 打通：影响他者） ----
+        /// <summary>
+        /// 【2026-09 修复·用户实测 JC059】`AuraFilterExcludeDomain` 的"**未声明**"哨兵
+        /// （＝不做领域筛选）。取 -1 是沿用全仓"印刷无魔法领域"的同一约定（见 `CardInstance.RebuildDomains`
+        /// 跳过 `-1`）。
+        ///
+        /// 为什么需要它：该字段**原先默认 `MagicDomain.Mind`**，而枚举里 **Mind == 0**（**没有 `None`**），
+        /// 于是"没写领域子句"与"显式排除心灵领域"无法区分 ⇒ **每一张光环卡都静默排除了心灵领域角色**。
+        /// 用户实测：JC059（"位于本地区的所有其他本方角色 +1 防御力"）对 JC066 不生效——JC066 的
+        /// `MagicDomains=[0]`＝心灵领域，被这条**隐式**排除挡掉了。全仓只有 JC060 显式写过该字段，
+        /// 而它同时设了优先级更高的 `AuraRequiresNoDomain=true`（"未印刷任何魔法领域"），
+        /// 故"排除某领域"这条分支实际**无人消费** ⇒ 改为**显式声明才生效**。
+        /// </summary>
+        public const int AuraNoDomainFilter = -1;
+
         /// <summary>光环型持续：源卡对自身授予 ContinuousGrants 的同时，对其控制者争夺区内其他符合条件的角色也授予同样的 Grants。
-        /// AuraFilterExcludeDomain != None 时启用光环：被影响目标 = 同控制者、争夺区内、当前实例 MagicDomains 不含该域的角色。
-        /// 例如 JC060 设 MagicDomain.Mind（"心"=心灵领域）：所有未印刷魔法领域图标的本方角色获得心图标+黑刀+心灵领域。
-        /// 源卡自身若已含该域则被自动排除（不会给自己重复授予）。</summary>
-        [Export] public MagicDomain AuraFilterExcludeDomain { get; set; } = MagicDomain.Mind;
+        /// 【2026-09 修复】领域排除改为**显式声明才生效**（见 `AuraNoDomainFilter`）：未声明＝不筛领域；
+        /// 显式声明某领域＝排除"实例 MagicDomains 已含该域"的角色（判定见 `EffectEngine.IsAuraTargetEligible`）。
+        /// 例：JC060 用 `AuraRequiresNoDomain=true`（"所有**未印刷**魔法领域图标的本方角色"）——后者优先级更高。</summary>
+        [Export] public MagicDomain AuraFilterExcludeDomain { get; set; } = (MagicDomain)AuraNoDomainFilter;
         /// <summary>是否启用光环型持续（D19-③）：true 时源卡对自身授予 ContinuousGrants 的同时，
         /// 对其控制者争夺区内其他符合条件的角色也授予同样的 Grants（见 AuraFilterExcludeDomain）。</summary>
         [Export] public bool IsAura { get; set; } = false;
@@ -1018,6 +1079,26 @@ namespace Script.Data.Effects
         /// MSJC012① ②（横置三个本方奴仆·吸血鬼角色）。
         /// </summary>
         [Export] public CardCostSpec CardCost { get; set; } = null;
+
+        /// <summary>
+        /// 【K11·触发版（2026-09 用户口径 JC061）】**触发类效果的"可选固定费用"**（0＝未声明）。
+        ///
+        /// 语义：该效果**入堆叠之前**问一次"**是否支付 N**"（**只有是/否两个选项，不需要输入金额**）：
+        ///  · 是 → 扣 N 点费用（`PlayerManager.SpendMana`）后照常入堆叠、照常结算；
+        ///  · 否 → **该触发不入堆叠**（整条效果不结算，也不扣费）。
+        ///
+        /// 与 `SacrificeCost` / `CounterCost` / `CardCost`（激活能力的**发动代价**）同类：都是
+        /// "**入堆叠之前付清、不在堆叠里结算、不可被响应**"；区别只是本项**可选且金额固定**（那三项是
+        /// "候选选择"类代价）。放弃整条效果由更上层的**触发排序窗**负责（`EffectData.Forced`），
+        /// 本费用窗**不提供"取消"**。
+        ///
+        /// 消费点（单一收口）：`TurnManager.EnsureOptionalPayThenPush` / `...Async` —— 两个方法都
+        /// **紧邻 `PushTriggerToStack` 调用**，即"**先选完目标、再问支付**"：联机选目标阶段取消时不会白扣费。
+        /// 费用不足 → **不弹窗**、直接按"不支付"处理（该触发不入堆叠；绝不替玩家花钱）。
+        /// 单机 UI ＝ `IGameUIHooks.PromptOptionalPay`（无实现时 fail-closed＝不支付）；
+        /// 联机 ＝ `ChoiceRequest.Kind.ForceChoice` 两按钮列表（天然不带"取消"按钮）。
+        /// </summary>
+        [Export] public int OptionalPayCost { get; set; } = 0;
 
         /// <summary>
         /// 【秘社批次】**秘社在场期间的静态子类别授予**（用户 2026-09 口径，见 `CouncilStaticGrant`）：

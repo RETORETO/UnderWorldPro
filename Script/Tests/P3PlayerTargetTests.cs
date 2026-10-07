@@ -172,7 +172,10 @@ namespace Script.Tests
             Assert.AreEqual("快速", a1.ActivateWindow, "窗口＝快速（拥有优先权即可发动）");
             Assert.AreEqual(1, a1.Cost, "卡文『快速行动1』→ 费用 1");
             Assert.AreEqual(TargetKind.Player, a1.Target.Kind, "目标大类＝玩家");
-            Assert.IsTrue(a1.Target.Restrictions.Contains(TargetRestriction.Enemy), "『目标玩家』＝对手");
+            // 【2026-09 用户裁定】卡文只写"目标玩家"（未写"敌方玩家/对手"）⇒ **任意玩家、含自己**
+            Assert.IsFalse(a1.Target.Restrictions.Contains(TargetRestriction.Enemy),
+                "『目标玩家』＝任意玩家（含自己）⇒ 不得限制为对手");
+
             Assert.AreEqual(ActionVerb.Inspect, a1.Actions[0].Verb, "动作＝检视");
             Assert.AreEqual("目标玩家牌库顶", a1.Actions[0].Args[0], "检视对象＝目标玩家牌库顶（只读不取出）");
 
@@ -201,6 +204,15 @@ namespace Script.Tests
             var enemy = PlayerTargetPool.Collect(PlayerTarget(TargetRestriction.Enemy), 1, pm);
             Assert.AreEqual(1, enemy.Count, "对手限制 → 只有 1 个候选");
             Assert.AreEqual(2, enemy[0], "P1 的对手＝P2");
+
+            // 【2026-09 用户裁定·JC111】卡驱动的"任意玩家（含自己）"：
+            // JC111 的两条能力都不限制敌我 ⇒ P1 的候选＝[P2（对手优先列出）, P1（自己排最后）]
+            var jc111 = FindEffect(Load("JC111_hundunhudie"), "JC111_1_InspectTopOfTargetPlayer");
+            Assert.IsNotNull(jc111, "JC111 应有检视能力");
+            var jcCands = PlayerTargetPool.Collect(jc111.Target, 1, pm);
+            Assert.AreEqual(2, jcCands.Count, "『目标玩家』＝任意玩家（含自己）⇒ 2 个候选");
+            Assert.AreEqual(2, jcCands[0], "对手优先列出");
+            Assert.AreEqual(1, jcCands[1], "自己排最后（合法性不变，仅顺序）");
 
             var friendly = PlayerTargetPool.Collect(PlayerTarget(TargetRestriction.Friendly), 2, pm);
             Assert.AreEqual(1, friendly.Count, "本方限制 → 只有 1 个候选");
@@ -306,9 +318,11 @@ namespace Script.Tests
 
             var a1 = FindEffect(unit.PlayerTemplate, "JC111_1_InspectTopOfTargetPlayer");
 
-            // 目标＝自己（Enemy 限制）→ 拒绝
-            EffectEngine.Instance.ActivateAbility(unit, a1, null, 1);
-            Assert.IsTrue(game.StackManager.IsEmpty, "目标为『自己』不合法 → 不入堆叠");
+            // 目标玩家号非法（0）→ 拒绝
+            // 【2026-09 用户裁定·JC111】"目标玩家"＝**任意玩家、含自己** ⇒ "自己(1)"是合法目标，
+            // 故本用例改用**非法玩家号 0** 验证 fail-closed。
+            EffectEngine.Instance.ActivateAbility(unit, a1, null, 0);
+            Assert.IsTrue(game.StackManager.IsEmpty, "非法玩家号（0）→ 不入堆叠");
             Assert.AreEqual(manaBefore, game.PlayerManager.GetAvailableMana(1), "被拒 → 不扣费");
 
             // 目标玩家不存在（3）→ 拒绝
@@ -497,7 +511,9 @@ namespace Script.Tests
             Assert.IsNotNull(e, "JC057 应有『现身触发：检视目标玩家的手牌』");
             Assert.AreEqual(EffectTiming.UncoverTrigger, e.Timing, "时机＝现身触发（暗藏→公开）");
             Assert.AreEqual(TargetKind.Player, e.Target.Kind, "目标大类＝玩家");
-            Assert.IsTrue(e.Target.Restrictions.Contains(TargetRestriction.Enemy), "『目标玩家』＝对手");
+            // 【2026-09 用户裁定】卡文只写"目标玩家"⇒ 任意玩家（含自己），不得限制为对手
+            Assert.IsFalse(e.Target.Restrictions.Contains(TargetRestriction.Enemy),
+                "『目标玩家』＝任意玩家（含自己）⇒ 不得限制为对手");
             Assert.AreEqual(ActionVerb.Inspect, e.Actions[0].Verb, "动作＝检视");
             Assert.AreEqual("目标玩家手牌", e.Actions[0].Args[0], "检视对象＝目标玩家的手牌");
         }
@@ -527,8 +543,8 @@ namespace Script.Tests
                 game.CardManager.RevealCard(unit);   // 现身 → EnterTrigger + UncoverTrigger
 
                 Assert.AreEqual(1, stub.Calls, "触发入堆叠前应弹出一次『目标玩家』独立窗口");
-                Assert.AreEqual(1, stub.LastCandidates.Count, "对手限制 → 1 个候选");
-                Assert.AreEqual(2, stub.LastCandidates[0], "候选＝P2");
+                Assert.AreEqual(2, stub.LastCandidates.Count, "任意玩家（含自己）⇒ 2 个候选");
+                Assert.AreEqual(2, stub.LastCandidates[0], "对手优先列出（自己排最后）⇒ 首个候选＝P2");
                 Assert.IsFalse(game.StackManager.IsEmpty, "选好目标玩家后触发应入堆叠");
 
                 ResolveStackOnce(game);
@@ -626,8 +642,8 @@ namespace Script.Tests
             var req = gw.Requests.Find(r => r.RequestKind == Script.Net.ChoiceRequest.Kind.SelectPlayer);
             Assert.IsNotNull(req, "应下发一次 SelectPlayer 请求");
             Assert.AreEqual(1, req.PlayerId, "**只发给做选择的人**（触发来源控制者 P1）");
-            Assert.AreEqual(1, req.OptionPlayerIds.Count, "候选玩家号（对手限制 → 1 个）");
-            Assert.AreEqual(2, req.OptionPlayerIds[0], "候选＝P2");
+            Assert.AreEqual(2, req.OptionPlayerIds.Count, "候选玩家号（任意玩家含自己 → 2 个）");
+            Assert.AreEqual(2, req.OptionPlayerIds[0], "对手优先列出 ⇒ 首个候选＝P2");
             Assert.IsTrue(req.ForceChoice, "选目标不可取消（与卡目标同口径）");
 
             StackEntry entry = null;

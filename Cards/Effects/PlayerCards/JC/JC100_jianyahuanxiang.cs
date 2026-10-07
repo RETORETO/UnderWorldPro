@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -67,11 +67,13 @@ namespace Cards.Effects.PlayerCards.JC
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },   // 主体＝封印宿主，无需取目标
                 Actions = new Array<EffectAction>
                 {
-                    // 可选支付 1（范围 0..1，默认 1）
+                    // 【2026-09 整体复查·修复】可选支付 1：卡文"你可以支付1，若你如此做…"是**是/否**选择
+                    // ⇒ 固定金额 `{1,1,1}`（引擎对 min==max 走二选一窗 `PromptOptionalPay`，**不再弹数值输入框**；
+                    // 旧写法 `{1,0,1}` 是 0..1 区间 ⇒ 仍会退回数值框，与 JC061/JC064 口径冲突）。
                     new EffectAction
                     {
                         Verb = ActionVerb.PayOptional,
-                        Args = new Array<string> { "1", "0", "1" },
+                        Args = new Array<string> { "1", "1", "1" },
                     },
                     // 令**封印宿主**（"该角色"）获得 -1 防御力，直到回合结束
                     new EffectAction

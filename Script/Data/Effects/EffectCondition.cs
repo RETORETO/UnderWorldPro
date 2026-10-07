@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Godot.Collections;
 
 namespace Script.Data.Effects
@@ -33,6 +33,30 @@ namespace Script.Data.Effects
         [Export] public string Param { get; set; } = "";
 
         [Export] public string BranchPredicate { get; set; } = "";
+
+        /// <summary>
+        /// 【2026-09·JC031 用户口径】门禁与分支**都满足**时，"是否**改为**执行主分支"由发动者
+        /// **在结算时**选择（卡文"…则**可以**改为…"的那一个"可以"）：
+        ///  · `true` → 结算时弹 **0/1 二选一**窗口（`AskPrompt`／`AskYesLabel`／`AskNoLabel`），
+        ///    询问**来源控制者**（＝"发动效果的玩家"）：选「是」→ `Actions`；选「否」/取消 → `ElseBranch`；
+        ///  · `false`（缺省）→ 行为与既有实现完全一致（门禁∧分支满足就直接 `Actions`）。
+        ///
+        /// 交互原语与 `SacrificeSelfOptional`／`PrepareUpkeep` 同款：单机
+        /// `IGameUIHooks.PromptNumberInput(0/1)`、联机 `ChoiceRequest.Kind.NumberInput`（网关 0/1 回包）、
+        /// 无 UI/网关的确定性兜底 = **「是」**（保留"分支成立即走主分支"的既有行为，便于测试与 headless）。
+        /// 用于 JC031 唤灵师："若死亡的是吸血鬼角色，则**可以**令目标玩家随机弃一张手牌"
+        /// （选是＝随机弃；选否＝走 ElseBranch＝由该玩家自选弃）。
+        /// </summary>
+        [Export] public bool AskBranch { get; set; } = false;
+
+        /// <summary>`AskBranch` 的提问文案（空则用通用文案）。</summary>
+        [Export] public string AskPrompt { get; set; } = "";
+
+        /// <summary>`AskBranch` 的"是"按钮文案（空＝"是"）。</summary>
+        [Export] public string AskYesLabel { get; set; } = "";
+
+        /// <summary>`AskBranch` 的"否"按钮文案（空＝"否"）。</summary>
+        [Export] public string AskNoLabel { get; set; } = "";
 
         /// <summary>条件不满足时执行的动作序列（"否则改为…"）。</summary>
         [Export] public Array<EffectAction> ElseBranch { get; set; } = new Array<EffectAction>();

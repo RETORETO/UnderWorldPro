@@ -318,7 +318,7 @@ namespace Script.Tests
                 if (x != null && x.EffectId == "JC104_1_Predict3") e = x;
             Assert.IsNotNull(e, "JC104 应有 Predict3 效果");
             Assert.AreEqual(EffectTiming.EnterTrigger, e.Timing, "预测3 为进场触发");
-            Assert.IsTrue(e.Forced, "卡文『进场触发：预测3』无『可以』→ 强制");
+            Assert.IsFalse(e.Forced, "【2026-09 整体复查】卡文只写『进场触发：预测3』、**没有『强制触发』** ⇒ 非强制（与 JC056 同口径）");
             Assert.AreEqual(1, e.Actions.Count, "单动作");
             Assert.AreEqual(ActionVerb.Predict, e.Actions[0].Verb, "动作为预测");
             Assert.AreEqual("3", e.Actions[0].Args[0], "X=3");

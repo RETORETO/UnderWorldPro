@@ -129,6 +129,8 @@ namespace Cards.Effects.PlayerCards.JC
             JC066_fengmopingselinna_Effects.Register();
             JC068_agesiIV_Effects.Register();
             JC069_jingquan_Effects.Register();
+            // 【2026-09 整体复查·补实现】虔心修士：前缀「公开」+「声望」（此前整卡无效果脚本 ⇒ 两个词条都没装载）
+            JC070_qianxinxiushi_Effects.Register();
             JC071_awalongyinshi_Effects.Register();
             // 【P3·调查对抗获胜时机】博学的贤者：赢得其所参与的调查对抗 → 获得【声望】直到回合结束。
             JC072_boxuedexianzhe_Effects.Register();

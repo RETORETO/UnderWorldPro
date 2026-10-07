@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -21,6 +21,12 @@ namespace Cards.Effects.PlayerCards.JC
 
         private static void Build(PlayerCardData data)
         {
+            // 【2026-09 整体复查·修复】卡文"**结附于目标角色**"⇒ 声明打出目标大类（否则附属默认允许全部目标）。
+            data.TargetRules = new Array<TargetRule>
+            {
+                TargetRule.Make(TargetKind.Character),
+            };
+
             var withdraw = KeywordEffects.Withdraw();
             withdraw.EffectId = "JC116_A_Withdraw";
             data.EffectDataList.Add(withdraw);

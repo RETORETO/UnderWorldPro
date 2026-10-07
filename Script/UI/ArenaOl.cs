@@ -81,6 +81,24 @@ namespace Script.UI
         private Script.Net.ChoiceRequest _pendingChoiceTargetRequest;
         /// <summary>服务端选目标请求中的**地区目标**集合（机动类触发：高亮地区槽位、点击地区完成选择）。</summary>
         private readonly System.Collections.Generic.HashSet<string> _activationLegalAreaUids = new System.Collections.Generic.HashSet<string>();
+
+        // —— 【2026-09 用户口径 JC062/JC021·联机】"一个窗多选"状态（`ChoiceRequest.Kind.FieldMultiPick`）——
+        /// <summary>整窗多选进行中（服务端等一次聚合回包）。</summary>
+        private bool _onlineMultiPickActive;
+        /// <summary>本轮多选对应的服务端请求（回包用其 RequestId）。</summary>
+        private Script.Net.ChoiceRequest _onlineMultiPickRequest;
+        /// <summary>已选卡 UID（有序）。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickCards = new System.Collections.Generic.List<string>();
+        /// <summary>已选地区 UID（至多 1 个）。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickAreas = new System.Collections.Generic.List<string>();
+        /// <summary>服务端下发的卡候选（全量，不随选择变化）。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickCardUids = new System.Collections.Generic.List<string>();
+        /// <summary>服务端下发的地区候选（全量，不随选择变化）。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickAreaUids = new System.Collections.Generic.List<string>();
+        /// <summary>当前**可点**的卡候选（未选满时的并集，已选中的不再列出）。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickCandCards = new System.Collections.Generic.List<string>();
+        /// <summary>当前**可点**的地区候选。</summary>
+        private readonly System.Collections.Generic.List<string> _onlineMultiPickCandAreas = new System.Collections.Generic.List<string>();
         /// <summary>「支付/横置」二选一窗口（JC068 准备维护；联机专用窗口，不本地结算）。</summary>
         private OnlinePayOrTapWindow _onlinePayOrTapWindow;
         /// <summary>「触发排序」窗口（联机专用；逐次入堆叠会多轮请求，窗口按 OrderContextId 复用）。</summary>
@@ -134,8 +152,22 @@ namespace Script.UI
         // 蒙版模式：DeployCovert=派遣暗藏（需落到己方争夺区），EstablishAsset=建立资产（拖出即建立）。
         private enum MaskMode { None, DeployCovert, EstablishAsset }
         private MaskMode _maskMode = MaskMode.None;
+        private Button _deployCovertBtn;   // 派遣暗藏按钮（缓存以统一刷新高亮）
+        private Button _establishAssetBtn; // 建立资产按钮（缓存以统一刷新高亮）
         private Control _localHand;      // 本地玩家手牌容器（拖拽来源）
         private int _localHandOwner;     // 本地玩家号（与 _localPlayerId 一致，拖拽时校验）
+
+        /// <summary>
+        /// 争夺区（AreaZone 桶）实际渲染出的角色卡 UI，按容器登记。
+        /// 【2026-10 修复】作为"争夺区统一平铺序列"的角色侧来源，替代原先
+        /// "遍历容器子节点 + `!IsAttached && !IsSeal`" 的过滤写法 —— 该写法会把「形态角色」
+        /// （SyncFormZone/MoveFormZone 迁入争夺区后仍保持 IsAttached=true，如 JC027"它仍然是附属"）
+        /// 从序列里剔除，导致它停留旧位并与地区附属完全重叠、其它卡随之整体位移（横置卡错位）。
+        /// 与单机 `_areaCardUIs`（争夺区 UI 全集、无过滤）同构。
+        /// 每次 RebuildAreaZoneCards 开头清空重填。
+        /// </summary>
+        private readonly System.Collections.Generic.Dictionary<Control, System.Collections.Generic.List<Control>>
+            _areaRoleGroups = new System.Collections.Generic.Dictionary<Control, System.Collections.Generic.List<Control>>();
 
         public override void _Ready()
         {
@@ -180,7 +212,7 @@ namespace Script.UI
             {
                 Name = "ArrowLayer",
                 MouseFilter = MouseFilterEnum.Ignore,
-                ZIndex = 4095,
+                ZIndex = Layers.Arrows,   // 层号统一由 Script.UI.Layers 分配
                 ZAsRelative = false,
             };
             _arrowLayer.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
@@ -191,7 +223,7 @@ namespace Script.UI
             // **对手手牌**在联机投影里本就是隐藏占位（`IsHidden`，无模板）→ 判定直接为假；
             // **对手暗藏者**需 JC057（未横置 + 同地区）授权 —— 但联机客户端**不持有隐藏卡的模板/卡图**
             // （服务端只下发占位），故即便授权成立也**没有卡面可显示**：该情形留作已知联机缺口（见清单 §7.9 K8）。
-            _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = 4096 };
+            _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview", ZIndex = Layers.CardHoverPreview };
             AddChild(_hoverPreview);
             CardPreviewBus.Attach(card => Script.Manager.CovertInspectRule.CanViewerSeeCardFace(
                 card, _localPlayerId, _matchClient?.ClientCardManager), _hoverPreview, viewerPlayerId: _localPlayerId);
@@ -202,10 +234,10 @@ namespace Script.UI
             if (endTurnBtn != null) endTurnBtn.Pressed += () => DoEndTurn(_localPlayerId);
 
             // 基础行动：派遣暗藏 / 建立资产（联机→上行意图，服务端裁决）
-            var deployBtn = GetNodeOrNull<Button>("Player1Area/DeployCovertButton");
-            if (deployBtn != null) deployBtn.Pressed += () => ToggleMask(MaskMode.DeployCovert, deployBtn);
-            var assetBtn = GetNodeOrNull<Button>("Player1Area/EstablishAssetButton");
-            if (assetBtn != null) assetBtn.Pressed += () => ToggleMask(MaskMode.EstablishAsset, assetBtn);
+            _deployCovertBtn = GetNodeOrNull<Button>("Player1Area/DeployCovertButton");
+            if (_deployCovertBtn != null) _deployCovertBtn.Pressed += () => ToggleMask(MaskMode.DeployCovert);
+            _establishAssetBtn = GetNodeOrNull<Button>("Player1Area/EstablishAssetButton");
+            if (_establishAssetBtn != null) _establishAssetBtn.Pressed += () => ToggleMask(MaskMode.EstablishAsset);
             if (_concedeButton != null) _concedeButton.Pressed += () => DoConcede(_localPlayerId);
 
             // PM 调试命令输入框（联机客户端：上行 DebugCommand 意图，由服务端权威执行）
@@ -213,6 +245,7 @@ namespace Script.UI
             if (_commandInput != null)
             {
                 _commandInput.Visible = false;
+                _commandInput.ZIndex = CommandInputZIndex;   // 拉到最上层：否则秘社/卡牌会压在命令框上方
                 _commandInput.GuiInput += OnCommandInputGuiInput;
             }
         }
@@ -452,6 +485,8 @@ namespace Script.UI
         /// <summary>【鼠标悬浮预览】整张卡图的悬浮浮层（见 `CardHoverPreview` / `CardPreviewBus`）。</summary>
         private CardHoverPreview _hoverPreview;
         private InvestigationWindow _onlineInvestigationWindow;
+        /// <summary>【2026-09·JC062/JC057】联机检视结果窗（与单机 `Arena.PromptInspectCards` 同款）。</summary>
+        private InspectWindow _onlineInspectWindow;
         private bool _onlineCombatWindowOpen;
 
         /// <summary>
@@ -488,13 +523,23 @@ namespace Script.UI
                     // **1:1 同款按钮窗**（同一 `ActivationChoiceItem` 列表、同样文案与"至少 1 个/重置/取消"口径）。
                     return OpenOnlineActivationCostWindow(req);
                 case Script.Net.ChoiceRequest.Kind.MultiTargetSlot:
+                    // 【2026-09·K15·A86】多目标逐槽：场上看得见的槽走"高亮 + 点击"（与单机同款），
+                    // 其余（区域牌堆/玩家槽/无候选）返回 false 退回通用面板的按钮列表。
+                    return OpenOnlineMultiTargetSlotWindow(req);
                 case Script.Net.ChoiceRequest.Kind.ConfirmTargets:
                 case Script.Net.ChoiceRequest.Kind.SelectEffectMode:
                 case Script.Net.ChoiceRequest.Kind.NumberInput:
-                case Script.Net.ChoiceRequest.Kind.InspectCards:
-                    // 【K15/K16/K11/P3·H】多目标逐槽选择 / 确认面板 / 模式分支"选择一项" / 数值输入框 / 检视（私密）：
+                    // 【K15/K16/K11】确认面板 / 模式分支"选择一项" / 数值输入框：
                     // 走通用决策面板的对应 Build* 分支（ChoicePromptPanel）。
                     return false;
+                case Script.Net.ChoiceRequest.Kind.FieldMultiPick:
+                    // 【2026-09 用户口径 JC062/JC021】整窗多选（服务端聚合下发）：与单机 1:1 同款
+                    // "一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"；窗口不可用时退回通用面板按钮列表。
+                    return OpenOnlineFieldMultiPickWindow(req);
+                case Script.Net.ChoiceRequest.Kind.InspectCards:
+                    // 【2026-09·JC062/JC057 用户口径】检视结果：与单机 1:1 同款 `InspectWindow`
+                    // （整批卡面列在一个窗、只有一个『确认』）；请求未带卡面引用时退回通用面板（卡名列示）。
+                    return OpenOnlineInspectWindow(req);
                 default:
                     return false;
             }
@@ -790,6 +835,60 @@ namespace Script.UI
             return true;
         }
 
+        /// <summary>
+        /// 【2026-09·JC062/JC057 用户口径】**联机检视结果窗**：与单机 `Arena.PromptInspectCards` **1:1 同款**
+        /// （`InspectWindow`：整批卡面列在**一个窗**里 + **只有一个『确认』按钮**，点击即关闭）。
+        /// 待展示的牌由服务端随请求下发（`OptionCardRefs`：决策等待期间服务端不推快照），客户端用投影
+        /// CardManager（`RebuildFromRef`）重建实例后渲染**卡面**（与调查/预测窗同一手法）。
+        /// 回包 `ChoiceResult{Cancelled=false}`——检视**不改变任何状态**，服务端只等一个确认
+        /// （确认后继续结算；JC062 的"抓一张牌"排在确认之后，见 `EffectEngine._deferredSorcery`）。
+        /// 请求未带卡面引用（极旧服务端/异常）→ 返回 false 退回通用决策面板（列卡名），不静默丢检视。
+        /// </summary>
+        private bool OpenOnlineInspectWindow(Script.Net.ChoiceRequest req)
+        {
+            var cards = new List<CardInstance>();
+            var clientCardMgr = _matchClient?.ClientCardManager;
+            if (clientCardMgr != null && req.OptionCardRefs != null)
+            {
+                foreach (var r in req.OptionCardRefs)
+                {
+                    if (r == null) continue;
+                    var inst = clientCardMgr.RebuildFromRef(r);
+                    if (inst != null) cards.Add(inst);
+                }
+            }
+            if (cards.Count == 0)
+            {
+                GD.PrintErr("[ArenaOl] 检视窗口：未拿到被检视牌（请求缺 OptionCardRefs），退回通用决策面板");
+                return false;
+            }
+
+            var win = new InspectWindow();
+            win.OnConfirmed = () =>
+            {
+                _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                {
+                    RequestId = req.RequestId,
+                    Cancelled = false,   // 只有一个『确认』：不存在"取消检视"
+                });
+                _onlineInspectWindow = null;
+                _activationSelectionBusy = false;
+                GD.Print("[ArenaOl] 检视确认已回包（服务端继续结算）");
+            };
+            // 【2026-09 修复·同单机】**先入树、再 Init**（否则 `CardUI._Ready()` 的 `SetFace(false)`
+            // 会把 `Init` 里翻好的正面盖成卡背）；`Init` 里已显式设定窗口尺寸，故随后的居中取值正确。
+            AddChild(win);
+            win.Init(req.Prompt, cards);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
+            win.Popup();
+
+            _onlineInspectWindow = win;
+            _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
+            GD.Print($"[ArenaOl] 检视窗口已打开（{cards.Count} 张，只有一个确认按钮）");
+            return true;
+        }
+
         /// <summary>先手破平：复用单机 TieBreakWindow（确认→Cancelled=false；取消→Cancelled=true）。</summary>
         private bool OpenOnlineTieBreakWindow(Script.Net.ChoiceRequest req)
         {
@@ -867,6 +966,17 @@ namespace Script.UI
         /// 目标可为**场上卡**（`OptionUids` 指向卡实例）或**地区**（机动类触发，指向地区 UID）。
         /// </summary>
         private bool OpenOnlineTargetSelectionWindow(Script.Net.ChoiceRequest req)
+            => OpenOnlineFieldTargetSelection(req, extraLabel: null, onExtra: null);
+
+        /// <summary>
+        /// 【2026-09·K15 多目标·联机】**场上点选**取目标（含"出口按钮"）：
+        /// 与单机 `Arena.PromptMultiTargets` 的 `AskSlotByFieldClick` 同款——
+        /// 候选在场上看得见的槽（争夺区角色/暗藏者/附属/秘社/地区）走"**高亮 + 点击**"，
+        /// **不弹候选列表窗**（用户口径："选择查看的暗藏者应该选择场上的高亮暗藏者，而不是弹出选择框"）。
+        /// `extraLabel` 非空时把窗口备用按钮用作该槽的出口（可留空 → 回空 UID；必选 → 回 Cancelled）。
+        /// </summary>
+        private bool OpenOnlineFieldTargetSelection(Script.Net.ChoiceRequest req, string extraLabel,
+            System.Action onExtra)
         {
             // 区分"卡目标"与"地区目标"：能解析为地区 UID 的走地区高亮（对齐单机 trigger.IsAreaTarget 分支）
             var areaUids = new List<string>();
@@ -909,18 +1019,273 @@ namespace Script.UI
                 return false;
             }
             _onlineTargetWindow.OnTargetPicked = OnServerChoiceTargetPicked;
+            // 【2026-09·K15】该槽的出口按钮（可留空 → 回空 UID；必选 → 回 Cancelled），
+            // 与单机 `TargetSelectionWindow.OnExtra` 同款语义（窗口自带的备用按钮）。
+            _onlineTargetWindow.OnExtra = onExtra == null ? null : () =>
+            {
+                ClearActivationTargetSelection();
+                _pendingChoiceTargetRequest = null;
+                onExtra();
+            };
             _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡/地区
             string hint = cardUids.Count == 0 && areaUids.Count > 0
                 ? "请点击一个高亮的地区（将移动至该地区）。"
                 : "请在场上选择合法目标卡（点击场上卡或秘社完成选择）。";
-            _onlineTargetWindow.Open(req.Prompt ?? "请选择目标", hint);
-            GD.Print($"[ArenaOl] 触发选目标窗口已打开（卡目标 {cardUids.Count} 个，地区目标 {areaUids.Count} 个）");
+            _onlineTargetWindow.Open(req.Prompt ?? "请选择目标", hint, extraLabel);
+            GD.Print($"[ArenaOl] 触发选目标窗口已打开（卡目标 {cardUids.Count} 个，地区目标 {areaUids.Count} 个，出口={extraLabel ?? "无"}）");
             return true;
         }
 
-        /// <summary>服务端选目标回包：把选中 UID 封成 `ChoiceResult` 上行（对齐单机选目标不可取消）。</summary>
-        private void OnServerChoiceTargetPicked(string targetUid)
+        /// <summary>
+        /// 【2026-09·K15 多目标·联机】逐槽 `MultiTargetSlot` 请求的落地：
+        ///  · 该槽候选**在场上看得见**（服务端经 `ChoiceRequest.SlotFieldVisible` 下发同一份判定，
+        ///    客户端不重算规则）→ 走"**场上高亮 + 点击**"（`OpenOnlineFieldTargetSelection`）；
+        ///  · 否则（区域牌堆/玩家槽/无候选）→ 返回 false，退回通用决策面板的按钮列表
+        ///    （那里有"留空该槽 / 取消（不打出）"出口）。
+        /// 回包：选中 → `SelectedUid`；出口 → 可留空回**空 UID**、必选回 `Cancelled=true`（服务端权威复检）。
+        /// </summary>
+        private bool OpenOnlineMultiTargetSlotWindow(Script.Net.ChoiceRequest req)
         {
+            if (!req.SlotFieldVisible) return false;
+            bool optional = req.SlotOptional;
+            string extraLabel = optional ? "不选（留空该槽）" : "取消（不打出）";
+            var captured = req;
+            return OpenOnlineFieldTargetSelection(req, extraLabel, () =>
+            {
+                _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                {
+                    RequestId = captured.RequestId,
+                    SelectedUid = "",                 // 空 UID ＝ 该槽留空（服务端按 SlotOptional 复检）
+                    Cancelled = !optional,            // 必选槽的出口＝取消整次打出
+                });
+                _activationSelectionBusy = false;
+                GD.Print($"[ArenaOl] 多目标槽出口回包：{(optional ? "留空该槽" : "取消整次打出")}");
+            });
+        }
+
+        /// <summary>
+        /// 【2026-09 用户口径 JC062/JC021·联机】**"一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"**：
+        /// 服务端把整组候选与上限/下限**一次性**下发（`Kind.FieldMultiPick`，与单机
+        /// `MultiTargetSlots.FieldPickPlan` **同源**），本方法用与单机**同一个窗口**
+        /// （`TargetSelectionWindow` 的多选模式）呈现，回包 `SelectedUids`（已选卡，有序）＋
+        /// `SelectedAreaUids`（已选地区）。
+        ///
+        /// 客户端只做**展示层约束**（服务端已给上限/下限）：至多 N 张卡、每个玩家场上的角色至多 1 个、
+        /// 地区至多 1 个且"必选时没选不能确认"、"选了地区后该地区内的角色不可选"（＝禁止原地移动）；
+        /// **合法性由服务端 `MultiTargetSlots.Validate` 权威复检**（客户端不重算规则）。
+        /// </summary>
+        private bool OpenOnlineFieldMultiPickWindow(Script.Net.ChoiceRequest req)
+        {
+            EnsureTargetWindow();
+            if (_onlineTargetWindow == null)
+            {
+                GD.PrintErr("[ArenaOl] FieldMultiPick：选目标窗不可用 → 退回通用决策面板（按钮式）");
+                return false;
+            }
+            _onlineMultiPickRequest = req;
+            _onlineMultiPickActive = true;
+            _onlineMultiPickCards.Clear();
+            _onlineMultiPickAreas.Clear();
+            _onlineMultiPickCardUids.Clear();
+            foreach (var u in req.OptionUids ?? new List<string>())
+                if (!string.IsNullOrEmpty(u)) _onlineMultiPickCardUids.Add(u);
+            _onlineMultiPickAreaUids.Clear();
+            foreach (var u in req.OptionAreaUids ?? new List<string>())
+                if (!string.IsNullOrEmpty(u)) _onlineMultiPickAreaUids.Add(u);
+
+            _activationSelectionBusy = true;      // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
+            _activationTargetActive = false;      // 多选不是"点一下即完成"，用独立状态机
+            _activationTargetSource = null;
+            _activationTargetAbility = null;
+            _pendingPlayCardUid = null;
+            _pendingChoiceTargetRequest = req;
+
+            _onlineTargetWindow.OnTargetPicked = null;
+            _onlineTargetWindow.OnExtra = null;
+            _onlineTargetWindow.OnCancelled = () =>
+            {
+                var captured = _onlineMultiPickRequest;
+                ClearOnlineMultiPick();
+                if (captured == null) return;
+                _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                {
+                    RequestId = captured.RequestId,
+                    Cancelled = true,
+                });
+                GD.Print("[ArenaOl] 【一个窗多选】取消 → 回包 Cancelled（不打出、不扣费）");
+            };
+            _onlineTargetWindow.OnMultiConfirmed = () =>
+            {
+                var captured = _onlineMultiPickRequest;
+                if (captured == null) return;
+                if (!OnlineMultiPickCanConfirm())
+                {
+                    GD.Print("[ArenaOl] 【一个窗多选】当前不满足确认条件 → 忽略确认键");
+                    return;
+                }
+                var res = new Script.Net.ChoiceResult { RequestId = captured.RequestId, Confirmed = true };
+                res.SelectedUids.AddRange(_onlineMultiPickCards);
+                res.SelectedAreaUids.AddRange(_onlineMultiPickAreas);
+                ClearOnlineMultiPick();
+                _matchClient?.SendChoiceResult(res);
+                GD.Print($"[ArenaOl] 【一个窗多选】确认 → 回包：卡 {res.SelectedUids.Count} 张、地区 {res.SelectedAreaUids.Count} 个");
+            };
+            _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡/地区
+            _onlineTargetWindow.OpenMultiPick("左键选择右键取消");
+            RefreshOnlineMultiPick();
+            return true;
+        }
+
+        /// <summary>多选：按当前选择重算"还能点谁 + 高亮 + 标题 + 确认可用性"（与单机 `RefreshMultiPick` 同口径）。</summary>
+        private void RefreshOnlineMultiPick()
+        {
+            var req = _onlineMultiPickRequest;
+            if (req == null || _onlineTargetWindow == null) return;
+
+            // 【2026-09 用户口径 JC021】**已选地区后必须取消"位于该地区内的角色"的选择**（禁止原地移动）：
+            // 用户口径："JC021选择地区后需要取消本地区内的角色选择"。单机由 `FieldPickPlan`（候选收缩 ⇒
+            // 协调器剔除失效选择）天然满足；联机客户端没有引擎计划，故在此按"已选地区 + 卡的 ZoneDetailId"自行剔除。
+            int pruned = _onlineMultiPickCards.RemoveAll(u => OnlineMultiPickIsInChosenArea(u));
+            if (pruned > 0)
+                GD.Print($"[ArenaOl] 【一个窗多选】选了地区后自动取消 {pruned} 个位于该地区内的角色选择（禁止原地移动）");
+
+            // 卡候选：服务端候选 − 已选 −（已选地区时）该地区内的角色（禁止原地移动）
+            _onlineMultiPickCandCards.Clear();
+            if (_onlineMultiPickCards.Count < req.MultiMaxCards)
+                foreach (var u in _onlineMultiPickCardUids)
+                    if (!_onlineMultiPickCards.Contains(u) && !OnlineMultiPickIsInChosenArea(u))
+                        _onlineMultiPickCandCards.Add(u);
+            // 地区候选：地区槽未选（上限 1）时全部候选
+            _onlineMultiPickCandAreas.Clear();
+            if (req.MultiMaxAreas > 0 && _onlineMultiPickAreas.Count < req.MultiMaxAreas)
+                _onlineMultiPickCandAreas.AddRange(_onlineMultiPickAreaUids);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                // 高亮＝**可点候选 ∪ 已选中**（选中的卡继续保持"亮着"，否则玩家会以为选择丢了）
+                bool on = _onlineMultiPickCandCards.Contains(ui.Instance.UID)
+                          || _onlineMultiPickCards.Contains(ui.Instance.UID);
+                ui.SetTargetHighlight(on);
+            }
+            HighlightOnlineCouncilTargets(false);   // 本形状的候选只有争夺区卡与地区（不涉及秘社）
+            _activationLegalCardUids.Clear();
+            foreach (var u in _onlineMultiPickCandCards) _activationLegalCardUids.Add(u);
+            _activationLegalAreaUids.Clear();
+            foreach (var u in _onlineMultiPickCandAreas) _activationLegalAreaUids.Add(u);
+            foreach (var u in _onlineMultiPickAreas) _activationLegalAreaUids.Add(u);   // 已选地区也要能右键取消
+            ApplyOnlineAreaHighlights();
+            // 多选里地区点击是"切换选择"，不是"点完即回包" ⇒ 覆盖上面的单击回包回调；
+            // `SetSelected` 用**另一个通道**（`Modulate`）强调"已选中"，与"可选"黄色高亮区分。
+            if (_areaSlots != null)
+                foreach (var slot in _areaSlots)
+                {
+                    if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                    bool candidate = _onlineMultiPickCandAreas.Contains(slot.AreaUID);
+                    bool selected = _onlineMultiPickAreas.Contains(slot.AreaUID);
+                    slot.SetSelected(selected);
+                    if (candidate || selected) slot.SetHighlight(true);
+                    if (!candidate && !selected) continue;
+                    slot.OnAreaClicked = candidate
+                        ? new Action<string>(uid => ToggleOnlineMultiPickArea(uid, rightClick: false))
+                        : null;
+                    slot.OnAreaRightClicked = new Action<string>(uid => ToggleOnlineMultiPickArea(uid, rightClick: true));
+                }
+
+            string cardLabel = string.IsNullOrEmpty(req.MultiCardLabel) ? "目标角色" : req.MultiCardLabel;
+            string areaLabel = string.IsNullOrEmpty(req.MultiAreaLabel) ? "目标地区" : req.MultiAreaLabel;
+            string title = req.MultiMaxAreas > 0
+                ? $"请选择{cardLabel}（{_onlineMultiPickCards.Count}/{req.MultiMaxCards}）和{areaLabel}（{_onlineMultiPickAreas.Count}/{req.MultiMaxAreas}）"
+                : $"请选择{cardLabel}：已选择（{_onlineMultiPickCards.Count}/{req.MultiMaxCards}）";
+            bool canOk = OnlineMultiPickCanConfirm();
+            _onlineTargetWindow.SetMultiPick("左键选择右键取消", title, canOk);
+            GD.Print($"[ArenaOl] 【一个窗多选】{title}｜可点卡 {_onlineMultiPickCandCards.Count}、可点地区 {_onlineMultiPickCandAreas.Count}，可确认={canOk}");
+        }
+
+        /// <summary>多选："确认"是否可用（至少 N 张卡；地区必选时必须已选地区）。</summary>
+        private bool OnlineMultiPickCanConfirm()
+        {
+            var req = _onlineMultiPickRequest;
+            if (req == null) return false;
+            return _onlineMultiPickCards.Count >= req.MultiMinCards
+                   && _onlineMultiPickCards.Count <= req.MultiMaxCards
+                   && _onlineMultiPickAreas.Count <= System.Math.Max(0, req.MultiMaxAreas)
+                   && (!req.MultiAreaRequired || _onlineMultiPickAreas.Count >= 1);
+        }
+
+        /// <summary>该卡是否位于"已选中的地区"内（FAQ：不能原地移动 ⇒ 选了地区后该地区内角色不可选）。</summary>
+        private bool OnlineMultiPickIsInChosenArea(string cardUid)
+        {
+            if (_onlineMultiPickAreas.Count == 0 || string.IsNullOrEmpty(cardUid)) return false;
+            var inst = _matchClient?.ClientCardManager?.GetInstance(cardUid);
+            if (inst == null) return false;
+            return _onlineMultiPickAreas.Contains(inst.ZoneDetailId);
+        }
+
+        /// <summary>多选：左键＝加选（受"至多 N 张"与"每个玩家场上的角色至多 1 个"约束）；右键＝取消该选择。</summary>
+        private void ToggleOnlineMultiPickCard(string uid, bool rightClick)
+        {
+            if (string.IsNullOrEmpty(uid)) return;
+            if (rightClick)
+            {
+                if (_onlineMultiPickCards.Remove(uid)) RefreshOnlineMultiPick();
+                return;
+            }
+            if (!_onlineMultiPickCandCards.Contains(uid)) return;
+            if (_onlineMultiPickRequest?.MultiSameControllerOnce == true)
+            {
+                var inst = _matchClient?.ClientCardManager?.GetInstance(uid);
+                if (inst != null)
+                    foreach (var picked in _onlineMultiPickCards)
+                    {
+                        var p = _matchClient?.ClientCardManager?.GetInstance(picked);
+                        if (p != null && p.ControllerId == inst.ControllerId)
+                        {
+                            GD.Print($"[ArenaOl] 【一个窗多选】每个玩家场上的角色只能选一个 → 忽略 {uid}");
+                            return;
+                        }
+                    }
+            }
+            _onlineMultiPickCards.Add(uid);
+            RefreshOnlineMultiPick();
+        }
+
+        /// <summary>多选：左键点地区＝选择/换选（至多 1 个）；右键＝取消该地区（**已选中的也要能取消**）。</summary>
+        private void ToggleOnlineMultiPickArea(string areaUid, bool rightClick)
+        {
+            if (string.IsNullOrEmpty(areaUid)) return;
+            if (rightClick)
+            {
+                // 先处理取消，再判候选（否则"已选中后不再是候选"会让右键失效 —— 用户实测"无法右键取消地区选择"）
+                if (_onlineMultiPickAreas.Remove(areaUid)) RefreshOnlineMultiPick();
+                return;
+            }
+            if (!_onlineMultiPickCandAreas.Contains(areaUid)) return;
+            var req = _onlineMultiPickRequest;
+            if (req == null || req.MultiMaxAreas <= 0) return;
+            if (_onlineMultiPickAreas.Count >= req.MultiMaxAreas) _onlineMultiPickAreas.Clear();   // 上限即"一个地区" ⇒ 直接换选
+            _onlineMultiPickAreas.Add(areaUid);
+            RefreshOnlineMultiPick();
+        }
+
+        /// <summary>多选收尾：清状态/清高亮/关窗/解除本地模态（回包前调用，避免复用时残留）。</summary>
+        private void ClearOnlineMultiPick()
+        {
+            _onlineMultiPickActive = false;
+            _onlineMultiPickRequest = null;
+            _onlineMultiPickCards.Clear();
+            _onlineMultiPickAreas.Clear();
+            _onlineMultiPickCandCards.Clear();
+            _onlineMultiPickCandAreas.Clear();
+            _onlineMultiPickCardUids.Clear();
+            _onlineMultiPickAreaUids.Clear();
+            _pendingChoiceTargetRequest = null;
+            ClearActivationTargetSelection();
+        }
+
+        /// <summary>服务端选目标回包：把选中 UID 封成 `ChoiceResult` 上行（对齐单机选目标不可取消）。</summary>
+        private void OnServerChoiceTargetPicked(string targetUid)        {
             var req = _pendingChoiceTargetRequest;
             ClearActivationTargetSelection();
             _pendingChoiceTargetRequest = null;
@@ -1087,11 +1452,36 @@ namespace Script.UI
                 if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
                 slot.IsTargetSelectable = false;
                 slot.SetHighlight(false);
+                slot.SetSelected(false);
                 slot.OnAreaClicked = null;
+                // 【2026-09·JC021】右键回调也要清（否则窗口复用/收尾后残留旧回调）
+                slot.OnAreaRightClicked = null;
             }
         }
 
+        /// <summary>【2026-09·JC051 用户口径】联机卡 UI 的**统一 Setup 收口**：先注入客户端投影
+        /// `PlayerManager`（卡面势力走 `AreaStatsCalculator.ValueOf`，与地区合计逐卡同函数），再 `Setup`。
+        /// 只为避免"某条创建路径漏注入"（本会话反复踩过同类漏口）。</summary>
+        private CardUI SetupCardUI(CardUI ui, CardInstance inst)
+        {
+            ui?.SetStatsDependencies(_matchClient?.ClientPlayerManager);
+            ui?.Setup(inst);
+            return ui;
+        }
+
         /// <summary>按实例找已渲染的 CardUI（清分配显示/命中判定用）。</summary>
+        /// <summary>【2026-09 修复·A101】联机卡 UI 的**统一登记收口**：写入 `_cardUIMap` 的同时**幂等订阅**双击激活。
+        /// 原先有 6 处 `_cardUIMap[inst.UID] = ui;`，但只有 3 处顺手订阅了 `AttachmentDoubleClicked`
+        /// ⇒ 经其余路径建出的卡 UI **双击无任何接收者**（`EmitSignal` 静默丢弃、零日志）＝用户实测
+        /// "JC053 有高亮、双击完全没有反馈"（与单机侧 A89 同一类缺陷：订阅必须挂"唯一收口"）。</summary>
+        private void RegisterOnlineCardUI(CardInstance inst, CardUI ui)
+        {
+            if (inst == null || ui == null) return;
+            _cardUIMap[inst.UID] = ui;
+            ui.AttachmentDoubleClicked -= OnAttachmentDoubleClicked;   // 幂等：防重复订阅
+            ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
+        }
+
         private CardUI FindCardUiByInstance(CardInstance inst)
         {
             if (inst == null) return null;
@@ -1206,15 +1596,52 @@ namespace Script.UI
 
             ArrangeAll();
 
+            // 【2026-10 修复·横置卡偏移】ArrangeAll() 内的 ArrangeAreas() 会**再次写入槽位 Position/Size**，
+            // 而卡片是槽位的子孙 ⇒ 全局坐标随之改变，排版瞬间写入的目标值即成为陈旧值
+            // （联机独有：单机 ArrangeAreas 只在建/删区调用，排版路径不碰槽位）。
+            // 因此在全部排版结束后统一自锁一次平滑目标，槽位后移、卡片旋转都不会被 _Process 拉偏。
+            SyncSmoothTargets();
+
             // 诊断日志：战场重建完成（用于排查"进入对战后没有卡牌"这类问题——能从日志直接看到手牌/场上数量）
             GD.Print($"[ArenaOl] 战场已按快照重建：手牌 {_p1Hand?.GetChildCount() ?? 0}/{_p2Hand?.GetChildCount() ?? 0}"
                 + $"，争夺区 {CountAllAreaCards()} 张，地区 {_areaSlots.Count} 个，堆叠 {_stackContainer?.GetChildCount() ?? 0}");
+            LogTappedCardSample();
 
             // 快照即权威状态：每次全量重建后刷新「可发动」高亮（联机无本地优先权变更事件）
             RefreshActivateHighlights();
 
+            // 【2026-09 修复·用户实测"地区没有正常高亮 / 选目标高亮消失"】**重建后必须补回"本地选目标"高亮**：
+            // `ClearAllUI()` 会把所有卡/地区的高亮与"已选中"态一并清掉，而快照延迟策略有 1.5s 上限
+            // （`SnapshotMaxDeferSeconds`）⇒ 玩家在选择窗里稍微多想一会儿，快照就会强制应用并把高亮抹掉
+            // （表现为"地区没有正常高亮"，且点选目标的手感全丢）。故按当前本地交互状态**重新施加**一次。
+            ReapplyLocalSelectionHighlights();
+
             // 【第0回合·调度】进入第 0 回合且尚未上报 → 本地弹出调度框（客户端驱动，见 EnsureMulliganPrompt）
             EnsureMulliganPrompt();
+        }
+
+        /// <summary>
+        /// 【2026-09】快照全量重建后，按当前本地交互状态**补回**选目标高亮与"已选中"态：
+        ///  · 整窗多选（JC062/JC021）→ `RefreshOnlineMultiPick()`（重算候选 + 已选中视觉 + 窗面计数）；
+        ///  · 单选取目标（触发/事务卡）→ 重新高亮 `_activationLegalCardUids` 与地区槽。
+        /// </summary>
+        private void ReapplyLocalSelectionHighlights()
+        {
+            if (_onlineMultiPickActive)
+            {
+                RefreshOnlineMultiPick();
+                return;
+            }
+            if (!_activationTargetActive) return;
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (_activationLegalCardUids.Contains(ui.Instance.UID)) ui.SetTargetHighlight(true);
+            }
+            HighlightOnlineCouncilTargets(true);
+            ApplyOnlineAreaHighlights();
+            GD.Print($"[ArenaOl] 快照重建后已补回选目标高亮（卡 {_activationLegalCardUids.Count}、地区 {_activationLegalAreaUids.Count}）");
         }
 
         /// <summary>
@@ -1353,7 +1780,7 @@ namespace Script.UI
             {
                 if (inst == null || inst.PlayerTemplate == null || inst.IsHidden) continue;   // 墓地只放玩家卡（占位除外）
                 var ui = _cardUIScene.Instantiate<CardUI>();
-                ui.Setup(inst);
+                SetupCardUI(ui, inst);
                 graveZone.AddCard(ui);
             }
         }
@@ -1378,23 +1805,22 @@ namespace Script.UI
                 }
             if (instances == null) return;
 
-            float x = 0f;
-            for (int i = 0; i < instances.Count; i++)
+            // 收集本容器所有资产卡，统一交共享排版平铺（与单机 ArrangeContainerCards 一致）：
+            // 容器宽 400px、卡宽 100、间距 20 → 超 3 张自动折叠重叠，右卡压左卡，不再横向溢出。
+            var cards = new System.Collections.Generic.List<Control>();
+            foreach (var inst in instances)
             {
-                var inst = instances[i];
                 if (inst?.PlayerTemplate == null) continue;
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
-                ui.Setup(inst);
+                SetupCardUI(ui, inst);
                 ui.SetExternalCostMod(ComputeClientCostMod(inst));
                 ui.SetTapped(inst.IsTapped);   // 使用费用后横置资产卡：同步服务端 IsTapped
                 ui.CanDrag = false;   // 资产区只读展示（联机下后续可扩展"横置/消耗"意图，暂不拖拽）
-                // 用共享排版定位：同时设置 Position 与 TargetPosition，避免 CardUI._Process 平滑移动
-                // 把卡拉回默认 (0,0) 导致"飘到屏幕左上角"；PlaceCardInContainer 也会按 IsTapped 旋转。
-                CardLayoutHelper.PlaceCardInContainer(container, ui, x, i);
-                _cardUIMap[inst.UID] = ui;
-                x += 105f;   // 横向排布，略重叠
+                RegisterOnlineCardUI(inst, ui);
+                cards.Add(ui);
             }
+            CardLayoutHelper.LayoutCardsEvenly(container, cards);
         }
 
         /// <summary>
@@ -1405,6 +1831,9 @@ namespace Script.UI
         /// </summary>
         private void RebuildAreaZoneCards(System.Collections.Generic.List<CardInstance> areaZoneCards)
         {
+            // 0) 清空争夺区角色 UI 登记（供 RebuildAttachmentsAndSeals 的统一平铺序列使用）
+            _areaRoleGroups.Clear();
+
             // 1) 清空每个 AreaSlot 争夺区容器的旧角色卡 UI
             foreach (var slot in _areaSlots)
             {
@@ -1428,15 +1857,14 @@ namespace Script.UI
 
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
-                ui.Setup(inst);
+                SetupCardUI(ui, inst);
                 ui.SetExternalCostMod(ComputeClientCostMod(inst));
                 ui.SetFace(!inst.IsCovert);      // 暗藏卡(IsCovert)显示背面，普通角色正面
                 ui.SetTapped(inst.IsTapped);     // 同步横置（使用费用/攻击后）
                 ui.CanDrag = false;              // 争夺区只读展示（联机下后续再接入攻击/横置意图）
-                _cardUIMap[inst.UID] = ui;
+                RegisterOnlineCardUI(inst, ui);
                 // 剩余交互：暗藏双击现身 / 附属双击激活（上行意图，服务端权威裁决）
                 ui.CovertRevealRequested += OnCovertRevealRequested;
-                ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
 
                 if (!groups.TryGetValue(container, out var list)) { list = new System.Collections.Generic.List<Control>(); groups[container] = list; }
                 list.Add(ui);
@@ -1445,6 +1873,14 @@ namespace Script.UI
             // 3) 各容器均匀平铺（含横置旋转视觉宽度）
             foreach (var kv in groups)
                 CardLayoutHelper.LayoutCardsEvenly(kv.Key, kv.Value);
+
+            // 4) 登记"争夺区角色 UI 全集"，供步骤 RebuildAttachmentsAndSeals 的统一平铺序列使用
+            //    （含形态角色：CurrentZone==AreaZone 但 IsAttached==true，绝不能被过滤掉）
+            foreach (var kv in groups)
+            {
+                if (kv.Value == null || kv.Value.Count == 0) continue;
+                _areaRoleGroups[kv.Key] = kv.Value;
+            }
         }
 
         /// <summary>清空容器下的 CardUI 子节点（立即移除+释放，避免延迟 QueueFree 残留）。</summary>
@@ -1503,7 +1939,7 @@ namespace Script.UI
                     if (inst == null || inst.CouncilTemplate == null) continue;
                     var ui = _councilUIScene.Instantiate<CouncilCardUI>();
                     container.AddChild(ui);
-                    ui.Setup(inst);
+                    ui.Setup(inst);   // 秘社 UI 是另一种类型（CouncilCardUI），不参与"卡面势力"注入
                     ui.SetTapped(inst.IsTapped);
                     _councilCardUIMap[inst.UID] = ui;
                     ui.CouncilDoubleClicked += OnCouncilDoubleClicked;
@@ -1532,12 +1968,23 @@ namespace Script.UI
             // 附属于地区/封印于地区的卡：按容器分组，全部渲染后统一与容器内角色卡平铺（CardLayoutHelper 会按 IsTapped 旋转）。
             var areaGroup = new System.Collections.Generic.Dictionary<Control, System.Collections.Generic.List<CardUI>>();
 
+            // 结附/封印于"卡"的附属：先只挂载，暂不定位。
+            // 【2026-10 修复】原流程在循环中立即按宿主**当时**的 Position 定位，而宿主角色卡可能
+            // 在下方 areaGroup 平铺时才被重新排布（地区附属 A 加入序列 ⇒ 角色 B 的 index/Position 变化），
+            // 导致附属 C 停在宿主旧位置 ⇒ 相对宿主偏移一个平铺步长。
+            // 对齐单机 ArrangeAllCards：先平铺（角色 + 地区附属），再基于宿主**最终** Position 相对定位。
+            var pendingRelative = new System.Collections.Generic.List<(CardUI ui, Control hostUi, bool isSeal, int idx)>();
+
             foreach (var inst in cards)
             {
                 if (inst == null || inst.PlayerTemplate == null) continue;
                 bool isSeal = inst.IsSeal;
 
-                CardInstance host = inst.IsAttached ? inst.AttachedTo : inst.SealedBy;
+                // 【2026-10·对齐单机 Arena.Layout:610】宿主判定加 IsSeal 分支：
+                // 单机写法 `IsAttached ? AttachedTo : (IsSeal ? SealedBy : null)`；
+                // 联机旧写法 `IsAttached ? AttachedTo : SealedBy` 在非结附时会无条件取 SealedBy，
+                // 一旦 AttachedTo 解析不到就退化成"地区附属"混入统一平铺行 —— 既挤开横置卡、又不再叠在宿主下。
+                CardInstance host = inst.IsAttached ? inst.AttachedTo : (inst.IsSeal ? inst.SealedBy : null);
                 if (host != null)
                 {
                     // —— 结附/封印于卡（角色或秘社）：挂宿主同容器，相对宿主对齐 ——
@@ -1548,25 +1995,27 @@ namespace Script.UI
                     }
                     else if (_cardUIMap.TryGetValue(host.UID, out var hui) && hui != null) hostUi = hui;
 
-                    if (hostUi == null) continue;   // 宿主 UI 未渲染（不应发生），跳过
+                    if (hostUi == null || !GodotObject.IsInstanceValid(hostUi)) continue;   // 宿主 UI 未渲染/已释放，跳过
+                    // 【2026-10·对齐单机】同容器护栏：附属必须挂到"宿主 UI 所在容器"，
+                    // 否则会继承别的容器的坐标系（甚至宿主的横置旋转）而错位（单机 4 处同款护栏）。
                     var hostContainer = hostUi.GetParent() as Control;
-                    if (hostContainer == null) continue;
+                    if (hostContainer == null || !GodotObject.IsInstanceValid(hostContainer)) continue;
 
                     // 先入树再 Setup（修复：Setup 在 AddChild 前会被 _Ready 覆盖成卡背）
                     var ui = _cardUIScene.Instantiate<CardUI>();
                     hostContainer.AddChild(ui);
-                    ui.Setup(inst);
+                    SetupCardUI(ui, inst);
                     ui.SetExternalCostMod(ComputeClientCostMod(inst));
                     ui.SetTapped(inst.IsTapped);
                     ui.CanDrag = false;
-                    ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
-                    _cardUIMap[inst.UID] = ui;
+                    RegisterOnlineCardUI(inst, ui);
 
                     // 相对宿主定位（含宿主对齐、横置旋转、多张下延/上延、ZIndex）
+                    // 推迟到 areaGroup 平铺之后统一执行，避免用宿主尚未最终化的 Position 定位。
                     int idx = 0;
                     var hostList = isSeal ? host.SealedCards : host.AttachedCards;
                     if (hostList != null) { int k = hostList.IndexOf(inst); if (k >= 0) idx = k; }
-                    LayoutAttachmentRelative(ui, hostUi, isSeal, idx);
+                    pendingRelative.Add((ui, hostUi, isSeal, idx));
                 }
                 else
                 {
@@ -1577,32 +2026,96 @@ namespace Script.UI
 
                     var ui = _cardUIScene.Instantiate<CardUI>();
                     hostContainer.AddChild(ui);
-                    ui.Setup(inst);
+                    SetupCardUI(ui, inst);
                     ui.SetExternalCostMod(ComputeClientCostMod(inst));
                     ui.SetTapped(inst.IsTapped);
                     ui.CanDrag = false;
-                    ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
-                    _cardUIMap[inst.UID] = ui;
+                    RegisterOnlineCardUI(inst, ui);
 
                     if (!areaGroup.TryGetValue(hostContainer, out var list)) { list = new System.Collections.Generic.List<CardUI>(); areaGroup[hostContainer] = list; }
                     list.Add(ui);
                 }
             }
 
-            // 结附/封印于地区的卡：与容器内角色卡一起均匀平铺（仅角色 + 地区附属，排除已相对宿主偏移的结附卡附属）。
-            foreach (var kv in areaGroup)
+            // 结附/封印于地区的卡：与容器内角色卡一起均匀平铺（对齐单机 ArrangeAreaAttachmentsAndSeals：
+            // 角色 + 地区附属/封印合并成统一序列；结附角色的附属 C 挂在 AttachedZone，绝不在本序列内，
+            // 只由下方 pendingRelative 循环相对宿主单独定位）。
+            // 【2026-10 修复】角色侧来源改为 RebuildAreaZoneCards 登记的 `_areaRoleGroups`
+            // （争夺区 UI **全集**，含形态角色这类 IsAttached==true 的卡），
+            // 不再用"遍历 GetChildren() + `!IsAttached && !IsSeal` 过滤"——该过滤会让形态角色
+            // 缺席统一平铺 ⇒ 停留旧位并与地区附属完全重叠（两张 JC027 重叠）、其余卡整体位移（横置卡错位）。
+            // 合并与平铺走共享实现 CardLayoutHelper.LayoutAreaRow，与单机同源。
+            var containers = new System.Collections.Generic.HashSet<Control>();
+            foreach (var k in _areaRoleGroups.Keys) containers.Add(k);
+            foreach (var k in areaGroup.Keys) containers.Add(k);
+            foreach (var container in containers)
             {
-                var all = new System.Collections.Generic.List<Control>();
-                foreach (Node child in kv.Key.GetChildren())
+                _areaRoleGroups.TryGetValue(container, out var roles);
+                areaGroup.TryGetValue(container, out var areaAttachSeals);
+                System.Collections.Generic.List<Control> attachSeals = null;
+                if (areaAttachSeals != null)
                 {
-                    if (child is not CardUI c || !GodotObject.IsInstanceValid(c) || c.Instance == null) continue;
-                    bool isRole = c.Instance.CurrentZone == CardZone.AreaZone;
-                    bool isAreaAttach = (c.Instance.IsAttached || c.Instance.IsSeal)
-                                        && c.Instance.AttachedTo == null && c.Instance.SealedBy == null;
-                    if (isRole || isAreaAttach) all.Add(c);
+                    attachSeals = new System.Collections.Generic.List<Control>();
+                    foreach (var a in areaAttachSeals)
+                        if (a != null && GodotObject.IsInstanceValid(a)) attachSeals.Add(a);
                 }
-                CardLayoutHelper.LayoutCardsEvenly(kv.Key, all);
+                CardLayoutHelper.LayoutAreaRow(container, roles, attachSeals);
             }
+
+            // 诊断日志：争夺区统一平铺序列（用于排查"横置卡错位 / 形态角色与地区附属重叠"）
+            // 形态角色数 = 争夺区内仍保留附属身份的卡（如 JC027 变角色后 IsAttached 仍为 true），
+            // 它**必须**参与统一平铺；若该数为 0 且存在形态卡，说明序列口径又漂了。
+            if (containers.Count > 0)
+            {
+                int formRoles = 0;
+                foreach (var kv in _areaRoleGroups)
+                    foreach (var c in kv.Value)
+                        if (c is CardUI fc && fc.Instance != null
+                            && fc.Instance.CurrentZone == CardZone.AreaZone && fc.Instance.IsAttached) formRoles++;
+                GD.Print($"[ArenaOl] 争夺区统一平铺：容器 {containers.Count} 个，地区附属/封印 {areaGroup.Count} 组，形态角色 {formRoles} 张");
+            }
+
+            // 宿主位置已最终化（含地区附属平铺后的角色重排），再统一相对宿主定位附属/封印。
+            foreach (var p in OrderHostFirst(pendingRelative))
+                LayoutAttachmentRelative(p.ui, p.hostUi, p.isSeal, p.idx);
+        }
+
+        /// <summary>
+        /// 稳定排序：把"宿主本身也是待定位附属"的嵌套附属排在其子级之前（宿主先定位）。
+        /// 【2026-10 兜底】附属结附于附属时，若子级先定位会用到父级尚未更新的旧坐标 ⇒ 位置错乱。
+        /// 采用"多轮稳定扫描"，无依赖环时保持原相对顺序，有环（异常数据）时按原序兜底输出，绝不丢项。
+        /// </summary>
+        private static System.Collections.Generic.List<(CardUI ui, Control hostUi, bool isSeal, int idx)> OrderHostFirst(
+            System.Collections.Generic.List<(CardUI ui, Control hostUi, bool isSeal, int idx)> items)
+        {
+            var result = new System.Collections.Generic.List<(CardUI ui, Control hostUi, bool isSeal, int idx)>();
+            if (items == null || items.Count == 0) return result;
+
+            var pending = new System.Collections.Generic.List<(CardUI ui, Control hostUi, bool isSeal, int idx)>(items);
+            var placed = new System.Collections.Generic.HashSet<CardUI>();
+            var pendingHosts = new System.Collections.Generic.HashSet<CardUI>();
+            foreach (var p in pending) pendingHosts.Add(p.ui);
+
+            while (pending.Count > 0)
+            {
+                bool progressed = false;
+                for (int i = 0; i < pending.Count;)
+                {
+                    var p = pending[i];
+                    // 宿主不在"待定位集合"中 ⇒ 宿主位置已最终化（争夺区角色/秘社/已定位附属），可以定位
+                    bool hostReady = !(p.hostUi is CardUI hc && pendingHosts.Contains(hc) && !placed.Contains(hc));
+                    if (!hostReady) { i++; continue; }
+
+                    result.Add(p);
+                    placed.Add(p.ui);
+                    pending.RemoveAt(i);
+                    progressed = true;
+                }
+                if (!progressed) break;   // 依赖环：按当前顺序兜底，避免死循环
+            }
+
+            if (pending.Count > 0) result.AddRange(pending);   // 绝不丢项
+            return result;
         }
 
         /// <summary>把附属/封印卡相对宿主（CardUI 或 CouncilCardUI）对齐定位（移植单机 ArrangeAllAttachments/Seals 算法）。
@@ -1636,8 +2149,10 @@ namespace Script.UI
 
             ui.Position = new Vector2(topLeftX, topLeftY);
             ui.TargetPosition = ui.GlobalPosition;
-            // 宿主层最高，附属/封印依次递减（越后越远）
-            ui.ZIndex = hostUi.ZIndex - (seal ? 1 : 0) - index;
+            // 宿主层最高，附属/封印依次递减（越后越远）。
+            // 【对齐单机】单机附属 `targetUI.ZIndex-(i+1)`、封印 `hostUI.ZIndex-1-i`，两者都是"减 1 起步"；
+            // 原联机 `-(seal?1:0)-index` 使附属第一张与宿主同层（叠在宿主之上），改为统一减 1 起步。
+            ui.ZIndex = hostUi.ZIndex - 1 - index;
         }
 
         /// <summary>重建分数区（ScoreZone）：渲染赢取地区/计分卡，并从快照刷新双方胜利分数。</summary>
@@ -1664,11 +2179,11 @@ namespace Script.UI
                     {
                         var ui = _cardUIScene.Instantiate<CardUI>();
                         container.AddChild(ui);
-                        ui.Setup(inst);
+                        SetupCardUI(ui, inst);
                         ui.SetExternalCostMod(ComputeClientCostMod(inst));
                         ui.SetFace(true);
                         ui.CanDrag = false;
-                        _cardUIMap[inst.UID] = ui;
+                        RegisterOnlineCardUI(inst, ui);
                     }
                     else if (inst.AreaTemplate != null && _areaCardUIScene != null)
                     {
@@ -1770,7 +2285,7 @@ namespace Script.UI
                 foreach (var _ in list)
                 {
                     var arrow = _stackArrowScene.Instantiate<StackArrow>();
-                    arrow.ZIndex = 4095;
+                    arrow.ZIndex = Layers.Arrows;
                     arrow.ZAsRelative = false;
                     _arrowLayer.AddChild(arrow);
                     arrow.SetColor(col);
@@ -1868,10 +2383,22 @@ namespace Script.UI
         }
 
         // ==================== PM 调试命令（联机服务端权威执行） ====================
-        /// <summary>Shift+Enter 执行输入框内的 PM 命令（逐行上行 DebugCommand 意图，服务端权威执行）。</summary>
+        /// <summary>
+        /// Shift+Enter 执行输入框内的 PM 命令（逐行上行 DebugCommand 意图，服务端权威执行）。
+        /// 另：`~` / `` ` `` 键**先于**字符插入被拦截 —— 关闭命令框并吞掉该次按键（命令框不接受 `~` 字符）。
+        /// </summary>
         private void OnCommandInputGuiInput(InputEvent @event)
         {
             if (@event is not InputEventKey key || !key.Pressed || key.Echo) return;
+
+            // 反引号/波浪线键：不插入字符，直接关闭命令框（与 _Input 的开关行为一致）
+            if (IsCommandToggleKey(key))
+            {
+                ToggleCommandInput();
+                _commandInput?.AcceptEvent();
+                return;
+            }
+
             if (key.Keycode != Key.Enter && key.Keycode != Key.KpEnter) return;
             if (!key.ShiftPressed) return;   // 无 Shift 交给 TextEdit 换行
             if (_commandInput == null) return;
@@ -1911,6 +2438,33 @@ namespace Script.UI
                 }
             }
 
+            // 【2026-09 用户口径 JC062/JC021】**整窗多选**：左键选中/右键取消（窗口保持打开，等"确认/取消"）。
+            // 必须在下面的"单击即完成"分支之前接管（否则多选的第一次点击就会被当成"完成选择"回包）。
+            if (_onlineMultiPickActive
+                && @event is InputEventMouseButton mpMb && mpMb.Pressed
+                && (mpMb.ButtonIndex == MouseButton.Left || mpMb.ButtonIndex == MouseButton.Right))
+            {
+                bool rightClick = mpMb.ButtonIndex == MouseButton.Right;
+                // **顺序关键：先判"点在卡上"，再判地区**——地区槽矩形包含其上的卡，顺序反了会把
+                // "点角色选角色"误判为"选了地区"（用户实测 JC021："第一个选择了角色，会显示地区（1/1）"）。
+                var mpCard = PickFieldCardAt(mpMb.GlobalPosition);
+                string mpCardUid = mpCard?.Instance?.UID;
+                if (!string.IsNullOrEmpty(mpCardUid)
+                    && (_onlineMultiPickCandCards.Contains(mpCardUid) || _onlineMultiPickCards.Contains(mpCardUid)
+                        || rightClick))
+                {
+                    ToggleOnlineMultiPickCard(mpCardUid, rightClick);
+                    AcceptEvent();
+                    return;
+                }
+                string mpArea = PickLegalActivationAreaAt(mpMb.GlobalPosition);
+                if (string.IsNullOrEmpty(mpArea)) mpArea = FindTargetAreaUidAt(mpMb.GlobalPosition);
+                if (!string.IsNullOrEmpty(mpArea))
+                    ToggleOnlineMultiPickArea(mpArea, rightClick);
+                AcceptEvent();
+                return;
+            }
+
             // 场上点击高亮选目标：左键命中合法目标卡/地区 → 完成选择（经复用的 TargetSelectionWindow.PickFromArena）
             if (_activationTargetActive
                 && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
@@ -1943,20 +2497,48 @@ namespace Script.UI
                 return;
             }
 
-            // 反引号键切换 PM 命令输入框可见性（与单机 Arena 按键一致，Key 96）
-            if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == (Key)96)
+            // `~` / `` ` `` 键切换 PM 命令输入框可见性（按一下打开、再按一下关闭；
+            // 打开时该键被吞掉，因此命令框里不会出现 `~` 字符 —— 与单机 Arena 行为一致）
+            if (@event is InputEventKey key && key.Pressed && !key.Echo && IsCommandToggleKey(key))
             {
-                if (_commandInput != null)
-                {
-                    bool show = !_commandInput.Visible;
-                    _commandInput.Visible = show;
-                    _commandInput.Text = "";
-                    if (show) _commandInput.GrabFocus();
-                    else _commandInput.ReleaseFocus();
-                    AcceptEvent();
-                }
+                ToggleCommandInput();
+                AcceptEvent();
             }
         }
+
+        /// <summary>
+        /// 命令框开关键判定：物理键位为反引号/波浪线键（`Keycode == 96`，即 `` ` `` / `~` 同键），
+        /// 或本次按键产生的字符就是 `~`（非美式键盘布局下的兜底）。
+        /// </summary>
+        private static bool IsCommandToggleKey(InputEventKey key)
+            => (int)key.Keycode == 96 || key.Unicode == '~';
+
+        /// <summary>
+        /// 切换 PM 命令输入框可见性（`~` / `` ` `` 键；单机与联机行为一致）。
+        /// 打开时清空内容、聚焦并置光标到开头；关闭时释放焦点。面板层级由 `CommandInputZIndex` 保证在最上层。
+        /// </summary>
+        private void ToggleCommandInput()
+        {
+            if (_commandInput == null) return;
+            bool show = !_commandInput.Visible;
+            _commandInput.Visible = show;
+            _commandInput.ZIndex = CommandInputZIndex;
+            _commandInput.Text = "";
+            if (show)
+            {
+                _commandInput.GrabFocus();
+                _commandInput.SetCaretLine(0);
+                _commandInput.SetCaretColumn(0);
+            }
+            else
+            {
+                _commandInput.ReleaseFocus();
+            }
+        }
+
+        /// <summary>PM 命令输入框的面板层级：战场内最高层（高于卡牌、附属、箭头与卡面悬浮预览）。
+        /// 层号统一由 Script.UI.Layers 分配（Godot z_index 上限 4096，旧值 4100 会被截断）。</summary>
+        private const int CommandInputZIndex = Layers.CommandInput;
 
         /// <summary>场上选目标命中：返回点击位置下 ZIndex 最高的合法目标卡 UID（无则 null）。
         /// 候选同时覆盖玩家卡（`_cardUIMap`）与**秘社**（`_councilCardUIMap`）——两者共用同一 ZIndex 比较。</summary>
@@ -2018,35 +2600,91 @@ namespace Script.UI
         /// <summary>暗藏者双击现身：上行 RevealCovert 意图，服务端权威裁决。</summary>
         private void OnCovertRevealRequested(CardUI cardUI)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止现身暗藏
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }   // 本地模态：效果选择/选目标/提示窗期间禁止现身暗藏
             if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离：只能现身自己的暗藏
             _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.RevealCovert, cardUI.Instance.UID);
             GD.Print($"[ArenaOl] 上行 RevealCovert: {cardUI.Instance.PlayerTemplate?.CardName}");
         }
 
+        /// <summary>
+        /// 【2026-09 防御加固·用户实测"偶发：卡有高亮但双击无反应"】
+        /// `_activationSelectionBusy` 是"本地模态"标志（决策期间禁止再起手/让过/结束回合）。
+        /// 它由各窗口的回调复位；一旦某条异常路径（窗口被快照重建释放、回包丢失、取消链断裂…）
+        /// 让它**残留为 true 而实际已无任何决策窗口存活**，该玩家的双击/激活就会被**永久静默吞掉**
+        /// （用户实测：卡有高亮、双击没弹窗也没反应，且**偶发、难以复现**）。
+        /// 故在双击入口做**自愈**：若标志为真但**没有任何存活的决策窗口**，判定为残留 → 复位后继续处理本次双击。
+        /// 只在"确实没有任何窗口"时复位，因此不影响任何正常的模态保护。
+        /// </summary>
+        private bool HasLiveLocalDecisionWindow()
+        {
+            if (_activationTargetActive) return true;                       // 场上点选目标状态机
+            if (_activateDragSource != null) return true;                   // 激活拖拽进行中
+            if (_onlineChoiceWindow != null && GodotObject.IsInstanceValid(_onlineChoiceWindow)) return true;
+            if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow) && _onlineTargetWindow.Visible) return true;
+            if (_onlinePayOrTapWindow != null && GodotObject.IsInstanceValid(_onlinePayOrTapWindow)) return true;
+            if (_onlineInvestigationWindow != null && GodotObject.IsInstanceValid(_onlineInvestigationWindow)) return true;
+            if (_noticeWindow != null && GodotObject.IsInstanceValid(_noticeWindow)) return true;
+            if (_choicePromptPanel != null && GodotObject.IsInstanceValid(_choicePromptPanel)) return true;
+            return _onlineCombatWindowOpen;
+        }
+
+        /// <summary>见 <see cref="HasLiveLocalDecisionWindow"/>：残留标志自愈。</summary>
+        private void HealStaleLocalModalFlag()
+        {
+            // 提示窗标志同理：窗口已不存在（异常/被快照重建释放）却仍为 true → 复位
+            if (_noticeWindowOpen && (_noticeWindow == null || !GodotObject.IsInstanceValid(_noticeWindow)))
+            {
+                GD.PrintErr("[ArenaOl] ⚠ 检测到「提示窗打开」标志残留（窗口已不存在）→ 已自愈复位");
+                _noticeWindowOpen = false;
+            }
+            if (!_activationSelectionBusy) return;
+            if (HasLiveLocalDecisionWindow()) return;
+            GD.PrintErr("[ArenaOl] ⚠ 检测到「本地模态」标志残留（无任何存活的决策窗口）→ 已自愈复位（用户实测偶发双击无反应）");
+            _activationSelectionBusy = false;
+        }
+
         /// <summary>附属卡双击激活：有多个可激活效果则弹联机效果列表供选择，再按所选发动；单效果直接发动（与单机一致）。</summary>
         private void OnAttachmentDoubleClicked(CardUI cardUI)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：防重复双击/提示窗期间
-            if (cardUI?.Instance == null || _matchClient == null) return;
-            if (cardUI.Instance.ControllerId != _localPlayerId) return;   // 输入隔离
+            // 【2026-09 防御加固】先自愈可能残留的"本地模态"标志（偶发双击无反应的兜底）
+            HealStaleLocalModalFlag();
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }   // 本地模态：防重复双击/提示窗期间
+            if (cardUI?.Instance == null || _matchClient == null)
+            {
+                GD.Print("[ArenaOl] 双击激活忽略：卡实例或联机客户端未就绪");
+                return;
+            }
+            if (cardUI.Instance.ControllerId != _localPlayerId)
+            {
+                GD.Print($"[ArenaOl] 双击激活忽略：{cardUI.Instance.PlayerTemplate?.CardName} " +
+                         $"控制者={cardUI.Instance.ControllerId} ≠ 本方={_localPlayerId}");
+                return;
+            }
             var inst = cardUI.Instance;
             // 【2026-09 修复·JC019/JC024（与单机 Arena 同款）】候选＝**模板 ∪ 运行期授予**
             // （`GetAllActivateAbilities`）：JC019 授予宿主的激活能力不在宿主模板里，
             // 旧写法（只读 `EffectDataList`）会判成"无可激活能力"直接忽略双击。
-            var abilities = new List<EffectData>();
-            foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
-            {
-                if (e != null && e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
-                    abilities.Add(e);
-            }
+            // 【2026-09 修复·纯客户端】纯客户端拿不到服务端的"运行期授予"表 ⇒ 再并入
+            // 服务端投影的能力清单（`GameViewSnap.ActivationAbilities`），否则联机下宿主的
+            // 授予能力**既不能拖拽也没有双击菜单**。
+            var abilities = CollectOnlineActivateAbilities(inst);
             if (abilities.Count == 0)
             {
                 GD.Print($"[ArenaOl] {inst.PlayerTemplate?.CardName} 无可激活能力，忽略双击");
                 return;
             }
-            if (abilities.Count == 1) { SendActivation(inst, abilities[0]); return; }
+            // 【2026-09 用户口径·JC053】"**不能直接发激活，要打开面板后展示一项可选、一项置灰**"：
+            // 只有 1 条能力时**也不得盲目直发**——若该条当前不可用（前置不满足/已横置/无合法目标），
+            // 必须开面板把它**置灰**展示（否则就是"有高亮、点了没反应"，用户实测）。可用且仅 1 条时仍直发（省一次点击）。
+            if (abilities.Count == 1 && !IsActivationEffectDisabled(inst, abilities[0]))
+            {
+                SendActivation(inst, abilities[0]);
+                return;
+            }
+            GD.Print($"[ArenaOl] 打开激活面板：{inst.PlayerTemplate?.CardName} 能力 {abilities.Count} 条（含置灰项）");
             ShowOnlineEffectChoice(inst, abilities);
         }
 
@@ -2054,7 +2692,8 @@ namespace Script.UI
         /// 与单机 Arena.OnCouncilDoubleClicked 一致：每个选项取首个 EffectData。</summary>
         private void OnCouncilDoubleClicked(CouncilCardUI cardUI)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }
             if (cardUI?.Instance == null || _matchClient == null) return;
             if (cardUI.Instance.ControllerId != _localPlayerId) return;
             var inst = cardUI.Instance;
@@ -2133,6 +2772,44 @@ namespace Script.UI
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
         }
 
+        /// <summary>
+        /// 【2026-09】某场上卡的"可激活能力"候选（联机）：**本地（模板 ∪ 本地可见的运行期授予）**
+        /// ∪ **服务端投影**（`GameViewSnap.ActivationAbilities` 里本地看不到的条目，如 JC019 授予宿主的能力）。
+        /// 投影条目用**代理 `EffectData`** 表达：只带 EffectId / 展示名 / 目标形态（真实限制与候选
+        /// 一律取自服务端投影，见 `ComputeLegalCardTargetUids` 的投影优先分支）。
+        /// </summary>
+        private List<EffectData> CollectOnlineActivateAbilities(CardInstance inst)
+        {
+            var result = new List<EffectData>();
+            if (inst == null) return result;
+            foreach (var e in ActivateEligibility.GetAllActivateAbilities(inst))
+                if (e != null && e.Timing is EffectTiming.AttachmentActivated or EffectTiming.CharacterActivated)
+                    result.Add(e);
+
+            var view = ClientLegalityView;
+            if (view?.ActivationAbilities == null) return result;
+            foreach (var a in view.ActivationAbilities)
+            {
+                if (a == null || a.SourceUid != inst.UID) continue;
+                bool exists = false;
+                foreach (var e in result)
+                    if (e != null && e.EffectId == a.EffectId) { exists = true; break; }
+                if (exists) continue;
+                result.Add(new EffectData
+                {
+                    EffectId = a.EffectId,
+                    Timing = EffectTiming.CharacterActivated,
+                    FaqNote = a.Label ?? "",
+                    Target = new TargetSpec
+                    {
+                        Kind = (TargetKind)a.TargetKindValue,
+                        NeedsSelection = a.NeedsSelection,
+                    },
+                });
+            }
+            return result;
+        }
+
         /// <summary>单条激活效果在列表中的简短描述（优先 FaqNote，回退 EffectId；与单机 GetActivationAbilityLabel 一致）。</summary>
         private static string GetActivationAbilityLabel(EffectData ability)
         {
@@ -2144,6 +2821,27 @@ namespace Script.UI
         /// <summary>联机本地粗筛：某激活效果当前是否置灰不可发动（需横置但已横置 / 需目标但无合法目标）。</summary>
         private bool IsActivationEffectDisabled(CardInstance inst, EffectData e)
         {
+            // 【2026-09·JC053 口径落地·A78】联机客户端的"可发动"以**服务端投影清单**为准：
+            // 若服务端**为这张卡**给出了能力投影，而本能力**不在其中**（＝服务端判不可发动，如前置条件不满足）
+            // ⇒ **置灰**。这既实现了"一项可选、一项置灰"，又不依赖客户端本地规则求值（客户端无 `EffectEngine.Instance`）。
+            // ⚠ 只在"这张卡确实有投影条目"时启用本条，避免服务端不下发投影的普通卡被整体误置灰。
+            var legality = ClientLegalityView;
+            if (legality?.ActivationAbilities != null && !string.IsNullOrEmpty(e.EffectId))
+            {
+                bool hasProjectionForCard = false, projected = false;
+                foreach (var a in legality.ActivationAbilities)
+                {
+                    if (a == null || a.SourceUid != inst.UID) continue;
+                    hasProjectionForCard = true;
+                    if (a.EffectId == e.EffectId) { projected = true; break; }
+                }
+                if (hasProjectionForCard && !projected) return true;
+            }
+            // 【2026-09 修复·JC053】结算条件（前置）不满足 → 置灰。与候选侧 `ActivateEligibility.CanActivate`
+            // 的 `ConditionAllowsActivation` 同源（单一实现）。
+            // ⚠ 纯客户端无 `EffectEngine.Instance`，该方法内部判空后返回 true（本地无法求值）⇒
+            // 联机的主判据是上面那条"投影清单里有没有"。
+            if (!Script.Manager.ActivateEligibility.ConditionAllowsActivation(e, inst)) return true;
             bool needsTap = !string.IsNullOrEmpty(e.ActivateCondition) && e.ActivateCondition.Contains("横置本角色");
             if (needsTap && inst.IsTapped) return true;
             if (e.Target != null && e.Target.NeedsSelection)
@@ -2160,6 +2858,8 @@ namespace Script.UI
         /// <summary>置灰原因后缀（与单机 OpenAttachmentActivateChoice 文案一致）。</summary>
         private static string EffectDisabledReason(CardInstance inst, EffectData e)
         {
+            // 【2026-09 修复·JC053】前置条件不满足的原因文案（与单机一致）
+            if (!Script.Manager.ActivateEligibility.ConditionAllowsActivation(e, inst)) return "（前置条件不满足）";
             bool needsTap = !string.IsNullOrEmpty(e.ActivateCondition) && e.ActivateCondition.Contains("横置本角色");
             if (needsTap && inst.IsTapped) return "（已横置，无法横置自身）";
             return "（无合法目标）";
@@ -2410,7 +3110,10 @@ namespace Script.UI
             }
             HighlightOnlineCouncilTargets(false);   // 秘社高亮同款清理
             if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
+            {
                 _onlineTargetWindow.Visible = false;
+                _onlineTargetWindow.OnExtra = null;   // 【2026-09·K15】清掉"本槽出口"回调，避免窗口复用时误触发
+            }
             ClearOnlineAreaHighlights();
             _activationTargetActive = false;
             _activationTargetAbility = null;
@@ -2596,11 +3299,8 @@ namespace Script.UI
             if (inst.IsCovert || inst.IsAttached) return false;   // 暗藏现身 / 附属激活各有双击链路，不在此争抢
             if (inst.ControllerId != _localPlayerId) return false; // 输入隔离
 
-            var ability = GetFirstOnlineActivateAbility(inst);
+            var ability = ResolveOnlineDragAbility(inst);
             if (ability == null) return false;
-            // 【2026-09·与单机同款】拖拽只能表达"恰好 1 条能力 ＋ 需选场上卡目标"：多能力走双击菜单、
-            // 无目标/自指走双击直接发动、玩家/地区目标不走卡拖拽 ⇒ 除这些情况外不起手（不吞左键）。
-            if (!ActivateEligibility.CanDragActivate(inst, out _)) return false;
 
             // 与单机 CardDragController.TryBeginActivateDragAt 同源门禁：优先权 + 费用 + 生效区 + 行动窗口 + 有合法目标
             // 【P2】改为"服务端投影优先 + 同一规则函数兜底"，客户端不再自行拼输入
@@ -2684,6 +3384,46 @@ namespace Script.UI
             => ActivateEligibility.GetFirstActivateAbility(inst);
 
         /// <summary>
+        /// 【2026-09 修复·JC019 宿主无法拖拽】解析"本次拖拽要发动的能力"：
+        ///  ① 本地判定优先（单机/宿主进程：`GetAllActivateAbilities` 含运行期授予）——
+        ///     与单机同款：**恰好 1 条能力 ＋ 需选场上卡目标**（多能力走双击菜单、无目标/自指走双击直接发动、
+        ///     玩家/地区目标不走卡拖拽），否则返回 null（**不吞左键**）；
+        ///  ② 本地判定不成立时，退回**服务端投影**（`GameViewSnap.ActivationAbilities`）：
+        ///     纯客户端拿不到服务端的"运行期授予"表（JC019 授予宿主的能力）⇒ 本地能力数是 0，
+        ///     此时必须按服务端下发的"可否拖拽 + EffectId"起手，否则该效果在联机下**永远无法拖拽**。
+        ///     为目标判定安全，本条要求服务端**同时**下发了该能力的合法目标条目（`AbilityTargets`），
+        ///     否则 fail-closed 返回 null（不自行放宽目标限制）。
+        /// </summary>
+        private EffectData ResolveOnlineDragAbility(CardInstance inst)
+        {
+            if (inst == null) return null;
+            if (ActivateEligibility.CanDragActivate(inst, out var localAbility)) return localAbility;
+
+            var view = ClientLegalityView;
+            if (view?.ActivationAbilities == null) return null;
+            string effectId = null;
+            foreach (var a in view.ActivationAbilities)
+            {
+                if (a == null || a.SourceUid != inst.UID || !a.Draggable) continue;
+                if (effectId != null) return null;   // 多条可拖拽能力（异常/未投影齐）→ 交给双击菜单
+                effectId = a.EffectId;
+            }
+            if (string.IsNullOrEmpty(effectId)) return null;
+            bool hasTargets = view.AbilityTargets != null
+                && view.AbilityTargets.Exists(t => t != null && t.SourceUid == inst.UID && t.EffectId == effectId);
+            if (!hasTargets) return null;   // 无服务端目标投影 → 不起手（不猜目标限制）
+
+            // 代理能力数据：**只用 EffectId + "需选卡目标"**（真实限制与候选全部来自服务端投影，
+            // 见 `ComputeLegalCardTargetUids` 的投影优先分支；上行意图只带 EffectId）。
+            return new EffectData
+            {
+                EffectId = effectId,
+                Timing = EffectTiming.CharacterActivated,
+                Target = new TargetSpec { Kind = TargetKind.Character, NeedsSelection = true },
+            };
+        }
+
+        /// <summary>
         /// 某张**本地手牌**在当前蒙版下是否允许被拖起（对齐单机 `CardDragController.IsDraggableUnderMask`）：
         ///  - 派遣暗藏：复用规则层同一静态函数 `DeployCovertEligibility.IsEligible`（非角色卡 / 带【公开】/ 被全局封锁 → 不可拖起）；
         ///  - 建立资产 / 无蒙版：均可拖起。
@@ -2702,15 +3442,42 @@ namespace Script.UI
             };
         }
 
-        /// <summary>按当前蒙版刷新"本地手牌是否可拖起"（进入/退出蒙版时调用；手牌每帧不会重建，故需主动刷新）。</summary>
+        /// <summary>按当前蒙版刷新"本地手牌是否可拖起" + 手牌灰/绿蒙版视觉（对齐单机 RefreshHandMask）。
+        /// 进入/退出蒙版时调用；手牌每帧不会重建，故需主动刷新。</summary>
         private void ApplyOnlineMaskDragGate()
         {
             if (_localHand == null || !GodotObject.IsInstanceValid(_localHand)) return;
             foreach (var child in _localHand.GetChildren())
             {
                 if (child is not CardUI ui || !GodotObject.IsInstanceValid(ui)) continue;
-                if (ui.Instance == null) { ui.CanDrag = false; continue; }
+                if (ui.Instance == null) { ui.CanDrag = false; ui.SetMask(null); continue; }
                 ui.CanDrag = !ui.Instance.IsHidden && IsDraggableUnderOnlineMask(ui.Instance);
+                ApplyOnlineMaskToOneCard(ui);
+            }
+        }
+
+        /// <summary>按当前蒙版为单张手牌设置灰/绿蒙版（对齐单机 Arena.Mask.ApplyMaskToOneCard）。</summary>
+        private void ApplyOnlineMaskToOneCard(CardUI card)
+        {
+            if (card == null) return;
+            var grey = new Color(0.01f, 0.01f, 0.01f, 0.90f);   // 灰色蒙版（派遣暗藏·角色卡，加深）
+            var green = new Color(0.2f, 0.8f, 0.3f, 0.55f);      // 绿色蒙版（建立资产·所有手牌）
+
+            switch (_maskMode)
+            {
+                case MaskMode.DeployCovert:
+                    // 仅"可派遣暗藏"的卡打灰色蒙版（角色卡且无【公开】且未被全局封锁）；
+                    // 事务/附属/公开卡不打蒙版（不可暗藏）。
+                    bool canCovert = DeployCovertEligibility.IsEligible(card.Instance,
+                        _matchClient?.ClientPlayerManager?.IsDeployCovertBlockedProjected(_localPlayerId) == true);
+                    card.SetMask(canCovert ? grey : (Color?)null);
+                    break;
+                case MaskMode.EstablishAsset:
+                    card.SetMask(green);
+                    break;
+                default:
+                    card.SetMask(null);
+                    break;
             }
         }
 
@@ -2840,10 +3607,20 @@ namespace Script.UI
 
             for (int i = 0; i < count; i++)
             {
-                _areaSlots[i].Position = new Vector2(startX + i * step, 0);
-                _areaSlots[i].Size = new Vector2(slotWidth, slotHeight);
-                _areaSlots[i].ZIndex = i;
-                _areaSlots[i].ZAsRelative = false;
+                var slot = _areaSlots[i];
+                if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                // 【2026-10·对齐单机 Arena.Layout.ArrangeAreas】单机在写完 Size 后还做两件事：
+                //  ① anchors 归零 —— 防止场景里残留的 anchor 让 Size/Position 被布局系统二次修正；
+                //  ② UpdateLayout() —— 按槽位当前 Size 重算 Player1Area/CardContainer/Player2Area 的
+                //     Size 与 Position。当前 tscn 默认恰好是 400x580 所以数值等价，但一旦槽位尺寸变化
+                //     （如未来窄屏压缩）不重算就会让子容器与视觉错位。
+                slot.Position = new Vector2(startX + i * step, 0);
+                slot.Size = new Vector2(slotWidth, slotHeight);
+                slot.AnchorLeft = 0; slot.AnchorRight = 0;
+                slot.AnchorTop = 0; slot.AnchorBottom = 0;
+                slot.ZIndex = Layers.AreaSlotBase + i;   // 右侧地区压在左侧地区上方（基准层由 Layers 统一分配）
+                slot.ZAsRelative = false;
+                slot.UpdateLayout();
             }
         }
 
@@ -2879,7 +3656,7 @@ namespace Script.UI
                 if (inst.PlayerTemplate == null) continue;
                 var ui = _cardUIScene.Instantiate<CardUI>();
                 container.AddChild(ui);
-                ui.Setup(inst);
+                SetupCardUI(ui, inst);
                 ui.SetExternalCostMod(ComputeClientCostMod(inst));   // 手牌减费提示（快照投影，仅展示）
                 // 输入隔离：仅本地玩家的手牌可拖拽出牌/派遣/资产；对手手牌只读展示
                 // 蒙版资格预检（对齐单机 CardDragController.IsDraggableUnderMask → TurnManager.CanDeployCovert）：
@@ -2887,7 +3664,7 @@ namespace Script.UI
                 ui.CanDrag = isLocalHand && IsDraggableUnderOnlineMask(inst);
                 if (isLocalHand)
                     ui.CardDragEnded += OnLocalHandCardDragEnded;
-                _cardUIMap[inst.UID] = ui;
+                RegisterOnlineCardUI(inst, ui);
             }
         }
 
@@ -2921,6 +3698,57 @@ namespace Script.UI
             CardLayoutHelper.LayoutCardsEvenly(container, cards);
         }
 
+        /// <summary>
+        /// 【2026-10】快照重建收尾：把所有卡 UI 的平滑目标（`TargetPosition`）同步到其**当前**全局位置。
+        ///
+        /// 为何需要这道统一兜底：
+        ///  ① **旋转卡的枢轴项**：旋转 Control 的 transform origin = Position + pivot − R·pivot，
+        ///     90° 时 GlobalPosition = Position + (120,20)。排版虽已用 CardLayoutHelper.SetSmoothTarget
+        ///     （读实时 GlobalPosition）写对，但下面 ② 会让它立刻失效；
+        ///  ② **联机独有的"排完卡之后再移槽位"**：ArrangeAll → ArrangeAreas 会再次写 `slot.Position/Size`，
+        ///     卡片是槽位的子孙 ⇒ 全局坐标随之改变 ⇒ 排版瞬间写入的目标值变成**陈旧值**，
+        ///     `CardUI._Process` 每帧 Lerp 会把整排卡拉回旧全局点（横置卡尤其明显）。
+        /// 自锁后横置宿主与竖置附属都不再漂移，"宿主漂移、附属不动"的分离现象随之消失。
+        ///
+        /// 跳过正在拖拽的卡：其 `TargetPosition` 承担"拖拽取消后归位"的职责，不可覆盖。
+        /// 仅每次快照重建后执行一次，O(n)，无每帧开销。
+        /// </summary>
+        private void SyncSmoothTargets()
+        {
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                if (ui.IsDragging) continue;   // 拖拽中的卡由 CardUI.CancelDrag 负责归位
+                ui.TargetPosition = ui.GlobalPosition;
+            }
+            foreach (var kv in _councilCardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                ui.TargetPosition = ui.GlobalPosition;
+            }
+        }
+
+        /// <summary>
+        /// 诊断：抽样式打印最多 2 张横置卡的坐标三元组（Position / GlobalPosition / TargetPosition）。
+        /// 正常应恒有 `GlobalPosition == TargetPosition`，且二者 ≈ `Position + 父容器全局 + (120,20)`（横置枢轴项）。
+        /// 若 `GlobalPosition != TargetPosition`，说明仍有环节在排版之后改写了其中之一 ⇒ 横置卡还会漂移。
+        /// </summary>
+        private void LogTappedCardSample()
+        {
+            int printed = 0;
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                if (!CardLayoutHelper.IsTapped(ui)) continue;
+                GD.Print($"[ArenaOl] 横置卡采样 {ui.Instance?.UID}：Pos={ui.Position}，"
+                    + $"Global={ui.GlobalPosition}，Target={ui.TargetPosition}，Rot={ui.RotationDegrees}");
+                if (++printed >= 2) break;
+            }
+        }
+
         // ==================== 操作输入（意图上行，含输入隔离） ====================
         // 输入隔离：联机下每个客户端进程只代表一个玩家（_localPlayerId，由 AttachLauncher 传入）。
         //  1) 所有意图上行必须用本地玩家身份：DoPass/DoEndTurn 只允许 playerId == _localPlayerId。
@@ -2932,7 +3760,8 @@ namespace Script.UI
         /// <summary>本地玩家让过。仅允许操作自己，越权忽略。</summary>
         public void DoPass(int playerId)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止让过
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }   // 本地模态：效果选择/选目标/提示窗期间禁止让过
             if (_matchClient == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -2940,7 +3769,8 @@ namespace Script.UI
         /// <summary>本地玩家结束回合/让过推进阶段。仅允许操作自己，越权忽略。</summary>
         public void DoEndTurn(int playerId)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗期间禁止结束回合
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }   // 本地模态：效果选择/选目标/提示窗期间禁止结束回合
             if (_matchClient == null || !IsLocalPlayer(playerId)) return;   // 输入隔离：只操作本地玩家
             _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.Pass);
         }
@@ -2948,12 +3778,37 @@ namespace Script.UI
         // ==================== 联机拖拽落点判定 + 意图上行 ====================
 
         /// <summary>切换派遣/资产蒙版模式。再次点击同按钮退出蒙版。</summary>
-        private void ToggleMask(MaskMode mode, Button btn)
+        private void ToggleMask(MaskMode mode)
         {
             _maskMode = (_maskMode == mode) ? MaskMode.None : mode;
-            if (btn != null) btn.Modulate = (_maskMode == mode) ? new Color(1.2f, 1.2f, 0.4f) : Colors.White;
-            ApplyOnlineMaskDragGate();   // 按新蒙版刷新手牌"可拖起"资格（对齐单机 IsDraggableUnderMask）
+            // 按钮高亮：**两个按钮一起刷**（对齐单机 UpdateActionButtons）。
+            // 【2026-10 修复】原先只刷被点击的那个按钮 ⇒ 先点"派遣暗藏"再点"建立资产"时两按钮同时高亮。
+            UpdateOnlineActionButtons();
+            // 进入蒙版即清除残留的手牌拖拽目标高亮（对齐单机 EnterMask → ClearDragTargetHighlights），
+            // 避免建立资产/派遣暗藏拖拽时旧黄色高亮残留。
+            if (_maskMode != MaskMode.None) ClearHandDragTargetHighlights();
+            ApplyOnlineMaskDragGate();   // 按新蒙版刷新手牌"可拖起"资格 + 灰/绿蒙版视觉（对齐单机 RefreshHandMask）
             GD.Print($"[ArenaOl] 蒙版模式 => {_maskMode}（{(_maskMode == MaskMode.DeployCovert ? "请拖手牌到己方争夺区" : _maskMode == MaskMode.EstablishAsset ? "请拖出手牌建立资产" : "无")}）");
+        }
+
+        /// <summary>按当前蒙版统一刷新"派遣暗藏/建立资产"两个按钮的高亮（对齐单机 `Arena.Mask.UpdateActionButtons`）。
+        /// 联机无 charge 概念，只刷 Modulate：命中当前蒙版＝浅绿 (0.7,1,0.7)，否则复位白色。</summary>
+        private void UpdateOnlineActionButtons()
+        {
+            var active = new Color(0.7f, 1f, 0.7f);
+            if (_deployCovertBtn != null && GodotObject.IsInstanceValid(_deployCovertBtn))
+                _deployCovertBtn.Modulate = (_maskMode == MaskMode.DeployCovert) ? active : Colors.White;
+            if (_establishAssetBtn != null && GodotObject.IsInstanceValid(_establishAssetBtn))
+                _establishAssetBtn.Modulate = (_maskMode == MaskMode.EstablishAsset) ? active : Colors.White;
+        }
+
+        /// <summary>退出蒙版（回到普通可出牌状态）并刷新手牌蒙版与可拖起资格（对齐单机 ExitMask → RefreshMaskUI）。</summary>
+        private void ExitOnlineMask()
+        {
+            if (_maskMode == MaskMode.None) return;
+            _maskMode = MaskMode.None;
+            ApplyOnlineMaskDragGate();   // 清除手牌灰/绿蒙版 + 恢复普通可拖起
+            UpdateOnlineActionButtons(); // 按钮高亮复位（落点取消/意图上行后同样要复位，避免残留）
         }
 
         /// <summary>
@@ -2970,7 +3825,8 @@ namespace Script.UI
         /// </summary>
         private void OnLocalHandCardDragEnded(CardUI cardUI, bool dropped)
         {
-            if (_activationSelectionBusy || _noticeWindowOpen) return;   // 本地模态：效果选择/选目标/提示窗/对抗窗口期间禁止拖拽出牌
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen) { GD.Print($"[ArenaOl] ⏸ 交互被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）→ 已提示并自愈检查"); return; }   // 本地模态：效果选择/选目标/提示窗/对抗窗口期间禁止拖拽出牌
             if (cardUI?.Instance == null) return;
             if (_matchClient == null || !IsLocalPlayer(_localHandOwner)) return;   // 输入隔离：只操作本地玩家
             var inst = cardUI.Instance;
@@ -2994,11 +3850,11 @@ namespace Script.UI
                 if (string.IsNullOrEmpty(areaUid))
                 {
                     GD.Print("[ArenaOl] 派遣暗藏需拖到己方争夺区（服务端将拒绝非法落点）");
-                    _maskMode = MaskMode.None;
+                    ExitOnlineMask();
                     return;
                 }
                 _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DeployCovert, cardUid, areaUid);
-                _maskMode = MaskMode.None;
+                ExitOnlineMask();
                 GD.Print($"[ArenaOl] 上行 DeployCovert: {inst.PlayerTemplate?.CardName} → 地区 {areaUid}");
                 return;
             }
@@ -3013,11 +3869,11 @@ namespace Script.UI
                 if (!droppedOnAsset && !droppedOnArea)
                 {
                     GD.Print("[ArenaOl] 建立资产：需拖到己方资产区或争夺区，本次不发意图");
-                    _maskMode = MaskMode.None;
+                    ExitOnlineMask();
                     return;
                 }
                 _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.EstablishAsset, cardUid);
-                _maskMode = MaskMode.None;
+                ExitOnlineMask();
                 GD.Print($"[ArenaOl] 上行 EstablishAsset: {inst.PlayerTemplate?.CardName}");
                 return;
             }
@@ -3065,12 +3921,28 @@ namespace Script.UI
             if (IsSorceryRequiringTarget(inst)
                 && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
             {
+                // 【2026-09 修复·用户实测 JC063（联机，用户报 3 个窗）】**声明了"选择一项"模式的事务卡必须
+                // 先选模式、再按所选模式取目标**——不能先弹"通用选目标"框。原实现先走
+                // `BeginOnlinePlayCardTargetSelection`（通用选目标框），玩家点完目标上行 `PlayCard` 后
+                // 服务端才发现"需要先选择一项模式"→ 又下发模式请求 → 再下发该模式的目标请求，
+                // 于是"通用框 → 模式框 → 目标框"三个窗（用户口径："第一个选择目标框是通用框，在这个效果里不需要"）。
+                // 修法＝与单机 `CardDragController.DragEnd` 的 A110② 同款：模式卡直接上行"裸打出意图"，
+                // 由服务端按 `SelectEffectMode` → 该模式目标 的正确顺序驱动（**最多 2 个窗**）。
+                var modeEffect = Script.Manager.MultiTargetSlots.FindModeEffect(
+                    tmpl, Script.Data.Effects.EffectTiming.OnSorceryCast);
+                if (modeEffect != null)
+                {
+                    _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid, "", "");
+                    GD.Print($"[ArenaOl] 【K16 模式分支】上行 PlayCard（无目标，由服务端先驱动『选择一项』再取该模式目标）: {tmpl.CardName}");
+                    return;
+                }
                 // 【K15·多目标】声明了 TargetSlots 的卡：客户端**不本地取目标**，只发"裸打出意图"，
-                // 由服务端逐槽下发 `MultiTargetSlot` 选择请求、最后下发 `ConfirmTargets` 确认（用户 2026-09 口径）。
+                // 由服务端一次性聚合下发"一个窗多选"请求（JC062/JC021 ⇒ `Kind.FieldMultiPick`；
+                // JC092/JC133 等区域牌堆形状 ⇒ 仍逐槽 + 确认面板）。用户 2026-09 口径。
                 if (IsMultiTargetCard(inst))
                 {
                     _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid, "", "");
-                    GD.Print($"[ArenaOl] 【K15 多目标】上行 PlayCard（无目标，由服务端驱动逐槽选择+确认）: {tmpl.CardName}");
+                    GD.Print($"[ArenaOl] 【K15 多目标】上行 PlayCard（无目标，由服务端驱动取目标）: {tmpl.CardName}");
                     return;
                 }
                 BeginOnlinePlayCardTargetSelection(inst);

@@ -90,6 +90,26 @@ public class PlayerActionService
         => _turnManager.BeginModeCardPlay(playerId, cardUid);
 
     /// <summary>
+    /// 【2026-09 用户口径 JC062/JC063】**正在进行"打出前选择流程"的卡**（模式/多目标/额外费用已由服务端接管，
+    /// 正等玩家选择）：期间该卡**不能再被打出一次**（用户实测："打出后…还在手牌，**可以再次打出**"）。
+    /// 由三个 `TryBegin*Online` 登记、异步流程结束后自动清除。
+    /// </summary>
+    private readonly System.Collections.Generic.HashSet<string> _pendingPlayCardUids
+        = new System.Collections.Generic.HashSet<string>();
+
+    /// <summary>该卡是否已在一次"打出前选择流程"中（服务端接管中）。</summary>
+    public bool IsPlayFlowPending(string cardUid)
+        => !string.IsNullOrEmpty(cardUid) && _pendingPlayCardUids.Contains(cardUid);
+
+    /// <summary>登记"打出前选择流程"，并在流程结束（成功入堆叠或取消）后自动解除登记。</summary>
+    private async System.Threading.Tasks.Task RunPendingPlayFlow(string cardUid,
+        System.Threading.Tasks.Task<bool> flow)
+    {
+        try { await flow; }
+        finally { if (!string.IsNullOrEmpty(cardUid)) _pendingPlayCardUids.Remove(cardUid); }
+    }
+
+    /// <summary>
     /// 【K16·模式分支·联机】服务端权威路径：若该卡声明了 `Modes` 且已注入输入网关 → 由服务端驱动
     /// "选模式 → 选目标 → 入堆叠"（异步；期间持原子锁）。返回 true＝已接管本次打出。
     /// </summary>
@@ -99,14 +119,24 @@ public class PlayerActionService
         var effect = Script.Manager.MultiTargetSlots.FindModeEffect(
             inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
         if (effect == null || _turnManager.InputGateway == null) return false;
+        if (IsPlayFlowPending(cardUid))
+        {
+            Godot.GD.Print($"[K16 模式·联机] ⛔ {inst?.PlayerTemplate?.CardName} 已在一次打出前选择流程中 → 忽略重复打出");
+            return true;
+        }
         Godot.GD.Print($"[K16 模式·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（选模式 → 选目标 → 入堆叠）");
-        _ = _turnManager.PlayModeCardAsync(playerId, cardUid);
+        _pendingPlayCardUids.Add(cardUid);
+        _ = RunPendingPlayFlow(cardUid, _turnManager.PlayModeCardAsync(playerId, cardUid));
         return true;
     }
 
     /// <summary>
     /// 【K15·多目标·联机】服务端权威路径：若该卡声明了多目标槽位且已注入输入网关，
-    /// 则**由服务端驱动**"逐槽下发选择请求 → ConfirmTargets 确认 → 入堆叠"（异步；期间持原子锁）。
+    /// 则**由服务端驱动**取目标 → 入堆叠（异步；期间持原子锁）。
+    /// 【2026-09 用户口径 JC062/JC021】形状为 `FieldMultiPick`（全槽＝地区槽或"场上看得见的卡槽"）
+    /// ⇒ **一次性聚合下发** `Kind.FieldMultiPick`（"一个窗 + 场上高亮 + 左键选择/右键取消 + 确认/取消"，
+    /// 该请求的确认即最终确认，**不再另发逐槽请求与确认面板**）；其余形状（含区域牌堆槽，如 JC092/JC133）
+    /// 仍走"逐槽 `MultiTargetSlot` → `ConfirmTargets`"。
     /// 返回 true＝已接管本次打出（调用方不要再走同步 `PlayCard`）；false＝按普通卡处理。
     /// </summary>
     public bool TryBeginMultiTargetPlayOnline(int playerId, string cardUid)
@@ -115,8 +145,23 @@ public class PlayerActionService
         var effect = Script.Manager.MultiTargetSlots.FindMultiTargetEffect(
             inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
         if (effect == null || _turnManager.InputGateway == null) return false;
-        Godot.GD.Print($"[K15 多目标·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（逐槽请求 + 确认面板）");
-        _ = _turnManager.PlayMultiTargetCardAsync(playerId, cardUid);
+        bool fieldMultiPick = Script.Manager.MultiTargetSlots.ClassifyShape(effect)
+                              == Script.Manager.MultiTargetSlots.MultiSlotShape.FieldMultiPick;
+        if (fieldMultiPick)
+        {
+            if (IsPlayFlowPending(cardUid))
+            {
+                Godot.GD.Print($"[K15 多目标·联机] ⛔ {inst?.PlayerTemplate?.CardName} 已在一次打出前选择流程中 → 忽略重复打出");
+                return true;
+            }
+            Godot.GD.Print($"[K15 多目标·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（**一个窗多选**聚合请求）");
+        }
+        else
+        {
+            Godot.GD.Print($"[K15 多目标·联机] 服务端接管 {inst?.PlayerTemplate?.CardName} 的打出流程（逐槽请求 + 确认面板）");
+        }
+        _pendingPlayCardUids.Add(cardUid);
+        _ = RunPendingPlayFlow(cardUid, _turnManager.PlayMultiTargetCardAsync(playerId, cardUid));
         return true;
     }
 
@@ -133,8 +178,14 @@ public class PlayerActionService
         if (tmpl?.ExtraCost == null || _turnManager.InputGateway == null) return false;
         bool needsChoice = _turnManager.NeedsExtraCostPlayerChoice(tmpl) || _turnManager.NeedsExtraCostRevealChoice(tmpl);
         if (!needsChoice) return false;
+        if (IsPlayFlowPending(cardUid))
+        {
+            Godot.GD.Print($"[K10 额外费用·联机] ⛔ {tmpl.CardName} 已在一次打出前选择流程中 → 忽略重复打出");
+            return true;
+        }
         Godot.GD.Print($"[K10 额外费用·联机] 服务端接管 {tmpl.CardName} 的打出流程（额外费用选择回环给玩家{playerId}）");
-        _ = _turnManager.PlayWithExtraCostAsync(playerId, cardUid, targetUid, targetCardUid);
+        _pendingPlayCardUids.Add(cardUid);
+        _ = RunPendingPlayFlow(cardUid, _turnManager.PlayWithExtraCostAsync(playerId, cardUid, targetUid, targetCardUid));
         return true;
     }
 

@@ -162,7 +162,7 @@ namespace Script.UI
             ui.Size = new Vector2(140, 100);
             ui.Setup(data);          // Setup 内部已 SetFace(true) 显示正面卡面
             ui.MouseFilter = MouseFilterEnum.Ignore;
-            ui.ZIndex = 5;           // 确保地区卡复制 UI 显示在 EffectPanel 文字层之上
+            ui.ZIndex = Layers.StackPanelCard;   // 确保地区卡复制 UI 显示在 EffectPanel 文字层之上
             ui.ZAsRelative = true;
             ui.ProcessMode = ProcessModeEnum.Disabled;
             _effectPanel.Visible = false;   // 用卡图替代文字面板

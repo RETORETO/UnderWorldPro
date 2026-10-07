@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Game.Entities;
 using Script.Manager;
 using Script.UI;
@@ -77,6 +77,17 @@ public partial class Arena : Control
         if (kind == Script.Enums.CardChangeKind.CovertChanged)
         {
             Script.Manager.EffectEngine.Instance.ReevaluateAuras(card.ControllerId);
+            // 【2026-09 修复·用户实测】**原地翻面**（由效果"潜伏"翻为暗藏者 / 由效果"现身"翻为正面）
+            // 不经过任何"移动/进区"同步，而卡面朝向只在进区同步（`SyncCardUI` 的 AreaZone 分支）里刷过
+            // ⇒ 单机下卡面永远停在旧朝向：JC041①"通过自己的效果现身没有刷新 UI"、
+            // JC039"令目标本方王座会角色潜伏"看起来"没生效"（实际已生效，见 P4WaterRevealTests/端到端用例）。
+            // 联机不受影响（客户端每次快照都整块重建争夺区卡 UI）。
+            var cardUI = FindCardUIByUID(card.UID);
+            if (cardUI != null && GodotObject.IsInstanceValid(cardUI))
+            {
+                cardUI.SetFace(!card.IsCovert);
+                cardUI.RefreshStats();
+            }
         }
         // 横置/重置：JC068 阿格斯IV"未横置封锁"依赖此即时开关（横置→解除封锁，竖置→恢复封锁）
         else if (kind == Script.Enums.CardChangeKind.TappedChanged)
@@ -171,10 +182,19 @@ public partial class Arena : Control
     }
 
     /// <summary>选目标高光总线处理器：读合法目标 UID 集合，重绘全场卡的黄色可选高光。
-    /// uids 为 null/空 → 清除所有高光；否则仅高亮集合内卡。纯读 Model 重绘，不改数据。</summary>
+    /// uids 为 null/空 → 清除所有高光；否则仅高亮集合内卡。纯读 Model 重绘，不改数据。
+    /// 【2026-09 修复·JC043②】必须同时覆盖**场上卡**：`_cardUIMap` 只登记"容器里的卡"（牌库/手牌/附属等），
+    /// **争夺区角色/暗藏者不在其中** ⇒ 原先只遍历 `_cardUIMap` 时"场上的合法目标根本不会被高亮"
+    /// （用户实测："JC043 选目标时弹出了选择窗 UI，应该是选择**场上的高亮卡**"）。</summary>
     private void OnTargetSelectionChangedHandler(List<string> uids)
     {
         HashSet<string> set = (uids == null || uids.Count == 0) ? null : new HashSet<string>(uids);
+        if (_areaCardUIs != null)
+            foreach (var ui in _areaCardUIs)
+            {
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                ui.SetSelectableHighlight(set != null && set.Contains(ui.Instance.UID));
+            }
         foreach (var kv in _cardUIMap)
             kv.Value.SetSelectableHighlight(set != null && set.Contains(kv.Key));
     }

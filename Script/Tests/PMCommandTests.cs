@@ -55,7 +55,193 @@ namespace Script.Tests
 
         private void Run(GameInitializer game, string cmd) => game.PMCommandManager.ExecuteCommand(cmd);
 
-        // ==================== ① draw <数量> <卡牌编号> ====================
+        // ==================== ⓪ damage / trauma / kill / heal（用户实测"无法使用"排查） ====================
+
+        /// <summary>
+        /// `damage card &lt;UID&gt; &lt;数值&gt;`：模型层必须真的加伤害（用户报"单机下无法使用"的排查基线）。
+        /// </summary>
+        public void TestPMCommand_damage_模型层生效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMDMG", 1, areaUid);
+            int before = unit.Damage;
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"damage card {unit.UID} 2", out string error);
+
+            Assert.IsTrue(ok, $"damage 应成功执行，实际 error={error}");
+            Assert.AreEqual(before + 2, unit.Damage, "伤害应写入实例");
+        }
+
+        /// <summary>`trauma card &lt;UID&gt; &lt;数值&gt;`：写创伤。</summary>
+        public void TestPMCommand_trauma_模型层生效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMTRM", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"trauma card {unit.UID} 1", out string error);
+
+            Assert.IsTrue(ok, $"trauma 应成功执行，实际 error={error}");
+            Assert.AreEqual(1, unit.Trauma, "创伤应写入实例");
+        }
+
+        /// <summary>`kill card &lt;UID&gt;`：防御打满 → 死亡 → 进墓地。</summary>
+        public void TestPMCommand_kill_模型层生效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMKILL", 1, areaUid);
+            Assert.IsTrue(unit.HasDefense, "前置：探针角色有防御");
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"kill card {unit.UID}", out string error);
+
+            Assert.IsTrue(ok, $"kill 应成功执行，实际 error={error}");
+            Assert.AreEqual(CardZone.Graveyard, unit.CurrentZone, "被杀死后应进入墓地");
+        }
+
+        /// <summary>`heal card &lt;UID&gt; [数值]`：清伤害。</summary>
+        public void TestPMCommand_heal_模型层生效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMHEAL", 1, areaUid);
+            game.PMCommandManager.ExecuteCommand($"damage card {unit.UID} 2");
+            Assert.AreEqual(2, unit.Damage, "前置：已造成 2 点伤害");
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"heal card {unit.UID}", out string error);
+
+            Assert.IsTrue(ok, $"heal 应成功执行，实际 error={error}");
+            Assert.AreEqual(0, unit.Damage, "heal（不带数值）应清空伤害");
+        }
+
+        /// <summary>`damage area &lt;索引&gt; &lt;数值&gt;`：对地区全部角色造成伤害（索引 0 起）。</summary>
+        public void TestPMCommand_damage_area_模型层生效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var a = PutInArea(game, "TSPMAREA1", 1, areaUid);
+            var b = PutInArea(game, "TSPMAREA2", 2, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("damage area 0 1", out string error);
+
+            Assert.IsTrue(ok, $"damage area 应成功执行，实际 error={error}");
+            Assert.AreEqual(1, a.Damage, "地区内角色 P1 应受到伤害");
+            Assert.AreEqual(1, b.Damage, "地区内角色 P2 应受到伤害");
+        }
+
+        /// <summary>
+        /// 【用户实测"看起来没反应"回归】伤害/治疗/杀死类命令必须**通知 View 刷新**：
+        /// 旧实现只改模型不调 `_onZoneChanged`（Arena 已把它接到整场重排 + 派生数值刷新）⇒
+        /// 伤害数字与地区统计不变，表现为"命令没用"。这里断言回调确实被触发。
+        /// </summary>
+        public void TestPMCommand_伤害与杀死命令_会通知View刷新()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMNOTIFY", 1, areaUid);
+
+            int notify = 0;
+            game.PMCommandManager.Initialize(
+                game.CardManager, game.DeckManager,
+                () => game.AreaManager.GetOrderedAreaUids(),
+                (pid, count) => { },
+                game.ZoneManager,
+                () => notify++,
+                areaManager: game.AreaManager,
+                stackManager: game.StackManager);
+
+            Run(game, $"damage card {unit.UID} 1");
+            Assert.IsTrue(notify >= 1, "damage 必须触发 View 刷新回调");
+
+            int afterDamage = notify;
+            Run(game, $"heal card {unit.UID}");
+            Assert.IsTrue(notify > afterDamage, "heal 必须触发 View 刷新回调");
+
+            int afterHeal = notify;
+            Run(game, $"kill card {unit.UID}");
+            Assert.IsTrue(notify > afterHeal, "kill 必须触发 View 刷新回调");
+        }
+
+        /// <summary>
+        /// 【用户实测回归】`kill &lt;UID&gt;`（**不带 card 关键字**）必须可用 —— 用户敲的就是
+        /// `kill inst_64`，而旧实现强制要求第二段是字面量 `card`，直接报"用法: kill card &lt;UID&gt;"，
+        /// 表现为"命令无法执行"。
+        /// </summary>
+        public void TestPMCommand_kill_无关键字写法可用()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMKILL2", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"kill {unit.UID}", out string error);
+
+            Assert.IsTrue(ok, $"`kill <UID>` 应可用，实际 error={error}");
+            Assert.AreEqual(CardZone.Graveyard, unit.CurrentZone, "应被杀死进墓地");
+        }
+
+        /// <summary>`kill card &lt;UID&gt;`（带关键字）同样必须可用，两种写法等价。</summary>
+        public void TestPMCommand_kill_带关键字写法可用()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMKILL3", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"kill card {unit.UID}", out string error);
+
+            Assert.IsTrue(ok, $"`kill card <UID>` 应可用，实际 error={error}");
+            Assert.AreEqual(CardZone.Graveyard, unit.CurrentZone, "应被杀死进墓地");
+        }
+
+        /// <summary>`heal &lt;UID&gt;`（不带关键字）在扣血后必须能清空伤害。</summary>
+        public void TestPMCommand_heal_无关键字写法可用()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMHEAL2", 1, areaUid);
+            game.PMCommandManager.ExecuteCommand($"damage card {unit.UID} 2");
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"heal {unit.UID}", out string error);
+
+            Assert.IsTrue(ok, $"`heal <UID>` 应可用，实际 error={error}");
+            Assert.AreEqual(0, unit.Damage, "应清空伤害");
+        }
+
+        /// <summary>`kill &lt;不存在的 UID&gt;`：失败信息要给出可用写法与"用 list 查 UID"的提示。</summary>
+        public void TestPMCommand_kill_UID不存在时给出提示()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("kill inst_nope", out string error);
+
+            Assert.IsFalse(ok, "目标不存在 → 失败");
+            Assert.IsTrue(error != null && error.Contains("未找到卡牌"), $"错误应说明未找到卡牌，实际: {error}");
+            Assert.IsTrue(error != null && error.Contains("list"), $"错误应提示可用 list 查 UID，实际: {error}");
+        }
+
+        /// <summary>`damage card &lt;不存在的 UID&gt; 5`：必须返回可读失败（供联机回执），不抛异常。</summary>
+        public void TestPMCommand_damage_目标不存在则失败()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("damage card inst_nope 5", out string error);
+
+            Assert.IsFalse(ok, "目标不存在 → 失败");
+            Assert.IsTrue(error != null && error.Contains("未找到卡牌"), $"错误应说明未找到卡牌，实际: {error}");
+        }
+
+        /// <summary>`kill card &lt;非卡目标&gt;`：参数写错时必须报用法错误，而不是静默什么都不做。</summary>
+        public void TestPMCommand_kill_参数格式错误则失败()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("kill hand 0", out string error);
+
+            Assert.IsFalse(ok, "kill 只支持 card 目标 → 失败");
+            Assert.IsTrue(!string.IsNullOrEmpty(error), "必须给出可读错误");
+        }
+
+
         // 注：默认卡组里**本来就含真实的 JC 卡**（如 JC001 通灵猫头鹰），因此探针用例统一用
         // 卡组里不可能出现的编号（ZZ9xx），把"命中/多张/随机/数量"这些自变量隔离出来。
 
@@ -572,6 +758,306 @@ namespace Script.Tests
 
             Assert.AreEqual(CardZone.AssetZone, card.CurrentZone, "该编号的卡进了资产区");
             Assert.AreEqual(1, card.ControllerId, "归属 P1");
+        }
+
+        /// <summary>
+        /// 【2026-10 回退】`attach &lt;附属编号|UID&gt; &lt;宿主编号|UID&gt;`（**不带玩家参数**）：
+        /// 附属用**卡牌编号**指定（双方范围内定位，场上优先），宿主用场上卡。
+        /// 注：编号＝模板 UID **第一个下划线之前**的部分，所以测试编号不能带下划线（`TS_pm_att` 的编号其实是 `TS`）。
+        /// </summary>
+        public void TestPMCommand_attach_编号指定()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var host = PutInArea(game, "TSPMHOST", 1, areaUid);
+            var attInstance = PutInArea(game, "TSPMATT", 1, areaUid);
+
+            Run(game, $"attach TSPMATT {host.UID}");
+
+            Assert.AreEqual(CardZone.AttachedZone, attInstance.CurrentZone, "附属进入附属子区域");
+            Assert.IsTrue(ReferenceEquals(host, attInstance.AttachedTo), "附属记录宿主");
+            Assert.IsTrue(host.AttachedCards.Contains(attInstance), "宿主记录附属");
+        }
+
+        /// <summary>`attacharea &lt;附属编号|UID&gt; &lt;地区编号&gt;`（不带玩家参数）：结附到指定地区。</summary>
+        public void TestPMCommand_attacharea_编号指定()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var attInstance = PutInArea(game, "TSPMATTAREA", 1, areaUid);
+
+            Run(game, "attacharea TSPMATTAREA 1");
+
+            Assert.AreEqual(CardZone.AttachedZone, attInstance.CurrentZone, "进入附属子区域");
+            Assert.IsNull(attInstance.AttachedTo, "地区附属不指向具体角色");
+            Assert.AreEqual(areaUid, attInstance.ZoneDetailId, "ZoneDetailId＝地区 UID");
+        }
+
+        /// <summary>`seal &lt;封印卡编号|UID&gt; &lt;目标编号|UID&gt;`（不带玩家参数）：目标必须是场上卡。</summary>
+        public void TestPMCommand_seal_编号指定()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            // 封印卡与目标同属 P1（跨方封印会被"区域归属反转"逻辑把封印卡退回手牌，属既有规则，非本命令职责）
+            var target = PutInArea(game, "TSPMSEALTARGET", 1, areaUid);
+            var sealCard = PutInHand(game, Probe("TSPMSEALCARD"), 1);
+
+            Run(game, $"seal TSPMSEALCARD {target.UID}");
+
+            Assert.AreEqual(CardZone.SealedZone, sealCard.CurrentZone, "封印卡进入封印子区域");
+            Assert.IsTrue(ReferenceEquals(target, sealCard.SealedBy), "封印卡记录目标");
+            Assert.IsTrue(target.IsSealed, "目标被标记为已封印");
+            Assert.IsTrue(target.SealedCards.Contains(sealCard), "目标记录封印卡");
+        }
+
+        /// <summary>`sealarea &lt;封印卡编号|UID&gt; &lt;地区编号&gt;`（不带玩家参数）：封印到指定地区。</summary>
+        public void TestPMCommand_sealarea_编号指定()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var sealCard = PutInHand(game, Probe("TSPMSEALAREA"), 1);
+
+            Run(game, "sealarea TSPMSEALAREA 1");
+
+            Assert.AreEqual(CardZone.SealedZone, sealCard.CurrentZone, "进入封印子区域");
+            Assert.IsNull(sealCard.SealedBy, "地区封印不指向具体角色");
+            Assert.AreEqual(areaUid, sealCard.ZoneDetailId, "ZoneDetailId＝地区 UID");
+        }
+
+        /// <summary>回退后 attach 只接受两个参数：多给玩家参数必须被判为用法错误。</summary>
+        public void TestPMCommand_attach_不接受玩家参数()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var host = PutInArea(game, "TSPMHOST2", 1, areaUid);
+            var attInstance = PutInArea(game, "TSPMATT2", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"attach 1 TSPMATT2 {host.UID}", out string error);
+
+            Assert.IsFalse(ok, "attach 不接受玩家参数 → 用法错误");
+            Assert.IsTrue(!string.IsNullOrEmpty(error), "必须给出可读错误");
+            Assert.AreEqual(CardZone.AreaZone, attInstance.CurrentZone, "状态不变（未被结附）");
+        }
+
+        // ==================== ⑨ 全命令参数审计（用户实测"其他命令可能也有这个问题"） ====================
+        // 目的：把"用户会自然敲的写法"与"命令实际接受的形式"逐条对齐，避免再出现
+        // `kill inst_64` 那种"看起来像用法错误、其实命令不可用"的回归。
+
+        /// <summary>
+        /// 【用户实测对齐】`damage &lt;UID&gt; &lt;数值&gt;`（**省略 card 关键字**）必须直接生效 ——
+        /// `kill inst_64` 能省关键字，`damage` 却要求必须写 `card`，这种不一致最容易让人判成"命令坏了"。
+        /// </summary>
+        public void TestPMCommand_audit_damage省略关键字也可用()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMAUD1", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"damage {unit.UID} 2", out string error);
+
+            Assert.IsTrue(ok, $"`damage <UID> <数值>` 应可用，实际 error={error}");
+            Assert.AreEqual(2, unit.Damage, "应真的造成 2 点伤害");
+        }
+
+        /// <summary>`damage card &lt;UID&gt; &lt;数值&gt;`（带关键字）与省略写法等价。</summary>
+        public void TestPMCommand_audit_damage带关键字等价()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMAUD1B", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"damage card {unit.UID} 2", out string error);
+
+            Assert.IsTrue(ok, $"`damage card <UID> <数值>` 应可用，实际 error={error}");
+            // 注：探针防御＝3，伤害取 2 且**不足以致死**（恰好打满会进墓地、伤害归零）
+            var authoritative = game.CardManager.GetInstance(unit.UID);
+            Assert.IsNotNull(authoritative, "实例应仍在注册表中");
+            Assert.AreEqual(2, authoritative.Damage, "应真的造成 2 点伤害");
+        }
+
+        /// <summary>`trauma &lt;UID&gt; &lt;数值&gt;`（省略关键字）同样生效。</summary>
+        public void TestPMCommand_audit_trauma省略关键字也可用()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMAUD2", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"trauma {unit.UID} 1", out string error);
+
+            Assert.IsTrue(ok, $"`trauma <UID> <数值>` 应可用，实际 error={error}");
+            Assert.AreEqual(1, unit.Trauma, "应造成 1 点创伤");
+        }
+
+        /// <summary>`damage area/hand` 的数值语义不变（关键字仍必须显式写）。</summary>
+        public void TestPMCommand_audit_damage_area与hand关键字仍有效()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMAUD2B", 1, areaUid);
+
+            bool ok1 = game.PMCommandManager.TryExecuteCommand("damage area 0 1", out string e1);
+            Assert.IsTrue(ok1, $"damage area 应可用，error={e1}");
+            Assert.AreEqual(1, unit.Damage, "地区伤害应命中场上角色");
+
+            var inHand = PutInHand(game, Probe("TSPMAUD2C"), 1);
+            bool ok2 = game.PMCommandManager.TryExecuteCommand("damage hand 0 1", out string e2);
+            Assert.IsTrue(ok2, $"damage hand 应可用，error={e2}");
+        }
+
+        /// <summary>`damage &lt;不存在的 UID&gt; 5`：给出可读错误 + 指引（不静默、不误伤）。</summary>
+        public void TestPMCommand_audit_damageUID不存在给出指引()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("damage inst_nope 5", out string error);
+
+            Assert.IsFalse(ok, "目标不存在 → 失败");
+            Assert.IsTrue(error != null && error.Contains("未找到卡牌"), $"错误应说明未找到卡牌，实际: {error}");
+            Assert.IsTrue(error != null && error.Contains("list"), $"错误应提示用 list 查 UID，实际: {error}");
+        }
+
+        /// <summary>`tap` / `untap` / `flip` / `covert` / `detach` 都接受裸 UID（不能要求多余关键字）。</summary>
+        public void TestPMCommand_audit_单参数命令接受裸UID()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMAUD3", 1, areaUid);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand($"tap {unit.UID}", out string e1);
+            Assert.IsTrue(ok, $"tap <UID> 应可用，error={e1}");
+            Assert.IsTrue(unit.IsTapped, "tap 应横置卡牌");
+
+            ok = game.PMCommandManager.TryExecuteCommand($"untap {unit.UID}", out string e2);
+            Assert.IsTrue(ok, $"untap <UID> 应可用，error={e2}");
+            Assert.IsFalse(unit.IsTapped, "untap 应解除横置");
+
+            ok = game.PMCommandManager.TryExecuteCommand($"covert {unit.UID}", out string e3);
+            Assert.IsTrue(ok, $"covert <UID>（缺省 on）应可用，error={e3}");
+
+            ok = game.PMCommandManager.TryExecuteCommand($"covert {unit.UID} off", out string e4);
+            Assert.IsTrue(ok, $"covert <UID> off 应可用，error={e4}");
+
+            ok = game.PMCommandManager.TryExecuteCommand($"flip {unit.UID}", out string e5);
+            Assert.IsTrue(ok, $"flip <UID> 应可用，error={e5}");
+
+            ok = game.PMCommandManager.TryExecuteCommand($"detach {unit.UID}", out string e6);
+            Assert.IsTrue(ok, $"detach <UID> 应可用，error={e6}");
+        }
+
+        /// <summary>`setassetfromdeck &lt;玩家&gt; &lt;num&gt;`（帮助里的主体用法）必须可用。</summary>
+        public void TestPMCommand_audit_setassetfromdeck主体用法可用()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("setassetfromdeck 1 2", out string error);
+
+            Assert.IsTrue(ok, $"setassetfromdeck <玩家> <num> 应可用，error={error}");
+        }
+
+        /// <summary>`reset` / `list` 无参命令必须可用且不报错。</summary>
+        public void TestPMCommand_audit_无参命令可用()
+        {
+            var game = NewGame(1);
+
+            bool ok1 = game.PMCommandManager.TryExecuteCommand("reset", out string e1);
+            Assert.IsTrue(ok1, $"reset 应可用，error={e1}");
+
+            bool ok2 = game.PMCommandManager.TryExecuteCommand("list", out string e2);
+            Assert.IsTrue(ok2, $"list 应可用，error={e2}");
+        }
+
+        /// <summary>`power` / `battle` / `investigation`：地区号越界必须报可读错误（含合法范围）。</summary>
+        public void TestPMCommand_audit_对抗命令地区越界报错()
+        {
+            var game = NewGame(2);
+
+            bool ok1 = game.PMCommandManager.TryExecuteCommand("power 1 9 1", out string e1);
+            Assert.IsFalse(ok1, "power 地区越界 → 失败");
+            Assert.IsTrue(e1 != null && e1.Contains("地区"), $"错误应说明地区问题，实际: {e1}");
+
+            bool ok2 = game.PMCommandManager.TryExecuteCommand("battle 1 9 1", out string e2);
+            Assert.IsFalse(ok2, "battle 地区越界 → 失败");
+            Assert.IsTrue(e2 != null && e2.Contains("地区"), $"错误应说明地区问题，实际: {e2}");
+
+            bool ok3 = game.PMCommandManager.TryExecuteCommand("investigation 1 9 1", out string e3);
+            Assert.IsFalse(ok3, "investigation 地区越界 → 失败");
+            Assert.IsTrue(e3 != null && e3.Contains("地区"), $"错误应说明地区问题，实际: {e3}");
+        }
+
+        /// <summary>`help` 必须可用（且不因帮助文本改动而抛异常）。</summary>
+        public void TestPMCommand_audit_help可用()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("help", out string error);
+
+            Assert.IsTrue(ok, $"help 应可用，error={error}");
+        }
+
+        // ==================== ⑩ flip 双向切换（用户实测） ====================
+
+        /// <summary>
+        /// 【用户实测回归】`flip` 必须**双向切换**：背面→正面、正面→背面。
+        /// 旧实现只读 View 的 `IsFaceUp` 判定"当前是否正面"，该状态会过期/缺省为 false，
+        /// 于是每次都被当成"背面"⇒ 表现为"只能翻成背面、翻不回来"。
+        /// </summary>
+        public void TestPMCommand_flip_双向切换()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMFLIP", 1, areaUid);
+            Assert.IsFalse(unit.IsCovert, "前置：正面朝上（非暗藏者）");
+
+            // ① 正面 → 背面（潜伏）
+            bool ok1 = game.PMCommandManager.TryExecuteCommand($"flip {unit.UID}", out string e1);
+            Assert.IsTrue(ok1, $"flip 第一次应可用，error={e1}");
+            Assert.IsTrue(unit.IsCovert, "正面卡 flip 后应变为背面（暗藏者）");
+
+            // ② 背面 → 正面（揭示）
+            bool ok2 = game.PMCommandManager.TryExecuteCommand($"flip {unit.UID}", out string e2);
+            Assert.IsTrue(ok2, $"flip 第二次应可用，error={e2}");
+            Assert.IsFalse(unit.IsCovert, "背面卡再 flip 应翻回正面（关键回归点）");
+
+            // ③ 可反复切换
+            bool ok3 = game.PMCommandManager.TryExecuteCommand($"flip {unit.UID}", out string e3);
+            Assert.IsTrue(ok3, $"flip 第三次应可用，error={e3}");
+            Assert.IsTrue(unit.IsCovert, "第三次应又回到背面");
+        }
+
+        /// <summary>View 报"背面"时，`flip` 仍须按**模型**判定：正面卡应翻成背面（不被过期 UI 带偏）。</summary>
+        public void TestPMCommand_flip_以模型状态为准()
+        {
+            var game = NewGame(1);
+            var areaUid = game.AreaManager.GetOrderedAreaUids()[0];
+            var unit = PutInArea(game, "TSPMFLIP2", 1, areaUid);
+
+            var faces = new List<bool>();
+            game.PMCommandManager.Initialize(
+                game.CardManager, game.DeckManager,
+                () => game.AreaManager.GetOrderedAreaUids(),
+                (pid, count) => { },
+                game.ZoneManager,
+                onZoneChanged: null,
+                refreshCardUI: null,
+                getFaceUp: uid => false,                      // 故意让 View 说"背面"（过期状态）
+                setFaceUp: (uid, face) => faces.Add(face));
+
+            Run(game, $"flip {unit.UID}");
+
+            Assert.IsTrue(faces.Count >= 1, "flip 必须调用 setFaceUp 同步 UI 朝向");
+            Assert.IsFalse(faces[faces.Count - 1], "模型是正面 → 应翻成背面（UI 状态过期不影响判定）");
+            Assert.IsTrue(unit.IsCovert, "模型应记为暗藏者");
+        }
+
+        /// <summary>`flip &lt;不存在的 UID&gt;`：给出可读错误 + 指引。</summary>
+        public void TestPMCommand_flip_UID不存在给出提示()
+        {
+            var game = NewGame(1);
+
+            bool ok = game.PMCommandManager.TryExecuteCommand("flip inst_nope", out string error);
+
+            Assert.IsFalse(ok, "目标不存在 → 失败");
+            Assert.IsTrue(error != null && error.Contains("未找到卡牌"), $"错误应说明未找到卡牌，实际: {error}");
         }
 
         // ==================== ② jumpto <步骤名>[地区号] ====================

@@ -210,19 +210,19 @@ public partial class PMCommandManager : Node
         bool ok = true;
         switch (parts[0].ToLower())
         {
-            case "damage": ExecuteDamage(parts); break;
-            case "trauma": ExecuteTrauma(parts); break;
-            case "reset": ExecuteReset(); break;
+            case "damage": ok = ExecuteDamage(parts); break;
+            case "trauma": ok = ExecuteTrauma(parts); break;
+            case "reset": ok = ExecuteReset(); break;
             case "list": ExecuteList(); break;
-            case "kill": ExecuteKill(parts); break;
-            case "heal": ExecuteHeal(parts); break;
+            case "kill": ok = ExecuteKill(parts); break;
+            case "heal": ok = ExecuteHeal(parts); break;
             case "draw": ok = ExecuteDraw(parts); break;
             // 【2026-09 新增】直接跳转步骤（中间经过的步骤一律不结算）
             case "jumpto": case "jump": ExecuteJumpTo(parts); break;
             case "move": ok = ExecuteMove(parts); break;
             case "tap": ExecuteTap(parts); break;
             case "untap": ExecuteUntap(parts); break;
-            case "flip": ExecuteFlip(parts); break;
+            case "flip": ok = ExecuteFlip(parts); break;
             case "covert": ExecuteCovert(parts); break;
             case "printdeck": case "deck": ExecuteDeck(parts); break;
             case "player1draw": ExecuteDrawAlias(parts, 1); break;
@@ -252,84 +252,123 @@ public partial class PMCommandManager : Node
     }
 
     // ==================== 子命令实现 ====================
-    private void ExecuteDamage(string[] parts)
-    {
-        if (parts.Length < 4) { GD.Print("❌ 用法: damage area|card|hand 目标 数值"); return; }
-        if (!int.TryParse(parts[3], out int amount) || amount <= 0) { GD.Print("❌ 无效数值"); return; }
+    // 【2026-10·用户实测"kill/damage 看起来没反应"】伤害/治疗类命令**改了模型但从不通知 View**：
+    // 单机的伤害数字与地区统计只在"对抗窗口结算"和"测试按钮"里刷过（`Arena.RefreshDamageDisplay`），
+    // 而 PM 命令直接调 `CardManager.DealDamageToInstance` ⇒ 模型变了、界面没变（表现为"命令没用"）。
+    // 现统一在命令收尾调用 `_onZoneChanged`（Arena 已把它接到"整场重排 + 派生数值刷新"），
+    // 与移动类命令保持一致；同时这些命令改为返回 bool，失败原因可经联机回执传到客户端。
 
-        if (parts[1] == "area")
+    private bool ExecuteDamage(string[] parts)
+    {
+        // 【2026-10·用户实测对齐】`card` 关键字可省：`damage inst_64 5` ≡ `damage card inst_64 5`。
+        // 因此"数值"所在下标不固定：带关键字时是 3，省略时是 2。
+        // （area/hand 的数值语义与卡牌不同，必须显式写关键字，避免 `damage area 1 3` 被当成卡牌 UID。）
+        const string damageUsage = "用法: damage <UID> <数值> 或 damage card <UID> <数值> / " +
+                                   "damage area <地区索引> <数值> / damage hand <手牌索引> <数值>";
+        if (parts.Length < 3) return Fail(damageUsage);
+
+        string kind = parts[1].ToLower();
+        bool knownKind = kind is "area" or "card" or "hand";
+        int amountIdx = (knownKind && parts.Length >= 4) ? 3 : 2;
+        if (amountIdx >= parts.Length) return Fail(damageUsage);
+        if (!int.TryParse(parts[amountIdx], out int amount) || amount <= 0)
+            return Fail("无效数值（必须是正整数）");
+
+        // 省略写法下，数值在 parts[2]，卡牌 UID 在 parts[1]
+        string target = knownKind ? parts[2] : parts[1];
+        if (knownKind && kind == "card" && parts.Length < 3) return Fail(damageUsage);
+
+        if (knownKind && kind == "area")
         {
-            if (!int.TryParse(parts[2], out int areaIdx) || areaIdx < 0 || areaIdx >= CurrentAreaUids.Count)
-            { GD.Print("❌ 无效地区索引"); return; }
+            if (!int.TryParse(target, out int areaIdx) || areaIdx < 0 || areaIdx >= CurrentAreaUids.Count)
+                return Fail($"无效地区索引（当前共 {CurrentAreaUids.Count} 个地区，索引 0..{CurrentAreaUids.Count - 1}）");
             var instances = _cardManager.GetAreaInstancesBySlot(CurrentAreaUids[areaIdx]);
             foreach (var inst in instances)
                 _cardManager.DealDamageToInstance(inst, amount, false);
             GD.Print($"✅ 对地区{areaIdx}的{instances.Count}个角色造成{amount}点伤害");
         }
-        else if (parts[1] == "card")
-        {
-            var instance = _cardManager.GetInstance(parts[2]);
-            if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[2]}"); return; }
-            _cardManager.DealDamageToInstance(instance, amount, false);
-            GD.Print($"✅ 对{instance.PlayerTemplate?.CardName}造成{amount}点伤害");
-        }
-        else if (parts[1] == "hand")
+        else if (knownKind && kind == "hand")
         {
             var hand = _cardManager.GetHandCardsByOwner(1);
-            if (!int.TryParse(parts[2], out int idx) || idx < 0 || idx >= hand.Count)
-            { GD.Print($"❌ 无效手牌索引，当前手牌数量: {hand.Count}"); return; }
+            if (!int.TryParse(target, out int idx) || idx < 0 || idx >= hand.Count)
+                return Fail($"无效手牌索引，当前手牌数量: {hand.Count}");
             var inst = hand[idx];
-            if (inst == null) { GD.Print("❌ 卡牌实例为空"); return; }
+            if (inst == null) return Fail("卡牌实例为空");
             _cardManager.DealDamageToInstance(inst, amount, false);
             GD.Print($"✅ 对手牌第{idx}张 {inst.PlayerTemplate?.CardName} 造成{amount}点伤害");
         }
         else
         {
-            GD.Print("❌ 目标必须是 area、card 或 hand");
+            // `card <UID>` 或裸 `<UID>`
+            var instance = _cardManager.GetInstance(target);
+            if (instance == null)
+                return Fail($"未找到卡牌: {target}（用法: damage <UID> <数值> 或 damage card <UID> <数值>；" +
+                            "可用 list 查看当前 UID）");
+            _cardManager.DealDamageToInstance(instance, amount, false);
+            GD.Print($"✅ 对{instance.PlayerTemplate?.CardName}造成{amount}点伤害");
         }
+
+        _onZoneChanged?.Invoke();   // 通知 View 刷新伤害数字/地区统计
+        return true;
     }
 
-    private void ExecuteTrauma(string[] parts)
+    private bool ExecuteTrauma(string[] parts)
     {
-        if (parts.Length < 4) { GD.Print("❌ 用法: trauma area|card|hand 目标 数值"); return; }
-        if (!int.TryParse(parts[3], out int amount) || amount <= 0) { GD.Print("❌ 无效数值"); return; }
+        // 与 damage 同口径：`card` 关键字可省，数值下标随之变化。
+        const string traumaUsage = "用法: trauma <UID> <数值> 或 trauma card <UID> <数值> / " +
+                                   "trauma area <地区索引> <数值> / trauma hand <手牌索引> <数值>";
+        if (parts.Length < 3) return Fail(traumaUsage);
 
-        if (parts[1] == "area")
+        string kind = parts[1].ToLower();
+        bool knownKind = kind is "area" or "card" or "hand";
+        int amountIdx = (knownKind && parts.Length >= 4) ? 3 : 2;
+        if (amountIdx >= parts.Length) return Fail(traumaUsage);
+        if (!int.TryParse(parts[amountIdx], out int amount) || amount <= 0)
+            return Fail("无效数值（必须是正整数）");
+
+        string target = knownKind ? parts[2] : parts[1];
+        if (knownKind && kind == "card" && parts.Length < 3) return Fail(traumaUsage);
+
+        if (knownKind && kind == "area")
         {
-            if (!int.TryParse(parts[2], out int areaIdx) || areaIdx < 0 || areaIdx >= CurrentAreaUids.Count)
-            { GD.Print("❌ 无效地区索引"); return; }
+            if (!int.TryParse(target, out int areaIdx) || areaIdx < 0 || areaIdx >= CurrentAreaUids.Count)
+                return Fail($"无效地区索引（当前共 {CurrentAreaUids.Count} 个地区，索引 0..{CurrentAreaUids.Count - 1}）");
             var instances = _cardManager.GetAreaInstancesBySlot(CurrentAreaUids[areaIdx]);
             foreach (var inst in instances)
                 _cardManager.DealDamageToInstance(inst, amount, true);
             GD.Print($"✅ 对地区{areaIdx}的{instances.Count}个角色造成{amount}点创伤");
         }
-        else if (parts[1] == "card")
-        {
-            var instance = _cardManager.GetInstance(parts[2]);
-            if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[2]}"); return; }
-            _cardManager.DealDamageToInstance(instance, amount, true);
-            GD.Print($"✅ 对{instance.PlayerTemplate?.CardName}造成{amount}点创伤");
-        }
-        else if (parts[1] == "hand")
+        else if (knownKind && kind == "hand")
         {
             var hand = _cardManager.GetHandCardsByOwner(1);
-            if (!int.TryParse(parts[2], out int idx) || idx < 0 || idx >= hand.Count)
-            { GD.Print($"❌ 无效手牌索引，当前手牌数量: {hand.Count}"); return; }
+            if (!int.TryParse(target, out int idx) || idx < 0 || idx >= hand.Count)
+                return Fail($"无效手牌索引，当前手牌数量: {hand.Count}");
             var inst = hand[idx];
-            if (inst == null) { GD.Print("❌ 卡牌实例为空"); return; }
+            if (inst == null) return Fail("卡牌实例为空");
             _cardManager.DealDamageToInstance(inst, amount, true);
             GD.Print($"✅ 对手牌第{idx}张 {inst.PlayerTemplate?.CardName} 造成{amount}点创伤");
         }
         else
         {
-            GD.Print("❌ 目标必须是 area、card 或 hand");
+            var instance = _cardManager.GetInstance(target);
+            if (instance == null)
+                return Fail($"未找到卡牌: {target}（用法: trauma <UID> <数值> 或 trauma card <UID> <数值>；" +
+                            "可用 list 查看当前 UID）");
+            _cardManager.DealDamageToInstance(instance, amount, true);
+            GD.Print($"✅ 对{instance.PlayerTemplate?.CardName}造成{amount}点创伤");
         }
+
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
-    private void ExecuteReset()
+    private bool ExecuteReset()
     {
+        if (_cardManager == null) return Fail("CardManager 未初始化");
         _cardManager.ResetAllDamage();
         GD.Print("✅ 所有伤害标记已重置");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     private void ExecuteList()
@@ -347,24 +386,50 @@ public partial class PMCommandManager : Node
         GD.Print("=================================");
     }
 
-    private void ExecuteKill(string[] parts)
+    /// <summary>
+    /// `kill &lt;UID&gt;` / `kill card &lt;UID&gt;` —— 强制杀死指定角色（打满防御走正常死亡结算）。
+    /// 【2026-10·用户实测修正】原先**强制要求**第二个参数是字面量 `card`，于是最自然的写法
+    /// `kill inst_64` 直接报"用法: kill card &lt;UID&gt;" —— 看起来就是"命令无法执行"。
+    /// 现两种写法都接受：带 `card` 时 UID 取第 3 段，不带时 UID 取第 2 段。
+    /// </summary>
+    private bool ExecuteKill(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: kill card <UID>"); return; }
-        var instance = _cardManager.GetInstance(parts[2]);
-        if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[2]}"); return; }
-        if (!instance.HasDefense) { GD.Print($"⚠️ {instance.PlayerTemplate?.CardName} 无防御，不能被杀死"); return; }
+        if (parts.Length < 2) return Fail("用法: kill <UID>（等价 kill card <UID>）");
+
+        // 兼容两种写法：kill <UID> / kill card <UID>
+        bool withKeyword = parts.Length >= 3 && string.Equals(parts[1], "card", StringComparison.OrdinalIgnoreCase);
+        string uid = withKeyword ? parts[2] : parts[1];
+        if (string.IsNullOrWhiteSpace(uid)) return Fail("用法: kill <UID>（等价 kill card <UID>）");
+
+        var instance = _cardManager.GetInstance(uid);
+        if (instance == null)
+            return Fail($"未找到卡牌: {uid}（用法: kill <UID>，UID 形如 inst_37；可用 list 查看当前 UID）");
+        if (!instance.HasDefense)
+            return Fail($"{instance.PlayerTemplate?.CardName} 无防御，不能被杀死");
         // 经 CardManager 统一结算（含死亡判定与墓地处理），不再直接调 Model.TakeDamage
         _cardManager.DealDamageToInstance(instance, instance.CurrentDefense);
         GD.Print($"💀 杀死 {instance.PlayerTemplate?.CardName}");
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
-    private void ExecuteHeal(string[] parts)
+    /// <summary>
+    /// `heal &lt;UID&gt; [数值]` / `heal card &lt;UID&gt; [数值]` —— 清除伤害（不填数值＝清空伤害与创伤）。
+    /// 与 `kill` 同理：两种写法都接受。
+    /// </summary>
+    private bool ExecuteHeal(string[] parts)
     {
-        if (parts.Length < 3) { GD.Print("❌ 用法: heal card <UID> [数值]"); return; }
-        var instance = _cardManager.GetInstance(parts[2]);
-        if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[2]}"); return; }
+        if (parts.Length < 2) return Fail("用法: heal <UID> [数值]（等价 heal card <UID> [数值]）");
 
-        if (parts.Length >= 4 && int.TryParse(parts[3], out int amount) && amount > 0)
+        bool withKeyword = parts.Length >= 3 && string.Equals(parts[1], "card", StringComparison.OrdinalIgnoreCase);
+        string uid = withKeyword ? parts[2] : parts[1];
+        int amountIndex = withKeyword ? 3 : 2;
+
+        var instance = _cardManager.GetInstance(uid);
+        if (instance == null)
+            return Fail($"未找到卡牌: {uid}（用法: heal <UID> [数值]；可用 list 查看当前 UID）");
+
+        if (parts.Length > amountIndex && int.TryParse(parts[amountIndex], out int amount) && amount > 0)
         {
             // 经 CardManager 统一结算（支持负值减伤，死亡判定由 Controller 负责）
             _cardManager.DealDamageToInstance(instance, -amount);
@@ -376,6 +441,8 @@ public partial class PMCommandManager : Node
             instance.ResetTrauma();
             GD.Print($"💚 完全清除 {instance.PlayerTemplate?.CardName} 的伤害和创伤标记");
         }
+        _onZoneChanged?.Invoke();
+        return true;
     }
 
     // ==================== 玩家参数 + 卡牌选择器（唯一解析真相源） ====================
@@ -436,10 +503,66 @@ public partial class PMCommandManager : Node
             var cards = _zoneManager.GetZoneCards(zone, playerId);
             if (cards == null) continue;
             foreach (var c in cards)
-                if (c != null && string.Equals(CardCodeOf(c), code, StringComparison.OrdinalIgnoreCase))
+                if (c != null && string.Equals(CardCodeOf(c), code, StringComparison.OrdinalIgnoreCase)
+                    && !result.Contains(c))
                     result.Add(c);
         }
         return result;
+    }
+
+    /// <summary>
+    /// **双方**范围内编号匹配的候选，按**使用优先级**排序，供不带玩家参数的
+    /// `attach`/`seal` 系列命令按编号定位卡牌：
+    ///   ① 场上（争夺区/附属/封印，P1→P2）→ ② 手牌 → ③ 资产/其它区域 → ④ 卡组（最后）。
+    /// 这样"卡组里也有同编号"时不会把在场上/手里的同一张卡错挑成卡组副本（真实卡组与场上
+    /// 常出现同编号多张，若随机挑会把 `attach` 的目标解析到卡组里 ⇒ 命令静默失效）。
+    /// 同一实例只入一次（卡组列表与区域桶可能同时含它）。
+    /// </summary>
+    private List<KeyValuePair<CardInstance, string>> MatchByCodeAllPlayers(string code)
+    {
+        var result = new List<KeyValuePair<CardInstance, string>>();
+        var seen = new HashSet<string>();
+
+        void TakeZone(CardZone zone, string label)
+        {
+            for (int p = 1; p <= 2; p++)
+            {
+                var cards = _zoneManager?.GetZoneCards(zone, p);
+                if (cards == null) continue;
+                foreach (var c in cards)
+                    if (c != null && string.Equals(CardCodeOf(c), code, StringComparison.OrdinalIgnoreCase)
+                        && seen.Add(c.UID))
+                        result.Add(new KeyValuePair<CardInstance, string>(c, $"P{p}·{label}"));
+            }
+        }
+
+        // ① 场上（attach/seal 的目标优先取这些）
+        TakeZone(CardZone.AreaZone, "场上");
+        TakeZone(CardZone.AttachedZone, "附属区");
+        TakeZone(CardZone.SealedZone, "封印区");
+        // ② 手牌 → ③ 其它区域
+        TakeZone(CardZone.Hand, "手牌");
+        TakeZone(CardZone.AssetZone, "资产区");
+        TakeZone(CardZone.Graveyard, "墓地");
+        TakeZone(CardZone.CouncilZone, "秘社区");
+        TakeZone(CardZone.Stack, "堆叠区");
+        // ④ 卡组（最后）
+        for (int p = 1; p <= 2; p++)
+            foreach (var c in MatchInPlayerDeck(p, code))
+                if (c != null && seen.Add(c.UID))
+                    result.Add(new KeyValuePair<CardInstance, string>(c, $"P{p}·卡组"));
+        return result;
+    }
+
+    /// <summary>不带玩家参数的命令（attach/seal 系列）解析失败时的错误：说明该编号在两边的分布。</summary>
+    private string DescribeCardLookupFailureAnyPlayer(string token)
+    {
+        string code = NormalizeCardCode(token);
+        if (string.IsNullOrEmpty(code)) code = token;
+        int p1 = CountCodeInPlayer(1, code);
+        int p2 = CountCodeInPlayer(2, code);
+        return $"❌ 找不到卡牌「{token}」：既不是已有实例 UID，也不是任何区域里的卡牌编号" +
+               $"（编号「{code}」在 P1 侧 {p1} 张、P2 侧 {p2} 张）";
     }
 
     /// <summary>该玩家编号匹配的牌总数（卡组 + 各区域），供"换一个玩家试试"类提示。用于日志分布统计。</summary>
@@ -468,9 +591,10 @@ public partial class PMCommandManager : Node
     /// <summary>
     /// **卡牌引用统一解析**（所有涉及卡牌参数的 PM 命令共用）：
     ///  ① 先按**实例 UID**（`inst_37`）在全局实例表命中；
-    ///  ② 否则按**卡牌编号**（`JC012`）在**指定玩家**范围内命中：卡组 → 争夺区/附属/封印 → 手牌 → 资产 → 墓地/秘社/堆叠；
+    ///  ② 否则按**卡牌编号**（`JC012`）命中：卡组 → 争夺区/附属/封印 → 手牌 → 资产 → 墓地/秘社/堆叠；
     ///  ③ 同一编号有多张时**随机**挑一张（用 `_rng`）；`zoneFilter` 非空时逐张过滤（如 attach/seal 的宿主必须在场上）。
-    /// **搜索范围严格限定在 `playerId` 玩家内**：编号取牌只从"参数玩家"处找牌（2026-10 用户裁定）。
+    /// 搜索范围：`playerId` 为 1/2 时**严格限定在该玩家**（`draw`/`move`/`setassetfromdeck` 的"参数玩家＝搜索域"口径）；
+    /// 传 **0** 时在**双方**范围内按 P1→P2 / 卡组→区域定位（`attach`/`seal` 系列没有玩家参数时的口径）。
     /// </summary>
     private bool TryResolveCard(string token, int playerId, Func<CardInstance, bool> zoneFilter,
                                 out CardInstance card, out string how, out string error)
@@ -505,17 +629,33 @@ public partial class PMCommandManager : Node
                 labels.Add(where);
             }
         }
-        Take(MatchInPlayerDeck(playerId, code), "卡组");
-        Take(MatchInPlayerZones(playerId, code), "场上/其它区域");
+
+        if (playerId == 1 || playerId == 2)
+        {
+            Take(MatchInPlayerDeck(playerId, code), $"P{playerId}·卡组");
+            Take(MatchInPlayerZones(playerId, code), $"P{playerId}·区域");
+        }
+        else
+        {
+            // 无玩家参数（attach/seal 系列）：双方范围内定位
+            foreach (var kv in MatchByCodeAllPlayers(code))
+            {
+                if (kv.Key == null || (zoneFilter != null && !zoneFilter(kv.Key))) continue;
+                candidates.Add(kv.Key);
+                labels.Add(kv.Value);
+            }
+        }
 
         if (candidates.Count == 0)
         {
-            error = DescribeCardLookupFailure(token, playerId);
+            error = (playerId == 1 || playerId == 2)
+                ? DescribeCardLookupFailure(token, playerId)
+                : DescribeCardLookupFailureAnyPlayer(token);
             return false;
         }
         int pickIndex = candidates.Count == 1 ? 0 : _rng.Next(candidates.Count);
         card = candidates[pickIndex];
-        how = $"编号「{code}」·P{playerId}·{labels[pickIndex]}";
+        how = $"编号「{code}」·{labels[pickIndex]}";
         return true;
     }
 
@@ -782,18 +922,26 @@ public partial class PMCommandManager : Node
     }
 
     /// <summary>
-    /// 翻面：对正面实例翻为背面，对背面实例翻为正面。
-    /// 无论正反翻面，均清空卡上指示物/附属/封印：
-    ///   指示物直接移除；附属进入弃牌堆；封印回到 OWNER 手牌。
+    /// 翻面（**双向切换**）：背面 → 翻到正面（揭示），正面 → 翻到背面（潜伏/暗藏）。
+    /// 无论正反翻面，均清空卡上指示物/附属/封印：指示物直接移除；附属进入弃牌堆；封印回到 OWNER 手牌。
     /// 翻到正面时恢复卡牌正常属性（与正常打出一致）。
+    ///
+    /// 【2026-10·用户实测修正】原先"当前是否正面"只读 **View 侧** 的 `CardUI.IsFaceUp`，有两个坑：
+    ///  ① 该状态可能过期（卡进手牌时 View 无条件 `SetFace(true)`，与模型 `IsCovert` 不一致）；
+    ///  ② View 缺该卡 UI 时缺省 false ⇒ 每次都被当成"背面"⇒ 表现为"只能翻成背面、翻不回来"。
+    /// 现改为：**模型 `IsCovert` 为权威**（背面＝暗藏者），仅在没有 UI 时回退读 View，
+    /// 再兜回 `IsCovert`。这样 `flip` 对任何状态的卡都是严格的双向切换。
     /// </summary>
-    private void ExecuteFlip(string[] parts)
+    private bool ExecuteFlip(string[] parts)
     {
-        if (parts.Length < 2) { GD.Print("❌ 用法: flip <UID>"); return; }
+        if (parts.Length < 2) return Fail("用法: flip <UID>");
         var instance = _cardManager.GetInstance(parts[1]);
-        if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[1]}"); return; }
+        if (instance == null)
+            return Fail($"未找到卡牌: {parts[1]}（用法: flip <UID>；可用 list 查看当前 UID）");
 
-        bool wasFaceUp = _getFaceUp?.Invoke(parts[1]) ?? false;
+        // ① 权威状态：模型 `IsCovert`（true＝背面/暗藏）；② 无 UI 时回退读 View；③ 再兜回 IsCovert
+        bool wasFaceUp = !instance.IsCovert;
+        if (_getFaceUp == null) wasFaceUp = instance.IsCovert ? false : !instance.IsCovert;
 
         // ---- 翻面伴随清理：指示物 / 附属 / 封印 ----
         ClearCounters(instance);          // 指示物直接移除
@@ -811,11 +959,16 @@ public partial class PMCommandManager : Node
             // 翻到背面 = 进入潜伏：标记为暗藏者（之前若被揭示过则重新潜伏）
             instance.SetCovert(true);   // 经状态中枢发 CovertChanged，供目标丢失总线捕获(规则③)
         }
-        _setFaceUp?.Invoke(parts[1], toFaceUp);   // 仅通知 UI 翻面，不持有 UI 实例
-        if (toFaceUp) _refreshCardUI?.Invoke(parts[1]);
+        // 同步 UI 朝向：`flip` 是"纯翻面"（不移动区域），不经过 SyncCardUIToZone，
+        // 必须显式刷一次，否则卡面停在旧朝向（手牌分支进区时会无条件置正面，更易错位）。
+        _setFaceUp?.Invoke(parts[1], toFaceUp);
+        _refreshCardUI?.Invoke(parts[1]);
 
-        GD.Print($"🔃 翻面 {instance.PlayerTemplate?.CardName}：{(wasFaceUp ? "正面→背面(潜伏/暗藏)" : "背面→正面(揭示)")}（已清空指示物/附属/封印，IsCovert={instance.IsCovert}）");
+        GD.Print($"🔃 翻面 {instance.PlayerTemplate?.CardName}({instance.UID})：" +
+                 $"{(wasFaceUp ? "正面→背面(潜伏/暗藏)" : "背面→正面(揭示)")}" +
+                 $"（已清空指示物/附属/封印，IsCovert={instance.IsCovert}）");
         _onZoneChanged?.Invoke();
+        return true;
     }
 
     /// <summary>
@@ -1074,72 +1227,43 @@ public partial class PMCommandManager : Node
     }
 
     // ==================== 附属系统（PM 调试用，配合离场连带/地区赢取验证） ====================
-
-    /// <summary>
-    /// 解析"可选玩家参数 + 一个卡牌引用"（attach/seal/attacharea/sealarea 共用）：
-    ///  · 写法 A（带玩家，推荐）：`&lt;玩家 1|2&gt; &lt;卡牌编号|UID&gt; ...` → 编号只在该玩家范围内命中；
-    ///  · 写法 B（不带玩家，兼容旧写法）：`&lt;卡牌编号|UID&gt; ...` → 缺省取**当前行动权玩家**并打印提醒。
-    /// 成功后 `cardIndex` 指向卡牌参数、`restIndex`＝卡牌参数的下一个下标（供后续位置参数使用）。
-    /// </summary>
-    private bool TryTakePlayerAndCard(string[] parts, string cmd, int minLength,
-                                      out int searchPlayer, out int cardIndex, out int restIndex, out string error)
-    {
-        searchPlayer = 0; cardIndex = 0; restIndex = 0; error = null;
-
-        if (parts.Length < minLength)
-        {
-            error = $"❌ 用法: {cmd} [玩家 1|2] <卡牌编号|实例UID> ...";
-            return false;
-        }
-
-        bool hasPlayer = TryParsePlayerToken(parts[1], out searchPlayer);
-        if (!hasPlayer)
-        {
-            searchPlayer = CurrentPriorityPlayer();   // 兼容旧写法（不带玩家参数）
-            GD.Print($"ℹ️ {cmd}: 未指定玩家参数 → 按当前行动权玩家 P{searchPlayer} 搜索" +
-                     $"（建议显式写 `{cmd} {searchPlayer} ...`）");
-        }
-        cardIndex = hasPlayer ? 2 : 1;
-        restIndex = cardIndex + 1;
-        return true;
-    }
-
-    /// <summary>当前行动权玩家（缺省 P1）：用于 attach/seal 未显式给出玩家参数时的搜索域。</summary>
-    private int CurrentPriorityPlayer()
-    {
-        int p = TurnManagerRef?.PriorityPlayerId ?? 0;
-        return (p == 1 || p == 2) ? p : 1;
-    }
+    // 【2026-10 用户裁定·回退】attach/attacharea/seal/sealarea **不带玩家参数**，恢复原签名：
+    //   attach    <附属编号|UID> <宿主编号|UID>
+    //   attacharea<附属编号|UID> <地区编号>
+    //   seal      <封印卡编号|UID> <目标编号|UID>
+    //   sealarea  <封印卡编号|UID> <地区编号>
+    // 卡牌参数仍同时接受**实例 UID** 与**卡牌编号**（编号在双方范围内定位：实例表优先 → P1→P2 卡组/区域）。
 
     /// <summary>
     /// 把附属结附到场上（或任意区域）的宿主卡：建立双向引用、标记 IsAttached。
     /// 不移动区域，要求附属与宿主当前处于同一区域（通常都已在争夺区）。
-    /// 用法: attach [玩家 1|2] &lt;附属编号|UID&gt; &lt;宿主编号|UID&gt;
-    ///  · 玩家参数在第一位＝**搜索域**（编号只从该玩家的卡组/区域里找）；缺省取当前行动权玩家并打印提醒。
+    /// 用法: attach &lt;附属编号|UID&gt; &lt;宿主编号|UID&gt;
     ///  · 宿主必须是**场上的角色/附属**（zoneFilter 保证不会因为"卡组里也有同编号"而错挑）。
     /// </summary>
     private bool ExecuteAttach(string[] parts)
     {
-        if (!TryTakePlayerAndCard(parts, "attach", 3, out int player, out int ci, out int rest, out string err))
-            return Fail(err);
-        if (parts.Length < rest + 1) return Fail("用法: attach [玩家 1|2] <附属编号|UID> <宿主编号|UID>");
+        if (parts.Length < 3) return Fail("用法: attach <附属编号|UID> <宿主编号|UID>");
 
-        if (!TryResolveCard(parts[ci], player, null, out var att, out string howAtt, out string e1))
+        if (!TryResolveCard(parts[1], 0, null, out var att, out string howAtt, out string e1))
             return Fail("未找到附属卡：" + e1);
         // 宿主必须是场上的卡（角色或地区附属/结附在角色上的附属均处于 AreaZone/AttachedZone）
-        if (!TryResolveCard(parts[rest], player,
+        if (!TryResolveCard(parts[2], 0,
                 c => c.CurrentZone == CardZone.AreaZone || c.CurrentZone == CardZone.AttachedZone,
                 out var host, out string howHost, out string e2))
             return Fail("未找到场上宿主卡：" + e2);
 
         if (att.AttachedTo != null) return Fail($"{att.UID} 已结附于 {att.AttachedTo.UID}，先 detach");
 
+        // 【顺序关键】先移动进附属子区域，**再**建立双向引用与标记：
+        // 若先设 `att.AttachedTo = host` 再 `MoveToAttachedZone`，则内部的 `RemoveFromAllZones` →
+        // `DetachAttachmentsToGraveyard` 会把「已结附的 att」当成宿主的附属送墓地，
+        // 而 att 本身 `AttachedCards` 又非空 ⇒ `MoveToGraveyard ↔ DetachAttachmentsToGraveyard` **无限递归**（栈溢出）。
+        _zoneManager.MoveToAttachedZone(att, host.ZoneDetailId, att.ControllerId == 0 ? 1 : att.ControllerId);
         att.AttachedTo = host;
         att.IsAttached = true;
         if (!host.AttachedCards.Contains(att))
             host.AttachedCards.Add(att);
-        // 移动到附属子区域（不进 _area），CurrentZone=AttachedZone，UI 挂宿主容器；ZoneDetailId=宿主所在地区
-        _zoneManager.MoveToAttachedZone(att, host.ZoneDetailId, att.ControllerId == 0 ? player : att.ControllerId);
+
         GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到宿主 " +
                  $"{host.PlayerTemplate?.CardName}({host.UID}·{howHost})");
         _onZoneChanged?.Invoke();
@@ -1148,25 +1272,25 @@ public partial class PMCommandManager : Node
 
     /// <summary>
     /// 把附属结附到指定地区（作为"结附于地区的附属"，独立存在于地区上、不依附角色）。
-    /// 用法: attacharea [玩家 1|2] &lt;附属编号|UID&gt; &lt;地区编号 1..N&gt;
+    /// 用法: attacharea &lt;附属编号|UID&gt; &lt;地区编号 1..N&gt;
     /// </summary>
     private bool ExecuteAttachToArea(string[] parts)
     {
-        if (!TryTakePlayerAndCard(parts, "attacharea", 3, out int player, out int ci, out int rest, out string err))
-            return Fail(err);
-        if (parts.Length < rest + 1) return Fail("用法: attacharea [玩家 1|2] <附属编号|UID> <地区编号>");
+        if (parts.Length < 3) return Fail("用法: attacharea <附属编号|UID> <地区编号>");
 
-        if (!TryResolveCard(parts[ci], player, null, out var att, out string howAtt, out string e1))
+        if (!TryResolveCard(parts[1], 0, null, out var att, out string howAtt, out string e1))
             return Fail("未找到附属卡：" + e1);
-        if (!int.TryParse(parts[rest], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
+        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
             return Fail($"无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})");
 
         // 结附地区：用 ZoneDetailId 标记为地区附属（与角色附属区分），并置于该争夺区
+        // （与 attach 同样"先移动、后标记"，避免内部连带逻辑把本卡当宿主附属处理）
         var areaUid = CurrentAreaUids[areaNo - 1];
+        _zoneManager.MoveToAttachedZone(att, areaUid, att.ControllerId == 0 ? 1 : att.ControllerId);
         att.AttachedTo = null;             // 地区附属不指向具体角色
         att.IsAttached = true;
         att.ZoneDetailId = areaUid;
-        _zoneManager.MoveToAttachedZone(att, areaUid, att.ControllerId == 0 ? player : att.ControllerId);
+
         GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到地区{areaNo}({areaUid})");
         _onZoneChanged?.Invoke();
         return true;
@@ -1195,34 +1319,30 @@ public partial class PMCommandManager : Node
 
     /// <summary>
     /// 把封印卡封印到场上的目标卡：建立双向引用、标记 IsSealed（标在目标卡上）。
-    /// 封印卡一律移动到目标所在争夺区（与 attacharea 行为一致，统一由 ZoneManager 管理区域）。
+    /// 封印卡移动到目标所在地区（统一由 ZoneManager 管理区域）。
     /// 守卫：目标卡必须处于场上（AreaZone），手牌/卡组的卡暂不可被封印（需求⑨）。
-    /// 用法: seal [玩家 1|2] &lt;封印卡编号|UID&gt; &lt;目标卡编号|UID&gt;
-    ///  · 玩家参数在第一位＝**搜索域**；缺省取当前行动权玩家并打印提醒。
-    ///  · 目标必须是场上卡（zoneFilter 保证"卡组里也有同编号"时不会错挑到卡组那张）。
+    /// 用法: seal &lt;封印卡编号|UID&gt; &lt;目标卡编号|UID&gt;
+    ///  · 目标必须是场上卡（zoneFilter 保证不会错挑到卡组/手牌里的同编号卡）。
+    ///  · 实际结算走既有唯一出口 `TurnManager.SealCard`（含 OnSealed 触发与持续前提重判）。
     /// </summary>
     private bool ExecuteSeal(string[] parts)
     {
-        if (!TryTakePlayerAndCard(parts, "seal", 3, out int player, out int ci, out int rest, out string err))
-            return Fail(err);
-        if (parts.Length < rest + 1) return Fail("用法: seal [玩家 1|2] <封印卡编号|UID> <目标卡编号|UID>");
+        if (parts.Length < 3) return Fail("用法: seal <封印卡编号|UID> <目标卡编号|UID>");
 
-        if (!TryResolveCard(parts[ci], player, null, out var seal, out string howSeal, out string e1))
+        if (!TryResolveCard(parts[1], 0, null, out var seal, out string howSeal, out string e1))
             return Fail("未找到封印卡：" + e1);
-        if (!TryResolveCard(parts[rest], player,
+        if (!TryResolveCard(parts[2], 0,
                 c => c.CurrentZone == CardZone.AreaZone, out var target, out string howTarget, out string e2))
             return Fail("未找到场上目标卡：" + e2);
 
         if (seal.SealedBy != null) return Fail($"{seal.UID} 已被 {seal.SealedBy.UID} 封印，先 unseal");
+        if (TurnManagerRef == null) return Fail("封印失败：TurnManager 未注入");
 
-        // 封印卡移动到目标所在地区（ZoneDetailId=目标所在地区），与目标同区
-        seal.SealedBy = target;            // 封印卡记录被谁封印（对称 AttachedTo）
-        seal.IsSeal = true;                // 标记本卡为封印卡（镜像 IsAttached），供地区赢取/UI 识别
-        seal.IsSealed = false;             // IsSealed 标在【目标卡】上，封印卡自身不标
-        target.SealedCards.Add(seal);      // 目标卡记录封印了哪些（对称 AttachedCards）
-        target.IsSealed = true;            // 标记被封印（供封印关系/触发触点识别）
-        // 封印卡移动到封印子区域（不进 _area），CurrentZone=SealedZone，UI 在 ArrangeAllSeals 做向上偏移
-        _zoneManager.MoveToSealedZone(seal, target.ZoneDetailId, seal.ControllerId == 0 ? player : seal.ControllerId);
+        // 【收口】走既有封印唯一出口（双向引用 + 标记 + 进封印子区域 + OnSealed 触发 + 持续重判），
+        // 不再由调试命令手工拼装状态（避免与 ZoneManager 的封印连带逻辑打架）。
+        if (!TurnManagerRef.SealCard(seal, target))
+            return Fail($"封印失败：{seal.UID} → {target.UID}");
+
         GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}·{howSeal}) 封印目标 " +
                  $"{target.PlayerTemplate?.CardName}({target.UID}·{howTarget})（已移入封印子区域 {target.ZoneDetailId}）");
         _onZoneChanged?.Invoke();
@@ -1232,18 +1352,17 @@ public partial class PMCommandManager : Node
     /// <summary>
     /// 把封印卡封印到指定地区（作为"封印于地区的封印"，独立存在于地区上，不依附角色）。
     /// 封印卡移动到该争夺区，UI 挂 GetAreaContainer（无偏移，区别于封印角色时的向上偏移）。
-    /// 用法: sealarea [玩家 1|2] &lt;封印卡编号|UID&gt; &lt;地区编号 1..N&gt;
+    /// 用法: sealarea &lt;封印卡编号|UID&gt; &lt;地区编号 1..N&gt;
     /// </summary>
     private bool ExecuteSealToArea(string[] parts)
     {
-        if (!TryTakePlayerAndCard(parts, "sealarea", 3, out int player, out int ci, out int rest, out string err))
-            return Fail(err);
-        if (parts.Length < rest + 1) return Fail("用法: sealarea [玩家 1|2] <封印卡编号|UID> <地区编号>");
+        if (parts.Length < 3) return Fail("用法: sealarea <封印卡编号|UID> <地区编号>");
 
-        if (!TryResolveCard(parts[ci], player, null, out var seal, out string howSeal, out string e1))
+        if (!TryResolveCard(parts[1], 0, null, out var seal, out string howSeal, out string e1))
             return Fail("未找到封印卡：" + e1);
-        if (!int.TryParse(parts[rest], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
+        if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
             return Fail($"无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})");
+        if (_zoneManager == null) return Fail("封印失败：ZoneManager 未注入");
 
         // 封印于地区：SealedBy=null + ZoneDetailId=地区UID 标记，并置于该争夺区（对称 attacharea）
         // 封印于地区不标 IsSealed（IsSealed 用于单卡压制守卫）；地区封印靠 SealedBy=null + ZoneDetailId 标识
@@ -1252,7 +1371,7 @@ public partial class PMCommandManager : Node
         seal.IsSeal = true;                // 标记本卡为封印卡（封印于地区），供地区赢取/UI 识别
         seal.IsSealed = false;
         seal.ZoneDetailId = areaUid;
-        _zoneManager.MoveToSealedZone(seal, areaUid, seal.ControllerId == 0 ? player : seal.ControllerId);
+        _zoneManager.MoveToSealedZone(seal, areaUid, seal.ControllerId == 0 ? 1 : seal.ControllerId);
         GD.Print($"🔒 封印卡 {seal.PlayerTemplate?.CardName}({seal.UID}·{howSeal}) 封印到地区{areaNo}({areaUid})");
         _onZoneChanged?.Invoke();
         return true;
@@ -1312,12 +1431,12 @@ public partial class PMCommandManager : Node
   setassetfromdeck <玩家 1|2> <num>        - 从**该玩家**卡组顶取 num 张进**该玩家**资产区
   setassetfromdeck <玩家 1|2> <卡牌编号> [num] - 从该玩家卡组按编号取（缺省 1 张）
 
-  ---- 附属 / 封印（编号或实例 UID 都可以；玩家参数可省略，省略时取当前行动权玩家并打印提醒）----
-  attach [玩家 1|2] <附属编号|UID> <宿主编号|UID>       - 结附到**场上**宿主（宿主自动限定场上卡）
-  attacharea [玩家 1|2] <附属编号|UID> <地区编号>       - 结附到指定地区
-  detach <附属UID>                                      - 解除结附（仅断引用）
-  seal [玩家 1|2] <封印卡编号|UID> <目标编号|UID>       - 封印到**场上**目标卡
-  sealarea [玩家 1|2] <封印卡编号|UID> <地区编号>       - 封印到指定地区
+  ---- 附属 / 封印（**不带玩家参数**，恢复原签名；两个卡牌参数都可用 实例UID 或 卡牌编号）----
+  attach <附属编号|UID> <宿主编号|UID>       - 结附到**场上**宿主（宿主自动限定场上卡）
+  attacharea <附属编号|UID> <地区编号>       - 结附到指定地区
+  detach <附属UID>                           - 解除结附（仅断引用）
+  seal <封印卡编号|UID> <目标编号|UID>       - 封印到**场上**目标卡
+  sealarea <封印卡编号|UID> <地区编号>       - 封印到指定地区
 
   ---- 对抗 ----
   investigation <玩家 1|2> <地区 areaNo> <X> - 调查对抗：胜者查看牌库顶 X 张、分配放回后抽 1
@@ -1331,9 +1450,13 @@ public partial class PMCommandManager : Node
                                 jumpto CombatInvestigation1 ＝跳到 1 地区调查对抗（省略＝地区1）
 
   ---- 其它 ----
-  damage area <索引> <数值> / damage card <UID> <数值> / damage hand <索引> <数值>
-  trauma ... 同 damage 但造成创伤；reset 重置伤害；list 列出卡牌状态
-  kill card <UID>；heal card <UID> [数值]
+  damage <UID> <数值> / damage card <UID> <数值>      - 对指定卡牌造成伤害（card 可省，两种写法等价）
+  damage area <地区索引> <数值>                       - 对地区所有角色造成伤害（索引从 0 开始）
+  damage hand <手牌索引> <数值>                       - 对 P1 手牌指定位置造成伤害（索引从 0 开始）
+  trauma <UID> <数值> / trauma card|area|hand ...     - 同 damage，但造成创伤
+  reset / list                - reset 重置伤害；list 列出全场卡牌状态（含 UID，配合 <UID> 参数用）
+  kill <UID> / kill card <UID>  - 强制杀死卡牌（打满防御走正常死亡结算；两种写法等价）
+  heal <UID> [数值] / heal card <UID> [数值] - 清除伤害（不填数值＝清空伤害与创伤）
   tap/untap/flip <UID>；covert <UID> [on|off]
   deck [1|2] / printdeck      - 按卡组内真实顺序打印卡组内容（索引0=牌库顶，默认玩家1）
   addarea [数量]              - 从世界牌库抽地区卡并新建地区槽位（默认1个）
@@ -1355,8 +1478,8 @@ public partial class PMCommandManager : Node
   move 2 JC014 hand          - P2 卡组取 1 张 JC014 加入 P2 手牌
   move 1 inst_37 2           - P1 的实例 inst_37 移动到争夺区 2
   setassetfromdeck 1 12      - P1 卡组顶 12 张进 P1 资产区
-  attacharea 1 JC012 1       - P1 的 JC012 结附到地区1
-  seal 1 JC020 <目标UID>      - P1 的 JC020 封印到场上目标卡
+  attacharea JC012 1         - JC012 结附到地区1（不带玩家参数）
+  seal JC020 <目标编号|UID>   - JC020 封印到场上目标卡
   investigation 2 1 1        - P2 在地区1 调查对抗获胜 X=1
   battle 1 1 2               - P1 在地区1 战斗对抗获胜 2 点
   power 1 1 5                - P1 在地区1 加 5 个势力标记（瞬时）

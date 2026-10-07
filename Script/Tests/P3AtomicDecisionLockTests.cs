@@ -188,6 +188,26 @@ namespace Script.Tests
                 bool allowCancel, System.Action<CardInstance> onPicked)
                 => PickPending.Add((chooserPlayerId, candidates, onPicked));
 
+            /// <summary>【2026-09·A81】"场上高亮 + 点击"式选择（牺牲自选等）的待回包队列（候选＝UID）。</summary>
+            public readonly List<(int, List<string>, System.Action<string>)> PlayTargetPending
+                = new List<(int, List<string>, System.Action<string>)>();
+
+            public void PromptPlayTarget(int chooserPlayerId, string prompt, bool isArea, List<string> candidateUids,
+                System.Action<string> onPicked)
+                => PlayTargetPending.Add((chooserPlayerId, new List<string>(candidateUids ?? new List<string>()), onPicked));
+
+            /// <summary>"玩家点击"最新打开的场上高亮选择窗（null＝第一候选）。</summary>
+            public void ClickPlayTarget(string uid)
+            {
+                Assert.IsTrue(PlayTargetPending.Count > 0, "前置：应有一个等待玩家的场上选择窗");
+                var (_, candidates, cb) = PlayTargetPending[0];
+                PlayTargetPending.RemoveAt(0);
+                string picked = null;
+                if (!string.IsNullOrEmpty(uid) && candidates != null && candidates.Contains(uid)) picked = uid;
+                picked ??= (candidates != null && candidates.Count > 0 ? candidates[0] : null);
+                cb?.Invoke(picked);
+            }
+
             public void PromptCurbMarks(int curbedPlayerId, int remaining,
                 List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid)
                 => onPickedAreaUid?.Invoke(null);
@@ -433,6 +453,8 @@ namespace Script.Tests
             Assert.IsFalse(game.TurnManager.IsAtomicLocked, "回包后释放");
         }
 
+        /// <summary>【2026-09·A81】多玩家牺牲：先手优先 + **逐位立即落地**，整段期间持续持锁
+        /// （后手看得见先手的牺牲已进墓地）。</summary>
         public void TestAtomicLock_多玩家牺牲逐位窗口期间持续持锁()
         {
             var game = NewGame();
@@ -448,16 +470,16 @@ namespace Script.Tests
 
             EffectEngine.Instance.ResolveEffect(e, p1a, null, "");
 
-            Assert.AreEqual(1, hooks.PickPending.Count, "先问先手玩家");
+            Assert.AreEqual(1, hooks.PlayTargetPending.Count, "先问先手玩家");
             Assert.IsTrue(game.TurnManager.IsAtomicLocked, "第一位玩家选择期间持锁");
 
-            hooks.ClickPick(p1b.UID);
-            Assert.AreEqual(1, hooks.PickPending.Count, "接着问第二位玩家");
+            hooks.ClickPlayTarget(p1b.UID);
+            Assert.AreEqual(CardZone.Graveyard, p1b.CurrentZone, "先手点击后**立即落地**（后手可见）");
+            Assert.AreEqual(1, hooks.PlayTargetPending.Count, "接着问第二位玩家");
             Assert.IsTrue(game.TurnManager.IsAtomicLocked, "多玩家编排的**整段**期间持续持锁");
 
-            hooks.ClickPick(p2a.UID);
-            Assert.AreEqual(CardZone.Graveyard, p1b.CurrentZone, "全部选完 → 一起牺牲");
-            Assert.AreEqual(CardZone.Graveyard, p2a.CurrentZone, "两位玩家的选择一起落地");
+            hooks.ClickPlayTarget(p2a.UID);
+            Assert.AreEqual(CardZone.Graveyard, p2a.CurrentZone, "后手的选择同样逐位落地");
             Assert.IsFalse(game.TurnManager.IsAtomicLocked, "全部完成 → 释放");
         }
 

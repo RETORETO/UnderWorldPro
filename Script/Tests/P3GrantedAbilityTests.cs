@@ -401,8 +401,47 @@ namespace Script.Tests
                 "本地区只有它自己且不能取自身 ⇒ 无合法目标");
         }
 
-        private static EffectData FindEffect(PlayerCardData tmpl, string effectId)
+        // ==================== ⑨ 服务端投影必须含"运行期授予"的能力（联机拖拽回归） ====================
+
+        /// <summary>
+        /// 【用户实测】"JC019 让宿主获得效果，现在变回**无法拖拽**的形式了"。
+        /// 根因（联机/纯客户端）：客户端要判"能否拖拽、用哪条能力"走 `ActivateEligibility.GetAllActivateAbilities`，
+        /// 而它读的是**服务端才有的**运行期授予表（`EffectEngine.GetGrantedAbilities`）⇒ 客户端只看到模板项，
+        /// JC019 授予宿主的能力**不可见**（本地能力数 0 ⇒ 拖拽起手直接 return false）；
+        /// 而服务端的合法性投影 `LegalityProjection` 也只枚举模板效果 ⇒ 投影里同样没有该能力。
+        /// 修复：① 投影改用 `GetAllActivateAbilities`（模板 ∪ 授予）；
+        ///       ② 新增 `GameViewSnap.ActivationAbilities`（含 `Draggable` 结论），客户端据此起手拖拽。
+        /// </summary>
+        public void TestGranted_服务端投影含授予的能力与可拖拽结论()
         {
+            var game = NewGame();
+            var areas = Areas(game);
+            var host = OnField(game, Probe("TS_ga_proj", "不死生物"), 1, areas[0]);
+            var victim = OnField(game, Probe("TS_ga_proj_t", "不死生物"), 2, areas[0]);
+            PlaceSpear(game, host, areas[0]);
+
+            var view = Script.Manager.LegalityProjection.Build(game.CardManager, game.PlayerManager,
+                game.TurnManager, game.ZoneManager, 1);
+            Assert.IsNotNull(view, "应生成投影");
+
+            // ① 能力清单含"运行期授予"的那条，且带"可拖拽"结论
+            Script.Net.ActivationAbilitySnap entry = null;
+            foreach (var a in view.ActivationAbilities)
+                if (a != null && a.SourceUid == host.UID && a.EffectId == "JC019_G_HostActivatedSmite") entry = a;
+            Assert.IsNotNull(entry, "投影必须下发**运行期授予**的能力（否则客户端看不到它）");
+            Assert.IsTrue(entry.Draggable, "宿主只有这 1 条能力 ＋ 需选场上卡目标 ⇒ 服务端应判『可拖拽』");
+            Assert.IsTrue(entry.NeedsSelection, "该能力需要选目标");
+            Assert.AreEqual((int)TargetKind.Character, entry.TargetKindValue, "目标大类＝角色");
+
+            // ② 该能力的合法目标也要投影（客户端拖拽期间的高亮/落点全靠它）
+            Script.Net.AbilityTargetSnap tgt = null;
+            foreach (var t in view.AbilityTargets)
+                if (t != null && t.SourceUid == host.UID && t.EffectId == "JC019_G_HostActivatedSmite") tgt = t;
+            Assert.IsNotNull(tgt, "投影必须含该能力的合法目标条目（旧实现只有模板效果 ⇒ 0 条）");
+            Assert.IsTrue(tgt.TargetUids.Contains(victim.UID), "敌方非人类角色应是合法落点");
+        }
+
+        private static EffectData FindEffect(PlayerCardData tmpl, string effectId)        {
             if (tmpl?.EffectDataList == null) return null;
             foreach (var e in tmpl.EffectDataList)
                 if (e != null && e.EffectId == effectId) return e;

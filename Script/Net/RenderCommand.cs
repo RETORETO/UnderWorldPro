@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Script.Enums;
 
 namespace Script.Net
@@ -49,6 +49,10 @@ namespace Script.Net
         public int CurrentInvestigation;
         public int CurrentStrength;
         public int CurrentPower;
+        /// <summary>【2026-09·JC051】卡面显示势力：服务端按与 AreaStatsCalculator 同一算式算好的标量
+        /// （CurrentPower ＋（先手 ? 授予的先手势力 : 0））。联机客户端卡面的增量更新走本指令，故此值必须随指令下发；
+        /// 否则角色卡的势永远不含先手势力（地区总显示读的是地区合计，故一直是对的——用户实测的差异根源）。</summary>
+        
         public int CurrentDefense;
         public List<MagicDomain> MagicDomains;
     }

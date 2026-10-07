@@ -29,6 +29,8 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
                     IsLocalZone = true,
+                    // 【2026-09 整体复查·用户裁定】卡文未排除自身，但自身**印刷费用 3 > 筛选项 ≤2** ⇒ 自身本就不符合
+                    // 目标条件 ⇒ 显式 `CanTargetSelf=false`（与默认值一致但写明意图，供判据⑥审计）。
                     CanTargetSelf = false,
                     Restrictions = new Array<TargetRestriction> { TargetRestriction.CostAtMost },
                     Param = "2",                      // 印刷费用 ≤ 2

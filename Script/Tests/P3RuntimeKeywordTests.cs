@@ -132,11 +132,17 @@ namespace Script.Tests
             var e = FindEffect(tmpl, "JC089_A_CursedHostGrants");
             Assert.IsNotNull(e, "JC089 应有『宿主获得减益与威名』持续效果");
             Assert.IsTrue(e.GrantToHost, "授予落点＝结附宿主");
-            Assert.AreEqual(4, e.ContinuousGrants.Count, "四条授予");
+            Assert.AreEqual(6, e.ContinuousGrants.Count, "六条授予（白刀/黑刀 各含 Icon + Attribute）");
             Assert.AreEqual(-1, e.ContinuousGrants[0].Amount, "-1 防御（负值授予）");
             Assert.AreEqual("防御", e.ContinuousGrants[0].Value, "授予对象＝防御");
-            Assert.IsTrue(e.ContinuousGrants[2].Value == "黑刀" || e.ContinuousGrants[2].Value == "白刀", "含图标授予");
-            Assert.AreEqual("威名", e.ContinuousGrants[3].Value, "含【威名】关键字授予");
+            bool hasIcon = false, hasWeiMing = false;
+            foreach (var g in e.ContinuousGrants)
+            {
+                if (g.Value == "黑刀" || g.Value == "白刀") hasIcon = true;
+                if (g.Value == "威名") hasWeiMing = true;
+            }
+            Assert.IsTrue(hasIcon, "含图标授予");
+            Assert.IsTrue(hasWeiMing, "含【威名】关键字授予");
         }
 
         // ==================== ② 群体授予：机动授予"所有其他本方角色" ====================

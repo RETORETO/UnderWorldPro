@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Enums;
@@ -67,6 +67,73 @@ public partial class GameInitializer : Node
     /// <summary>本局加载的 P2 卡组（含卡组与秘社），供 SetupCouncils 按玩家读取秘社；null=该方无专属卡组。</summary>
     private DeckList _deckP2;
 
+    // ============================================================
+    // 【2026-10 修复·单人模式"看不到起始手牌 / PM draw 无 UI 变化"】卡组装载来源快照
+    // ============================================================
+    // 装载（`InitFromDeckList` / `InitTestDecks`）会 **new 出整批新 CardInstance**。而 View 是按
+    // "装载完成那一刻"的那批实例建卡 UI 的：`Arena.InitializeDeckAndGraveyard()` 用它们建 `DeckZone` 的
+    // CardUI，`Arena.BuildCardUIMap()` 把它们登记进 `_cardUIMap`（键＝实例 UID）。
+    // 若在 View 绑定之后再装一次，逻辑层与 View 就分属两批实例：之后每一次"牌库→手牌"移动
+    // （起始发牌 / PM `draw` / 回合抓牌）在 `Arena.SyncCardUIToZone` 里都按 UID 查不到卡 UI，
+    // 于是**静默 return**（无任何日志）⇒ 手牌区永远空白、牌库 UI 永远不减。
+    // 真实调用链正是如此：`Arena._Ready → InitializeAll()`（首次装载）→ 建 View
+    // → `StartMatch() → DealOpeningHands()`（原实现无条件再装一次）。
+    // 因此这里记录"上次装载的来源"，来源未变就**不重装**，保证实例集与 View 始终同源。
+
+    /// <summary>是否已完成过一次卡组装载（首次必须装载）。</summary>
+    private bool _decksLoaded;
+
+    /// <summary>上次装载时 P1 的来源卡组（null＝硬编码测试卡组；非 null＝该 DeckList 引用）。</summary>
+    private DeckList _loadedP1Deck;
+
+    /// <summary>上次装载时 P1 走"单机 UI 所选 JSON"分支的路径（null＝未走该分支）。
+    /// 来源标识用**路径**而非 `GameManager.SelectedDeck` 对象：玩家可在房间内改选卡组，
+    /// 只有路径才是稳定的选择标识（`SelectedDeck` 仅作按需读盘缓存，本项目当前从不写入它）。</summary>
+    private string _loadedP1UiPath;
+
+    /// <summary>上次装载时 P2 的来源卡组（null＝硬编码测试卡组；非 null＝P2DeckOverride）。</summary>
+    private DeckList _loadedP2Deck;
+
+    /// <summary>P1 卡组来源分支（与 `ReloadDecks` 的优先级一一对应；仅用于"是否需要重装"判定与打日志）。</summary>
+    private enum P1DeckSourceKind
+    {
+        Hardcoded,      // 硬编码测试卡组
+        Override,       // P1DeckOverride
+        UiSelectedJson, // 单机 UI 所选卡组 JSON（按路径）
+        InheritP2,      // 未指定 P1，沿用 P2DeckOverride
+    }
+
+    /// <summary>
+    /// 解析 P1 卡组来源（**不实例化**）。优先级与 `ReloadDecks` 完全一致：
+    /// ① `P1DeckOverride`；② 单机 UI 所选 JSON（返回路径）；③ 沿用 `P2DeckOverride`；④ 硬编码。
+    /// </summary>
+    private P1DeckSourceKind ResolveP1DeckSource(out DeckList deck, out string uiPath)
+    {
+        deck = null;
+        uiPath = null;
+
+        if (P1DeckOverride != null)
+        {
+            deck = P1DeckOverride;
+            return P1DeckSourceKind.Override;
+        }
+
+        var gm = GameManager.Instance;
+        if (gm != null && gm.UseSelectedDeck)
+        {
+            uiPath = gm.SelectedDeckPath ?? "";
+            return P1DeckSourceKind.UiSelectedJson;
+        }
+
+        if (P2DeckOverride != null)
+        {
+            deck = P2DeckOverride;
+            return P1DeckSourceKind.InheritP2;
+        }
+
+        return P1DeckSourceKind.Hardcoded;
+    }
+
     /// <summary>取指定玩家的本局卡组（即该玩家秘社的来源）；该方无专属卡组时返回 null，由调用方回退默认秘社。</summary>
     private DeckList GetDeckForPlayer(int playerId) => playerId == 1 ? _deckP1 : _deckP2;
 
@@ -88,6 +155,9 @@ public partial class GameInitializer : Node
 
     /// <summary>【K13】区域移动后 → 光环重算的订阅句柄（装配层持有，联机服务端与 headless 同样生效）。</summary>
     private System.Action<Script.Game.Entities.CardInstance, Script.Enums.CardZone, int, string> _postMoveAuraHandler;
+        /// <summary>【2026-09·JC051】回合开始时的持续/光环重算（自愈补授）句柄：回合切换**不经移动** ⇒ 需独立触发点。</summary>
+        
+private System.Action<int> _turnStartAuraHandler;
 
     // ============================================================
     // 初始化入口（由 Arena._Ready 调用）
@@ -274,6 +344,33 @@ public partial class GameInitializer : Node
         };
         ZoneManager.OnPostMove -= _postMoveAuraHandler;
         ZoneManager.OnPostMove += _postMoveAuraHandler;
+
+        // 【2026-09 用户实测·JC051】光环/持续授予在**回合切换**时也可能被还原掉，而"回合切换"**没有卡牌移动**
+        // ⇒ 走不到上面的 `OnPostMove` 重算，自愈补授永不触发（实测："第一回合能正常显示，再过两回合
+        // 先手交移回来了没有正常显示"）。这里在**回合开始**对双方各做一次同口径的**幂等**重算/自愈补授。
+        _turnStartAuraHandler = _ =>
+        {
+            // 【2026-09 回归加固】回合切换不经移动 ⇒ 在这里补一次持续/光环重算。
+            // ⚠ 只做与"授予补回"直接相关的两项（光环重算 + 数值授予补回）：原先连 `ReapplyGrantedAbilities`/
+            // `ReapplySuppressions`/`ReevaluateCouncilStaticGrants` 一起调，风险面过大（用户实测：加了本钩子后
+            // JC053 双击无反馈、JC051 连第一回合都不显示 ⇒ 疑似此处异常中断了回合流程）。
+            // 且**一律 try/catch**：重算失败绝不允许打断"回合开始"这一关键流程（只记日志）。
+            try
+            {
+                effectEngine.ReevaluateAuras(1);
+                effectEngine.ReevaluateAuras(2);
+                effectEngine.ReapplyMissingContinuousGrants(1);
+                effectEngine.ReapplyMissingContinuousGrants(2);
+                // 【2026-09·JC051】先手相关值必须在**回合开始**重算（否则先手标记停留在上一回合 ⇒ 后手回合把临时先手能力也算进去）
+                TurnManager.RefreshFirstStrikeStats();
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[光环/持续] ⚠ 回合开始重算异常（已吞掉，不影响回合流程）：{ex.Message}");
+            }
+        };
+        TurnManager.OnTurnStarted -= _turnStartAuraHandler;
+        TurnManager.OnTurnStarted += _turnStartAuraHandler;
         TurnManager.SetAreaManager(AreaManager);     // 注入：赢取地区检查/结算依赖
         if (VerboseSetup) GD.Print("  ✅ AreaManager");
 
@@ -349,14 +446,33 @@ public partial class GameInitializer : Node
     ///   2. 单机 UI 选择（`GameManager.UseSelectedDeck` + `SelectedDeck/SelectedDeckPath`，仅 P1）；
     ///   3. 硬编码测试卡组（P1/P2）→ 记为"该方无专属卡组"，秘社回退默认秘社。
     /// InitTestDecks / InitFromDeckList 均为幂等重建（内部 Clear 后填充+洗牌），可安全重复调用。
+    ///
+    /// 【幂等·来源未变则不重装】见文件内 `_decksLoaded` 段注释：重装会换掉整批 CardInstance，
+    /// 使已按旧实例建好的 View（`DeckZone` 的 CardUI + `Arena._cardUIMap`）**永久失联**
+    /// ⇒ 起始手牌与 PM draw 全都没有 UI。故仅当来源真的变化时才重装：
+    ///  · 单机路径：`InitializeAll` 已按房间所选卡组装载 → `StartMatch` 时来源未变 ⇒ 跳过（修复本次故障）；
+    ///  · 测试/联机：在 `InitializeAll` **之后**才赋 `P1DeckOverride`/`P2DeckOverride`（或房间内改选了卡组路径）
+    ///    ⇒ 来源变化 ⇒ 照常重装（既有契约不变）；
+    ///  · 整局重开：`ResetMatch` 传 `force: true`（`CardManager.Reset` 已把 `_nextUID` 归 1，必须重建实例）。
     /// </summary>
-    private void ReloadDecks()
+    private void ReloadDecks(bool force = false)
     {
-        // ① P2 卡组
-        if (P2DeckOverride != null)
+        var p1Kind = ResolveP1DeckSource(out var p1Deck, out var p1UiPath);
+        var p2Deck = P2DeckOverride;
+
+        if (!force && _decksLoaded
+            && ReferenceEquals(_loadedP1Deck, p1Deck) && _loadedP1UiPath == p1UiPath
+            && ReferenceEquals(_loadedP2Deck, p2Deck))
         {
-            DeckManager.InitFromDeckList(P2DeckOverride, playerId: 2);
-            _deckP2 = P2DeckOverride;   // 秘社来源：P2 自己的卡组
+            GD.Print("[GameInitializer] 卡组来源未变 ⇒ 跳过重复装载（保持逻辑实例集与 View 同源）");
+            return;
+        }
+
+        // ① P2 卡组
+        if (p2Deck != null)
+        {
+            DeckManager.InitFromDeckList(p2Deck, playerId: 2);
+            _deckP2 = p2Deck;   // 秘社来源：P2 自己的卡组
             GD.Print("【GameInitializer】P2 使用本局显式指定卡组");
         }
         else
@@ -366,44 +482,52 @@ public partial class GameInitializer : Node
         }
 
         // ② P1 卡组（每个分支都必须显式赋值 _deckP1，避免沿用上一局/其它分支的残留）
-        if (P1DeckOverride != null)
+        switch (p1Kind)
         {
-            DeckManager.InitFromDeckList(P1DeckOverride, playerId: 1);
-            _deckP1 = P1DeckOverride;   // 秘社来源：P1 自己的卡组（不再以 P1 卡组统一双方秘社）
-            GD.Print("【GameInitializer】P1 使用本局显式指定卡组");
-            return;
+            case P1DeckSourceKind.Override:
+                DeckManager.InitFromDeckList(p1Deck, playerId: 1);
+                _deckP1 = p1Deck;   // 秘社来源：P1 自己的卡组
+                GD.Print("【GameInitializer】P1 使用本局显式指定卡组");
+                break;
+
+            case P1DeckSourceKind.UiSelectedJson:
+            {
+                var gm = GameManager.Instance;
+                var deck = gm?.SelectedDeck ?? DeckListLoader.Load(p1UiPath);
+                if (deck != null && deck.Cards.Count > 0)
+                {
+                    DeckManager.InitFromDeckList(deck, playerId: 1); // P1 用 JSON
+                    _deckP1 = deck;
+                    GD.Print($"【GameInitializer】P1 使用卡组 JSON: {p1UiPath}");
+                }
+                else
+                {
+                    GD.PrintErr("[GameInitializer] 卡组 JSON 无效，P1 回退到硬编码卡组");
+                    DeckManager.InitTestDecks(playerId: 1);
+                    _deckP1 = null;   // 回退硬编码 = 无专属卡组，不能沿用已加载但无效的 deck
+                }
+                break;
+            }
+
+            case P1DeckSourceKind.InheritP2:
+                // 联机场景：P2 已显式指定 → P1 未指定时沿用 P2 卡组（避免服务端去读 UI 状态）。
+                // 此时 P1 的牌确实来自该卡组，秘社也取该卡组自带值，保持"卡与秘社同源"。
+                DeckManager.InitFromDeckList(p1Deck, playerId: 1);
+                _deckP1 = p1Deck;
+                GD.Print("【GameInitializer】P1 沿用 P2 的本局显式卡组（未单独指定）");
+                break;
+
+            default:
+                DeckManager.InitTestDecks(playerId: 1); // P1 硬编码（未勾选）
+                _deckP1 = null;                         // 无专属卡组 → 秘社回退默认秘社
+                break;
         }
 
-        var gm = GameManager.Instance;
-        if (gm != null && gm.UseSelectedDeck)
-        {
-            var deck = gm.SelectedDeck ?? DeckListLoader.Load(gm.SelectedDeckPath);
-            if (deck != null && deck.Cards.Count > 0)
-            {
-                DeckManager.InitFromDeckList(deck, playerId: 1); // P1 用 JSON
-                _deckP1 = deck;
-                GD.Print($"【GameInitializer】P1 使用卡组 JSON: {gm.SelectedDeckPath}");
-            }
-            else
-            {
-                GD.PrintErr("[GameInitializer] 卡组 JSON 无效，P1 回退到硬编码卡组");
-                DeckManager.InitTestDecks(playerId: 1);
-                _deckP1 = null;   // 回退硬编码 = 无专属卡组，不能沿用已加载但无效的 deck
-            }
-        }
-        else if (P2DeckOverride != null)
-        {
-            // 联机场景：P2 已显式指定 → P1 未指定时沿用 P2 卡组（避免服务端去读 UI 状态）。
-            // 此时 P1 的牌确实来自该卡组，秘社也取该卡组自带值，保持"卡与秘社同源"。
-            DeckManager.InitFromDeckList(P2DeckOverride, playerId: 1);
-            _deckP1 = P2DeckOverride;
-            GD.Print("【GameInitializer】P1 沿用 P2 的本局显式卡组（未单独指定）");
-        }
-        else
-        {
-            DeckManager.InitTestDecks(playerId: 1); // P1 硬编码（未勾选）
-            _deckP1 = null;                         // 无专属卡组 → 秘社回退默认秘社
-        }
+        // 记录本次生效来源，供下一次判定"是否需要重装"（见上方幂等说明）。
+        _decksLoaded = true;
+        _loadedP1Deck = p1Deck;
+        _loadedP1UiPath = p1UiPath;
+        _loadedP2Deck = p2Deck;
     }
 
     // ============================================================
@@ -503,7 +627,9 @@ public partial class GameInitializer : Node
         // 2.5【MVC 收口】清空 UI 通知总线订阅（旧 Arena 节点重建会重新订阅，避免残留叠加）
         Script.Manager.UiNotificationBus.Instance?.Clear();
         // 3. 重建玩家卡组 + 世界牌库 + 秘社（ZoneManager.Reset 已清 CouncilZone，需重放秘社）
-        ReloadDecks();
+        // 【强制重装】CardManager.Reset 已把 _nextUID 归 1 ⇒ 必须重建整批实例（否则新 UID 与旧注册表冲突），
+        // 来源即使未变也不能跳过，故传 force: true。
+        ReloadDecks(force: true);
         SetupCouncils();
         // 4. 发牌起局
         StartMatch();
@@ -586,7 +712,10 @@ public partial class GameInitializer : Node
             return;
         }
 
-        // 起手数来源＝秘社；重放秘社确保读到的是**本局卡组**携带的秘社（而非 InitializeAll 时的旧卡组）。
+        // 起手数来源＝秘社；重放卡组+秘社确保读到的是**本局最终卡组**携带的秘社（而非 InitializeAll 时的旧卡组）。
+        // ReloadDecks 是幂等的：来源未变（单机：InitializeAll 已按房间所选卡组装载）⇒ 直接跳过，
+        // **绝不换掉 View 已绑定的那批实例**；来源变化（测试/联机在 InitializeAll 之后才赋 override，
+        // 或房间内改选了卡组路径）⇒ 照常重装。详见 ReloadDecks 的幂等说明。
         ReloadDecks();
         SetupCouncils();
 

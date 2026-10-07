@@ -18,6 +18,27 @@ namespace Script.Interfaces
         void PromptPayOrTap(CardInstance source, int payAmount);
 
         /// <summary>
+        /// 【2026-09 整体复查·修复·JC128】通用**二选一确认窗**（两个按钮、**不出现输入框**）：用于
+        /// "是/否"型决策——如 JC128 替罪羊"是否移除 N 个势力标志（取消则牺牲一个角色）"。
+        /// 用户口径（JC061/JC064 同类）："**不需要输入框**"。`onChosen(true)`＝选了 `yesLabel`；`false`＝`noLabel`。
+        /// 默认实现：退回数值输入窗（值域 0..1、标签 `yesLabel`/`noLabel`）⇒ 旧 View / 测试桩不受影响。
+        /// </summary>
+        void PromptTwoChoice(int chooserPlayerId, string prompt, string yesLabel, string noLabel,
+            System.Action<bool> onChosen)
+            => PromptNumberInput(chooserPlayerId, prompt, 0, 1, 0, yesLabel, noLabel,
+                chosen => onChosen?.Invoke(chosen > 0));
+
+        /// <summary>
+        /// 【2026-09 用户实测·JC064】"**支付 N，否则牺牲本卡**"（`PayOrSacrificeSelf`）的**二选一确认窗**——
+        /// 用户口径："JC064 支付费用的触发弹窗**不需要输入框**，参考 JC061"（JC061 的可选支付＝两个按钮）。
+        /// `onChosen(true)`＝支付 N；`false`＝牺牲本卡（费用不足时调用方根本不会问，直接牺牲）。
+        /// 默认实现：退回数值输入窗（0/1，标签为 `"支付 N"` / `"牺牲"`）⇒ 旧 View / 测试桩不受影响。
+        /// </summary>
+        void PromptPayOrSacrifice(int chooserPlayerId, string sourceName, int amount, System.Action<bool> onChosen)
+            => PromptNumberInput(chooserPlayerId, $"{sourceName}：支付 {amount} 还是牺牲它？", 0, 1, 1,
+                $"支付 {amount}", "牺牲", chosen => onChosen?.Invoke(chosen > 0));
+
+        /// <summary>
         /// 【P2】弃牌：请求 UI 让 **chooserPlayerId** 从候选手牌中选出一张（候选属于 discarderId）。
         ///  · 一般情形 chooser == discarder（自己弃自己的手牌，如 JC130）；
         ///  · JC114 情形 chooser == 施术者（从对手手牌中指定，候选需对 chooser 可见）。
@@ -106,6 +127,18 @@ namespace Script.Interfaces
         void PromptEffectMode(CardInstance source, Script.Data.Effects.EffectData data, System.Action<int> onChosen);
 
         /// <summary>
+        /// 【2026-09 用户口径 JC063】"选择一项" + **各模式可用性**（该模式当前是否有合法目标）：
+        /// `availability` 与 `data.Modes` 同序，true ＝ 可用；false ＝ 该模式**当前没有合法目标**，View 应**置灰**。
+        /// 用户口径："JC063 两个效果如果场上完全没有合法目标，置灰（注意两个效果要求的合法目标不一致）"
+        /// —— 可用性由 Controller 用**与真正取目标同一份枚举**算好（`TurnManager.GetModeAvailability`），
+        /// View 只展示不重算。
+        /// 默认实现：忽略可用性、退回既有 <see cref="PromptEffectMode"/>（旧 View / 测试桩不受影响）。
+        /// </summary>
+        void PromptEffectModeWithAvailability(CardInstance source, Script.Data.Effects.EffectData data,
+            System.Collections.Generic.List<bool> availability, System.Action<int> onChosen)
+            => PromptEffectMode(source, data, onChosen);
+
+        /// <summary>
         /// 【K11·可选支付 / 数值输入】请求 UI 弹出一个**数值输入框**：玩家输入一个数字 N（`min`..`max`，初始 `defaultValue`），
         /// 再按 `confirmLabel`（如"支付"）或 `cancelLabel`（如"不支付"）。
         /// 用户 2026-09 口径：**输入的数字即为 N**；取消/不支付 → `onChosen(-1)`。
@@ -161,6 +194,59 @@ namespace Script.Interfaces
         {
             Godot.GD.PrintErr("[IGameUIHooks] ⚠ PromptPlayTarget 未实现（该 View 未提供目标选择窗）→ 按取消处理（不打出该牌）");
             onPicked?.Invoke(null);
+        }
+
+        /// <summary>
+        /// 【K11·触发版】**触发入堆叠前的"可选固定费用"**：问玩家"**是否支付 N**"——
+        /// **只有"是/否"两个选项，不需要输入金额**（选"是"就支付 N）。
+        ///
+        /// 语义（用户 2026-09 口径 JC061）：
+        ///  · 否 → 调用方**不把该触发入堆叠**（整条效果不结算，也不扣费）；
+        ///  · 是 → 调用方扣 N 点费用后再入堆叠。
+        /// **放弃整条触发由更上层的触发排序窗负责**（`EffectData.Forced`），故本窗**不提供"取消"**。
+        ///
+        /// 说明（为什么本方法带**默认实现**）：与 `PromptPlayTarget` / `WaitForUIRefresh` 同款口径——
+        /// `IGameUIHooks` 既有成员为纯抽象，本方法新增时已有 20+ 处测试桩（各测试文件内的 Stub 类）
+        /// 会因"未实现接口成员"而全量编译失败；而本方法的"无实现"语义明确是 **fail-closed**
+        /// （不支付 ⇒ 不入堆叠，**绝不替玩家花钱**），故给一个显式兜底默认体。
+        /// 生产实现见 `Arena.PromptOptionalPay`。
+        /// </summary>
+        /// <param name="chooserPlayerId">做选择的玩家（＝该触发来源卡的控制者）。</param>
+        /// <param name="prompt">窗口提示文本（如"危机处理特派小组：是否支付 1？"）。</param>
+        /// <param name="amount">要支付的固定费用 N（调用方已确认玩家付得起才会调用本方法）。</param>
+        /// <param name="onChosen">true＝支付；false＝不支付。</param>
+        void PromptOptionalPay(int chooserPlayerId, string prompt, int amount, System.Action<bool> onChosen)
+        {
+            Godot.GD.PrintErr("[IGameUIHooks] ⚠ PromptOptionalPay 未实现 → 按『不支付』处理（该触发不入堆叠，绝不替玩家花钱）");
+            onChosen?.Invoke(false);
+        }
+
+        /// <summary>
+        /// 【2026-09·JC062/JC057 用户口径】**检视结果的合并呈现**：把本次结算中被私下检视到的**全部**牌面
+        /// **列在同一个窗**里给检视者看，框里**只有一个『确认』按钮**，点击即关闭并继续结算。
+        ///
+        /// 用户口径（原文）："JC062 的查看结果方式是结算的时候弹出一个弹窗，里面**列出所有看到的信息**，
+        /// 这个框的按钮**只有一个确认**，点击后关闭弹窗"＋"JC057 的查看方式和 JC062 一致"＋补问裁定
+        /// "**等点确认后再继续结算**（JC062 的抓牌排在确认之后）；**两个目标合并为同一个窗**"。
+        ///
+        /// 由 `EffectEngine.FlushInspectBatch` 在**最外层结算收尾**调用（同批只调一次，已合并）；
+        /// 调用前引擎已挂起（决策持锁），UI 只负责"展示 + 收集一次确认"，实际续算由回调驱动
+        /// （`onConfirmed` → `ContinuePendingChain`），View 不写 Model。
+        ///
+        /// 说明（为什么本方法带**默认实现**）：与 `PromptPlayTarget` / `WaitForUIRefresh` / `PromptOptionalPay`
+        /// 同款口径——新增抽象成员会让既有 20+ 处测试桩全量编译失败；而"无实现"的语义是明确的
+        /// **fail-open**（检视只是呈现，不改变任何规则状态）⇒ 直接回调确认、绝不死锁。
+        /// 生产实现见 `Arena.PromptInspectCards`（联机见 `ArenaOl.OpenOnlineInspectWindow`）。
+        /// </summary>
+        /// <param name="viewerPlayerId">检视者（＝效果来源卡控制者）。</param>
+        /// <param name="title">窗口标题（如"检视 2 张牌"）。</param>
+        /// <param name="cards">本批被检视的全部卡（**同一窗全部列出**；可为暗藏者/对手手牌）。</param>
+        /// <param name="onConfirmed">玩家点『确认』（或关闭窗口）后回调，续算结算流程。</param>
+        void PromptInspectCards(int viewerPlayerId, string title, System.Collections.Generic.List<CardInstance> cards,
+            System.Action onConfirmed)
+        {
+            Godot.GD.PrintErr("[IGameUIHooks] ⚠ PromptInspectCards 未实现 → 检视结果不弹窗，直接继续结算");
+            onConfirmed?.Invoke();
         }
 
         /// <summary>

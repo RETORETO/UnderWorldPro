@@ -41,6 +41,8 @@ namespace Cards.Effects.PlayerCards.JC
                     Kind = TargetKind.Character,   // IncludeCovert=true 时暗藏者也可选（卡文"角色或暗藏者"）
                     NeedsSelection = true,
                     IsLocalZone = true,            // 本地区 = 瑟琳娜所在地区
+                    // 【2026-09 整体复查·用户裁定】卡文未写"其他"，但**规则上瑟琳娜不能把自己封印在自己身上**
+                    // ⇒ 显式排除自身（`CanTargetSelf=false`，与默认值一致但写明意图，供判据⑥审计）。
                     CanTargetSelf = false,
                     IncludeCovert = true,
                 },

@@ -38,7 +38,8 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Kind = TargetKind.Player,
                     NeedsSelection = true,
-                    Restrictions = new Array<TargetRestriction> { TargetRestriction.Enemy },
+                    // 【2026-09 用户裁定】**"目标玩家"＝任意玩家（含自己）** ⇒ **不加** `Restrictions`
+                    // （空＝任意；`Enemy`＝对手 / `Friendly`＝本方）。原先写 `Enemy` 属收窄，已按裁定移除。
                 },
                 Actions = new Array<EffectAction>
                 {

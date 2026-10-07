@@ -23,8 +23,9 @@ public partial class Arena
     private const float CARD_HEIGHT = 140;
     private const float HAND_SPACING = 20;
 
-    // 场上/手牌/资产卡 ZIndex 基准：高于争夺区背景槽位(AreaSlot, ZIndex 0~6)，避免被背景遮挡
-    private const int ZINDEX_CARD_BASE = 100;
+    // 场上/手牌/资产卡 ZIndex 基准：高于争夺区背景槽位(AreaSlot)，避免被背景遮挡
+    // 【2026-10】层号统一收口到 Script.UI.Layers（禁止再写魔数；新增 UI 请从 Layers 取层号）
+    private const int ZINDEX_CARD_BASE = Layers.CardBase;
 
     // ============================================================
     // 分流辅助方法（双玩家双容器的查询收口）
@@ -368,28 +369,39 @@ public partial class Arena
     private void ArrangeAreaAttachmentsAndSeals()
     {
         // 按地区容器分组，容器内部统一排布
-        var groups = new Dictionary<Control, List<CardUI>>();
+        var roleGroups = new Dictionary<Control, List<Control>>();
+        var attachGroups = new Dictionary<Control, List<Control>>();
         // 角色卡（_areaCardUIs）按原顺序加入；地区附属/封印（_areaAttachSealUIs）按进入地区先后追加。
         // 两者合并后即为"统一平铺序列"，index 递增决定左右与 ZIndex 上下层。
+        // 【2026-10】合并与平铺统一走 CardLayoutHelper.LayoutAreaRow（单机/联机唯一实现）。
+        // 注意：角色侧**不做任何 IsAttached/IsSeal 过滤** —— 形态角色（如 JC027 变角色后仍保持附属身份）
+        // 已进入争夺区桶，必须参与统一平铺，否则会停留旧位并与地区附属重叠。
         foreach (var card in _areaCardUIs)
         {
             if (card == null || !GodotObject.IsInstanceValid(card)) continue;
             var parent = card.GetParent() as Control;
             if (parent == null) continue;
-            if (!groups.ContainsKey(parent)) groups[parent] = new List<CardUI>();
-            groups[parent].Add(card);
+            if (!roleGroups.ContainsKey(parent)) roleGroups[parent] = new List<Control>();
+            roleGroups[parent].Add(card);
         }
         foreach (var card in _areaAttachSealUIs)
         {
             if (card == null || !GodotObject.IsInstanceValid(card)) continue;
             var parent = card.GetParent() as Control;
             if (parent == null) continue;
-            if (!groups.ContainsKey(parent)) groups[parent] = new List<CardUI>();
-            groups[parent].Add(card);
+            if (!attachGroups.ContainsKey(parent)) attachGroups[parent] = new List<Control>();
+            attachGroups[parent].Add(card);
         }
 
-        foreach (var kv in groups)
-            LayoutCardsEvenly(kv.Key, kv.Value);
+        // 对"有角色 或 有地区附属/封印"的容器全部重排一次，保证 index/ZIndex 与联机完全一致
+        var containers = new HashSet<Control>(roleGroups.Keys);
+        foreach (var k in attachGroups.Keys) containers.Add(k);
+        foreach (var container in containers)
+        {
+            roleGroups.TryGetValue(container, out var roles);
+            attachGroups.TryGetValue(container, out var attachSeals);
+            CardLayoutHelper.LayoutAreaRow(container, roles, attachSeals);
+        }
     }
 
     /// <summary>
@@ -444,7 +456,7 @@ public partial class Arena
             slot.Size = new Vector2(slotWidth, slotHeight);
             slot.AnchorLeft = 0; slot.AnchorRight = 0;
             slot.AnchorTop = 0; slot.AnchorBottom = 0;
-            slot.ZIndex = i;              // 右侧地区压在左侧地区上方
+            slot.ZIndex = Layers.AreaSlotBase + i;   // 右侧地区压在左侧地区上方（基准层由 Layers 统一分配）
             slot.UpdateLayout();
         }
     }
@@ -466,7 +478,34 @@ public partial class Arena
             return;
         }
 
-        if (!_cardUIMap.TryGetValue(card.UID, out var cardUI) || cardUI == null) return;
+        if (!_cardUIMap.TryGetValue(card.UID, out var cardUI) || cardUI == null)
+        {
+            // 【诊断·2026-10】玩家卡却查不到卡 UI ⇒ View 与逻辑层分的不是同一批实例
+            // （例如卡组被重装、或卡 UI 漏建）。旧实现此处**静默 return**，于是"看不到起始手牌、
+            // PM draw 也没有任何 UI 变化"完全无日志可查——诊断这类故障时只能靠猜。
+            // 区域卡（AreaCardData）没有 PlayerTemplate，正常流程也会走到这里，故只对玩家卡报错。
+            if (card.PlayerTemplate != null)
+                GD.PrintErr($"[Arena.Sync] ❌ 找不到卡 UI：{card.PlayerTemplate.CardName}（UID={card.UID}）→ 区域 {card.CurrentZone}；" +
+                            "View 与逻辑实例集可能不同源（卡 UI 未建 / 实例已被替换）");
+            return;
+        }
+
+        // 【2026-09·JC051 用户口径】卡面势力显示依赖的**统一注入收口**（幂等）：
+        // 卡面数值＝`AreaStatsCalculator.ValueOf(card, Power, playerManager)`（与地区合计逐卡同一函数），
+        // 故每张卡 UI 在**区域同步收口**处注入单机的 `_playerManager`。放这里而不是各建卡分支，
+        // 避免"某条路径漏注入 ⇒ 卡面势力少算先手/临时先手能力"（与 A89/A101 同一类漏口）。
+        cardUI.SetStatsDependencies(_playerManager);
+
+        // 【2026-09 修复·A89】**双击激活订阅的统一收口**（幂等）：
+        // 原先 `AttachmentDoubleClicked` 只在两处订阅——① `Arena.Events.OnCardDrawnFromTurn`（抽牌进手牌）
+        // ② `Arena.Layout` 的**附属/封印入区**分支；**没有任何"进入争夺区/其它区"的兜底订阅**。
+        // 于是**不经过"抽到手牌 → 打出"这条路径进场的卡**（效果放置、PM 命令、从牌库/墓地直接进场、
+        // 场景重建后重新同步…）其信号**没有任何接收者**：CardUI 侧双击照常触发（有 `[CardUI] 左键到达…`
+        // 日志），但 `Arena` 的转发器**永远不会被调用**（`EmitSignal` 无监听者＝静默丢弃）——
+        // 正是用户实测"卡有高亮、双击**完全没有 LOG**、且**偶发**"的根因（JC042/JC044）。
+        // 区域同步是本类唯一收口 ⇒ 在此统一（幂等）订阅，任何进区路径都不会再漏。
+        cardUI.AttachmentDoubleClicked -= _onAttachmentDoubleClickedForward;
+        cardUI.AttachmentDoubleClicked += _onAttachmentDoubleClickedForward;
 
         // 堆叠区 UI 由 RefreshStackUI（OnStackChanged）独占管理：
         // 复用真卡在此挂入 StackEntryUI 并冻结。本方法若对堆叠卡执行后续
@@ -1082,11 +1121,10 @@ public partial class Arena
         card.PivotOffset = pivot;
         card.RotationDegrees = isTapped ? 90f : 0f;
         card.Position = localPos;
-        // TargetPosition 为平滑移动动画专用属性；玩家卡与秘社卡都实现了该属性，统一设置。
-        if (card is CardUI cui)
-            cui.TargetPosition = container.GlobalPosition + localPos;
-        else if (card is CouncilCardUI cci)
-            cci.TargetPosition = container.GlobalPosition + localPos;
+        // TargetPosition：交由共享实现 CardLayoutHelper.SetSmoothTarget 处理，保证与联机完全同源。
+        // 【2026-10 修复·横置卡偏移根因】旧写法 `container.GlobalPosition + localPos` 漏了
+        // 旋转枢轴项（90° 时为 (120,20)），_Process 会把横置卡拉偏 —— 详见 CardLayoutHelper 注释。
+        CardLayoutHelper.SetSmoothTarget(card, container, localPos);
         // 场上/手牌/资产卡统一抬高 ZIndex 基准，确保不被争夺区背景(AreaSlot, ZIndex 0~6)遮挡
         card.ZIndex = ZINDEX_CARD_BASE + z;   // 索引越大越靠右越在上层，实现右卡压左卡
     }

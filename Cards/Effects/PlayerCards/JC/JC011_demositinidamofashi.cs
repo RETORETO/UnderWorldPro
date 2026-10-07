@@ -29,6 +29,13 @@ namespace Cards.Effects.PlayerCards.JC
             renown.EffectId = "JC011_B_Renown";
             data.EffectDataList.Add(renown);
 
+            // 【2026-09 用户口径·声望改触发】"声望"的规则本体＝**触发效果**（该地区所有对抗结束后，
+            // 本地区声望角色较多的一方放置一个势力标志；不依赖对抗胜负、只数声望角色）。
+            // 卡面固有关键字不会被 `RuntimeTriggerTemplates` 通道重复合成，故这里必须**显式**声明触发条目。
+            var renownTrigger = KeywordEffects.Renown();
+            renownTrigger.EffectId = "JC011_B2_RenownTrigger";
+            data.EffectDataList.Add(renownTrigger);
+
             data.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC011_1_TapAllEnemyInArea",

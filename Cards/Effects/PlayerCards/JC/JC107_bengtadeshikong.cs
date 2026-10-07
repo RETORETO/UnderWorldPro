@@ -1,4 +1,4 @@
-using Godot.Collections;
+﻿using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -27,7 +27,6 @@ namespace Cards.Effects.PlayerCards.JC
                 TargetRule.Make(TargetKind.Attachment),
                 TargetRule.Make(TargetKind.Asset),
             };
-            data.LimitToActionPhaseOnly = true;   // "行动"
 
             data.EffectDataList.Add(new EffectData
             {

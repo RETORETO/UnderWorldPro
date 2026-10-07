@@ -41,7 +41,10 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     new EffectAction { Verb = ActionVerb.Tap },
                 },
-                Forced = true,
+                // 【2026-09 修复·用户口径】本效果**不是强制触发**：卡文只写"进场触发：横置…"，
+                // 没有"强制"语义 ⇒ `Forced=false`，玩家可在触发排序窗口把它拖入放弃区
+                // （`Forced=true` 会禁止放弃）。与 JC011/JC045/JC052 的同类报障同一口径。
+                Forced = false,
                 Duration = "瞬时",
                 FaqNote = "进场时横置本地区所有暗藏者（群体动作一次结算完成）。",
             });

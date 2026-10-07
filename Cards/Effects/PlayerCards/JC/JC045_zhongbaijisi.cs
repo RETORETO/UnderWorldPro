@@ -37,7 +37,8 @@ namespace Cards.Effects.PlayerCards.JC
                         Args = new Array<string> { "时间标志", "1", "自身" },
                     },
                 },
-                Forced = true,   // "每当…时"强制触发（非"你可以"）
+                Forced = false,   // 【2026-09 修复·用户口径】"每当一个角色死亡时…"**不是强制触发**（用户可以放弃）；
+                                  // 原先误写成 `Forced = true`（把"时间标志"类效果一律当强制）——用户实测报障。
                 Duration = "瞬时",
                 FaqNote = "每当一个角色死亡时，在钟摆祭司上放一个时间标志（含敌方角色，不含自身死亡）。",
             });
@@ -55,7 +56,12 @@ namespace Cards.Effects.PlayerCards.JC
                 ContinuousEffect = "在其上每有一个时间标志，钟摆祭司就获得一个［黑星］",
                 ContinuousGrants = new Array<EffectGrant>
                 {
+                    // 【2026-09 修复·A65】"获得一个［黑星］"＝**数值**（黑星=势力）：两条通道都要写——
+                    // `Icon` 只管"图标存在性/展示"，**数值**必须走 `Attribute:势力`。
+                    // 实测：此前只写 `Icon` ⇒ 每有一个时间标志 `GetAttribute("势力")` 仍为 **0**
+                    // （用户："JC045 的增加势力效果没有生效"）。缩放由 `GetPrereqScale` 施加（Amount × N）。
                     new EffectGrant { Kind = "Icon", Value = "黑星", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "势力", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Duration = "常驻",

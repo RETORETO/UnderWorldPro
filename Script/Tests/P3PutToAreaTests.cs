@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -84,7 +84,7 @@ namespace Script.Tests
         {
             var tmpl = Load("JC092_silingzhaohuan");
             Assert.IsNotNull(tmpl, "JC092 模板应可加载");
-            Assert.IsTrue(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段");
+            Assert.IsFalse(tmpl.LimitToActionPhaseOnly, "『行动』→ 限行动阶段 ⇒ **非快速**：不得在响应窗口打出（A档＝自己行动步骤且堆叠为空）");
 
             var e = FindEffect(tmpl, "JC092_1_ReviveGraveyardCharacterCovert");
             Assert.IsNotNull(e, "JC092 应有『墓地角色牌暗藏进场』效果");

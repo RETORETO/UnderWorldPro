@@ -42,7 +42,9 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     new EffectGrant { Kind = "Attribute", Value = "防御", Amount = -1 },
                     new EffectGrant { Kind = "Icon", Value = "白刀", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "先手战斗", Amount = 1 },
                     new EffectGrant { Kind = "Icon", Value = "黑刀", Amount = 1 },
+                    new EffectGrant { Kind = "Attribute", Value = "战斗", Amount = 1 },
                     new EffectGrant { Kind = "Keyword", Value = "威名", Amount = 1 },
                 },
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
