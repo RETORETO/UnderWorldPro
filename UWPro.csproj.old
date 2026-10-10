@@ -1,0 +1,18 @@
+<Project Sdk="Godot.NET.Sdk/4.7.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+
+    <!-- 开发期提速：关闭 Roslyn 分析器与代码修复器（不影响生成的 DLL 行为，可随时回退） -->
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <Nullable>disable</Nullable>
+
+    <!-- 将 NuGet 包固定到本地路径，避免每次构建重新解析/下载索引 -->
+    <RestorePackagesPath>./packages</RestorePackagesPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.2" />
+  </ItemGroup>
+</Project>
