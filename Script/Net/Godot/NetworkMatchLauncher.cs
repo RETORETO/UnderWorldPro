@@ -325,7 +325,7 @@ namespace Script.Net.Godot
         /// <summary>（遗留）单场路径的旧分发实现已迁入 `ClientMatchView.HandleMessage`。</summary>
         private void OnClientMessageLegacy(int playerId, string message)
         {
-            if (message.StartsWith(SNAP_PREFIX))
+            if (message.StartsWith(SNAP_PREFIX, StringComparison.Ordinal))
             {
                 var snap = Script.Net.SnapshotSerializer.Deserialize(message.Substring(SNAP_PREFIX.Length));
                 if (snap != null)

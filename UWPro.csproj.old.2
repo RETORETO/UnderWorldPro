@@ -1,0 +1,31 @@
+<Project Sdk="Godot.NET.Sdk/4.8.0-dev.7">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Web 导出需要 net9.0（wasm-tools-net9）。若验证失败可回退为 net8.0 -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+
+    <!-- 开发期提速：关闭 Roslyn 分析器与代码修复器（不影响生成的 DLL 行为，可随时回退） -->
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <Nullable>disable</Nullable>
+
+    <!-- 将 NuGet 包固定到本地路径，避免每次构建重新解析/下载索引 -->
+    <RestorePackagesPath>./packages</RestorePackagesPath>
+
+    <!-- 【2026-10 复核·修复】Web 导出的**魔改版** Godot 要求项目内存在一个带顶层语句的 `Program.cs`
+         （见 `Web导出环境状态与下一步.md` 步骤 5），而带顶层语句必须 OutputType=Exe；
+         但桌面/测试用的官方引擎构建一直（且应当）保持 Library。
+         故按目标平台**条件化**：仅 Web 构建启用 Exe，其余构建把 `Program.cs` 排除在编译之外。
+         这样：① 官方引擎 / headless 测试路径与 2026-10-10 之前完全一致（不再出现 CS8805）；
+              ② Web 导出路径仍满足魔改版要求。
+         回退方案：若 Web 构建实测不接受条件化 Exe，可改为无条件 `<OutputType>Exe</OutputType>`。 -->
+    <OutputType Condition=" '$(GodotTargetPlatform)' == 'web' ">Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.2" />
+  </ItemGroup>
+  <!-- 非 Web 构建：排除顶层语句入口占位（否则会报 CS8805「使用顶级语句的程序必须是可执行文件」） -->
+  <ItemGroup Condition=" '$(GodotTargetPlatform)' != 'web' ">
+    <Compile Remove="Program.cs" />
+  </ItemGroup>
+</Project>

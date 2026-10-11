@@ -60,6 +60,8 @@ namespace Script.Manager
         /// <summary>【K24】该槽是"目标玩家"槽（候选见 <see cref="PlayerIds"/>）。</summary>
         public bool IsPlayer;
         public string Label = "";
+        /// <summary>【2026-10·JC092】该槽的**动作提示**（`TargetSlot.Hint`；空＝UI 用中性兜底文案）。</summary>
+        public string Hint = "";
         public bool Optional = true;
         public List<string> AreaUids = new List<string>();
         public List<CardInstance> Cards = new List<CardInstance>();
@@ -123,6 +125,7 @@ namespace Script.Manager
                 IsArea = IsAreaSlot(slot),
                 IsPlayer = IsPlayerSlot(slot),
                 Label = SlotLabel(data, slotIndex),
+                Hint = slot?.Hint ?? "",
                 Optional = slot?.Optional ?? true,
             };
             if (slot?.Spec == null) return result;
@@ -410,6 +413,56 @@ namespace Script.Manager
         /// <summary>
         /// 【K16·模式分支】从卡模板里找出"声明了模式"的效果（打出版本用；`timing` 传 null 表示任意）。
         /// </summary>
+        /// <summary>
+        /// 【JC082·"选择一项"的**打出**】把卡上的 `TargetRules`（各类别各一项）**合成为一份模式声明**，
+        /// 供 `TurnManager.BeginModeCardPlay` / `PlayCard` / 联机 `PlayerActionService.TryBeginModeCardPlayOnline`
+        /// / `ArenaOl` 走与 JC063 完全相同的"先选一项 → 再选该项目的目标"流程。
+        /// 未声明 `PlayerCardData.PlayChoice` → 返回 null（其余卡路径不变）。
+        /// </summary>
+        public static EffectData PlayChoiceEffect(Script.Data.Cards.PlayerCardData tmpl)
+        {
+            if (tmpl?.PlayChoice != true || tmpl.TargetRules == null) return null;
+            var effect = new EffectData
+            {
+                EffectId = (tmpl.UID ?? "") + "_playchoice",
+                Timing = EffectTiming.OnSorceryCast,   // 仅作"打出时模式"的占位时机（不入效果结算）
+                Duration = "瞬时",
+            };
+            foreach (var rule in tmpl.TargetRules)
+            {
+                if (rule == null || rule.Kind == TargetKind.None) continue;
+                effect.Modes.Add(new EffectMode
+                {
+                    Label = DescribePlayChoice(rule),
+                    Target = new TargetSpec
+                    {
+                        Kind = rule.Kind,
+                        Restrictions = rule.Restrictions,
+                        Param = rule.Param,
+                        NeedsSelection = true,
+                    },
+                });
+            }
+            return effect.Modes.Count > 0 ? effect : null;
+        }
+
+        /// <summary>把一条打出目标规则转成"选择一项"的选项标签（JC082：结附于目标角色／结附于本方秘社）。</summary>
+        private static string DescribePlayChoice(TargetRule rule)
+        {
+            string what = rule.Kind switch
+            {
+                TargetKind.Character => "目标角色",
+                TargetKind.Covert => "目标暗藏者",
+                TargetKind.Area => "目标地区",
+                TargetKind.Attachment => "目标附属",
+                TargetKind.Asset => "目标资产",
+                TargetKind.Council => "本方秘社",
+                TargetKind.Player => "目标玩家",
+                _ => rule.Kind.ToString(),
+            };
+            return $"结附于{what}";
+        }
+
         public static EffectData FindModeEffect(Script.Data.Cards.PlayerCardData tmpl, EffectTiming? timing = null)
         {
             if (tmpl?.EffectDataList == null) return null;

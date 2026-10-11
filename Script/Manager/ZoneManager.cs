@@ -1,4 +1,4 @@
-﻿using Godot;
+using Godot;
 using Script.Data.Effects;
 using Script.Game.Entities;
 using Script.Enums;
@@ -599,6 +599,37 @@ public partial class ZoneManager : Node
             _triggerEmitPoints?.OnMove(card, playerId, areaDetailId, fromZoneAreaDetail);
         if (VerboseMoves) GD.Print($"[ZoneManager] {card.PlayerTemplate?.CardName} 进入附属子区域(地区 {areaDetailId})");
         FireMoved(card, CardZone.AttachedZone, playerId, areaDetailId);
+    }
+
+    /// <summary>
+    /// 【判据㉙·结附落地单点】把附属卡落地为"已结附"并**登记持续效果**——
+    /// **生产结算**（`TurnManager.ResolveEntry` 的 `ResolveKind.Attachment` 分支）与
+    /// **调试命令**（`PMCommandManager.attach` / `attacharea`）必须共用本函数，
+    /// 否则"授予宿主"（`GrantToHost`）类持续效果会在漏走登记的那条路径上**静默失效**
+    /// （用户实测：JC073 用 PM `attach` 结附后，宿主拿不到【屏障】——`MoveToAttachedZone` 的自动登记
+    /// 发生在 `AttachedTo` 尚未建立的时刻）。
+    /// </summary>
+    /// <param name="att">要落地的附属卡。</param>
+    /// <param name="host">宿主卡；传 null ＝"结附于地区"（无宿主）。</param>
+    /// <param name="zoneDetailUid">附属的 `ZoneDetailId`（所属地区）；null ⇒ 取宿主所在地区。</param>
+    public void AttachAndRegister(CardInstance att, CardInstance host, string zoneDetailUid = null)
+    {
+        if (att == null) return;
+        string detail = zoneDetailUid ?? (host?.ZoneDetailId ?? "");
+        // 【顺序关键】先移动进附属子区域、**再**建立双向引用与标记：
+        // 若先设 `att.AttachedTo = host` 再移动，`RemoveFromAllZones` → `DetachAttachmentsToGraveyard`
+        // 会把「已结附的 att」当成宿主的附属送墓地，而 att 自身 `AttachedCards` 又非空
+        // ⇒ `MoveToGraveyard ↔ DetachAttachmentsToGraveyard` **无限递归**（栈溢出）。
+        MoveToAttachedZone(att, detail, att.ControllerId == 0 ? 1 : att.ControllerId);
+        att.IsAttached = true;
+        att.AttachedTo = host;                   // 结附地区时 host==null（地区附属不指向具体卡）
+        if (host != null)
+        {
+            if (host.AttachedCards == null) host.AttachedCards = new System.Collections.Generic.List<CardInstance>();
+            if (!host.AttachedCards.Contains(att)) host.AttachedCards.Add(att);
+        }
+        // 绑定建立之后**再登记一次**（幂等）：按当前宿主重建"授予宿主"类持续效果。
+        if (att.CurrentZone == CardZone.AttachedZone) EE?.RegisterPersistent(att);
     }
 
     /// <summary>进入封印子区域：不进 _area 桶，挂在宿主实例(SealedBy)或地区(SealedBy==null)上。

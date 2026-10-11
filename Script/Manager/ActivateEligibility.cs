@@ -156,6 +156,27 @@ namespace Script.Manager
             return "该卡当前没有任何可发动的激活能力（费用/阶段窗口/每回合次数/发动代价/目标不满足）";
         }
 
+        /// <summary>
+        /// 【2026-10 用户口径·JC093】该激活能力是否**因次数上限用尽**而不可发动
+        /// （`MaxUsesPerTurn`／`MaxUsesPerGame`；0＝不限次）——**候选/高亮/逐项置灰/直发判定共用同一份**。
+        /// 用途：单机 `Arena.OpenAttachmentActivateChoice` 与联机 `ArenaOl.IsActivationEffectDisabled`
+        /// 据此把用尽的能力**置灰**；"全部用尽"时双击**不开面板、无反馈**
+        /// （用户口径："使用两次效果后双击不需要反馈"）。
+        /// </summary>
+        public static bool IsAbilityUsesExhausted(CardInstance card, EffectData e)
+            => card != null && e != null
+               && (card.IsAbilityLimitReached(e.EffectId, e.MaxUsesPerTurn)
+                   || card.IsGameAbilityLimitReached(e.EffectId, e.MaxUsesPerGame));
+
+        /// <summary>一组激活能力是否**全部**已因次数上限用尽（UI 据此静默忽略双击，不开面板）。</summary>
+        public static bool AllAbilitiesUsesExhausted(CardInstance card, List<EffectData> abilities)
+        {
+            if (card == null || abilities == null || abilities.Count == 0) return false;
+            foreach (var e in abilities)
+                if (!IsAbilityUsesExhausted(card, e)) return false;
+            return true;
+        }
+
         public static bool CanActivate(CardInstance card, TurnManager tm, PlayerManager pm, CardManager cm,
             bool ignoreAtomicLock = false)
         {            if (card?.PlayerTemplate is not PlayerCardData tmpl)

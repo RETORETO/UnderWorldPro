@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -36,6 +36,8 @@ namespace Cards.Effects.PlayerCards.JC
                     new TargetSlot
                     {
                         Label = "目标地区",
+                        // 【2026-10 用户口径·提示文字】与 JC092 同款：提示按**卡文**给（"正面进场并置于该地区"）。
+                        Hint = "令你墓地中的角色牌正面进场并置于该地区（该角色额外具有不死生物类别）",
                         Optional = false,
                         Spec = new TargetSpec { Kind = TargetKind.Area, NeedsSelection = true },
                     },

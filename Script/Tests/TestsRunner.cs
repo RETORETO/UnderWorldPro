@@ -127,6 +127,9 @@ namespace Script.Tests
                 new P3DrawFromBottomTests(),           // P3·非抓牌式取牌（不广播 OnDraw）：JC049 深渊细语②
                 new P3RulingBatchTests(),              // 用户口径批：JC022 战斗获胜近似判定 / JC074 快速行动授予 / JC122 锁定者禁现身
                 new JCCardTextAuditTests(),            // 【2026-09 整体复查】JC 包卡面自检（门禁/强制/关键字装载/时机/输入框；豁免表可审计）
+                new JCEnginePathContractTests(),       // 【判据㉖–㉙】旁路同判 / 多声明 OR / 落地路径一致 / 交互收尾 / 联机孪生
+                new JCBugfixBatchTests(),             // 【2026-10 实测 BUG 批】声望去重 / JC078 目标 / JC082 秘社结附 / JC083 触发 / 屏障拦袭击
+                new JCBugfixBatch2Tests(),            // 【2026-10 实测反馈四批】未横置才有词条（威名/声望）/ JC085 墓地行动 / JC089 减防致死 / JC092 提示文字 / JC093 次数用尽
                 new JCEffectSelfAuditTests(),          // 【2026-10 JC 效果代码自查】效果结构层面（㉑切分/③区域/④朝向/⑫类别/⑬白名单/⑮门禁/⑤目标/⑳结构/⑭代价/⑩注册；豁免表可审计）
                 new P3PathUniquenessTests(),           // P3·K25「道途」唯一性（与领袖同款：玩家选一个牺牲）：JC034①
                 new P3TemporaryManaTests(),            // P3·K19 临时费用池（优先花费 + 步骤结束清除）：JC115

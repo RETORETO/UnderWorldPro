@@ -506,6 +506,9 @@ public partial class Arena
         // 区域同步是本类唯一收口 ⇒ 在此统一（幂等）订阅，任何进区路径都不会再漏。
         cardUI.AttachmentDoubleClicked -= _onAttachmentDoubleClickedForward;
         cardUI.AttachmentDoubleClicked += _onAttachmentDoubleClickedForward;
+        // 【2026-10·JC085】墓地行动双击订阅（同一收口点，幂等）：任何进区路径都不会漏。
+        cardUI.GraveyardPlayRequested -= _onGraveyardPlayRequestedForward;
+        cardUI.GraveyardPlayRequested += _onGraveyardPlayRequestedForward;
 
         // 堆叠区 UI 由 RefreshStackUI（OnStackChanged）独占管理：
         // 复用真卡在此挂入 StackEntryUI 并冻结。本方法若对堆叠卡执行后续

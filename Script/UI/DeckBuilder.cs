@@ -35,11 +35,32 @@ public partial class DeckBuilder : Control
     private const int MinDeckSize = 50;
 
     // 分页
-    private const int PageSize = 40;   // 单条结果现在是带五行数据的信息面板（约 26 个控件），比原来的一张卡图重得多
+    /// <summary>
+    /// 单页行数（默认值）。**可被命令行开关 `--wp-pagesize=N` 覆盖**（见 Script/Web/WebPerfParams.cs），
+    /// 用于不重导出就做「行数 ↔ 耗时是否线性」的性能对照实验（E1）。
+    /// 单条结果是带五行数据的信息面板（约 10 个控件 + 5 个 Label），比原先的一张卡图重得多。
+    ///
+    /// 【B1：40 → 12，2026-10-11】原来 40 行/页：一屏实际只看得到约 5 行（行高≈148px），
+    /// 也就是说 35/40 的行是白建的 —— 而每行要建约 10 个控件并参与布局，
+    /// 一页合计约 400 个控件。Web（wasm）上这份同步建节点的开销足以把界面卡住十几秒，
+    /// 正是「点编辑卡组几乎无法下一步」的主因之一。改成 12（≈2 屏多）后同步成本降到约 30%。
+    /// </summary>
+    private const int DefaultPageSize = 12;
+    private static int PageSize => WebPerfParams.PageSizeOverride > 0 ? WebPerfParams.PageSizeOverride : DefaultPageSize;
     private int _poolPage = 0;
 
     // 缓存：避免重复加载纹理（路径 -> Texture2D）
     private Dictionary<string, Texture2D> _texCache = new Dictionary<string, Texture2D>();
+
+    /// <summary>卡背占位图（渐进填充期间先贴它，避免行先空着）。懒加载，只取一次。</summary>
+    private Texture2D _cardBackTex;
+    private bool _cardBackTried;
+
+    /// <summary>
+    /// 卡图渐进填充的批次号：每次刷新卡池/卡组都自增，旧批次在下一个 await 处自行放弃，
+    /// 避免「翻页后上一页的填充还在往已销毁的节点上贴图」。
+    /// </summary>
+    private int _fillToken;
 
     // 搜索结果面板的外观资源（所有行共用一份，避免每建一行就new一份主题资源）
     private StyleBoxFlat _poolRowStyle;
@@ -61,7 +82,14 @@ public partial class DeckBuilder : Control
 
     public override void _Ready()
     {
-        GD.Print("【DeckBuilder】场景加载完成");
+        // 【2026-10-12 清理说明】这里原来插着几十行"逐步定位标记 m1..m19"和一批实验开关
+        //（--wp-min / --wp-hide / --wp-solo / --wp-norules / --wp-gtest / --wp-addscene …）。
+        // 崩点已彻底查清：**Web 上从托管代码连接 `RenderingServer.FramePostDraw` 会让 wasm abort**
+        //（`--wp-hooks=post` 复现；只连 `FramePreDraw`/`SceneTree.ProcessFrame` 均正常），
+        // 与 DeckBuilder 的内容毫无关系 —— 之前 `--wp-min`、`--wp-hide=all`、
+        // 甚至只留 0 个子节点都照样崩，就是因为探针一直挂着。
+        // 诊断标记与实验开关已全部删除，只保留 `[PERF]` 阶段计时（由 --wp-perf 控制）。
+        ulong __tStart = Time.GetTicksMsec();
 
         _poolList = GetNode<VBoxContainer>("PoolPanel/PoolScroll/PoolList");
         _deckList = GetNode<VBoxContainer>("DeckPanel/DeckScroll/DeckList");
@@ -103,21 +131,155 @@ public partial class DeckBuilder : Control
         GetNode<Button>("BottomBar/BackButton").Pressed += OnBack;
         _loadOption.ItemSelected += OnLoadSelected;
 
-        ScanPool();
-        ScanCouncils();
-        BuildLoadOptions();
-        RefreshPoolView();
+        ulong __tBind = Time.GetTicksMsec();
+        // 整段套 try/catch：Web 上「托管异常跨原生边界」会直接 abort、看不到内容；
+        // 捕获后打印 ex 就能拿到异常类型/消息/托管栈，便于以后定位。
+        try
+        {
+            ScanPool();
+            ulong __tScanPool = Time.GetTicksMsec();
+            ScanCouncils();
+            ulong __tScanCouncil = Time.GetTicksMsec();
+            BuildLoadOptions();
+            ulong __tLoadOpts = Time.GetTicksMsec();
+            RefreshPoolView();
+            ulong __tPool = Time.GetTicksMsec();
 
-        // 若从房间/主菜单带入了要编辑的卡组，则载入
-        var editPath = GameManager.Instance.EditingDeckPath;
-        if (!string.IsNullOrEmpty(editPath))
-        {
-            _loadOption.Select(FindLoadIndex(editPath));
-            LoadDeckFromFile(editPath);
+            WebPerfParams.Summary(
+                $"deck._Ready scanPool={__tScanPool - __tBind}ms scanCouncil={__tScanCouncil - __tScanPool}ms "
+                + $"loadOpts={__tLoadOpts - __tScanCouncil}ms refreshPool={__tPool - __tLoadOpts}ms "
+                + $"(" + PageSize + $" 行/页) readyTotal={__tPool - __tStart}ms");
+
+            // 若从房间/主菜单带入了要编辑的卡组，则载入
+            var editPath = GameManager.Instance.EditingDeckPath;
+            if (!string.IsNullOrEmpty(editPath))
+            {
+                _loadOption.Select(FindLoadIndex(editPath));
+                LoadDeckFromFile(editPath);
+            }
+            else
+            {
+                RefreshDeckView();
+            }
+
+            WebPerfParams.Summary($"deck._Ready done total={Time.GetTicksMsec() - __tStart}ms");
+            StartFirstFrameProbe();
         }
-        else
+        catch (System.Exception __ex)
         {
-            RefreshDeckView();
+            // 若这行能打出来，说明是「托管异常」而不是原生 abort —— 异常全文就是根因。
+            GD.PrintErr("【DeckBuilder】_Ready 抛出托管异常");
+            GD.PrintErr("  类型: " + __ex.GetType().FullName);
+            GD.PrintErr("  消息: " + __ex.Message);
+            GD.PrintErr("  托管栈: " + __ex.StackTrace);
+        }
+    }
+
+    // ============================================================
+    // 【性能埋点】首帧探针 —— 字形栅格化 / 首帧 GPU 上传都发生在**渲染阶段**，
+    // 纯 C# 计时器抓不到；用渲染帧信号打时间戳才能量出来。定位完成后可整段删除。
+    // ============================================================
+    private ulong _probeStart;
+    private int _probeFrames;
+    private bool _preDrawSeen;
+    private bool _postConnected;
+
+    private void StartFirstFrameProbe()
+    {
+        if (!WebPerfParams.FrameProbe) return;
+
+        _probeStart = Time.GetTicksMsec();
+        _probeFrames = 0;
+        _probeStopped = false;
+        WebPerfParams.Summary($"probe start (+{_probeStart}ms 引擎 uptime)");
+
+        // 钩子 A：渲染帧信号（含绘制期开销，最能抓到字形栅格化/首次纹理上传）
+        // 【2026-10-12 重大发现 —— Web 上禁止连接 FramePostDraw】
+        //   A/B 实测（同一份构建，只改 index.html 的 args）：
+        //     · `--wp-hooks=post`（只连接 FramePostDraw）→ **首帧立刻 Aborted，心跳 0 条**；
+        //     · `--wp-hooks=pre` （只连接 FramePreDraw） → 存活 16s、240fps；
+        //     · `--wp-hooks=proc`（只连接 ProcessFrame） → 存活 19s、240fps；
+        //     · `--wp-noprobe`   （全不连接）            → 存活 39s、240fps。
+        //   ⇒ 唯一致命的是 **RenderingServer.FramePostDraw**；且 `--wp-quietprobe`
+        //     （回调体什么都不做）也崩 ⇒ 崩因是"连接该信号"本身，与回调内容无关。
+        //   这条曾经让 Web 版一进 DeckBuilder 就 abort（看起来像"卡死、点不动"），
+        //   因为 `DevFlags.FrameProbe` 默认 true —— 见 Script/DevFlags.cs。
+        //   下面用 OS.HasFeature("web") 做**硬保险**，任何人以后误开开关都不会再崩 Web。
+        bool isWeb = OS.HasFeature("web");
+        _postConnected = !isWeb;
+        if (_postConnected) RenderingServer.Singleton.FramePostDraw += OnProbeFramePostDraw;
+        // 钩子 A2：draw 之前一发（Web 上安全）。用来把耗时钉在「逻辑流程」还是「绘制」。
+        RenderingServer.Singleton.FramePreDraw += OnProbeFramePreDraw;
+        // 钩子 B：逻辑帧信号（抓到布局 / 节点处理耗时）
+        GetTree().ProcessFrame += OnProbeProcessFrame;
+    }
+
+    private void OnProbeFramePreDraw()
+    {
+        if (_preDrawSeen) return;
+        _preDrawSeen = true;
+        WebPerfParams.Summary($"frame_pre_draw +{Time.GetTicksMsec() - _probeStart}ms（首帧绘制已开始）");
+        // Web 上没有 post 钩子来收尾（连接它必崩），所以这里自己摘钩子，
+        // 否则 ProcessFrame/FramePreDraw 的钩子会一直挂着、每帧刷日志。
+        if (!_postConnected) StopFirstFrameProbe();
+    }
+
+    private void OnProbeFramePostDraw()
+    {
+        WebPerfParams.Summary($"frame_post_draw#{_probeFrames} +{Time.GetTicksMsec() - _probeStart}ms "
+                            + $"fps={Engine.GetFramesPerSecond()}");
+        if (++_probeFrames < 4) return;
+        StopFirstFrameProbe();
+    }
+
+    private void OnProbeProcessFrame()
+    {
+        WebPerfParams.Log($"process_frame +{Time.GetTicksMsec() - _probeStart}ms");
+    }
+
+    private void StopFirstFrameProbe()
+    {
+        _probeStopped = true;
+        RenderingServer.Singleton.FramePostDraw -= OnProbeFramePostDraw;
+        RenderingServer.Singleton.FramePreDraw -= OnProbeFramePreDraw;
+        GetTree().ProcessFrame -= OnProbeProcessFrame;
+        WebPerfParams.Summary("probe done");
+    }
+
+    // ============================================================
+    // 【诊断埋点，默认关闭】只由运行时开关 `--wp-probe` 打开（见 DevFlags.FrameProbe 的说明）。
+    // 之所以保留而没删：Godot 的日志没有时间戳、CDP 又会回放缓存日志，
+    // "页面到底活到了第几秒"只能靠这条每秒心跳来证明。交付版（无 --wp-probe）完全静默。
+    // ⚠️ 注意：绝不能在 Web 上连接 RenderingServer.FramePostDraw（会 wasm abort）。
+    // ============================================================
+    private int _processTicks;
+    private ulong _lastBeatMs;
+    private bool _probeStopped = true;
+
+    public override void _Process(double delta)
+    {
+        if (!WebPerfParams.FrameProbe) return;
+
+        _processTicks++;
+        ulong now = Time.GetTicksMsec();
+        if (_processTicks <= 10)
+            WebPerfParams.Log($"deck._Process 第 {_processTicks} 次 +{now - _probeStart}ms");
+
+        if (now - _lastBeatMs >= 1000)
+        {
+            _lastBeatMs = now;
+            GD.Print("[BEAT] deck 存活 ticks=" + Script.IO.WebSafeText.Int(_processTicks)
+                   + " fps=" + Script.IO.WebSafeText.Int((int)Engine.GetFramesPerSecond())
+                   + " nodes=" + Script.IO.WebSafeText.Int(GetTree().GetNodeCount()));
+        }
+    }
+
+    public override void _ExitTree()
+    {
+        // 场景切换时若探针还没摘干净，会在已释放的节点上调回调
+        if (!_probeStopped)
+        {
+            try { StopFirstFrameProbe(); } catch { /* 已随场景释放 */ }
         }
     }
 
@@ -129,7 +291,9 @@ public partial class DeckBuilder : Control
         _allPoolPaths.Clear();
         // 导出安全的递归扫描（导出包内 .tres 会变成 "xxx.tres.remap"，见 Script/IO/ResourceDirScan.cs）
         Script.IO.ResourceDirScan.TresRecursiveInto(PlayerCardsDir, _allPoolPaths);
-        _allPoolPaths.Sort();
+        // 【2026-10-12】显式 StringComparer.Ordinal：无参 List<T>.Sort() 用文化敏感比较器（走 ICU），
+        // Web 版运行时没有 ICU，会 abort。卡池路径是 ASCII，序数排序与原先结果一致。
+        _allPoolPaths.Sort(System.StringComparer.Ordinal);
         GD.Print($"【DeckBuilder】扫描到卡池 {_allPoolPaths.Count} 张");
         ApplyPoolFilter();
     }
@@ -139,7 +303,10 @@ public partial class DeckBuilder : Control
     {
         _poolPage = 0;   // 过滤后回到第一页
 
-        string f = string.IsNullOrWhiteSpace(_poolFilter) ? "" : _poolFilter.Trim().ToLowerInvariant();
+        // 【2026-10-12 Web 修复】`.Trim()` 保留（待验证），但大小写折叠必须换成手写 ASCII 版：
+        // 实测 `ToLowerInvariant()` 在 Web 上同样让 wasm abort（TextInfo 仍走原生）。
+        // 卡池过滤只需要 ASCII 语义（卡号/英文名/中文名），手写折叠行为一致。
+        string f = string.IsNullOrWhiteSpace(_poolFilter) ? "" : WebSafeText.ToLowerAscii(_poolFilter.Trim());
 
         if (_councilMode)
         {
@@ -147,14 +314,14 @@ public partial class DeckBuilder : Control
             foreach (var p in _councilPaths)
             {
                 if (f.Length == 0) { _councilFilterPaths.Add(p); continue; }
-                if (System.IO.Path.GetFileNameWithoutExtension(p).ToLowerInvariant().Contains(f))
+                if (WebSafeText.ToLowerAscii(System.IO.Path.GetFileNameWithoutExtension(p)).Contains(f))
                 {
                     _councilFilterPaths.Add(p);
                     continue;
                 }
                 // 秘社数量少（十余张），允许按卡名搜，代价可接受
                 var c = ResourceLoader.Load<CouncilCardData>(p);
-                if (c != null && !string.IsNullOrEmpty(c.CardName) && c.CardName.ToLowerInvariant().Contains(f))
+                if (c != null && !string.IsNullOrEmpty(c.CardName) && WebSafeText.ToLowerAscii(c.CardName).Contains(f))
                     _councilFilterPaths.Add(p);
             }
             return;
@@ -169,7 +336,7 @@ public partial class DeckBuilder : Control
         {
             foreach (var p in _allPoolPaths)
             {
-                string file = System.IO.Path.GetFileNameWithoutExtension(p).ToLowerInvariant();
+                string file = WebSafeText.ToLowerAscii(System.IO.Path.GetFileNameWithoutExtension(p));
                 if (file.Contains(f))
                     _poolPaths.Add(p);
             }
@@ -222,7 +389,7 @@ public partial class DeckBuilder : Control
         _councilPaths.Clear();
         // 秘社按系列分子目录，需递归扫描；同样统一走导出安全的扫描工具
         Script.IO.ResourceDirScan.TresRecursiveInto(CouncilCardsDir, _councilPaths);
-        _councilPaths.Sort();
+        _councilPaths.Sort(System.StringComparer.Ordinal);
         ApplyPoolFilter();
         GD.Print($"【DeckBuilder】扫描到秘社 {_councilPaths.Count} 张");
     }
@@ -262,45 +429,194 @@ public partial class DeckBuilder : Control
     // ============================================================
     private void RefreshPoolView()
     {
+        ulong __t0 = Time.GetTicksMsec();
+        int __before = _poolList.GetChildCount();
+        int token = ++_fillToken;     // 作废上一批未完成的渐进填充
         int ok = 0, fail = 0;
-        foreach (var child in _poolList.GetChildren())
-            child.QueueFree();
+
+        ClearChildren(_poolList);
 
         // 【筛选模式】秘社模式走独立的候选列表渲染（来源、加入规则都与卡牌不同）
         if (_councilMode)
         {
             RefreshCouncilPoolView();
+            WebPerfParams.Summary($"deck.pool(council) total={Time.GetTicksMsec() - __t0}ms");
             return;
         }
 
         int total = _poolPaths.Count;
-        int pageCount = Mathf.Max(1, (total + PageSize - 1) / PageSize);
+        int pageSize = PageSize;
+        int pageCount = Mathf.Max(1, (total + pageSize - 1) / pageSize);
         if (_poolPage >= pageCount) _poolPage = pageCount - 1;
         if (_pageLabel != null) _pageLabel.Text = $"{_poolPage + 1} / {pageCount}（共 {total} 张）";
 
+        // 【2026-10-12 Web 诊断开关 --wp-nocards】连卡牌面板都不建。
+        // 用来判断首帧 abort 到底是不是卡牌面板（纹理 + 中文换行文本）引起的：
+        // 加上这个开关后如果 DeckBuilder 能正常显示出来，就把范围锁死在卡牌面板内部。
+        if (WebPerfParams.SkipPoolCards)
+        {
+            WebPerfParams.Summary("deck.pool 被 --wp-nocards 跳过（不建任何卡牌面板）");
+            GD.Print("【DeckBuilder】--wp-nocards：已跳过卡牌面板构建");
+            return;
+        }
+
         // 只渲染当前页，避免一次性加载全部卡牌导致内存/显存爆掉闪退
-        int start = _poolPage * PageSize;
-        int end = Mathf.Min(start + PageSize, total);
+        int start = _poolPage * pageSize;
+        int end = Mathf.Min(start + pageSize, total);
+
+        // 【性能埋点】把「加载模板数据 / 解析卡图路径 / 解码纹理 / 建节点」四件事分开计时，
+        // 否则只知道"慢"，不知道慢在哪。见 Script/Web/WebPerfParams.cs。
+        ulong dData = 0, dResolve = 0, dTex = 0, dNode = 0, texMax = 0;
+        string texMaxPath = "";
+        int texLoad = 0, texHit = 0, texPending = 0;
+        // 【B2：渐进填充改成默认行为，2026-10-11】原先必须显式加 `--wp-prog` 才启用。
+        // 现在默认就是「分帧填图」，只在显式 `--wp-sync`（或 E2 的 `--wp-notex`）时回到旧的同步加载。
+        // 这样导出的包开箱即用，不必依赖实验开关。
+        bool progressive = !WebPerfParams.ForceSync && !WebPerfParams.SkipTextures;
+        var pending = new List<(string Path, TextureRect Target)>();
+
         for (int i = start; i < end; i++)
         {
             string path = _poolPaths[i];
+
+            ulong s = Time.GetTicksMsec();
             var data = ResourceLoader.Load<PlayerCardData>(path);
+            dData += Time.GetTicksMsec() - s;
+
             Texture2D tex = null;
+            string imgPath = null;
             if (data != null)
             {
-                string imgPath = CardUI.ResolveCardImagePath(data.UID);
-                if (!_texCache.TryGetValue(imgPath, out tex))
+                s = Time.GetTicksMsec();
+                imgPath = CardUI.ResolveCardImagePath(data.UID);
+                dResolve += Time.GetTicksMsec() - s;
+
+                if (!string.IsNullOrEmpty(imgPath))
                 {
-                    tex = ResourceLoader.Load<Texture2D>(imgPath);
-                    if (tex != null) _texCache[imgPath] = tex;   // 缓存，避免重复加载
+                    if (_texCache.TryGetValue(imgPath, out tex))
+                    {
+                        texHit++;
+                    }
+                    else if (WebPerfParams.SkipTextures)
+                    {
+                        // 【实验 E2】?notex=1：完全不加载纹理，用来量「摘掉纹理后还剩多少耗时」
+                    }
+                    else if (progressive)
+                    {
+                        texPending++;                                   // 交给 FillTexturesProgressive 分帧填
+                    }
+                    else
+                    {
+                        s = Time.GetTicksMsec();
+                        tex = ResourceLoader.Load<Texture2D>(imgPath);
+                        ulong dt = Time.GetTicksMsec() - s;
+                        dTex += dt; texLoad++;
+                        if (dt > texMax) { texMax = dt; texMaxPath = imgPath; }
+                        if (dt > 50) WebPerfParams.Log($"slow-tex {dt}ms {imgPath}");
+                        if (tex != null) _texCache[imgPath] = tex;      // 缓存，避免重复加载
+                    }
                 }
             }
-            if (tex != null) ok++; else { fail++; GD.PrintErr($"【DeckBuilder】卡图加载失败: {data?.UID} ({path})"); }
 
+            s = Time.GetTicksMsec();
             // 每张结果＝一张信息面板：卡图 + 结构化数据列 + 加入按钮
-            _poolList.AddChild(BuildCardPanel(path, data, tex));
+            var panel = BuildCardPanel(path, data, tex ?? CardBackPlaceholder(), out var thumb);
+            _poolList.AddChild(panel);
+            dNode += Time.GetTicksMsec() - s;
+
+            if (tex == null && progressive && thumb != null && !string.IsNullOrEmpty(imgPath))
+            {
+                pending.Add((imgPath, thumb));
+            }
+
+            if (tex != null) ok++;
+            else if (WebPerfParams.SkipTextures) { /* 故意不加载，不算失败 */ }
+            else if (progressive) { /* 待分帧填充，不算失败 */ }
+            else { fail++; GD.PrintErr($"【DeckBuilder】卡图加载失败: {data?.UID} ({path})"); }
         }
+
+        WebPerfParams.Summary(
+            $"deck.pool page={_poolPage + 1}/{pageCount} rows={end - start} "
+            + $"data={dData}ms resolve={dResolve}ms tex={dTex}ms(load {texLoad}/hit {texHit}/pending {texPending}, 最慢 {texMax}ms) "
+            + $"nodes={dNode}ms children {__before}->{_poolList.GetChildCount()} total={Time.GetTicksMsec() - __t0}ms");
+        if (texMaxPath.Length > 0) WebPerfParams.Log($"最慢的一张：{texMaxPath}");
+
+        if (pending.Count > 0) FillTexturesProgressive(token, pending);
+
         GD.Print($"【DeckBuilder】刷新卡池（第 {_poolPage + 1} 页）完成：本页 {ok} 张 / 失败 {fail} 张，子节点数 {_poolList.GetChildCount()} / 总计 {total}");
+    }
+
+    /// <summary>
+    /// 立即把旧行摘出容器再排队释放。
+    /// 为什么不只 `QueueFree()`：它要到**帧末**才真正删除，在此之前旧行仍在树上参与布局与绘制；
+    /// 同一帧内刷新多次就会重复付这份成本。先 `RemoveChild` 即刻停止布局，`QueueFree` 保证安全回收。
+    /// </summary>
+    private static void ClearChildren(Node container)
+    {
+        foreach (var child in container.GetChildren())
+        {
+            container.RemoveChild(child);
+            child.QueueFree();
+        }
+    }
+
+    /// <summary>卡背占位图（渐进填充期间先贴它，避免行先空着）。懒加载，只尝试一次。</summary>
+    private Texture2D CardBackPlaceholder()
+    {
+        if (!_cardBackTried)
+        {
+            _cardBackTried = true;
+            _cardBackTex = ResourceLoader.Load<Texture2D>("res://Cards/Image/CardBack.jpg");
+        }
+        return _cardBackTex;
+    }
+
+    /// <summary>
+    /// 【性能修复 B2】卡图渐进填充：每帧只同步加载一张纹理并贴到对应缩略图上，
+    /// 每张之后让出主线程一帧，于是界面**立刻可交互**，不再出现「进界面整屏冻结十几秒」。
+    ///
+    /// 两个安全点：
+    ///   1. `token != _fillToken` → 这次刷新已被翻页/重刷取代，立刻放弃（否则会往旧节点上贴图）；
+    ///   2. 每帧检查 `IsInstanceValid`，节点已随场景释放就直接停。
+    /// </summary>
+    private async void FillTexturesProgressive(int token, List<(string Path, TextureRect Target)> pending)
+    {
+        var tree = GetTree();
+        if (tree == null) return;
+
+        ulong t0 = Time.GetTicksMsec();
+        int done = 0, failed = 0, skipped = 0;
+        ulong maxOne = 0;
+
+        foreach (var item in pending)
+        {
+            if (token != _fillToken)
+            {
+                WebPerfParams.Log($"prog fill 被新批次取代（已填 {done} 张）");
+                return;
+            }
+            if (!GodotObject.IsInstanceValid(item.Target)) { skipped++; continue; }
+
+            _texCache.TryGetValue(item.Path, out var tex);
+            if (tex == null)
+            {
+                ulong s = Time.GetTicksMsec();
+                tex = ResourceLoader.Load<Texture2D>(item.Path);
+                ulong dt = Time.GetTicksMsec() - s;
+                if (dt > maxOne) maxOne = dt;
+                if (tex != null) _texCache[item.Path] = tex;
+                else failed++;
+            }
+            if (GodotObject.IsInstanceValid(item.Target)) item.Target.Texture = tex;
+            done++;
+
+            await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            if (!GodotObject.IsInstanceValid(this)) return;
+        }
+
+        WebPerfParams.Summary(
+            $"deck.prog fill 完成 {done} 张 / 失败 {failed} / 跳过已销毁 {skipped} / "
+            + $"共 {Time.GetTicksMsec() - t0}ms（单张最慢 {maxOne}ms）");
     }
 
     /// <summary>
@@ -444,8 +760,9 @@ public partial class DeckBuilder : Control
     /// <summary>
     /// 一张搜索结果面板：PanelContainer（边框+底色）内为「卡图 | 详细数据列 | 添加按钮」。
     /// 详细数据固定五行：<c>卡名/独有卡名</c>、<c>费用/颜色/魔法领域/组织</c>、<c>类别/子类别</c>、<c>能力图标</c>、<c>编号</c>。
+    /// <paramref name="thumb"/> 回传卡图控件，供 <see cref="FillTexturesProgressive"/> 稍后（分帧）把真图贴上去。
     /// </summary>
-    private PanelContainer BuildCardPanel(string path, PlayerCardData data, Texture2D tex)
+    private PanelContainer BuildCardPanel(string path, PlayerCardData data, Texture2D tex, out TextureRect thumb)
     {
         var panel = new PanelContainer();
         panel.AddThemeStyleboxOverride("panel", GetPoolRowStyle());
@@ -454,7 +771,7 @@ public partial class DeckBuilder : Control
         row.AddThemeConstantOverride("separation", 8);
         panel.AddChild(row);
 
-        var thumb = MakeCardThumb(tex);
+        thumb = MakeCardThumb(tex);
         thumb.GuiInput += (InputEvent e) =>   // 卡图可点击加入，保持原有交互
         {
             if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
@@ -499,32 +816,45 @@ public partial class DeckBuilder : Control
             f2.Add("组织：" + org);
         col.AddChild(MakeInfoLine(f2));
 
-        // ③ 类别（恒显示）｜子类别（仅当存在时显示）
+        // ③ 类别（恒显示）｜子类别（仅当存在时显示）—— 短行，不参与 WordSmart 分词测量
         var f3 = new List<string> { "类别：" + CategoryText(data) };
         string subs = SubCategoriesText(data);
         if (subs.Length > 0)
             f3.Add("子类别：" + subs);
-        col.AddChild(MakeInfoLine(f3));
+        col.AddChild(MakeInfoLine(f3, null, 0, wrap: false));
 
-        // ④ 能力：固定顺序罗列，数值为 0 的项整体略去，其余保持相对顺序
+        // ④ 能力：固定顺序罗列，数值为 0 的项整体略去，其余保持相对顺序 —— 短行
         var abilities = AbilityFields(data);
-        col.AddChild(MakeTextLine(abilities.Count > 0 ? "能力图标：" + string.Join("，", abilities) : "能力图标："));
+        col.AddChild(MakeTextLine(abilities.Count > 0 ? "能力图标：" + string.Join("，", abilities) : "能力图标：", null, 0, wrap: false));
 
-        // ⑤ 编号（恒显示）
-        col.AddChild(MakeTextLine("编号：" + UidText(data, path), new Color(0.75f, 0.75f, 0.8f)));
+        // ⑤ 编号（恒显示）—— 短行
+        col.AddChild(MakeTextLine("编号：" + UidText(data, path), new Color(0.75f, 0.75f, 0.8f), 0, wrap: false));
 
         return col;
     }
 
     /// <summary>信息面板中的一行：字段用分隔符隔开，宽度不足时整行换行（绝不截断丢失数据）。</summary>
-    private static Label MakeInfoLine(List<string> fields, Color? modulate = null, int fontSize = 0)
-        => MakeTextLine(string.Join("　｜　", fields), modulate, fontSize);
+    private static Label MakeInfoLine(List<string> fields, Color? modulate = null, int fontSize = 0, bool wrap = true)
+        => MakeTextLine(string.Join("　｜　", fields), modulate, fontSize, wrap);
 
-    /// <summary>信息面板单行控件：横向填满剩余宽度、垂直居中，可按行指定颜色/字号。</summary>
-    private static Label MakeTextLine(string text, Color? modulate = null, int fontSize = 0)
+    /// <summary>
+    /// 信息面板单行控件：横向填满剩余宽度、垂直居中，可按行指定颜色/字号。
+    ///
+    /// <paramref name="wrap"/> 为 false 时用 <see cref="TextServer.AutowrapMode.Arbitrary"/>（按字符换行）替代
+    /// <see cref="TextServer.AutowrapMode.WordSmart"/>（按词智能换行）：
+    /// WordSmart 每行都要做一次分词+断行测量，而卡池一页几百行、每行都是中文，
+    /// 中文本来就可以任意字符处换行，用 Text 模式更便宜且视觉效果基本一致。
+    /// 只对「几乎不会换行的短行」（类别/能力/编号）关掉，长行仍保留 WordSmart。
+    /// </summary>
+    private static Label MakeTextLine(string text, Color? modulate = null, int fontSize = 0, bool wrap = true)
     {
         var lb = new Label { Text = text, VerticalAlignment = VerticalAlignment.Center };
-        lb.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        // 【2026-10-12 Web 诊断开关 --wp-nowrap】强制改用 Arbitrary（按字符换行）。
+        // 怀疑点：WordSmart（按词智能换行）需要分词/断行，中文断行要走到 ICU 那条路径，
+        // 而 Web 运行时正是所有全球化路径都会 abort。用开关一测即可确认。
+        lb.AutowrapMode = (wrap && !WebPerfParams.NoWordWrap)
+            ? TextServer.AutowrapMode.WordSmart
+            : TextServer.AutowrapMode.Arbitrary;
         lb.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         lb.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         if (modulate.HasValue) lb.Modulate = modulate.Value;
@@ -760,7 +1090,10 @@ public partial class DeckBuilder : Control
             CustomMinimumSize = new Vector2(40, 140),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        name.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        // 【2026-10-12】--wp-nowrap 时退回按字符换行（理由见 MakeTextLine 注释）
+        name.AutowrapMode = WebPerfParams.NoWordWrap
+            ? TextServer.AutowrapMode.Arbitrary
+            : TextServer.AutowrapMode.WordSmart;
         name.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         name.Modulate = new Color(0.55f, 0.95f, 0.55f);
         row.AddChild(name);
@@ -774,21 +1107,47 @@ public partial class DeckBuilder : Control
 
     private void RefreshDeckView()
     {
-        foreach (var child in _deckList.GetChildren())
-            child.QueueFree();
+        ulong __t0 = Time.GetTicksMsec();
+        _fillToken++;   // 作废可能在途的卡池渐进填充（它持有的是卡池行的节点，不能往卡组行上贴）
+
+        ClearChildren(_deckList);
 
         BuildDeckCouncilRow();
 
         int total = 0;
-        int deckFail = 0;
+        int deckFail = 0, texHit = 0, texLoad = 0;
+        ulong dData = 0, dTex = 0, dNode = 0;
         foreach (var kv in _workingCards)
         {
             total += kv.Value;
+            ulong __sNode = Time.GetTicksMsec();
             var row = new HBoxContainer();
 
             // 轻量卡图（不实例化 CardUI）
+            ulong s = Time.GetTicksMsec();
             var data = ResourceLoader.Load<PlayerCardData>(kv.Key);
-            var tex = data != null ? ResourceLoader.Load<Texture2D>(CardUI.ResolveCardImagePath(data.UID)) : null;
+            dData += Time.GetTicksMsec() - s;
+
+            // 【B6】与卡池共用 _texCache：原来每张都无条件重新 Load，点一次 +/- 就把整个卡组重载一遍
+            Texture2D tex = null;
+            if (data != null)
+            {
+                string imgPath = CardUI.ResolveCardImagePath(data.UID);
+                if (!string.IsNullOrEmpty(imgPath))
+                {
+                    if (_texCache.TryGetValue(imgPath, out tex))
+                    {
+                        texHit++;
+                    }
+                    else
+                    {
+                        s = Time.GetTicksMsec();
+                        tex = ResourceLoader.Load<Texture2D>(imgPath);
+                        dTex += Time.GetTicksMsec() - s; texLoad++;
+                        if (tex != null) _texCache[imgPath] = tex;
+                    }
+                }
+            }
             var tr = new TextureRect();
             tr.Texture = tex;
             tr.StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered;
@@ -809,15 +1168,55 @@ public partial class DeckBuilder : Control
             row.AddChild(plus);
 
             _deckList.AddChild(row);
+            dNode += Time.GetTicksMsec() - __sNode;
         }
 
         _countLabel.Text = $"{total} 张";
+        WebPerfParams.Summary(
+            $"deck.view rows={_workingCards.Count} cards={total} data={dData}ms tex={dTex}ms(load {texLoad}/hit {texHit}) "
+            + $"nodes={dNode}ms total={Time.GetTicksMsec() - __t0}ms");
         GD.Print($"【DeckBuilder】刷新卡组视图：共 {total} 张 / 加载失败 {deckFail} 张 / 行数 {_deckList.GetChildCount()}");
+        // 【2026-10-12 Web 修复】原来是 `$"卡组{System.DateTime.Now:HHmmss}"`。
+        // 自定义日期时间格式串会走 DateTimeFormatInfo → 全球化/ICU 路径，
+        // 实测在魔改版 Web 运行时上让 wasm 直接 abort（本行正是 RefreshDeckView 的最后崩点）。
+        // 改用 NowHHmmss()（引擎 Time 单例 + 纯手工取数字，见方法注释）。
         if (string.IsNullOrEmpty(_nameEdit.Text))
-            _nameEdit.PlaceholderText = $"卡组{System.DateTime.Now:HHmmss}";
+            _nameEdit.PlaceholderText = "卡组" + NowHHmmss();
 
         // 【秘社批次】每次卡组变动都重算构筑限制进度（展示 + 为保存拦截准备）
         RefreshRestrictionView();
+    }
+
+    /// <summary>
+    /// 【2026-10-12 Web 修复】安全地取「当前时间 HHmmss」。
+    ///
+    /// 不能写 `System.DateTime.Now.ToString("HHmmss")`：带格式串的日期时间格式化会经过
+    /// DateTimeFormatInfo（全球化/ICU），在魔改版 Web 运行时上会让 wasm 直接 abort。
+    /// 这里改用 Godot 的 Time 单例取 "HH:MM:SS"（引擎返回 String，属已验证安全的那条封送路径），
+    /// 再用纯 ASCII 数字筛选凑出 6 位数字——全程不碰任何全球化代码。
+    /// 桌面端结果与原先一致（同为本地时间的 HHmmss）。
+    /// </summary>
+    private static string NowHHmmss()
+    {
+        try
+        {
+            string t = Godot.Time.GetTimeStringFromSystem();
+            if (!string.IsNullOrEmpty(t))
+            {
+                string digits = "";
+                for (int i = 0; i < t.Length && digits.Length < 6; i++)
+                {
+                    char c = t[i];
+                    if (c >= '0' && c <= '9') digits += c;
+                }
+                if (digits.Length == 6) return digits;
+            }
+        }
+        catch (System.Exception)
+        {
+            // 引擎接口不可用时退化为固定后缀（仅影响默认卡组名，不影响功能）
+        }
+        return "000000";
     }
 
     // ============================================================
@@ -917,7 +1316,10 @@ public partial class DeckBuilder : Control
 
             var line = new Label { Text = (ok ? "✔ " : "✘ ") + r.Describe(actual) };
             line.Modulate = ok ? new Color(0.55f, 0.95f, 0.55f) : new Color(1f, 0.5f, 0.5f);
-            line.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+            // 【2026-10-12】--wp-nowrap 时退回按字符换行（理由见 MakeTextLine 注释）
+            line.AutowrapMode = WebPerfParams.NoWordWrap
+                ? TextServer.AutowrapMode.Arbitrary
+                : TextServer.AutowrapMode.WordSmart;
             _restrictionBox.AddChild(line);
         }
 
@@ -959,7 +1361,9 @@ public partial class DeckBuilder : Control
 
     private void OnSave()
     {
-        string name = string.IsNullOrWhiteSpace(_nameEdit.Text) ? $"卡组{System.DateTime.Now:HHmmss}" : _nameEdit.Text.Trim();
+        // 【2026-10-12 Web 修复】原来用 $"{DateTime.Now:HHmmss}"，格式化会走全球化路径 → Web 上 abort；
+        // 统一改用 NowHHmmss()。（.Trim() 只裁 ASCII 空白，走共享的 Web 安全实现）
+        string name = string.IsNullOrWhiteSpace(_nameEdit.Text) ? "卡组" + NowHHmmss() : WebSafeText.TrimAscii(_nameEdit.Text);
 
         // 【违规校验】非法卡组不再被直接拦截，而是先弹窗说明原因，由用户决定是否继续保存。
         var violations = CollectDeckViolations();
@@ -996,7 +1400,7 @@ public partial class DeckBuilder : Control
     /// <summary>真正把编辑中的卡组写入 ../Decks。</summary>
     private void SaveDeck(string name)
     {
-        string display = string.IsNullOrWhiteSpace(name) ? $"卡组{System.DateTime.Now:HHmmss}" : name.Trim();
+        string display = string.IsNullOrWhiteSpace(name) ? "卡组" + NowHHmmss() : WebSafeText.TrimAscii(name);
 
         var deck = new DeckList
         {

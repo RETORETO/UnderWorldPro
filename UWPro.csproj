@@ -1,8 +1,15 @@
 <Project Sdk="Godot.NET.Sdk/4.7.2">
   <PropertyGroup>
+    <!--
+      【2026-10-11 复核·Web 导出定版】TargetFramework 必须与**魔改版引擎内静态链接的 mono 运行时**同代。
+      实测（从模板 web_release.zip 内的 godot.wasm 提取版本串）：
+        · 4.7.2-stable 魔改版  -> 运行时 .NET 9.0.19（字符串 9.0.19.0）
+        · 4.8-dev7     魔改版  -> 运行时 .NET 9.0.20，但其 GodotSharp 只有 lib/net10.0（NU1202 实测），
+                                 强制 net10.0 后类库变成 10.0.12 -> mono 报
+                                 "Your mono runtime and class libraries are out of sync" -> 该预发布版 Web 导出不可用。
+      结论：使用 4.7.2-stable 魔改版 + net9.0 + D:\dotnet9（wasm-tools 9.0.20）工具链。
+      若改用其他版本引擎，务必先核对运行时版本再改这一行。 -->
     <TargetFramework>net9.0</TargetFramework>
-    <!-- Web 导出需要 net9.0（wasm-tools-net9）。若验证失败可回退为 net8.0 -->
-    <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
 
     <!-- 开发期提速：关闭 Roslyn 分析器与代码修复器（不影响生成的 DLL 行为，可随时回退） -->
@@ -12,8 +19,68 @@
 
     <!-- 将 NuGet 包固定到本地路径，避免每次构建重新解析/下载索引 -->
     <RestorePackagesPath>./packages</RestorePackagesPath>
+
+    <!-- 【2026-10 复核·修复】Web 导出的**魔改版** Godot 要求项目内存在一个带顶层语句的 `Program.cs`
+         （见 `Web导出环境状态与下一步.md` 步骤 5），而带顶层语句必须 OutputType=Exe；
+         但桌面/测试用的官方引擎构建一直（且应当）保持 Library。
+         故按目标平台**条件化**：仅 Web 构建启用 Exe，其余构建把 `Program.cs` 排除在编译之外。
+         这样：① 官方引擎 / headless 测试路径与 2026-10-10 之前完全一致（不再出现 CS8805）；
+              ② Web 导出路径仍满足魔改版要求。
+         回退方案：若 Web 构建实测不接受条件化 Exe，可改为无条件 `<OutputType>Exe</OutputType>`。 -->
+    <OutputType Condition=" '$(GodotTargetPlatform)' == 'web' ">Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.2" />
+  </ItemGroup>
+  <!-- 非 Web 构建：排除顶层语句入口占位（否则会报 CS8805「使用顶级语句的程序必须是可执行文件」） -->
+  <ItemGroup Condition=" '$(GodotTargetPlatform)' != 'web' ">
+    <Compile Remove="Program.cs" />
+  </ItemGroup>
+  <!--
+    【2026-10-11 定位到的真正元凶】browser-wasm 的 publish 默认开启 ILLink 裁剪。
+    实测解包导出后的 build/web/index.pck，.NET 程序集全部是被裁过的：
+        UWPro.dll                 2,598,912  ->  4,096 字节（只剩入口 Program.<Main>$）
+        System.Private.CoreLib.dll 4,652,368 -> 4,333,056
+        System.Collections.Immutable.dll 255,312 -> 18,432
+    因为游戏入口 `<Main>$` 之外的一切都只能被引擎用反射进来
+    （gd_mono.cpp 里 mono_class_from_name(img, "GodotPlugins.Game", "Main")），
+    ILLink 看不见这条路径，于是把 GodotPlugins.Game 整个类连同游戏代码一起删了，
+    浏览器里就报：
+        ERROR: .NET: Couldn't find class 'GodotPlugins.Game.Main'.
+        ERROR: .NET: Failed to initialize Mono runtime.
+        RuntimeError: null function
+    => Web 目标必须【关闭裁剪】。TrimmerRootAssembly 作为双保险保留
+       （PublishTrimmed=false 时会被忽略，一旦某天被改回 true 仍能兜住）。 -->
+  <PropertyGroup Condition=" '$(GodotTargetPlatform)' == 'web' ">
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+
+    <!--
+      【2026-10-12 Web 崩溃真正根因 · 定版修复】
+      症状：Web 版启动到主菜单完全正常（中文也正常），但一进「编辑卡组」立刻
+            Aborted() + RuntimeError: unreachable，wasm 栈每次都一样。
+
+      定位过程（在 DeckBuilder._Ready 与 DirAccess 扫描里逐句埋 m1~m19/[P]01~[P]99 标记）：
+        · DirAccess.Open / ListDirBegin / GetNext / CurrentIsDir / ListDirEnd 全部正常；
+        · 真正崩的是 `name.StartsWith(".")` —— 即 **只传一个参数字符串的 StartsWith**。
+        · 单独探针确认：`"BH".StartsWith(".")` 打不出下一行日志，进程直接 abort。
+
+      原因：不带 StringComparison 的 StartsWith/EndsWith/IndexOf、无参 List.Sort()、
+            ToLower()/ToUpper()、以及 $"{x:N2}" 这类格式化，都会走 .NET 的
+            **全球化（ICU）** 路径；而魔改版引擎的 browser-wasm mono 运行时**没有链接 ICU**
+            （libSystem.Globalization.Native 缺失），一调用就跳进空函数指针 → wasm unreachable。
+            .NET 官方 browser-wasm 模板默认就是 InvariantGlobalization=true，本工程此前没设，
+            于是踩了这个坑。
+
+      修复：Web 目标开启 InvariantGlobalization（所有文化敏感 API 退化为不变文化实现，
+            不再触碰 ICU）。桌面目标**不动**，保持与改造前完全一致的文化行为。
+      双保险：已知的热点调用点也一并改成显式序数比较（见 ResourceDirScan / DeckCatalog / DeckBuilder）。 -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup Condition=" '$(GodotTargetPlatform)' == 'web' ">
+    <TrimmerRootAssembly Include="System.Private.CoreLib" />
+    <TrimmerRootAssembly Include="System.Runtime" />
+    <TrimmerRootAssembly Include="UWPro" />
+    <TrimmerRootAssembly Include="GodotSharp" />
   </ItemGroup>
 </Project>

@@ -44,6 +44,8 @@ namespace Cards.Effects.PlayerCards.JC
                     new TargetSlot
                     {
                         Label = "目标地区",
+                        // 【2026-10·提示文字】提示由数据给出（不再由 UI 猜）；本卡是**移动**语义。
+                        Hint = "将所选角色移动到该地区",
                         Optional = false,
                         Spec = new TargetSpec { Kind = TargetKind.Area, NeedsSelection = true },
                     },

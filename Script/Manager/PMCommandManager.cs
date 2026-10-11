@@ -132,7 +132,9 @@ public partial class PMCommandManager : Node
         if (string.IsNullOrWhiteSpace(cmd)) return false;
         var parts = cmd.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return false;
-        return BlockingCommands.Contains(parts[0].ToLower());
+        // 【2026-10-12 Web 修复】用手写 ASCII 折叠替代 ToLowerInvariant()：
+        // 实测 TextInfo 相关的转换（ToLower/ToLowerInvariant/ToUpper…）在 Web 上会让 wasm 直接 abort。
+        return BlockingCommands.Contains(Script.IO.WebSafeText.ToLowerAscii(parts[0]));
     }
 
     /// <summary>
@@ -160,7 +162,7 @@ public partial class PMCommandManager : Node
         {
             var line = lines[i].Trim();
             if (line.Length == 0) continue;          // 跳过空行
-            if (line.StartsWith("#")) continue;      // 支持 # 注释行
+            if (line.StartsWith("#", StringComparison.Ordinal)) continue;      // 支持 # 注释行
 
             ExecuteCommand(line);
             executed++;
@@ -171,7 +173,7 @@ public partial class PMCommandManager : Node
                 for (int j = i + 1; j < lines.Length; j++)
                 {
                     var rest = lines[j].Trim();
-                    if (rest.Length == 0 || rest.StartsWith("#")) continue;
+                    if (rest.Length == 0 || rest.StartsWith("#", StringComparison.Ordinal)) continue;
                     discarded++;
                 }
                 if (discarded > 0)
@@ -208,7 +210,7 @@ public partial class PMCommandManager : Node
         GD.Print($"🛠️ 执行PM命令: {cmd}");
 
         bool ok = true;
-        switch (parts[0].ToLower())
+        switch (Script.IO.WebSafeText.ToLowerAscii(parts[0]))
         {
             case "damage": ok = ExecuteDamage(parts); break;
             case "trauma": ok = ExecuteTrauma(parts); break;
@@ -267,7 +269,7 @@ public partial class PMCommandManager : Node
                                    "damage area <地区索引> <数值> / damage hand <手牌索引> <数值>";
         if (parts.Length < 3) return Fail(damageUsage);
 
-        string kind = parts[1].ToLower();
+        string kind = Script.IO.WebSafeText.ToLowerAscii(parts[1]);
         bool knownKind = kind is "area" or "card" or "hand";
         int amountIdx = (knownKind && parts.Length >= 4) ? 3 : 2;
         if (amountIdx >= parts.Length) return Fail(damageUsage);
@@ -319,7 +321,7 @@ public partial class PMCommandManager : Node
                                    "trauma area <地区索引> <数值> / trauma hand <手牌索引> <数值>";
         if (parts.Length < 3) return Fail(traumaUsage);
 
-        string kind = parts[1].ToLower();
+        string kind = Script.IO.WebSafeText.ToLowerAscii(parts[1]);
         bool knownKind = kind is "area" or "card" or "hand";
         int amountIdx = (knownKind && parts.Length >= 4) ? 3 : 2;
         if (amountIdx >= parts.Length) return Fail(traumaUsage);
@@ -717,7 +719,7 @@ public partial class PMCommandManager : Node
     private bool Fail(string error)
     {
         LastError = error;
-        GD.Print(error.StartsWith("❌") ? error : "❌ " + error);
+        GD.Print(error.StartsWith("❌", System.StringComparison.Ordinal) ? error : "❌ " + error);
         return false;
     }
 
@@ -830,7 +832,7 @@ public partial class PMCommandManager : Node
             return Fail(error);
 
         // ③ 目标（纯数字＝地区编号，先校验越界；避免把越界数字误当成"目标玩家"吞掉）
-        string target = parts[3].ToLower();
+        string target = Script.IO.WebSafeText.ToLowerAscii(parts[3]);
         if (int.TryParse(target, out int parsedArea) && (parsedArea < 1 || parsedArea > CurrentAreaUids.Count))
             return Fail($"无效地区编号 {parsedArea}，当前共 {CurrentAreaUids.Count} 个地区(1..{CurrentAreaUids.Count})");
 
@@ -839,7 +841,7 @@ public partial class PMCommandManager : Node
         string deckSide = null;
         for (int i = 4; i < parts.Length; i++)
         {
-            string tok = parts[i].ToLower();
+            string tok = Script.IO.WebSafeText.ToLowerAscii(parts[i]);
             if (TryParsePlayerToken(tok, out int p)) { destPlayer = p; continue; }
             if (tok == "top" || tok == "bottom") { deckSide = tok; continue; }
             return Fail($"无法识别的参数「{parts[i]}」。用法: {usage}");
@@ -981,7 +983,7 @@ public partial class PMCommandManager : Node
         if (parts.Length < 2) { GD.Print("❌ 用法: covert <UID> [on|off]"); return; }
         var instance = _cardManager.GetInstance(parts[1]);
         if (instance == null) { GD.Print($"❌ 未找到卡牌: {parts[1]}"); return; }
-        bool on = parts.Length < 3 || parts[2].ToLower() != "off";
+        bool on = parts.Length < 3 || Script.IO.WebSafeText.ToLowerAscii(parts[2]) != "off";
         // 暗藏(潜伏) = 背面朝上；解除暗藏 = 正面朝上（并恢复基础属性）
         instance.SetCovert(on);   // 走暗藏中枢（发 CovertChanged），供目标丢失版本号收口
         bool toFaceUp = !on;
@@ -1254,15 +1256,10 @@ public partial class PMCommandManager : Node
 
         if (att.AttachedTo != null) return Fail($"{att.UID} 已结附于 {att.AttachedTo.UID}，先 detach");
 
-        // 【顺序关键】先移动进附属子区域，**再**建立双向引用与标记：
-        // 若先设 `att.AttachedTo = host` 再 `MoveToAttachedZone`，则内部的 `RemoveFromAllZones` →
-        // `DetachAttachmentsToGraveyard` 会把「已结附的 att」当成宿主的附属送墓地，
-        // 而 att 本身 `AttachedCards` 又非空 ⇒ `MoveToGraveyard ↔ DetachAttachmentsToGraveyard` **无限递归**（栈溢出）。
-        _zoneManager.MoveToAttachedZone(att, host.ZoneDetailId, att.ControllerId == 0 ? 1 : att.ControllerId);
-        att.AttachedTo = host;
-        att.IsAttached = true;
-        if (!host.AttachedCards.Contains(att))
-            host.AttachedCards.Add(att);
+        // 【判据㉙·结附落地单点】与生产结算路径共用 `ZoneManager.AttachAndRegister`
+        // （移动 → 绑定 → **登记持续效果**）。历史上本命令自己拼装这三步、漏了登记
+        // ⇒ 用户实测"JC073 用 PM attach 后宿主拿不到【屏障】"。
+        _zoneManager.AttachAndRegister(att, host);
 
         GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到宿主 " +
                  $"{host.PlayerTemplate?.CardName}({host.UID}·{howHost})");
@@ -1283,13 +1280,10 @@ public partial class PMCommandManager : Node
         if (!int.TryParse(parts[2], out int areaNo) || areaNo < 1 || areaNo > CurrentAreaUids.Count)
             return Fail($"无效地区编号，当前共 {CurrentAreaUids.Count} 个(1..{CurrentAreaUids.Count})");
 
-        // 结附地区：用 ZoneDetailId 标记为地区附属（与角色附属区分），并置于该争夺区
-        // （与 attach 同样"先移动、后标记"，避免内部连带逻辑把本卡当宿主附属处理）
+        // 结附地区：用 ZoneDetailId 标记为地区附属（与角色附属区分）；同样收口到
+        // `ZoneManager.AttachAndRegister`（host=null ⇒ 地区附属，不指向具体卡）。
         var areaUid = CurrentAreaUids[areaNo - 1];
-        _zoneManager.MoveToAttachedZone(att, areaUid, att.ControllerId == 0 ? 1 : att.ControllerId);
-        att.AttachedTo = null;             // 地区附属不指向具体角色
-        att.IsAttached = true;
-        att.ZoneDetailId = areaUid;
+        _zoneManager.AttachAndRegister(att, null, areaUid);
 
         GD.Print($"🔗 附属 {att.PlayerTemplate?.CardName}({att.UID}·{howAtt}) 结附到地区{areaNo}({areaUid})");
         _onZoneChanged?.Invoke();

@@ -30,7 +30,7 @@ namespace Script.Data.Effects
         /// 只登记"关键词本身就等价于一条触发效果"的词：
         ///  · `机动` → `ManeuverTrigger`（对抗前窗口，选择另一地区移动过去）；
         ///  · `威名` → `OnCombatWon`（战斗对抗获胜，在本地区放置一个势力标志）；
-        ///  · `声望` → `OnPowerCombatEnded`（**该地区所有对抗结束后**，本地区声望角色较多的一方放置一个势力标志）。
+        ///  · `声望` → `OnPowerCombatEnded`（**每次势力对抗结算完毕**，本地区声望角色较多的一方放置一个势力标志）。
         /// 不在表内的（`袭击` 由收集阶段的**数值合并**单独处理）一律不经本通道，避免重复结算。
         ///
         /// 【2026-09 用户口径·声望改触发】**声望从"引擎级立即结算"改为"触发效果"**（与威名同款，走本表）：
@@ -72,6 +72,8 @@ namespace Script.Data.Effects
                     new EffectAction { Verb = ActionVerb.Move }
                 },
                 Duration = "瞬时",
+                // 【2026-10·提示文字】选地区窗的提示由数据给出（不再硬编码在 UI 里）。
+                Hint = "将移动至该地区",
                 FaqNote = "玩家可选",
                 // 结算前校验来源卡版本号未变：离场/翻面/进手牌/进墓地则跳过结算（争夺区→争夺区移动不影响）。
                 RequireSourceVersionUnchanged = true
@@ -190,13 +192,16 @@ namespace Script.Data.Effects
         /// 威名（WeiMing）：战斗对抗获胜触发关键词——当本卡控制者赢得一场战斗对抗（Strength 类型）后，
         /// 在【本地区】（威名卡当前所在地区，= source.ZoneDetailId）放置一个本方势力标志。
         /// 对应卡文："威名（当你在一场战斗中获胜时，在该地区放置一个势力标记。）"
+        /// 【2026-10 用户口径】**横置的角色不提供其词条 ⇒ 本卡须未横置才触发**（`RequireSourceUntapped`，与声望同办）。
         /// 触发链路：CombatManager.ResolveWinner（战斗类型）→ TriggerEmitPoints.OnCombatWon 广播
         ///           → TriggerRegistry 收为 OnCombatWon（按"在场威名卡"各自注入 source）
         ///           → 条件 WinnerIsSelfInSameArea 判定：
         ///                 ① 本卡控制者 == 战斗获胜方（WinnerIsSelf）；
         ///                 ② 本卡所在地区 == 战斗获胜地区（WinnerInSameArea，Y 方案：跨地区卡收集阶段即不入栈）
         ///           → 入堆叠（排序窗口）→ 双方让过 → ResolveEffect，执行 PlaceToken(势力标志,1,威名)。
-        /// 去重（D2）：同一控制者在同一地区、单次战斗对抗内只放置一个势力标志（由 EffectEngine 去重字典保证）。
+        /// 去重（广播窗口）：同一控制者在同一地区、**单次战斗对抗（一次 `OnCombatWon` 广播）内只放 1 枚**
+        /// （`TriggerEmitPoints.OnCombatWon` 广播前 `BeginPlacementDedupWindow(PlacementDedupTags.WeiMing)`
+        /// 清该标签的桶；`EffectEngine.PlaceToken` 按桶查重）。
         /// 非强制触发（Forced=false，对应卡文"可以"/"当…时"可选结算）；放置落点取 source.ZoneDetailId（与 JC035 同款）。
         /// </summary>
         public static EffectData WeiMing()
@@ -217,12 +222,15 @@ namespace Script.Data.Effects
                 },
                 Actions = new Array<EffectAction>
                 {
-                    // Args[0]=势力标志类型；Args[1]=数量；Args[2]="威名" 触发 D2 单次战斗维度去重。
-                    new EffectAction { Verb = ActionVerb.PlaceToken, Args = new Array<string> { "势力标志", "1", "威名" } }
+                    // Args[0]=势力标志类型；Args[1]=数量；Args[2]=去重标签（`PlacementDedupTags.WeiMing`；
+                    // 非空即启用去重 ⇒ 单次战斗对抗内每控制者每地区只放 1 枚）。
+                    new EffectAction { Verb = ActionVerb.PlaceToken, Args = new Array<string> { "势力标志", "1", PlacementDedupTags.WeiMing } }
                 },
                 Forced = false,  // 非强制触发（威名=可选结算）
                 Duration = "瞬时",
-                FaqNote = "战斗对抗获胜后在本地区放置一个势力标志；同一控制者同一地区单次战斗只放置一个（D2 去重）；非强制。"
+                // 【2026-10 用户口径】横置的角色不提供其词条 ⇒ 威名须**未横置**才触发（与声望同办）。
+                RequireSourceUntapped = true,
+                FaqNote = "战斗对抗获胜后在本地区放置一个势力标志；同一控制者同一地区单次战斗只放 1 枚（广播窗口去重）；未横置才触发；非强制。"
             };
         }
 
@@ -338,14 +346,18 @@ namespace Script.Data.Effects
         }
 
         /// <summary>
-        /// 【P3】声望（Renown）= 触发效果（用户 2026-09 规则文本）：
-        /// **一个地区的所有对抗结束后**（不是"每次势力对抗结束"，故 JC067 让本地区多打一次势力对抗也只触发一次），
+        /// 【P3】声望（Renown）= 触发效果（用户 2026-09 规则文本，**第二轮口径**）：
+        /// **每次势力对抗结算完毕**（含平局/败方；JC067「本地区额外进行一次势力对抗」追加的那次**同样触发**），
         /// 由该地区中**拥有较多声望角色的一方**触发，给该地区添加一个势力标志；
-        /// 多个声望角色在场也只添加一个（去重与威名同款）；**不依赖势力对抗获胜**（平局/败方只要声望角色更多就触发）。
-        /// 实现：`Timing = OnPowerCombatEnded`（触发点＝`TurnManager` 在"该地区三种对抗全部结算完毕"时广播）
-        ///       ＋ 条件谓词 `RenownMajority`（该卡控制者在该地区的声望角色数 **严格多于** 对手）
-        ///       ＋ `PlaceToken{势力标志,1,声望}`（Args[2] 启用同维度去重：同一方多个声望只放一个标志）。
-        /// 口径（已确认）：声望角色**不要求未横置**、**不要求参与该次对抗**，只要在该地区即可；双方相等/均为 0 → 不触发。
+        /// **同一次势力对抗内多个声望角色也只添加 1 枚**（广播窗口去重，与威名同款）；
+        /// **不依赖势力对抗获胜**（平局/败方只要声望角色更多就触发）。
+        /// 实现：`Timing = OnPowerCombatEnded`（触发点＝`TurnManager` 每次势力对抗结算完毕广播）
+        ///       ＋ 条件谓词 `RenownMajorityInSameArea`（该卡控制者在该地区的声望角色数 **严格多于** 对手，
+        ///         且**来源卡就在该对抗地区内**——地区级规则）
+        ///       ＋ `PlaceToken{势力标志,1,<see cref="PlacementDedupTags.Renown"/>}`。
+        /// 口径（2026-10 用户口径）：**必须未横置**（横置的角色不提供其词条 ⇒ 既不计数也不触发；`RequireSourceUntapped`
+        /// ＋ `RenownRule.CountRenownCharacters` 跳过横置者）、**不要求参与该次对抗**，只要在该地区即可；双方相等/均为 0 → 不触发。
+        /// 注：卡面原文"一个地区的所有对抗结束后…未横置…"被本口径覆盖（用户 2026-09 第二轮口径优先）。
         /// </summary>
         public static EffectData Renown()
         {
@@ -353,16 +365,18 @@ namespace Script.Data.Effects
             {
                 EffectId = "",   // 调用方按"卡号_序号_词缀"规范补写
                 Timing = EffectTiming.OnPowerCombatEnded,
-                Condition = new EffectCondition { Predicate = "RenownMajority" },
+                Condition = new EffectCondition { Predicate = "RenownMajorityInSameArea" },   // 【BUG 修复】必须"来源在该对抗地区内"（地区级规则）
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },
                 Actions = new Array<EffectAction>
                 {
-                    // Args[2]="声望" 启用单次"势力对抗"维度去重（同一方多个声望只放一个标志）
-                    new EffectAction { Verb = ActionVerb.PlaceToken, Args = new Array<string> { "势力标志", "1", "声望" } }
+                    // Args[2]=去重标签（`PlacementDedupTags.Renown`；非空即启用去重 ⇒ 单次势力对抗内只放 1 枚）
+                    new EffectAction { Verb = ActionVerb.PlaceToken, Args = new Array<string> { "势力标志", "1", PlacementDedupTags.Renown } }
                 },
                 Forced = false,   // "由拥有较多声望角色的一方触发"——非强制（可放弃）
                 Duration = "瞬时",
-                FaqNote = "每次势力对抗结束后，本地区声望角色较多的一方放置一个势力标志（多个声望只放一个）。"
+                // 【2026-10 用户口径】横置的角色不提供其词条 ⇒ 声望须**未横置**才触发（计数同样不含横置者）。
+                RequireSourceUntapped = true,
+                FaqNote = "每次势力对抗结束后，本地区声望角色较多的一方放置一个势力标志（多个声望只放一个；只计未横置的声望角色）。"
             };
         }
 

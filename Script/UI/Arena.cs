@@ -65,6 +65,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         private CardUI.CovertRevealRequestedEventHandler _onCovertRevealForward;
         // 附属卡双击激活请求转发（CardUI 的 AttachmentDoubleClicked 事件签名 (CardUI)，与秘社双击一致）
         private CardUI.AttachmentDoubleClickedEventHandler _onAttachmentDoubleClickedForward;
+        /// <summary>【2026-10·JC085】墓地行动双击请求转发（CardUI.GraveyardPlayRequested → 选择地区 → 从墓地打出）。</summary>
+        private CardUI.GraveyardPlayRequestedEventHandler _onGraveyardPlayRequestedForward;
     private List<CardUI> _handCardUIs = new List<CardUI>();
     private List<CardUI> _handCardUIs2 = new List<CardUI>();
     private List<CardUI> _areaCardUIs = new List<CardUI>();
@@ -566,6 +568,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             GD.Print($"[Arena] 双击激活请求：{inst.PlayerTemplate?.CardName}（能力 {ActivateEligibility.GetAllActivateAbilities(inst).Count} 条）");
             OpenAttachmentActivateChoice(c);
         };
+        // 【2026-10 用户口径·JC085】墓地行动：墓地中的"墓地行动"卡双击 → **弹选择地区窗** → 从墓地正面打出
+        // （卡文"你可以从墓地中正面打出复生行尸，就如同其在你的手上一样"；费用/忠诚/行动步骤照常由 Controller 校验）。
+        // 触发条件（墓地区 + `PlayableFromGraveyard`）已在 `CardUI.OnGuiInput` 侧过滤，这里再做一次权威校验。
+        _onGraveyardPlayRequestedForward = (c) => OnGraveyardPlayRequested(c);
 
         // ---- 6. 订阅逻辑层事件 ----
         SubscribeToManagerEvents();
@@ -1075,7 +1081,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     {
                         onConfirmed?.Invoke(null);             // 必选槽取消 → 整次不打出
                     }
-                });
+                },
+                cand.Hint);   // 【2026-10·JC092】该槽的动作提示（卡文口径；空＝中性兜底）
         }
 
         void Confirm()
@@ -1223,7 +1230,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         AddChild(win);
         win.Init(prompt, min, max, defaultValue, confirmLabel, cancelLabel);
         // 【2026-09】先解锁、再交回 Controller（配对纪律；取消亦会回调 -1，见 NumberInputWindow.Cancel）
-        win.OnConfirmed = value => { UnlockChoiceWindow(win); onChosen?.Invoke(value); };
+            win.OnConfirmed = value =>
+            {
+                UnlockChoiceWindow(win);
+                onChosen?.Invoke(value);
+                // 【BUG 修复·JC083 用户实测"输入数字点确定后没立刻刷新 UI"】回调里会**同步重入结算**
+                // （如 JC083：立刻把牌库顶的牌判给手牌/牌库底）⇒ 必须在这里立刻重排/刷新 View，
+                // 否则界面停留在结算前的状态，要等下一次自然刷新才更新。
+                ArrangeAllCardsInternal();
+                UpdateTurnUIInternal();
+            };
         LockChoiceWindow(win);
         win.PopupCentered();
     }
@@ -1921,6 +1937,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     if (set.Count > 0) _activateLegalTargetCache[inst.UID] = set;
                 }
             }
+            // 【2026-10 用户口径·JC085】**墓地行动**也要有"可行动"高亮（用户："墓地中的卡有行动效果可以激活时
+            // 要有高亮"）：判据＝`TurnManager.CanPlayFromGraveyardNow`（与双击入口**同一实现**），
+            // 双击 ⇒ 弹激活效果窗 ⇒ 选地区 ⇒ 正面打出。
+            foreach (var inst in _zoneManager.GetZoneCards(CardZone.Graveyard, 0))
+            {
+                if (inst?.PlayerTemplate == null || !inst.PlayerTemplate.PlayableFromGraveyard) continue;
+                var ui = FindCardUIByUID(inst.UID);
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                ui.SetActivatableHighlight(_turnManager.CanPlayFromGraveyardNow(inst, out _));
+            }
         }
 
         /// <summary>D9：取某卡的第一个角色/附属激活能力（**模板 ∪ 运行期授予**，与拖拽控制器同源）。</summary>
@@ -1999,6 +2025,79 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         }
 
         /// <summary>
+        /// 【2026-10 用户口径·JC085】**墓地行动**：墓地中声明 `PlayerCardData.PlayableFromGraveyard` 的卡
+        /// 双击 → **唤出技能/激活选择窗**（用户口径："只有一个激活效果也要弹出窗口"）→ 选该项后再弹
+        /// **选择地区窗** → 从墓地正面打出（走生产同款 `_actionService.PlayCard`）。
+        /// 口径（卡文）："你可以从墓地中正面打出复生行尸，就如同其在你的手上一样（仍需要支付其费用，且需满足其忠诚需求）"
+        /// ⇒ 本方法只负责"选项 + 选地区 + 提交意图"，费用/忠诚/入堆叠由 Controller 校验（View 不写 Model）。
+        /// 门禁＝`TurnManager.CanPlayFromGraveyardNow`（与高亮同一实现）。
+        /// </summary>
+        private void OnGraveyardPlayRequested(CardUI cardUI)
+        {
+            var inst = cardUI?.Instance;
+            if (inst == null) return;
+            var tmpl = inst.PlayerTemplate;
+            if (tmpl == null || !tmpl.PlayableFromGraveyard)
+            {
+                GD.Print($"[Arena] 墓地行动忽略：{tmpl?.CardName} 未声明『墓地行动』");
+                return;
+            }
+            if (!_turnManager.CanPlayFromGraveyardNow(inst, out string why))
+            {
+                GD.Print($"[Arena] 墓地行动忽略：{tmpl.CardName} → {why}");
+                RefreshActivateHighlights();
+                return;
+            }
+
+            // 第一级：**技能/激活选择窗**（即使只有一条也弹，对齐"双击弹出选择效果的面板"口径）
+            var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
+            if (win == null)
+            {
+                GD.PrintErr("[Arena] 墓地行动：激活选择窗不可用（编辑器未挂场景）→ 直接进入选地区");
+                OpenGraveyardAreaChoice(inst);
+                return;
+            }
+            var items = new List<ActivationChoiceItem>
+            {
+                new ActivationChoiceItem
+                {
+                    Label = $"墓地行动：从墓地正面打出「{tmpl.CardName}」（费用 {Mathf.Max(0, tmpl.Cost)}）",
+                    OnChosen = () => OpenGraveyardAreaChoice(inst),
+                },
+                new ActivationChoiceItem { Label = "取消", OnChosen = () => { } },
+            };
+            win.Init(items);
+            AddChild(win);
+            win.PopupCentered();
+            GD.Print($"[Arena] 墓地行动：{tmpl.CardName} 双击 → 弹技能选择窗（1 条）");
+        }
+
+        /// <summary>【2026-10·JC085】墓地行动第二级：**选择地区窗** → `PlayCard{目标地区}`（正面打出）。</summary>
+        private void OpenGraveyardAreaChoice(CardInstance inst)
+        {
+            var tmpl = inst.PlayerTemplate;
+            var areas = _areaManager?.GetOrderedAreaUids() ?? new List<string>();
+            if (areas.Count == 0)
+            {
+                GD.PrintErr($"[Arena] 墓地行动：当前没有可放置的地区（{tmpl?.CardName}）");
+                return;
+            }
+            _triggerCoordinator.RequestActivateTargetSelection(
+                $"{tmpl?.CardName}（墓地行动）",
+                true,                       // isArea：走地区槽位高亮 + 点击
+                areas,
+                uid =>
+                {
+                    if (string.IsNullOrEmpty(uid)) return;
+                    bool ok = _actionService.PlayCard(inst.ControllerId, inst.UID, uid, null);
+                    GD.Print($"[Arena] 墓地行动：{tmpl?.CardName} → 地区 {uid} " +
+                             (ok ? "打出成功（已入堆叠）" : "被拒（见 Controller 日志：费用/忠诚/阶段）"));
+                    RefreshActivateHighlights();
+                },
+                "取消（不打出）");
+        }
+
+        /// <summary>
         /// 激活能力选择框（附属 / **争夺区正面角色**）：列出所有可激活的 AttachmentActivated/CharacterActivated
         /// 效果供玩家选其一发动（多条＝弹窗，单条＝直接发动）。
         /// 【2026-09 修复·JC019】候选改为 `ActivateEligibility.GetAllActivateAbilities`＝**模板 ∪ 运行期授予**：
@@ -2030,6 +2129,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             if (abilities.Count == 0)
             {
                 GD.PrintErr($"[Arena] ⛔ 双击激活被拒：{inst.PlayerTemplate?.CardName} 无 CharacterActivated/AttachmentActivated 能力");
+                return;
+            }
+            // 【2026-10 用户口径·JC093】次数上限**全部用尽**（如"每回合至多发动两次"已用两次）⇒
+            // 双击**不开面板、无反馈**（用户："使用两次效果后双击不需要反馈"）；部分用尽时仍开面板，
+            // 把用尽项**置灰**展示（对齐 JC053"一项可选、一项置灰"口径）。
+            if (ActivateEligibility.AllAbilitiesUsesExhausted(inst, abilities))
+            {
+                GD.Print($"[Arena] ⏹ 双击忽略：{inst.PlayerTemplate?.CardName} 的激活能力本回合次数已全部用尽");
                 return;
             }
 
@@ -2073,10 +2180,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 // "以横置本角色为代价"的效果：若本卡已横置（无法执行横置代价）也置灰（如 JC020 效果A）。
                 bool needsTap = !string.IsNullOrEmpty(ability.ActivateCondition)
                                 && ability.ActivateCondition.Contains("横置本角色");
+                // 【2026-10·JC093】次数上限用尽的能力在面板里**置灰**（与候选/权威门禁同源）。
+                bool exhausted = ActivateEligibility.IsAbilityUsesExhausted(inst, ability);
                 bool disabled = (ability.Target is { NeedsSelection: true }
                                  && !ActivateEligibility.HasLegalTarget(inst, ability, _cardManager))
-                                || (needsTap && inst.IsTapped);
-                if (disabled) label += needsTap && inst.IsTapped ? "（已横置，无法横置自身）" : "（无合法目标）";
+                                || (needsTap && inst.IsTapped)
+                                || exhausted;
+                if (disabled) label += exhausted ? "（本回合次数已用尽）"
+                    : (needsTap && inst.IsTapped ? "（已横置，无法横置自身）" : "（无合法目标）");
                 items.Add(new ActivationChoiceItem
                 {
                     Label = label,

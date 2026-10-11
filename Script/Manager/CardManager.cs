@@ -683,6 +683,8 @@ public partial class CardManager : Node
     /// 跑一次死亡检查 —— 否则已经受伤的角色会在防御掉回去后**赖着不死**。
     /// 用户实测报障原文："JC059 移动地区后，原有地区的角色防御总值下降，如果已经受伤可能会导致死亡，
     /// 现在没有因为这个原因死亡，需要修正"。
+    /// 【2026-10 用户口径·JC089 追加】"**最大防御只有 1 的宿主被 -1 防御后应死亡**"⇒ 判据放宽：
+    /// 防御被降到 0（`CurrentDefense == 0`）**即使毫发无伤也死亡**；`CurrentDefense < 0`（无防御哨兵）不判死。
     ///
     /// 由 Controller（光环重算 / 时效还原等"减防"路径尾部）调用；**只在真的满足死亡判据时**才走既有
     /// 死亡流程 `HandleInstanceDeath`（含死亡时机广播与墓地处理），与伤害入口同口径地排除暗藏者。
@@ -694,10 +696,12 @@ public partial class CardManager : Node
         // 只有在场卡参与死亡判定（争夺区/附属区；手牌/牌库/墓地等不在此列）
         if (instance.CurrentZone != CardZone.AreaZone && instance.CurrentZone != CardZone.AttachedZone) return false;
         if (instance.IsCovert) return false;          // 暗藏者免疫伤害/不参与死亡判定（与 `DealDamageToInstance` 同口径）
-        // **必须已经受伤**才谈"减防致死"（用户口径："如果已经受伤可能会导致死亡"）。
-        // 为什么不能只看 `IsDead()`：形态转换等过渡态会出现"`CurrentDefense == -1`（当前无防御）但模板仍有印刷防御"
-        // 的组合，此时 `IsDead()` 的 `0 >= -1` 会**把毫发无伤的卡判死**（实测踩到 JC028 鲜血奴仆变附属后被打死）。
-        if (instance.Damage + instance.Trauma <= 0) return false;
+        // 【2026-10 用户口径·JC089】判据＝"**当前有防御力**（`CurrentDefense >= 0`）且 伤害＋创伤 ≥ 当前防御力"：
+        //  · `CurrentDefense < 0`（＝-1 哨兵"当前无防御"，如附属/形态过渡态）⇒ 不判死
+        //    （原"必须已经受伤"的写法会漏掉防御被降到 0 的卡）；
+        //  · 防御被降到 **0**（如 1 防御的角色吃到 -1 防御）⇒ **即使毫发无伤也应死亡**（用户实测 JC089：不死亡）；
+        //  · 已受伤的角色因减防而 `伤害＋创伤 ≥ 防御`（如 3 防御受 2 伤 → -1 防御后 2 ≥ 2）⇒ 死亡。
+        if (instance.CurrentDefense < 0) return false;
         if (!instance.IsDead()) return false;
         GD.Print($"[CardManager] 💀 {instance.PlayerTemplate?.CardName} **防御力下降**后满足死亡判据" +
                  $"（伤害{instance.Damage}＋创伤{instance.Trauma} ≥ 防御{instance.CurrentDefense}）→ 死亡");

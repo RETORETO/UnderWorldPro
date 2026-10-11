@@ -1,16 +1,19 @@
-# JC 效果代码核查项（唯一口径来源）
+﻿# JC 效果代码核查项（唯一口径来源）
 
 > **本文件是 JC 扩展包效果代码自查的唯一口径来源。**
 > 核查对象：`Cards/Effects/PlayerCards/JC/*.cs`（134 个效果脚本 + `JCEffects.cs` 注册入口）
 > 与 `Cards/Data/PlayerCards/JC/*.tres`（135 个卡数据）。
 >
-> **纪律**：本轮核查**只读、只记录，不修改任何卡效果代码 / tres / 引擎代码**。
-> 发现问题一律写入台账并标注【待裁定】，由用户裁定后另行进入修复阶段。
+> **核查纪律（最新）**：
+>  · **静态比对一律自动化**（`Script/Tests/JCEffectSelfAuditTests.cs`）；**必须先构建成功再真跑**——
+>    构建失败或编译产物过期时，任何"通过"都不成立（自动化结论只在"真跑过"的前提下有效）；
+>  · 扫描命中先判"是检查器口径问题还是实现问题"：**实现问题就修实现**（＋单测＋全量回归），
+>    **检查器口径问题就修检查器并写明依据**；确属"卡文如此/引擎通道如此"的例外写入豁免表（**理由必写**）；
+>  · 只有**卡文歧义**才停下来回问用户（㉔）。
 >
-> **记录口径**：台账与问题清单**只写现状**（当前实现是什么、与卡文是否一致），
-> **不列"曾经写错过什么"**（历史缺陷只在判据文档的"历史缺陷"栏作为判据由来参考）。
+> **记录口径**：只写**现状与结论**（当前实现是什么、与卡文是否一致、依据在哪），**不写"曾经写错过什么"、不写修改过程**。
 >
-> 判据分两段：**A 段（①–⑨）＝用户给定的主干判据**；**B 段（⑩–㉔）＝结合本项目引擎实际字段与历史缺陷补齐的判据**，
+> 判据分两段：**A 段（①–⑨）＝用户给定的主干判据**；**B 段（⑩–㉔）＝按本项目引擎实际字段补齐的判据**，
 > 其中 **㉑（效果切分规则）为最高优先级**，它是判据②⑤⑥⑦⑧⑪⑱等的共同前置；
 > **㉔（卡文歧义·必须回问）为强制流程判据**。
 >
@@ -68,7 +71,7 @@ JCEffects.RegisterAll()
 | 目标范围（本地区/所有地区/含自身/含暗藏者） | ✅ 措辞 | ✅ `IsLocalZone`/`AllAreas`/`CanTargetSelf`/`IncludeCovert` | 两侧直接比对（⑯） |
 | 代价（横置/牺牲/支付 N/额外费用） | ✅ 措辞 | ✅ `Cost`/`SacrificeCost`/`OptionalPayCost`/`ExtraCost` | 两侧直接比对（⑭） |
 | 次数 / 阶段门禁 | ✅ 措辞 | ✅ `MaxUsesPerTurn`/`MaxUsesPerGame`/`OnlyPhases`/`ActivateWindow`/… | 两侧直接比对（⑮） |
-| 次数·地区级一次（威名/声望） | ✅ 前缀区"威名/声望" | ✅ `KeywordEffects.WeiMing()`/`Renown()` + 引擎地区级去重 | 两侧比对（⑮）：**以威名为准**，声望去重口径存疑另记 |
+| 次数·地区级一次（威名/声望） | ✅ 前缀区"威名/声望" | ✅ `KeywordEffects.WeiMing()`/`Renown()` + 引擎**按标签分桶**的广播窗口去重 | 两侧比对（⑮）：时机↔标签**必须成对**（`OnCombatWon`⇒`威名`、`OnPowerCombatEnded`⇒`声望`），两词条同形且互不干扰 |
 | 卡文卡名自指（卡文出现与本卡 `Name` 完全一致的卡名） | ✅ `Effects` 原文中出现的卡名 | ✅ 自指通道（动作对象"自身/触发卡/结附宿主"、`TriggerBySelf`） | 两侧比对（⑪） |
 | 动态数值 X | ✅ "X"所在句 | ✅ `ValueExpr`/`ValueAtResolve` | 两侧比对 + 求值时机（⑱） |
 | 期限 | ✅ "直到回合结束/常驻" | ✅ `Duration` | 两侧直接比对（⑲） |
@@ -85,8 +88,8 @@ JCEffects.RegisterAll()
 - **代价**："入堆叠前支付/不可被响应"**需要两侧统一**（卡文"作为代价"⇒ 实现必须是入堆叠前支付的代价字段）。
 - **卡文↔实现的语义对比**：**自动化做"可规则化"的比对**（见判据⑪-b 的四种通道），
   且**即使自动对比通过，也不放弃人工/裁定复核**——两者并行，自动通过不等于语义正确。
-- **次数限制·地区级一次**：一回合一次查 `MaxUsesPerTurn`；**威名/声望按"该地区每回合只触发一次"核对**，
-  **以威名为准**；声望现存去重口径冲突，**只登记【待裁定】，不改引擎**（见判据⑮）。
+- **次数限制·地区级一次**：一回合一次查 `MaxUsesPerTurn`；**威名/声望＝一次广播窗口内每控制者每地区 1 枚**
+  （威名＝战斗对抗获胜每次；声望＝每次势力对抗结算完毕各触发一次，用户 2026-09 第二轮口径，见判据⑮）。
 - **卡文卡名自指**：卡文出现与本卡 `Name` **完全一致**的卡名时，一律视作"本卡指代"，
   实现须走自指通道，**不得去别处找同名卡**（见判据⑪）。
 - **文档不重复**：已合并的判据不单独体现、不重复罗列。
@@ -113,7 +116,6 @@ JCEffects.RegisterAll()
   - 实测：JC001=1（角色）、JC092=2（事务）、JC020=4（附属）、JC121=5（角色\|附属）、JC048=4（附属）
 - **检查方法**：人工（读卡文前缀）+ 自动化（`CategoryFlag` 与主角色的统计）。
 - **误判/豁免**：事务卡的"结附"类词条不适用；角色\|附属复合类别卡（如 JC121）需人工判定主形态。
-- **历史缺陷**：JC121 曾漏装"公开"。
 
 ### 判据② 效果类型：行动 / 持续 / 触发（**含类别误用**）
 - **检查对象**：`EffectData.Timing`。
@@ -131,7 +133,6 @@ JCEffects.RegisterAll()
 - **字段/落点**：`EffectData.cs:43`（`EffectTiming` 枚举，注释已分 B/C/F 组）。
 - **检查方法**：自动化（卡文前缀 ↔ `Timing` 映射、类别 ↔ `Timing` 组别映射，二者为同一套用例）+ 人工（多段卡逐个核对、确认"这段是一次性事件还是常驻规则"）。
 - **重要限定（与㉔ 联动）**：**卡文本身描述不明确**（例如只写"持续"但语义像一次性、"当…时"其实描述的是常驻规则）时，**不得自行择一实现** ⇒ 走判据㉔ 回问用户。
-- **历史缺陷**：JC048 曾把"准备步骤强制触发"错落到拆分的多条同时机效果；JC124 的"行动3"曾漏声明窗口（见⑮）。
 
 ### 判据③ "场上"的定义只有争夺区 / 附属区
 - **检查对象**：`EffectData.Scope`（`ZoneScope`）。
@@ -157,6 +158,9 @@ JCEffects.RegisterAll()
   - 非场上区域触发**没有独立字段**，只能靠显式 `Scope`（`HandZone`/`Graveyard`/`DeckZone`/`SealedZone`）或 `DeckLevelRegistration=true`（`EffectData.cs:1308`，JC124 构筑级全局触发）表达。
 - **检查方法**：自动化（`Scope` 非场上区域 或 `CovertOnly` 的效果 ⇒ 必须有卡文依据；`DeckLevelRegistration=true` 必须卡文写明"离场后仍生效/构筑级"）。
 - **误判/豁免**：`CovertOnly` 仅限"暗藏者专用能力"（JC041 禁婆 `RequireSourceCovert`、JC054 蒙古死亡蠕虫潜伏触发）。
+- **状态门禁（2026-10 用户口径）**：**横置的角色不提供其词条** ⇒ 威名/声望这类"由卡自身状态产出的词条"要求来源卡**未横置**
+  （`EffectData.RequireSourceUntapped`，两处收集循环各一道；运行时授予的关键词模板**同一门禁**）；
+  声望的"哪一方触发"计数同样**不含**横置者（`RenownRule.CountRenownCharacters`）。判据归口＝⑮，见该条。
 
 ### 判据⑤ 是否取目标 / 取什么目标 / 是否多目标（**含目标语义限定词与自身约束**）
 - **检查对象**：`EffectData.Target`（`TargetSpec`）、`TargetSlots`、`MinChosenSlots`、`NeedsAreaTarget`。
@@ -195,19 +199,41 @@ JCEffects.RegisterAll()
 - **检查方法（与既有测试的关系）**：`JCCardTextAuditTests.TestAudit_JC包_本地区目标需显式声明自身可否` 已按"本地区目标"口径实现（JC002/JC004）；
   本判据把口径**从"本地区目标"扩展到全部取目标效果**（含目标语义限定词）。
 - **豁免**：`JC020 / JC058 / JC066 / JC088 / JC100`（各附规则依据，见台账豁免区）。
-- **历史缺陷**：JC021 狭路相逢（三槽：地区 + 本方角色 + 敌方角色，`MinChosenSlots=1`）；JC055 混合 `Kind`+`KindAlt` 曾永远取不到角色一半。
 
-### 判据⑥ 丢失目标是否导致效果无法结算
-- **检查对象**：`TurnManager.IsTargetLost`、`TargetSpec.VersionSkipsSelf`、`TargetSlots` + `MinChosenSlots`。
-- **判据描述**：
-  - **单目标**：目标丢失 ⇒ **整条效果不结算**（fizzle）；
-  - **仅 K15 多目标**：允许"部分目标失效后其余照常结算"（`MinChosenSlots` 自洽）。
+- **⑯ 2026-10 加固（限制条件的「适用范围」）**：否定/限制型静止规则只约束其**适用对象**——
+  `OnlyAttachWithSubCategories` 只约束**附属卡**（非附属 fail-open：事务卡/角色卡以该卡为目标不受限，
+  实测 JC078→JC081）；`CannotBeAttached` 只约束**装备**。检查＝数据层自洽（`TestAudit_承诺落地清单`）
+  ＋行为级（`TestContract_白名单_只约束附属且仅限结附路径`）。
+### 判据⑥ 丢失目标 → **按句号切分的"部分"级结算**（不整条 fizzle）
+- **检查对象**：`TurnManager.IsTargetLost`、`EffectEngine.ValidateTargetAtResolve`、`TargetSpec.VersionSkipsSelf`、
+  `TargetSlots` + `MinChosenSlots`、以及**效果的"部分"划分**（卡文句号边界）。
+- **判据描述（最新口径）**：
+  1. **一条效果内部按卡文句号（`。`）切成若干"独立部分"**；一条 `EffectData` 可以承载多个部分
+     （部分之间用句内顺序原语表达，见判据㉑-b）——即"多个部分包装进一条效果"。
+  2. **目标丢失的判定单位是"部分"，不是"整条效果"**：
+     - 丢失的目标只影响**它所在的那个部分**（＝到该部分句号边界为止）；
+     - **同一效果内其它部分照常结算**（"尽可能结算"）；
+     - 只有当丢失的是**该次打出/发动的必需目标**（整卡目标声明：如事务卡唯一的卡目标/地区目标）时，
+       才整体失效——**事务卡** ⇒ 不结算、卡进墓地；**触发/激活** ⇒ 仅跳过本条结算。
+  3. **句号是"部分"的唯一边界**：逗号、"然后"、"若…则"是**句内**顺序（判据㉑-b），**不产生独立部分**。
+  4. 多目标（K15）另按槽位粒度：失效槽位跳过、其余槽位照常结算（`MinChosenSlots` 自洽）。
+- **理由与实测依据（为什么"丢失目标还能结算遏制1"）**：
+  - **JC065 审问嫌疑人**：`快速行动：选择目标地区，然后目标对手牺牲一个位于该地区的暗藏者。遏制1。`
+    ⇒ **遏制1 是独立句**（句号分隔）⇒ 前句因对手响应翻面而目标丢失时，**遏制1 照常结算**；
+    卡文 FAQ 亦明确"即使场上没有暗藏者，你也可以打出审问嫌疑人，**仅仅为了遏制1**"。
+  - **JC009 远东六号科研所**：`进场触发：将目标角色封印在远东六号科研所上，然后遏制1。`
+    ⇒ 遏制1 与封印**在同一句内**（`，然后` 连接，非句号）⇒ 封印未落地则**该句整体不结算**，遏制1 不结算；
+    卡文 FAQ 亦明确"如果未能成功将一个角色封印在其上，**则之后的遏制1 能力无法结算**"。
+  - ⇒ 两卡的差异**只由句号边界决定**，与"效果条数"无关；这正是"部分级结算"而非"整条 fizzle"的口径。
 - **字段/落点**：
-  - 唯一判定点 `TurnManager.IsTargetLost`（版本号比对）；
-  - 多目标部分结算：`TargetSlots` + `MinChosenSlots`，见 `Script/Tests/P3MultiTargetTests.cs:573-576`（JC021/D16 口径）；
-  - `TargetSpec.VersionSkipsSelf`（`EffectData.cs:734`）：JC052"其他"版本敏感写法（翻面后"现存这张自己"也会被老触发消灭）。
-- **检查方法**：自动化（单目标效果不得依赖部分结算；多目标效果必须声明 `MinChosenSlots`）+ 人工（卡文是否写"尽可能"）。
-- **误判/豁免**：卡文明确写"对每个…都…"（群体）时不适用本判据，走判据⑯。
+  - 目标丢失判定：`TurnManager.IsTargetLost`（版本号比对）＋ `EffectEngine.ValidateTargetAtResolve`；
+  - 现状缺口（按本法执行时的实现要求）：`EffectEngine` 现在按"整条效果"跳过（`EffectEngine.cs:308-322`），
+    需改为**按部分判定**：动作序列按卡文句号分组，某组的目标丢失时只中止该组、其余组继续；
+  - `TargetSpec.VersionSkipsSelf`（`EffectData.cs:734`）：JC052"其他"版本敏感写法；
+  - 多目标部分结算：`TargetSlots` + `MinChosenSlots`（`P3MultiTargetTests`）。
+- **检查方法（自动化）**：① 事务卡的"必需目标"缺失/丢失 ⇒ 整卡不结算；② 卡文含"…。…。"多句的效果，
+  其动作序列须可按句号分组（部分级判定可落地）；③ 多目标效果必须声明 `MinChosenSlots`。
+- **误判/豁免**：卡文写"对每个…都…"（群体）不适用本判据，走判据⑯；卡文只有一句且该句依赖唯一目标 ⇒ 整句不结算（＝本条效果不结算）。
 
 ### 判据⑦ 结算中需要询问玩家的部分必须有询问
 - **检查对象**：脚本是否调用 `IGameUIHooks.Prompt*`（或等效询问通道）。
@@ -221,6 +247,9 @@ JCEffects.RegisterAll()
 - **检查方法**：人工为主（逐段对照卡文与动作原语），自动化辅助（`AskBranch`/`PayOptional`/`Discard` 等动词是否存在对应提示窗口路径）。
 - **误判/豁免**：**无 UI/无网关的环境**（headless 测试）按既定确定性兜底是**允许的**（引擎既有设计），但线上路径必须有询问。
 
+- **⑦/⑧ 2026-10 加固（非支付型"你可以…"）**：`EffectData.ConfirmPrompt` ⇒ 触发**入堆叠前**弹
+  **两按钮是/否窗**（无输入框）；**选"否"⇒ 不入堆叠、不结算**；无 UI ⇒ 按"否"（fail-closed）。
+  检查＝行为级（`TestContract_交互收尾_是窗与持锁`）。
 ### 判据⑧ 询问窗口是否"合适"
 - **检查对象**：`EffectAction.Verb` 与询问窗口的匹配。
 - **判据描述**：必须用**语义匹配**的窗口——
@@ -229,8 +258,13 @@ JCEffects.RegisterAll()
   - **固定数量**（"弃一张""移除一个标志"）⇒ 不得弹"输入数量"；
   - **多选项文本**（"选择一项：·… ·…"）⇒ 走 `PromptEffectMode`（列表二选一），**不得**弹数值框；
   - **可变数量 X**（"移除X个"）⇒ 才允许数值/分配窗（`AmountByPlayerChoice`）。
+  - **文案必须按卡文/数据给（2026-10 用户口径·JC092）**：选择窗口（选地区/选卡/选目标）的提示语必须来自该效果的声明
+    （`TargetSlot.Hint` / `EffectData.Hint`），**不得由 UI 硬编码另一类动作的说法**。实测：JC092 死灵召唤
+    "选择一个地区，将你墓地中的目标角色牌以暗藏者状态置于该地区"在联机选地区时被显示成移动类效果的
+    "请点击一个高亮的地区（将移动至该地区）"。
+    检查＝自动（`TestAudit_承诺落地清单` 的『提示文字·联机按数据展示』承诺 ＋ **反向**断言"`ArenaOl.cs` 不得再出现该硬编码文案"）
+    ＋行为（`TestB2_5_JC092选地区提示为卡文口径`）。
 - **检查方法**：自动化（`PayOptional` 值域 `min!=max && max>1` ⇒ 违规，参考既有用例）+ 人工（选项型是否误用数值框）。
-- **历史缺陷**：JC031"是否要求随机弃牌"曾弹**输入框**，后改走 `PromptEffectMode` 列表二选一（A85）；JC044 计数器代价"固定模式"曾因误下发 `OptionMaxAmounts` 导致窗口样式不一致且无法发动（A91②）。
 
 ### 判据⑨ 不满足条件时按钮必须置灰
 - **检查对象**：`ActivateEligibility`（候选侧）、`EffectEngine.ActivateAbility`（权威侧）、`TurnManager.GetModeAvailability`、`LegalityProjection`。
@@ -241,8 +275,13 @@ JCEffects.RegisterAll()
   - 权威侧 `EffectEngine.ActivateAbility`；
   - 模式可用性 `TurnManager.GetModeAvailability`（View 只展示不重算）；
   - 联机投影 `LegalityProjection`（只投影当前确实可发动的能力）。
-- **检查方法**：自动化（激活能力若有前置条件/代价/目标，须能被 `ActivateEligibility` 判定）+ 人工（找"UI 与服务端两套判据"的隐患）。
-- **历史缺陷**：JC053 前置不满足曾**不置灰**（A98）⇒ `ConditionAllowsActivation` 提升为 public 后 UI 与服务端共用；A103 纯客户端无 `EffectEngine.Instance` 时置灰求值**崩溃**；A104 投影改为只投影可发动能力。
+  - **次数用尽 ⇒ "无反馈"（2026-10 用户口径·JC093）**：激活能力本回合/本局次数**全部用尽**时双击
+    **不开面板、不弹窗**（不是"开面板再置灰"）；**部分**用尽时仍开面板，把用尽项置灰并标注"（本回合次数已用尽）"。
+    单一判定＝`ActivateEligibility.IsAbilityUsesExhausted` / `AllAbilitiesUsesExhausted`
+    （单机 `Arena.OpenAttachmentActivateChoice` 与联机 `ArenaOl.OnAttachmentDoubleClicked` / `IsActivationEffectDisabled` **共用**）。
+    实测：JC093 怨灵咒刃"每回合至多发动两次"用满两次后仍能双击唤起面板。
+- **检查方法**：自动化（激活能力若有前置条件/代价/目标，须能被 `ActivateEligibility` 判定 ＋ ㉖ 承诺『次数用尽·单机/联机静默不开面板』）
+  + 行为（`TestB2_6_JC093次数用尽后不可发动`）+ 人工（找"UI 与服务端两套判据"的隐患）。
 
 ---
 
@@ -256,7 +295,6 @@ JCEffects.RegisterAll()
   - tres = **135**、cs = **134**、`.Register()` 调用 = **134**；
   - **差异卡已定位＝JC125 无知路人**（无 cs、无 Register）——但它是**有意为之**（见㉒）。
 - **检查方法**：自动化（数量比对 + 每个 cs 文件名在 `JCEffects.cs` 中可检索到）。
-- **历史缺陷**：JC070 虔心修士曾**整卡无脚本**（前缀"公开/声望"全漏装）。
 
 ### 判据⑪ 卡文 ↔ 实现一致性（以㉑切段数为准）
 - **判据描述**：`tres.Effects` **按㉑切段后的段数** ↔ `EffectDataList` 条数 · 顺序 · 语义 必须对应；
@@ -296,7 +334,6 @@ JCEffects.RegisterAll()
   - 非事务不得有 `OnSorceryCast`（那是事务打出结算时机）；
   - 附属（`Attachment=4`）默认 `Scope=AttachTarget`、角色（`Character=1`）默认 `Scope=AreaZone`（除非卡文另有说明）。
 - **检查方法**：自动化（`CategoryFlag` × `Timing` 交叉表断言）。
-- **历史缺陷**：JC034"结附于本方秘社"的 `TargetRules` 曾完全没写 ⇒ 该卡**永远打不出**（`TargetRules.Count=0`、`IsLegalPlayTarget` 全 false）。
 
 ### 判据⑬ 未登记字面量静默失败（fail-closed）
 - **判据描述**：脚本写入的**非枚举字面量**（阶段名、表达式、检索语法、条件谓词、动词参数）若未在引擎登记，
@@ -317,37 +354,55 @@ JCEffects.RegisterAll()
   `SacrificeCost`（`ExcludeSource` 等）、`CounterCostSpec`（标志代价，`AmountByPlayerChoice`）、
   `OptionalPayCost`（`:1101`）、`ExtraCost`（`ExtraCostSpec`，`EffectData.cs:426-447`，如 JC049"额外费用：牺牲一个角色"）。
 - **检查方法**：自动化（代价字段存在性）+ 人工（是否漏代价或代价错档）。
-- **历史缺陷**：JC049 额外费用必须"无合法牺牲对象 ⇒ 整张不能打出"（A21）；JC055 可变标志代价 X≥1 且入堆叠前支付。
 
 ### 判据⑮ 次数与阶段门禁
 - **判据描述**：`MaxUsesPerTurn` / `MaxUsesPerGame` / `OnlyPhases` / `ExcludedPhases` / `ActivateWindow` / `PlayTiming` / `LimitToActionPhaseOnly` 与卡文表述一致。
 - **次数限制（本判据核心补充）**：逐卡核对卡文次数措辞与实现：
   - 卡文含"每回合一次 / 每回合N次" ⇒ 对应 `MaxUsesPerTurn=N`；
   - 卡文含"每局一次 / 整局N次" ⇒ 对应 `MaxUsesPerGame`；
-  - **地区级一次**：卡文含 `威名` / `声望` ⇒ 该关键词按**"该地区每回合只触发一次"**核对。
-    - **以威名为准**：`KeywordEffects.WeiMing()`（`Cards/Effects/PlayerCards/KeywordEffects.cs:202`）＝ `OnCombatWon` + 谓词 `WinnerIsSelfInSameArea` + 放势力标志，**单次战斗对抗内每控制者每地区只放一个**（`EffectEngine` 去重）；
-    - **声望存疑**：`KeywordEffects.Renown()`（`:350`）＝ `OnPowerCombatEnded` + 谓词 `RenownMajority` + 放势力标志；
-      引擎注释（`RenownRule.cs`）称"同一地区每回合只触发一次"，但既有测试 `P3KeywordsTests.TestP3_声望_每次势力对抗触发_同一次只加一个` 断言"JC067 追加的第二次势力对抗会**再触发一次**" ⇒ **去重口径冲突**。
-      **本轮只登记现状与冲突，标注【待裁定】，不改引擎**（用户口径"以威名为准"）。
+  - **地区级一次（放置去重）**：卡文含 `威名` / `声望` ⇒ 按"**一次广播窗口内、每控制者每地区只放 1 枚势力标志**"核对。
+    - **两词条同形（用户 2026-09 第二轮口径）**：
+      · `威名`＝`KeywordEffects.WeiMing()`＝ `OnCombatWon` + 谓词 `WinnerIsSelfInSameArea` + `PlaceToken{势力标志,1,威名}`，
+        **每次战斗对抗获胜**广播一次 ⇒ 单次战斗内每控制者每地区只放 1 枚；
+      · `声望`＝`KeywordEffects.Renown()`＝ `OnPowerCombatEnded` + 谓词 `RenownMajorityInSameArea` + `PlaceToken{势力标志,1,声望}`，
+        **每次势力对抗结算完毕**广播一次（JC067 追加的那次同样触发）⇒ 单次势力对抗内只放 1 枚。
+      · 卡面原文"一个地区的所有对抗结束后…未横置…"（JC070 等）被上面的第二轮口径覆盖，**不按卡面字面实现**。
+    - **机制**：`EffectEngine` 按**去重标签分桶**（`PlacementDedupTags`；桶＝标签，键＝`地区|控制者`），
+      广播点 Emit 前调 `BeginPlacementDedupWindow(标签)` **只清本标签的桶** ⇒ ① 窗口内只放 1 枚；② 两个词条**互不干扰**。
+      不变式：两次广播之间堆叠必已清空（`TurnManager.Pass`：堆叠非空只结算栈顶、不推进阶段）。
+    - **检查**：自动＝时机↔标签成对断言（`OnCombatWon`⇒`威名`、`OnPowerCombatEnded`⇒`声望`）＋源码承诺；
+      行为＝`TestContract_去重窗口_威名_多张一次战斗只放一枚`、`TestContract_去重窗口_威名与声望同窗不互吞`、
+      `TestBug1_多个声望角色一次势力对抗只放一个标志`、`P3KeywordsTests.TestP3_声望_每次势力对抗触发_同一次只加一个`。
 - **字段/落点**：
   - `MaxUsesPerTurn`（`:968`，计数基准＝每卡·每回合·每能力，按 `EffectId` 分别计数）、`MaxUsesPerGame`（`:981`）；
-  - 威名/声望：`KeywordEffects.WeiMing()`（`KeywordEffects.cs:202`）/ `Renown()`（`:350`）、`RenownRule.cs`（地区级去重）；
+  - 威名/声望：`KeywordEffects.WeiMing()`（`KeywordEffects.cs:202`）/ `Renown()`（`:350`）、`RenownRule.cs`（只做计数）、
+    `PlacementDedupTags`（标签单一真相源）、`EffectEngine.BeginPlacementDedupWindow`（按标签分桶）、
+    `TriggerEmitPoints.OnCombatWon` / `PowerCombatEnded`（两处同形开启窗口）；
   - `OnlyPhases`/`ExcludedPhases`（见⑬）；`ActivateWindow`（`:936`，"行动"/"快速"）；
   - `PlayTiming`（`:163`）：`MainPhase`/`Response`/`NonResponsive`；`LimitToActionPhaseOnly`；`ActivateCondition`（`:957`）。
-- **检查方法**：自动化（激活能力必须声明 `ActivateWindow`；"行动："前缀不得为 C 档；"只能在行动阶段打出"须 `LimitToActionPhaseOnly`；**卡文次数词 ⇒ `MaxUsesPerTurn`/`MaxUsesPerGame` 映射；卡文含威名/声望 ⇒ 按地区级一次核对**）。
-- **历史缺陷**：JC117"该能力只能在行动阶段发动"⇒ `OnlyPhases="行动阶段"`；JC124"行动3"曾漏 `ActivateWindow`；JC031"每回合只能发动一次"曾在**结算前**才检查 ⇒ 第二次死亡仍入堆叠（A76，后改为收集阶段拦下）；JC063/JC074"快速行动"曾误限行动阶段。
+- **检查方法**：自动化（激活能力必须声明 `ActivateWindow`；"行动："前缀不得为 C 档；"只能在行动阶段打出"须 `LimitToActionPhaseOnly`；**卡文次数词 ⇒ `MaxUsesPerTurn`/`MaxUsesPerGame` 映射；威名/声望 ⇒ 时机↔去重标签成对**）。
 
+- **⑮ 2026-10 加固（未横置才有词条 · 威名/声望）**（用户口径："威名和声望都只有未横置的角色可以触发"；
+  声望"计算双方数量决定哪一方可以触发时不计入横置的声望角色"）：
+  · 门禁声明＝`EffectData.RequireSourceUntapped`（`KeywordEffects.WeiMing()` / `Renown()` 各 `= true`）；
+  · 消费点＝**两处收集循环**——卡面固有触发（`TriggerRegistry` 主循环）与**运行期授予关键词**的模板通道
+    （`template.RequireSourceUntapped && card.IsTapped`）；`CloneKeywordTemplate` 必须**逐项拷贝门禁字段**
+    （漏拷＝"模板声明了、运行期授予的那份却不过门禁"——本批实测坑）；
+  · 计数＝`RenownRule.CountRenownCharacters` **跳过横置者**（卡文"更多**未横置**的声望角色"）。
+  检查＝自动（㉖ 承诺『未横置门禁·声明与消费』『…运行期授予关键词同一门禁』『声望计数排除横置者』）
+  ＋行为（`TestB2_1A_威名_横置不触发_未横置触发`、`TestB2_2_声望_横置不计入数量且不触发`、
+  `TestB2_2B_JC089授予的威名_宿主横置不触发`）。
+
+- **⑮ 2026-10 加固（声望＝地区级）**：声望触发条件必须同时要求"**来源卡就在该对抗地区内**"
+  （复合谓词 `RenownMajorityInSameArea`），且 `PlaceToken` 必带**去重标签**（`威名`/`声望`）——
+  否则别处（含跨地区授予）的声望角色会参与触发、并把标志放进错误地区。
+  检查＝自动（`TestAudit_JC次数限制_与卡文一致`／`TestAudit_承诺落地清单`）＋行为（`TestBug3c_声望只由本地区角色触发`）。
 ### 判据⑯ 目标筛选正确性（**只查"限制条件"；目标类型归⑤**）
 - **判据描述**：`IsLocalZone`（本地区）/ `AllAreas`（所有地区）/ `IncludeCovert`（含暗藏者）/ `Filter` / `Restrictions` / `MassMode` / `MinCounters` / `ExcludeInChosenArea` 与卡文用词严格一致。
 - **字段/落点**：`TargetSpec` 的 `IsLocalZone`、`AllAreas`、`IncludeCovert`、`Filter`、`Restrictions`、`MassMode`、`ExcludeInChosenArea`（多槽）。
 - **检查方法（自动化，非人工）**：卡文限制词 ⇒ 期望字段的映射比对（"本地区"→`IsLocalZone`、"所有地区/任一地区"→`AllAreas`、
   "含暗藏者"→`IncludeCovert`、"所有角色/每个角色"→`MassMode.AllInArea`、"本方/敌方/对手"→`Restrictions`）；
   `Filter` 的检索串（如 `子类别:吸血鬼`）必须命中引擎白名单（⑬），且**子类别字符串必须能在 `tres.SubCategories` 找到**（`PlayerCardData.cs:209/215`）。
-- **历史缺陷**：
-  - `CanTargetSelf` 默认 **false** ⇒ 漏声明会让"本地区只有它自己"时**候选为空、触发静默跳过**（JC004 实测）；
-  - JC017 卡文无"本地区"限定却漏加 `AllAreas=true`（原只能指定本地区角色）；
-  - JC111/JC031/JC057"目标玩家"（＝任意玩家含自己）曾被收窄为 `Enemy`（2026-09 裁定修正）；
-  - JC055 混合 `Kind`+`KindAlt` 曾因 `TargetZonePool.IsZonePileSpec` 判定导致"角色"一半永远取不到。
 
 ### 判据⑰ 光环与持续授予的**落点**
 - **判据描述**：持续/光环授予的**作用对象**必须与卡文一致——
@@ -357,19 +412,18 @@ JCEffects.RegisterAll()
   - "所有**其他本方**角色"必须**排除自身**且限定本方。
 - **字段/落点**：`GrantToHost`（`:1235`）、`AuraFilterKeyword`（`:1216`）、`AuraLocalZoneOnly`（`:1223`）、`IsAura`、`AuraRequiresNoDomain`、`AuraFilterExcludeDomain`、`ContinuousCostMod`（`:1243`）、`GrantedAbility`（`:1183`）。
 - **检查方法**：人工为主 + 自动化（字段存在性/互斥性）。
-- **历史缺陷**：
-  - JC059 类"本地区"vs"全场"光环范围误写；
-  - `AuraRequiresNoDomain` / `AuraFilterExcludeDomain` 曾因枚举默认值 `Mind`（=0）导致**每张光环卡都静默排除了心灵领域角色**（`EffectData.cs:1024-1029` 注释记录）；
-  - JC051"所有其他本方鸣钟教派角色"须排除自身与非本组织者；
-  - JC025/JC012 等徽记减费须限定 `Filter` 与一次性语义。
 
 ### 判据⑱ 动态数值 X
 - **判据描述**：`ValueExpr` 必须合法（命中⑬白名单）；依赖的"玩家选择"必须有数值输入/分配 UI；
   `ValueAtResolve` 该开未开会导致**收集阶段 X=0 被整条跳过**。
 - **字段/落点**：`ValueExpr`（`:989`）、`ValueAtResolve`（`:1001`）。
 - **检查方法**：自动化（`ValueExpr` 非空 ⇒ 命中白名单）+ 人工（"X 由玩家选择"须有分配窗；自身会改变该计数 ⇒ 必须 `ValueAtResolve=true`）。
-- **历史缺陷**：JC048 诅咒沙漏——X 在收集阶段求值，而"放标志"尚未发生 ⇒ 首个准备步骤 X=0 被 K1 门禁整条跳过，实测"只有牺牲那回合才造成伤害"（A90②，后置 `ValueAtResolve=true`）；JC040 遏制 X=事件数量，X=0 时不发动；JC055 `ValueExpr="代价数量"`。
 
+- **⑱ 2026-10 加固（求值阶段）**：`ValueExpr="玩家选择"` ⇒ 取值**只能发生在结算期**，
+  收集阶段的动态值门禁**不得**丢掉该触发（实测 JC083"完全不触发"）；依赖"同效果更早动作"的 X ⇒ `ValueAtResolve=true`。
+  另：**收集期只评估 `Condition.Predicate`**（`BranchPredicate` 供结算分支）⇒ 两条事实都要成立的门禁
+  必须**合成单谓词**（实测 JC082 用 `WinnerIsSelfAndAbilityUsed`）。
+  检查＝自动（`TestAudit_本批BUG回归防线`）＋行为（`TestBug4_JC083准备步骤触发并弹数值窗`）。
 ### 判据⑲ 期限与撤销（**两面：⑲-a 期限可两侧比对；⑲-b 撤销属引擎运行期**）
 - **⑲-a 期限（卡面 ↔ 实现）**：`Duration`（常驻 / 瞬时 / 直到回合结束）**必须与卡文的"直到回合结束/常驻/本回合"等措辞一致**。
   字段：`Duration`（`:1271`）。卡文期限词 ⇒ 期望 `Duration` 的映射比对（自动化）。
@@ -378,11 +432,6 @@ JCEffects.RegisterAll()
 - **字段/落点**：`Duration`（`:1271`）、`GrantedAbility`（`:1183`，`ReapplyGrantedAbilities`）、
   `IconSuppression`（`:1154`）、`DomainSuppression`（`:1161`）、`TextBlank`（`:1170`）、`FormChange`（`:1147`）、`ContinuousGrants`。
 - **检查方法**：⑲-a 自动化（卡文期限词 ↔ `Duration`）；⑲-b 针对性核对实现侧还原路径（自动化可做"直到回合结束"须有还原路径的弱断言）。
-- **历史缺陷**：
-  - 离场清空运行期授予 ⇒ 以"运行期授予子类别"为条件的**死亡触发**恒不成立（JC030 血族长老：JC030 可触发 JC031 让对手随机弃牌，曾失效 ⇒ 改用死亡瞬间子类别快照）；
-  - JC028 形态撤销须迁回附属区并还原类别；
-  - 持续授予的自愈补授只挂在"卡牌移动"钩子 ⇒ **回合切换无移动时不补授**（JC051 A97，后订阅 `OnTurnStarted`）；
-  - JC036 持续夺控（`ControlGain = AttachedHost`）注销时须归还拥有者。
 
 ### 判据⑳ 结构卫生
 - **判据描述**：`EffectId` 唯一且符合命名规范；无空壳效果；无"声明了 `Target` 但动作未消费"；无同卡重复效果。
@@ -390,6 +439,8 @@ JCEffects.RegisterAll()
 - **检查方法**：自动化（同卡 `EffectId` 去重；`Actions` 与 `Modes` 皆空且非纯持续/静止 ⇒ 空壳告警）。
 - **命名规范**：`<卡号>_<字母>_<语义>`，如 `JC048_1_PreparePlaceDamageSacrifice`、`JC022_S_Spirit`。
 
+- **⑳ 2026-10 加固（声明式分工）**：代价型激活效果（横置/支付）的动作由同卡另一条触发承担时，
+  `Actions` 可为空——但**必须**登记豁免（键 `卡UID|struct|空壳:<EffectId>` + 理由），不得静默留空。
 ### 判据㉑ 效果切分规则（**最高优先级**）
 > 由用户定义；它是②⑤⑥⑦⑧⑪⑱的共同前置。**必须先按㉑切段，再逐段核查其它判据。**
 
@@ -445,7 +496,6 @@ JCEffects.RegisterAll()
   - **JC125 无知路人**（`JC125_wuzhiluren.tres:27`）：`持续：名称为无知路人的牌，构筑时在牌组中的数量没有限制。`（`CategoryFlag=1`）——
     是**构筑规则**，**无 cs / 无 Register**；`JC卡牌效果进度表.md:299` 标 `⛔ 未实现（K25 构筑校验（GameDeckValidator））`，用户明确"暂不做"。
 - **检查方法**：人工（识别构筑级文字）+ 自动化（`UnimplementedCards` 集合登记＋进度表 ⛔ 对齐）。
-- **待裁定**：JC125 是否需要在某处（构筑校验层）落地，或长期保持"暂不做"。
 
 ### 判据㉔ 卡文歧义必须回问用户（**强制流程判据**）
 - **判据描述**：核查（以及据此进行的任何实现）过程中，凡遇**卡文描述不明确 / 存在多种合理读法**的情形，
@@ -457,7 +507,7 @@ JCEffects.RegisterAll()
   4. **区域歧义**：是否限"本地区"、是否含特定区域（秘社/资产/封印）；
   5. **归属歧义**：授予**宿主**还是**控制者**、代价由**哪一方**支付；
   6. **时机歧义**：卡文短语与引擎时机不完全对应（"当…时"对应哪个 `EffectTiming`）。
-- **落点**：台账"待裁定清单"的 **❓ 类目**；每条须写明**卡文原文 + 两种以上读法 + 各自影响的实装差异**，便于用户一次裁定。
+- **落点**：核查时**当场停下回问**；每次回问须写明**卡文原文 + 两种以上读法 + 各自影响的实装差异**，便于用户一次裁定；裁定后按裁定实现并只保留裁定口径。
   （**不列"曾经怎么写的"**，只写"现状哪一种读法 + 需要确认什么"。）
 - **检查方法**：人工为主。核查员遇上述情形即**登记而非实现**；
   自动化辅助：把"卡文短语 ↔ `Timing` 无唯一映射"的卡自动列成候选（本轮以人工清单为准）。
@@ -467,34 +517,42 @@ JCEffects.RegisterAll()
 
 ## 判据 ↔ 检查方式 总览
 
-| # | 判据 | 主要检查方式 |
-|---|---|---|
-| ① | 效果主体（**已并入 ⑫**） | 自动化（`CategoryFlag` × `Timing`/`Scope` 交叉表） |
-| ② | 效果类型：行动/持续/触发（**含类别误用**） | 自动化（前缀 ↔ `Timing`；前缀类别 ↔ `Timing` 组别） |
-| ③ | 场上区＝争夺区∪附属区 | 自动化（`Scope` 枚举） |
-| ④ | 默认仅场上正面朝上 | 自动化（`TriggerCovertMode`/`Scope`） |
-| **⑤** | **目标：类型 + 语义限定词（其他/敌方/我方/本地区/全部）+ 多目标 + 自身约束** | **自动化（槽位自洽 + 目标词↔`TargetKind` + 限定词↔约束字段 + 默认允许自身）** |
-| ⑥ | 目标丢失结算（tres 不体现 ⇒ 跳过两侧统一） | 自动化（单/多目标分档） |
-| ⑦ | 需要询问处有询问（tres 不体现） | 自动化辅助（动词↔窗口路径） |
-| ⑧ | 询问窗口合适（tres 不体现） | 自动化 + 裁定 |
-| ⑨ | 不满足条件置灰（tres 不体现） | 自动化（候选侧↔权威侧同判据） |
-| ⑩ | 注册完整性 | 自动化（数量比对 + 每个 cs 被调用） |
-| ⑪ | 卡文 ↔ 实现一致（条数/顺序/语义/**卡名自指**） | 自动化（㉑切段 + 动作动词映射 + 卡名自指）+ 人工/裁定 |
-| ⑫ | 主体类别 × Timing 自洽（**含 ①**） | 自动化（交叉表） |
-| ⑬ | 未登记字面量静默失败 | 自动化（白名单） |
-| ⑭ | 代价与发动条件 | 自动化（卡文代价词 ↔ 代价字段） |
-| ⑮ | 次数与阶段门禁（**含威名/声望地区级一次**） | 自动化（卡文次数/阶段词 ↔ 字段；威名/声望 ↔ 地区级一次） |
-| ⑯ | 目标**限制条件**（类型已归⑤） | 自动化（本地区/含暗藏者/群体/Filter） |
-| ⑰ | 光环/持续授予落点 | 自动化（卡文范围词 ↔ 光环字段）+ 裁定 |
-| ⑱ | 动态数值 X | 自动化（`ValueExpr` 白名单 + 求值时机） |
-| ⑲ | 期限与撤销（**⑲-a 卡面↔实现；⑲-b 引擎运行期**） | ⑲-a 自动化；⑲-b 实现侧核对 |
-| ⑳ | 结构卫生（同卡结构，非卡面可比） | 自动化 |
-| **㉑** | **效果切分规则** | **自动化（切段）** |
-| ㉒ | 构筑级/非游戏内规则 | 自动化（登记对齐）+ 裁定 |
-| **㉔** | **卡文歧义必须回问用户** | **强制流程（自动化列候选）** |
+> **纪律**：本表由测试强制校验（`TestAudit_自检_判据覆盖矩阵`）——凡标"自动/行为"的判据，
+> 其**检查方法必须真实存在**（反射校验）；标"人工"的必须写明落点；标"并入"的必须写明并入哪条判据。
+> **判据不得只有文档、没有检查。**
 
----
-
+| # | 判据 | 类型 | 检查方法（测试） |
+|---|---|---|---|
+| ① | 效果主体 | 并入 | 并入⑫（主体类别 × Timing 自洽） |
+| ② | 效果类型：行动/持续/触发（含类别误用） | 自动 | `TestAudit_JC类别_触发与持续不得误用` |
+| ③ | "场上"＝争夺区∪附属区 | 自动 | `TestAudit_JC区域_Scope仅场上区或需卡文依据` |
+| ④ | 默认仅场上正面朝上 | 自动 | `TestAudit_JC朝向_CovertOnly与构筑级需卡文依据` |
+| **⑤** | 目标：类型＋语义限定词＋多目标＋自身约束 | 自动 | `TestAudit_JC目标_声明自洽` |
+| ⑥ | 丢失目标＝按句号部分级结算 | 自动 | `TestAudit_JC目标_声明自洽` |
+| ⑦ | 需要询问处必须有询问 | 自动 | `TestAudit_JC实现_动作动词与卡文语义一致` |
+| **⑧** | 询问窗口是否合适（含**文案按卡文/数据给**） | 行为 | `TestContract_交互收尾_是窗与持锁` |
+| ⑨ | 不满足条件置灰（含**次数用尽 ⇒ 无反馈**） | 自动 | `TestAudit_JC目标筛选_限制条件与卡文一致` |
+| ⑩ | 注册完整性 | 自动 | `TestAudit_JC注册_数量对齐` |
+| **⑪** | 卡文 ↔ 实现一致（含卡名自指） | 自动 | `TestAudit_JC卡文_卡名自指登记` |
+| ⑫ | 主体类别 × Timing 自洽 | 自动 | `TestAudit_JC类别_与Timing自洽` |
+| ⑬ | 未登记字面量静默失败 | 自动 | `TestAudit_JC白名单_阶段名与取值与谓词已登记` |
+| ⑭ | 代价与发动条件 | 自动 | `TestAudit_JC代价_关键代价字段存在性` |
+| ⑮ | 次数与阶段门禁（含威名/声望的放置去重窗口） | 自动 | `TestAudit_JC次数限制_与卡文一致` |
+| ⑯ | 目标限制条件（含**适用范围**） | 行为 | `TestContract_白名单_只约束附属且仅限结附路径` |
+| ⑰ | 光环/持续授予落点与范围 | 自动 | `TestAudit_承诺落地清单` |
+| ⑱ | 动态数值 X（含**求值阶段**） | 自动 | `TestAudit_本批BUG回归防线` |
+| ⑲ | 期限与撤销 | 自动 | `TestAudit_JC期限_Duration与卡文一致` |
+| ⑳ | 结构卫生（含声明式分工豁免） | 自动 | `TestAudit_JC结构_EffectId唯一与非空壳` |
+| **㉑** | 效果切分规则 | 自动 | `TestAudit_JC切分_段数与效果条数一致` |
+| ㉒ | 构筑级/非游戏内规则 | 自动 | `TestAudit_JC注册_数量对齐` |
+| ㉓ | 类别误用 | 并入 | 并入② |
+| **㉔** | 卡文歧义必须回问用户 | 人工 | 落点＝本文件判据㉔、《台账》卡文歧义登记区 |
+| ㉕ | 取目标默认允许自身 | 并入 | 并入⑤ |
+| **㉖** | 承诺必须落地（声明↔消费点↔行为用例） | 自动 | `TestAudit_承诺落地清单` |
+| **㉗** | 多声明 OR 一致 | 行为 | `TestContract_多声明OR_两类别各自可结算` |
+| **㉘** | 单一真相源的旁路同判 | 行为 | `TestContract_屏障_候选与合法性四路径一致` |
+| **㉙** | 落地路径完备性与交互收尾 | 行为 | `TestContract_交互收尾_数值窗单机与联机` |
+| **㉚** | 数值下降后复检派生状态（死亡判定） | 行为 | `TestB2_4A_JC089减防致死_防御1未受伤` |
 ## 附：核查产出的问题分级
 | 级别 | 含义 | 示例 |
 |---|---|---|
@@ -503,4 +561,309 @@ JCEffects.RegisterAll()
 | **P2 交互不当** | 结果正确但询问窗口/置灰不合适 | 固定金额弹数值框、选项型弹输入框、不满足条件不置灰 |
 | **P3 规范问题** | 不影响行为，属结构卫生 | `EffectId` 命名、空壳效果、注释缺失 |
 
-> 全部问题仅记录，标注【待裁定】；用户裁定后才进入修复阶段。
+> 查出的实现问题直接修（＋单测＋全量回归）；只有卡文歧义按㉔回问，裁定后按裁定实现。
+
+---
+
+## 附二 · 判据最新口径（定稿）
+
+> 本节是各判据在**当前引擎实现**下的权威口径，替代早期较粗的表述；只写"怎么查、依据在哪"，不含任何待办/建议。
+
+### ②/㉓ 效果类别（触发 ↔ 持续 ↔ 行动）
+- 前缀词 → 实现组别：`触发/进场触发/现身触发/死亡触发/准备步骤强制触发/结束步骤触发/当…时` ⇒ 触发类 `EffectTiming`（`EnterTrigger`/`UncoverTrigger`/`OnCardDied`/`OnTurnStarted`/`OnTurnEnded`/`OnCombatWon`…）；
+  `持续/静止` ⇒ **必须**落在 `Continuous`/`Static`；`行动N/快速行动N/手牌行动N` ⇒ `CharacterActivated`/`AttachmentActivated`（＋`ActivateWindow`/`Cost`）。
+- **事务卡**（`CategoryFlag` 含 `Sorcery`）的 `行动：`/`快速行动：` 段＝**打出即结算**（`OnSorceryCast`），**不按激活能力**判定。
+- 认可的"非触发通道"：`DamageRedirect`/`TextBlank`/`IconSuppression`/`DomainSuppression`（替代与抑制）、
+  `StaticKind`（地区级静止规则）、`WinAreaDestination`（K3 去处替代）、`StaticKind.AllowInspectLocalCovert`（随时检视）、
+  `GrantedAbility`（K13 运行期授予能力）、`PlayableFromGraveyard`（`墓地行动：`＝从墓地正面打出的**许可**，不是效果段）。
+- **前缀关键词本体条**（`KeywordEffects.*` 产出：领袖/威名/机动/袭击/杀伤/灵体/公开/隐匿/撤回/屏障/标志…）对应**前缀词条**，不计入"效果段"。
+- **已知偏差（按本法执行时应改、优先级已裁定延后）**：**JC034 心兽之道**的"持续："段（"当你赢得一次战斗对抗时，你可以令目标对手弃一张手牌"）应按**持续效果**结算，现由 `OnCombatWon` 触发通道承载。
+
+### ③ "场上"与区域 `Scope`
+- 合法默认：`AreaZone`（争夺区）/`AttachTarget`（附属）。
+- **关键词载体**（`ContinuousGrants` 含 `Kind="Keyword"`，如"公开/隐匿/灵体"）按 `KeywordEffects` 设计在**手牌区生效**（`Scope=HandZone`），不属越权。
+- `SealedZone`：卡文写"**被封印**在…上时"即成立（JC100/JC110）。
+- 其余非场上区（墓地/牌库/资产/秘社/手牌行动）必须卡文明确依据。
+
+### ④ 朝向与构筑级
+- `CovertOnly`（仅暗藏者触发）须卡文含"暗藏/潜伏"。
+- `DeckLevelRegistration`（构筑级全局触发）须卡文写明"**离场后仍生效/仍然生效/构筑**"（JC124）。
+
+### ⑤/㉕ 目标（类型 + 语义限定词 + 自身约束）
+- 目标类型映射：角色→`Character`、暗藏者→`Covert`、地区→`Area`、玩家→`Player`、附属→`Attachment`、资产→`Asset`、秘社→`Council`、墓地→`Graveyard`、手牌→`Hand`、牌库→`Deck`。
+- **同一目标也可由非 `Target.Kind` 通道承载**，均视为已声明：
+  · "角色或暗藏者" ⇒ `Kind=Character` ＋ **`IncludeCovert=true`**（本工程既定写法）；
+  · "目标角色牌（墓地/手牌/牌库）" ⇒ `Kind=Graveyard/Hand/Deck` ＋ `Filter="类别:角色"`；
+  · "目标地区" ⇒ `TargetRules` 含 `Area`，或 `NeedsAreaTarget=true`；
+  · "暗藏者"作为**牺牲/代价池** ⇒ 动作参数（如 `SacrificeChoice{"暗藏者",…}`）。
+- 语义限定词**只在目标子句内**生效：出现在**代价/条件/归属/其它卡**语句里的"本方/敌方/另一个"不算目标限定（JC009/JC012/JC017/JC023/JC055/JC094/JC105/JC108 属此列）。
+- **㉕ 默认允许取自身**：取目标的效果，卡文未写"其他/另一个/其它"⇒ `CanTargetSelf=true`（判定仅在**来源卡本身是角色**时适用）。
+  例外只限"规则上确实不满足"：自身非该大类候选（附属/事务来源、目标为暗藏者而本卡正面）、发动代价＝牺牲自身（入堆栈前已离场）、
+  规则禁止自指（不能把自身封印/结附在自身上）。
+- 多目标（K15）：`TargetSlots` ＋ `MinChosenSlots`；卡文写"**至多/最多 N 个**"⇒ 允许 `MinChosenSlots=0`。
+
+### ⑥ 丢失目标 ⇒ **按句号切分的部分级结算**
+见判据⑥正文（句号＝部分边界；丢失目标只中止其所在部分；事务卡必需目标丢失⇒整卡不结算；触发/激活⇒仅跳过本条）。
+理由示例：**JC065**（`…牺牲一个…暗藏者。遏制1。` ⇒ 遏制1 独立成句，照常结算）；**JC009**（`…封印在…上，然后遏制1。` ⇒ 同句，整体不结算）。
+
+### ⑦/⑧/⑨ 询问与置灰
+- 卡文含"你可以/选择一个/是否/任意数量/检视"等决策 ⇒ 必须有 `IGameUIHooks.Prompt*`（单机窗口）或网关请求（联机）。
+- 窗口形态按语义选：是/否 ⇒ 两按钮（`PromptOptionalPay`/`PromptTwoChoice`/`PromptPayOrSacrifice`）；多个选项卡 ⇒ `Modes`；
+  数值 ⇒ `PromptNumberInput`/`PromptPrediction`/分配窗；**不得**用"退化数值框"表达是/否。
+- 前置不满足（阶段/次数/代价/目标/代价对象）时 UI 与服务端**共用同一判定**并置灰。
+
+### ⑩/⑪/⑪-b 注册、自指、语义↔动作
+- 每个 `Cards/Effects/PlayerCards/JC/*.cs` 必须在 `JCEffects.cs` 注册；`tres`/`cs`/注册三者数量对齐（未实现卡登记在案）。
+- **卡名自指**：卡文（非 FAQ）出现与本卡 `CardName` 完全一致的名字时，实现必须有**自指通道**之一：
+  动作对象"自身/触发卡/结附宿主/封印宿主"、条件 `TriggerBySelf`、`Target.CanTargetSelf`、激活条件"横置/牺牲本角色"、
+  非光环的持续授予（授予自身）、`StaticEffects`、`WinAreaDestination`、自指动词（`PayOrSacrificeSelf`/`SacrificeSelfOptional`/`PrepareUpkeep`/`TransformForm`/`RevealSealedAndQueueFreePlay`）。
+  名字出现在**效果主体/触发条件主语**位置（来源即本卡）时无需额外字段。
+- **⑪-b 语义↔动作**（高置信映射，动作集合含 `Modes[].Actions`，**先剥圆括号补充说明**）：
+  `造成`→`DealDamage`（`DamageRedirect` 亦算）；`消灭`→`Destroy`/`DestroyOnTarget`/`DestroyWithMinCounters`；
+  `封印`→`Seal`（`DestroyOnTarget{"封印牌"}`、`Search{…封印}` 亦算）；`检索`/`寻找`→`Search`；
+  `洗牌`→`Shuffle`/`Search`（`Search` 内部自动洗牌）；`预测`→`Predict`；`检视`→`Inspect`；
+  `抓一张/抓两张`→`Draw`/`DrawFromBottom`；`移回其拥有者手上`→`Bounce`/`MoveToZone`/`RevealSealedAndQueueFreePlay`；
+  `潜伏`→`Latent`/`TransformForm`；`重置`→`Untap`；`放置`→`PlaceCounter`/`PlaceToken`/`PlaceHandCardToArea`/`UnsealToArea`。
+  代价/条件词（横置/牺牲/支付/移除/伤害/抓/弃）不做动词要求（多由 `Cost`/`SacrificeCost`/`CounterCost`/触发条件/`Search` 承担）。
+
+### ⑬ 白名单（未登记即静默失效）
+阶段名（`分配战斗伤害阶段`/`行动阶段`/`对抗阶段`）、`ValueExpr`（`事件数量`/`代价数量`/`已付代价数量`/`玩家选择` 与 `计数:…` 前缀）、
+`Condition.Predicate`/`BranchPredicate` 必须命中引擎登记；引擎新增登记后需同步白名单。
+
+### ⑭ 代价完备
+- 卡文写"**作为代价**"（或"支付N，否则…"）⇒ 必须是**入堆叠前支付**的代价字段（`Cost`/`SacrificeCost`/`CounterCost`/`OptionalPayCost`/`ExtraCost`）。
+- 卡文只写"移除…标志"时按**效果**判定（`RemoveToken`）；无代价依据不得强行要求代价字段。
+
+### ⑮ 次数与阶段门禁
+- "每回合只能发动一次/限一次"⇒ `MaxUsesPerTurn`；"每局一次"⇒ `MaxUsesPerGame`；"只能在行动阶段发动"⇒ `OnlyPhases`（白名单）或行动窗口。
+- **威名/声望**只在**前缀区**出现时才算本卡词条（效果句里的"获得声望"是**授予**），按"**一次广播窗口内每控制者每地区 1 枚**"核对：
+  威名＝**每次战斗对抗获胜**广播一次（`OnCombatWon`）；声望＝**每次势力对抗结算完毕**广播一次（`OnPowerCombatEnded`，JC067 追加的那次同样触发）。
+  两词条**同形**：广播点 `BeginPlacementDedupWindow(PlacementDedupTags.X)` **按标签分桶**清桶，`PlaceToken` 查本桶。
+
+### ⑯ 目标筛选
+- "本地区" ⇒ `IsLocalZone=true`，或 `Restrictions` 含 `LocalZone`，或**群体范围**（`MassMode.AllInArea` 的集合本身），或**牺牲代价** `SacrificeCost.LocalZone`。
+- "所有/每个角色" ⇒ `MassMode.AllInArea`（不是单目标 `Target`）；"含/以及暗藏者" ⇒ `IncludeCovert=true`；`Filter` 检索串须命中引擎白名单且子类别能在 `tres.SubCategories` 找到。
+
+### ⑰ 光环与授予落点
+- `GrantToHost=true`＝授予**结附宿主**；无该标志的持续授予＝授予**来源卡自身**。
+- 光环范围：卡文写"**本地区**"⇒ `AuraLocalZoneOnly=true`（JC059）；写"所有…"且未写本地区 ⇒ **全场**（`AuraLocalZoneOnly=false`，JC105）。
+- 筛选：`AuraFilterKeyword`/`AuraFilterOrganization`/`AuraRequiresNoDomain`（"未印刷魔法领域图标"⇒`true`，JC060）/`AuraFilterExcludeDomain`；
+  "所有**其他本方**角色" ⇒ 同控制者集合（`ReevaluateAuras` 只遍历来源控制者的卡）＋排除自身。
+- **"获得［某能力图标］"必须双通道**：`Icon:<图标>`（存在性/展示/图标替换与抑制的判定基准）＋ `Attribute:<对应属性>`（数值）；
+  `ApplyAuraGrantsTo` **不做** Icon→Attribute 折算（仅形态授予与 `Gain` 动词折算）⇒ 两通道不重复加成。
+
+### ⑲ 期限与撤销
+- ⑲-a：卡文"直到回合结束/本回合" ⇔ `Duration` 含"回合结束/本回合"；"常驻"⇔ `常驻`。
+- ⑲-b：授予/抑制/改写类效果离场时由 **`EffectEngine.ReapplySuppressions`** 统一重算（先精确还原、再按当前局面施加）；
+  `GrantedAbility`/`IconSuppression`/`DomainSuppression`/`TextBlank`/`FormChange`/`ContinuousGrants` 同入口。
+
+### ㉑ 效果切分（最高优先级）
+- **前缀命中（最新实现）**：核心前缀词（`准备步骤强制触发`/`结束步骤强制触发`/`潜伏强制触发`/`现身强制触发`/`进场触发`/`现身触发`/`死亡触发`/
+  `快速暗藏者行动`/`快速暗藏行动`/`手牌行动`/`墓地行动`/`快速行动`/`行动`/`触发`/`持续`/`静止`）
+  在 `：` 左侧 **40 字窗口**内命中、且窗口内无另一个 `：` 与句号 ⇒ 成立；**容忍修饰语**（数字、"2"、"1"、"N"、"，"、"横置"、"牺牲X"等）。
+- **㉑-a**：一个前缀段 ⇒ 一条 `EffectData`；可自动判定部分＝"**有动作/模式的效果条数 ≤ 段数**"（关键词本体条、声望规则本体条、`墓地行动`段不计）。
+- **㉑-b**：段内"然后/若…则"是**句内顺序**，由动作数组声明顺序保证；**仅当该段是群体效果**（`MassMode != Single`）时须 `MassSequential=true` ＋ 动作级 `MassInArea`/`RequirePredicate`/`RequireParam`。
+- **㉑-c**：段内"选择一项"用 `EffectData.Modes`（一条效果），不拆多条效果。
+- 卡文圆括号 `（…）` 内为规则解释，不产生动作要求、不构成新段。
+
+### ㉒ 构筑级
+JC125 无知路人（"构筑时牌组张数不限"）按用户口径**暂不落地**（无场上效果、无同名卡上限校验器）⇒ 无脚本是正确的。
+
+### ㉔ 卡文歧义
+遇歧义当场回问用户（给出卡文原文 + 两种以上读法 + 实装差异）；裁定后按裁定实现，文档只保留裁定口径。
+**已确认口径**：JC036"印刷类别为人类"⇒读**模板**；JC091"人类角色"⇒读**实例当前**类别；JC047"所有角色"⇒**不含暗藏者**；
+JC105 光环"所有其他本方灵体角色"⇒**全场**；JC059 光环写"本地区"⇒限本地区；JC060"未印刷魔法领域图标"⇒`AuraRequiresNoDomain=true`；JC034 见②的已知偏差。
+
+### 验证纪律
+1. **先构建成功再真跑**：`dotnet build UWPro.csproj` 0 错误 → headless 全量（`res://Scenes/TestsRunner.tscn`）0 失败；
+2. 自动化套件必须含**防空转自检**：扫描规模（≥134 张卡且 `EffectDataList` 非空）、关键事实断言、
+   **豁免理由非空**（`卡UID|判据|词` → 理由，理由为空视为违规）；
+3. 实现侧改动必须补单测；文档只保留最新口径。
+### 附二补遗 · 2026-10 实测 BUG 批反推出的口径
+
+- **⑮ 声望去重**：`PlaceToken` 的去重标签**必须带**（`威名`／`声望`），去重维度＝同一控制者＋同一地区＋同一次广播
+  （`OnCombatWon` / `PowerCombatEnded` 广播前**各清自己标签的桶**）⇒ **一个地区内多个声望角色只放 1 枚势力标志**（参考威名）。
+- **⑤/⑯ 附属白名单的适用范围**：`OnlyAttachWithSubCategories`（JC081「除装备与祝福外不受附属」）只约束
+  **附属卡**（`PassesAttachWhitelist` 对非附属 fail-open）⇒ 事务卡/角色卡以该卡为目标**不受限**。
+- **⑤/⑯ 争夺区候选的判定链**：取目标阶段的候选枚举（触发/模式卡/激活）必须与打出、结算复检**共用**
+  `TargetValidity.CheckRestrictions`（含**屏障**）——只按"大类映射"过滤会漏检屏障与 `Restrictions`
+  ⇒ 被授予屏障的角色仍会被『袭击』等选为对象（用户实测 JC073）。
+- **⑥ 多目标类别声明的 D16 复检**：卡上并列多条目标声明（"选择一项：角色／本方秘社"）时，结算复检必须按
+  **任一命中即合法**（`PassesAnyDeclaredTargetDesc`，与 `IsLegalPlayTarget` 同款 OR）；只按首条复检会把合法目标
+  误判为"丢失"⇒ 卡进弃牌堆（用户实测 JC082）。
+- **⑱/⑬ 玩家选择型动态值**：`ValueExpr="玩家选择"` 的取值**只能发生在结算期**（`BeginPlayerValuePrompt`：单机
+  `PromptNumberInput`／联机 `NumberInput`），因此**收集阶段不得**用动态值门禁丢掉该触发（否则连窗都不弹，JC083 实测）；
+  必须显式声明 `ValueMin=0`（A31：0 合法）与上限。
+- **㉑-c "选择一项"的两种载体**：
+  · **效果内**选择一项（差异在动作）⇒ `EffectData.Modes`（JC063/JC110）；
+  · **打出时**选择一项（差异在**结附/取目标类别**，效果本身按宿主各自生效，无法用 `Modes` 表达）⇒
+    `PlayerCardData.PlayChoice = true`，选项＝该卡各 `TargetRules` 类别，流程＝`BeginModeCardPlay`
+    （模式窗 → 该项目标窗 → `PlayCard(modeIndex)`，JC082）。
+### 附二补遗二 · 2026-10 实测反馈二批
+
+- **⑮ 声望＝地区级**：触发条件必须同时要求"**来源卡就在该对抗地区内**"（复合谓词 `RenownMajorityInSameArea`）。
+  仅用"多数"会把**别处**（含 JC074 跨地区授予）的声望角色也算进来，而 `PlaceToken` 按来源地区落点 ⇒ 标志放进错误地区。
+- **⑳ 声明式分工**：若某条激活效果只承担**代价**（横置/支付），动作由同卡的另一条触发承担，
+  其 `Actions` 为空是设计（登记结构豁免，键 `卡UID|struct|空壳:<EffectId>`）。
+- **⑦/⑧ "你可以…"（非支付型）**：时机到达时必须**在入堆叠前**弹"是/否"选择窗
+  （`EffectData.ConfirmPrompt`；两按钮、无输入框）；**选否⇒不入堆叠、不结算**；无 UI ⇒ 按"否"（fail-closed）。
+  禁止用 `Pending` 一次性承诺冒充（那会在时机到达时再走一次触发/排序窗——用户口径）。
+- **条件求值的阶段差异**：触发收集期**只评估** `Condition.Predicate`（不评估 `BranchPredicate`）⇒
+  凡"两条事实都必须成立"的门禁（如"本方获胜 ∧ 本回合已发动该能力"）必须合成**单谓词**。
+- **单机/联机孪生纪律**：任何"打出/取目标/入堆叠前询问"的改动，必须**同时**检查四个入口——
+  `CardDragController`（单机拖拽）、`Arena`/`TurnManager.BeginModeCardPlay`（单机流程）、
+  `ArenaOl`（联机客户端）、`PlayerActionService.TryBegin*Online`＋`TurnManager.*Async`（服务端驱动）。
+- **结附落点登记**：附属进入 `AttachedZone` 后必须 `RegisterContinuous`——**结附秘社的分支不得提前 `break`**
+  （否则该附属的持续授予与激活能力全部不生效）。
+- **交互后刷新**：凡"回调里同步重入结算"的 UI 窗（数值输入等），回调返回前必须刷新 View
+  （`ArrangeAllCardsInternal`/`UpdateTurnUIInternal`），否则界面停留在结算前状态。
+#### 补遗二之补 · 2026-10 实测第三批（PM 命令与联机刷新）
+
+- **调试命令必须走"与生产同款"的登记纪律**：`ZoneManager.MoveToAttachedZone` 的自动登记发生在
+  `AttachedTo` **尚未建立**的时刻（这是为了避免 `DetachAttachmentsToGraveyard` 递归而必须的次序），
+  因此**任何**结附落地（生产结算 / `PMCommandManager.attach` / `attacharea`）都必须在**绑定建立之后**
+  再 `RegisterPersistent` 一次（幂等），否则"授予宿主"（`GrantToHost`）类持续效果拿不到宿主，
+  表现为【屏障】等词条**静默不生效**（用户实测：JC073 用 PM attach 后宿主仍能被袭击选中）。
+- **凡"回调型挂起"的玩家交互（数值窗、确认窗等）**：回包续算后必须走 `ContinuePendingChain()`
+  ⇒ `TurnManager.OnEngineChainSettled()`（含 `NotifyResolutionSettled()`）——
+  **联机靠它立即下发快照**，否则客户端 UI 停留在结算前状态（用户实测：JC083 输入数字点确定后界面不刷新）。
+  单机虽由 View 侧回调刷新，仍应走同一收尾以保证"地区赢取/解原子锁/免费打出队列"不被跳过。
+
+---
+
+## 漏检复盘与判据加固（2026-10）
+
+> 三批实测 BUG（A124/A125/A126）在"25 判据 + 20 个审计用例全绿"的前提下仍然漏出。
+> 原因不是"没跑"，而是**判据的检查维度与缺陷所在维度不同**。本表为整理后的结论（去重版），
+> 每条盲区都已落到**新判据或加固条款**，并有可复跑的检查。
+
+| 盲区 | 实测实例 | 原判据为什么不过问 | 已加固判据 / 检查 |
+|---|---|---|---|
+| ① 只核对"卡面 ↔ 卡脚本"，不核对"引擎是否真消费了该声明" | BUG1 声望（`Renown()` 声明去重、`PlaceToken` 只认 `威名`）；JC083 数值范围 | ⑮/⑱ 只问"卡有没有声明"，不问"引擎有没有消费" | **㉖ 承诺必须落地** → `TestAudit_承诺落地清单` |
+| ② 只问"目标类型对不对"，不问"限制规则的**适用范围**" | BUG2 JC081「除装备与祝福外不受附属」被套到**任何**打出目标 ⇒ 事务卡 JC078 被拦 | ⑤/⑯ 是"关键词 ↔ 字段"存在性检查，无"作用对象"维度 | **加固⑤/⑯** → 数据层自洽 + `TestContract_白名单_只约束附属且仅限结附路径` |
+| ③ 只做结构一致性，不做端到端流程 | BUG3 JC082（两条 `TargetRules` 都在，但复检只取首条 ⇒ 结附秘社进墓地） | ⑥ 只覆盖"单/多目标丢失语义"，未覆盖**多类别声明** | **㉗ 多声明 OR 一致** → `TestContract_多声明OR_两类别各自可结算` |
+| ④ 门禁写在"另一个阶段"，核查只看"卡有没有声明" | BUG4 JC083（收集期把"尚未取值"当"X 不可用"⇒ 整条触发不收集） | ⑬/⑱ 无"**求值阶段**"维度（收集期 vs 结算期） | **加固⑱** → 行为 `TestBug4_JC083准备步骤触发并弹数值窗` + 自动 `TestAudit_本批BUG回归防线` |
+| ⑤ 单一真相源的**扩散面**没覆盖（只验主入口） | BUG5 屏障（`CheckRestrictions` 正确，但候选枚举旁路只按大类过滤 ⇒ 宿主仍被袭击选中） | ⑦ 只验"屏障有实现"，没验"**所有候选枚举点**都过同一判定" | **㉘ 旁路同判** → `TestContract_屏障_候选与合法性四路径一致` / `..._结算复检_先指定后获屏障` |
+| ⑥ 同一能力只改一条落地路径；交互挂起漏收尾 | JC082 联机侧漏改三入口；JC073 屏障在 **PM `attach`** 路径不生效；JC083 联机数值窗回包不收尾 ⇒ 不下发快照 | 无判据覆盖"**路径完备性**"（生产/调试命令/单机/联机/重连）与"**交互收尾**" | **㉙ 落地路径与交互收尾** → `TestContract_落地路径一致_生产与PM命令`、`TestContract_交互收尾_数值窗单机与联机`、`TestContract_交互收尾_是窗与持锁`、`TestContract_联机孪生入口_PlayChoice`、`TestBug5c_PM命令attach后宿主获得屏障` |
+
+### 本轮加固附带查出的**真实缺陷**（不是检查器口径问题）
+
+1. **换局残留挂起链吞掉结算收尾**：`EffectEngine._pendingChain` 未随换局清空；残留的"无续算点"挂起链
+   会让后续回调型挂起被静默吞掉、`ContinuePendingChain` 直接返回 ⇒ **联机不下发快照（UI 不刷新）**。
+   已修：`ResetAll` 清 `_pendingChain/_pendingResolve/_resolveDepth/_playerChosenValue`；
+   `SuspendChainForCallback` 识别并替换"无续算点"残留链（告警）；新增 `SettleAfterValuePrompt` 单点收尾
+   （未由我方登记也补一次 `OnEngineChainSettled`）。
+2. **结附登记多路径分叉**：生产结算、PM `attach`、`attacharea` 各写一份 ⇒ 任一路径漏登记即"授予宿主"失效。
+   已修：`ZoneManager.AttachAndRegister` 单点化，三条路径共用。
+
+### 通用防范（写进后续核查动作）
+
+1. **否定型规则**（不能被…／不受…／不能…）与**阶段/时机相关**规则 ⇒ 必须落**行为级用例**，不能只做字段比对；
+2. **注释/参数名承诺了行为**的地方 ⇒ 一律加"消费点断言 + 行为用例"（判据㉖）；
+3. **同一判定有多个调用点** ⇒ 核查必须追问"**旁路**是否也过这一判定"（判据㉘）；
+4. **"结构有、流程无"只能靠端到端用例发现** ⇒ 每张受影响卡至少一条"真的打出／真的触发／真的结附"；
+5. **任何改动都要问"另一条落地路径改了吗"**（单机/联机/PM 命令/快照重建）（判据㉙）。
+6. **让"派生结果"的输入变坏的路径** ⇒ 尾部必须**重算派生结果**（判据㉚：减防/减血 ⇒ 复检死亡；改控制权/翻面/换区 ⇒ 复检目标合法性）。
+
+---
+
+### 判据㉚ 数值下降 ⇒ **必须复检派生状态**
+
+- **判据描述**：任何让"派生结果"的输入变坏的路径，都必须在**同一路径尾部**复检派生结果，尤其是**死亡判定**
+  （`伤害＋创伤 ≥ 当前防御力`）。实测（2026-10 用户口径·JC089 毒血诅咒"受此结附的角色获得 -1 防御力"）：
+  持续授予/光环撤销/时效到期/形态还原等**所有减防路径**都必须在尾部补一次死亡判定。
+- **口径（"剩余生命"语义·2026-10 用户裁定）**：**"获得 -N 防御力"是上限削减，不等于受到伤害**——
+  削减时**优先吸收已受伤害**（`dmg -= min(N, dmg)`，再 `max -= N`），剩余生命＝当前上限 − 已受伤害：
+  · 2 防御受 1 伤 → −1 上限 ⇒ 伤害被吸收为 0、上限 1 ⇒ **剩余 1 ⇒ 不死**（实测原判为死亡）；
+  · 1 防御未受伤 → −1 上限 ⇒ 上限 0 ⇒ **死亡**；
+  · 3 防御受 2 伤 → −1 上限 ⇒ 伤害 1、上限 2 ⇒ 剩余 1 ⇒ 不死（同款）；
+  · 上限被削减后**生存力照常下降**（上述 1 上限的角色再吃 1 点伤害即死）。
+  **边界（必须区分）**："**撤销正向授予**"（光环消失等，`CardInstance.Revoke`）**不吸收伤害** ⇒
+  JC059 判例（3 防御受 2 伤、+1 光环撤销回 2 ⇒ **死亡**）保持不变 → 见 `P3AuraFilterTests.TestAuraFilter_减防导致死亡`。
+- **死亡判定（单一实现）**：`CardManager.RecheckDeathAfterDefenseDrop`：
+  · 只判**在场卡**（争夺区/附属区）且**非暗藏者**；
+  · `CurrentDefense < 0`（-1 哨兵＝"当前无防御"，如附属/形态过渡态）⇒ **不判死**（防误杀）；
+  · `CurrentDefense >= 0` 且 `IsDead()`（伤害＋创伤 ≥ 当前防御）⇒ 走既有死亡流程
+    ⇒ **防御降到 0 时即使毫发无伤也死亡**。
+- **字段/落点**：吸收实现＝`CardInstance.Grant("Attribute","防御",负数)` 分支（单一实现，`Gain{"防御",-N}` 与持续授予共用）；
+  `CardManager.RecheckDeathAfterDefenseDrop`；收口扫描＝`EffectEngine.RecheckDeathsAfterDefenseDrop()`；
+  调用点＝`ReevaluateAuras` 尾部（光环撤销）、`RegisterPersistent` 尾部（持续授予可能含**负值防御**）、其余减防路径。
+- **检查方法**：自动（㉖ 承诺『上限削减吸收已受伤害（单一实现）』＋『减防后补死亡判定（含持续授予路径）』≥2 处消费点）
+  ＋行为（`TestB2_4A_JC089减防致死_防御1未受伤`、`TestB2_4B_JC089减防吸收已受伤害_不误杀`、
+  `TestB2_4C_JC089减防不误杀_防御3未受伤`、`TestAuraFilter_减防导致死亡`（JC059 边界））。
+
+---
+
+### 附二补遗三 · 2026-10 判据加固与复查
+
+- **新增判据**：㉖ 承诺必须落地、㉗ 多声明 OR 一致、㉘ 单一真相源的旁路同判、㉙ 落地路径完备性与交互收尾。
+- **加固既有**：⑤/⑯（限制条件适用范围）、⑦/⑧（非支付型"你可以…"＝入堆叠前是/否窗）、⑮（声望＝地区级）、
+  ⑱（求值阶段 + 收集期只评估 `Condition.Predicate` ⇒ 复合门禁须合成单谓词）、⑳（声明式分工须登记豁免）。
+- **新增检查**：
+  · 自动层 `TestAudit_承诺落地清单`（14 条承诺的消费点源码断言 + 行为用例反射校验 + 数据层自洽：
+    附属白名单自洽、光环范围字段 ↔ 卡文词）；
+  · 自检层 `TestAudit_自检_判据覆盖矩阵`（①–㉚ 全覆盖、检查方法必须真实存在、文档总览不得缺号）；
+  · 行为层 `JCEnginePathContractTests`（判定 × 路径矩阵 / 多声明 OR / 落地路径一致 / 交互收尾与持锁 / 联机孪生入口）。
+- **测试基建**：`JCTestStubs.cs`（触发视图桩、UI 桩、网关桩、对抗窗口桩集中一处，避免各套件口径漂移）。
+
+---
+
+### 附二补遗四 · 2026-10 放置去重窗口统一（威名／声望）
+
+**背景**：`声望` 的放置去重是**借用**`威名`的表，而不是与它同形的一等机制。核查后确认 4 处不一致，
+其中 2 处是隐患、2 处是文档/检查问题：
+
+| # | 不一致 | 性质 |
+|---|---|---|
+| ① | 去重表与键**都不含标签**（表名 `_combatWonMarkPlaced`、方法 `ResetCombatWonDedup`、键 `地区\|控制者`）⇒ 跨标签**互相吞标记/互相破防** | 隐患（时序上被"两次广播之间堆叠必空"掩盖，直连 API/测试一次即现形） |
+| ② | 启用条件是**手改白名单** `dedupTag == "威名" \|\| dedupTag == "声望"` ⇒ 新增同类词条必须记得改引擎（BUG1 根因） | 隐患（同类必再犯） |
+| ③ | `RenownRule.cs`／`Renown()`／`PowerCombatEnded` 注释写"所有对抗结束后／每回合只触发一次／自带幂等守卫"，与代码（每次广播一次、无守卫）与测试相悖 ⇒ ⑮ 只能"以威名为准、声望存疑、只登记" | 文档口径冲突 |
+| ④ | 威名侧**无数据层断言、无行为用例**；㉖ 的源码针只钉了 `dedupTag == "声望"` 一半 ⇒ 删掉威名那半无测试变红 | 检查不对称（不可反向验证） |
+
+**统一后的机制（单一真相源）**：
+- 标签常量 `Script/Data/Effects/PlacementDedupTags.cs`（`WeiMing` / `Renown`）；关键词模板与广播点**共用同一常量**；
+- `EffectEngine`：`_placementDedupByTag`（**桶＝标签**，键＝`地区|控制者`）+ `BeginPlacementDedupWindow(标签)`
+  （**只清本标签的桶**）；`PlaceToken` **非空标签即启用**（删掉白名单）；
+- 广播点：`OnCombatWon` → `BeginPlacementDedupWindow(PlacementDedupTags.WeiMing)`；
+  `PowerCombatEnded` → `(...Renown)`——两处**同形**；
+- 不变式：**两次广播之间堆叠必已清空**（`TurnManager.Pass`：堆叠非空只结算栈顶、不推进阶段）。
+  若将来新增"堆叠非空时也能广播"的触点，必须先改成"收集触发时打窗口戳"再广播。
+- 口径（写进判据⑮）：威名＝**每次战斗对抗获胜**广播一次；声望＝**每次势力对抗结算完毕**广播一次
+  （JC067 追加的那次同样触发）；每个窗口内**每控制者每地区只放 1 枚**，两词条互不干扰。
+
+**检查（两侧对称）**：
+- 自动：`TestAudit_JC次数限制_与卡文一致`＝时机↔标签成对（`OnCombatWon`⇒`威名`、`OnPowerCombatEnded`⇒`声望`）+ 两侧计数防空转；
+  `TestAudit_承诺落地清单`＝两处窗口开启、按标签分桶、两条标签常量（针钉在 `Args` 字面量上，注释不能糊过去）；
+- 行为：`TestContract_去重窗口_威名_多张一次战斗只放一枚`（同窗口 2 张威名只 1 枚；第二次战斗＝新窗口再 1 枚）、
+  `TestContract_去重窗口_威名与声望同窗不互吞`（同一窗口交错：先结算 1 张威名 → 声望广播 → 全部结算 ⇒ 恰好 2 枚）、
+  `TestBug1_多个声望角色一次势力对抗只放一个标志`、`P3KeywordsTests.TestP3_声望_每次势力对抗触发_同一次只加一个`；
+- 反向验证：①清全表 ⇒ 同窗用例红；②删 `OnCombatWon` 的窗口 ⇒ 威名用例 + 承诺红；③`Renown()` 标签写成 `声_望` ⇒ ⑮红（6 条）+ 承诺红；还原⇒0 失败。
+
+---
+
+### 附二补遗五 · 2026-10 实测反馈四批（联机优先，单机同办）
+
+- **⑮ 未横置才有词条（威名／声望）**：横置的角色不提供其词条 ⇒ 来源卡横置时**不收集**该类触发
+  （`EffectData.RequireSourceUntapped`；**卡面固有**与**运行期授予关键词模板**两条收集路径**各一道**；
+  `CloneKeywordTemplate` 必须逐项拷贝门禁字段）。声望"哪一方触发"的计数**不含**横置者
+  （`RenownRule.CountRenownCharacters`）。卡文依据：声望"更多**未横置**的声望角色"＋项目既有口径
+  "横置的卡不提供任何能力"（`AreaStatsCalculator`）。
+- **㉚ 上限削减 ⇒ 吸收已受伤害 ＋ 复检死亡（JC089，二轮修正）**：『获得 -N 防御力』是**上限削减**、不是伤害：
+  削减时**优先吸收已受伤害**（剩余生命＝当前上限 − 已受伤害）⇒『2 防御受 1 伤 + −1 上限』**不死亡**（剩余 1）、
+  『1 防御未受伤 + −1 上限』**死亡**（上限 0）；削减后生存力照常下降（再受 1 点即死）。
+  所有减防路径尾部补 `RecheckDeathsAfterDefenseDrop`；`-1` 哨兵（当前无防御）不判死。
+  **边界**：撤销**正向**授予（光环消失）**不吸收**伤害 ⇒ JC059 判例（3 防御受 2 伤 + 光环撤销 ⇒ 死亡）保持。
+- **⑧ 选择窗文案按卡文/数据给（JC092）**：选地区/选卡窗的提示必须来自 `TargetSlot.Hint`／`EffectData.Hint`
+  （联机经 `ChoiceRequest.SlotHint` 下发），UI **不得硬编码**另一类动作的说法——
+  实测 JC092 死灵召唤被显示成移动类效果的"（将移动至该地区）"；同款数据化覆盖 JC133（正面进场）与
+  JC021／机动（真正的移动语义）。
+- **⑨ 次数用尽 ⇒ 不问（JC093）**：激活能力本回合/本局次数**全部用尽**时双击**不开面板、无反馈**；
+  部分用尽 ⇒ 该项置灰并标注"（本回合次数已用尽）"。单一判定＝`ActivateEligibility.IsAbilityUsesExhausted` /
+  `AllAbilitiesUsesExhausted`（单机 `Arena` 与联机 `ArenaOl` 共用）。
+- **㉙ 墓地行动的可行动入口（JC085，二轮修正）**：`PlayerCardData.PlayableFromGraveyard` 的卡在墓地中**要有可行动高亮**：
+  门禁＝单一实现 `TurnManager.CanPlayFromGraveyardNow`（在墓地 ∧ 声明该标志 ∧ 有行动权 ∧ 行动步骤），
+  单机 `Arena` 与联机 `ArenaOl` 的高亮各接一处（联机另要求服务端投影把它列为可打出源）；
+  **双击 → 先弹『技能/激活选择窗』（只有一条也弹）→ 再弹『选择地区窗』→ 正面打出**（单机 `Arena.OnGraveyardPlayRequested`
+  → `OpenGraveyardAreaChoice`；联机 `ArenaOl.OnGraveyardPlayRequested` → `OpenOnlineGraveyardAreaChoice` 后上行
+  `PlayCard{targetAreaUid}`，服务端权威校验费用/忠诚/阶段）。信号＝`CardUI.GraveyardPlayRequested`
+  （订阅收口在 `Arena.Layout` 的『区域同步唯一收口』与 `ArenaOl.RegisterOnlineCardUI`）。

@@ -42,6 +42,92 @@ public partial class MainMenu : Control
         // 同步 GameManager 状态（已是 MainMenu 场景，GoToState 内部会跳过重载）
         if (GameManager.Instance != null)
             GameManager.Instance.GoToState(GameManager.GameState.MainMenu);
+
+        // 【性能排查入口】惰性解析命令行开关（Web 上是 index.html 的 GODOT_CONFIG.args）。
+        // 诊断阶段打的 eA/e0~e3/eB 等标记已删除（结论见 Script/IO/WebSafeText.cs 与 DevFlags.cs）。
+        WebPerfParams.Ensure();
+        WebPerfParams.DumpBanner();
+
+        if (!string.IsNullOrEmpty(WebPerfParams.AutoEnter))
+            ScheduleAutoEnter();
+    }
+
+    /// <summary>
+    /// 【性能排查】自动进入卡组编辑用的剩余帧数；-1 = 未启用。
+    ///
+    /// 为什么按帧计数而不是 `GetTree().CreateTimer()`：
+    /// 本工程此前**从未调用过** `CreateTimer` / `ToSignal`（那些写法只出现在玩法代码里、
+    /// 未必真的执行过），属于"未经验证"的接口。已被验证的是**每个 Node 都会走的基础回调**
+    /// （`_Ready`/`_Process`），所以这里只用最基础的机制，避免再引入新的崩点。
+    /// </summary>
+    private int _autoEnterFramesLeft = -1;
+
+    /// <summary>【诊断】自动进入的目标状态（由 `--wp-auto=` 解析而来）。</summary>
+    private GameManager.GameState _autoTargetState = GameManager.GameState.DeckBuilder;
+
+    /// <summary>
+    /// 【诊断】把 `--wp-auto=` 的取值映射到 GameState。
+    /// 只用 `StringComparison.OrdinalIgnoreCase`（不走 ICU），未知目标返回 false。
+    /// 支持任意场景是为了做「换一个场景是否也崩」的决定性对照：
+    /// 若连最简单的 Lobby 也在首帧 abort，说明崩点在「场景切换」本身而不是 DeckBuilder 的内容。
+    /// </summary>
+    private static bool TryParseAutoTarget(string s, out GameManager.GameState st)
+    {
+        st = GameManager.GameState.DeckBuilder;
+        if (string.Equals(s, "deck", System.StringComparison.OrdinalIgnoreCase)
+         || string.Equals(s, "deckbuilder", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.DeckBuilder; return true; }
+        if (string.Equals(s, "lobby", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.Lobby; return true; }
+        if (string.Equals(s, "lobbyonline", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.LobbyOnline; return true; }
+        if (string.Equals(s, "room", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.Room; return true; }
+        if (string.Equals(s, "roomonline", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.RoomOnline; return true; }
+        if (string.Equals(s, "mainmenu", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.MainMenu; return true; }
+        return false;
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_autoEnterFramesLeft < 0) return;
+        if (_autoEnterFramesLeft-- > 0) return;
+        _autoEnterFramesLeft = -1;
+
+        if (!IsInsideTree()) return;                    // 期间场景已切换就放弃
+        if (GameManager.Instance == null)
+        {
+            GD.PrintErr("[WebPerf] 自动进入失败：GameManager 未就绪");
+            return;
+        }
+        GD.Print("[WebPerf] 自动进入：" + _autoTargetState.ToString());
+        if (_autoTargetState == GameManager.GameState.DeckBuilder)
+            GameManager.Instance.EditingDeckPath = null; // 新建卡组，与点「编辑卡组」一致
+        GameManager.Instance.GoToState(_autoTargetState);
+    }
+
+    /// <summary>
+    /// 【诊断】由运行时开关 `--wp-auto=deck` 触发自动进入，省掉无头浏览器里模拟点击的坐标问题。
+    /// 这里只做登记，真正的进入在 <see cref="_Process"/> 里按帧倒计时执行。
+    ///
+    /// 为什么按帧计数而不是 `GetTree().CreateTimer()`：
+    /// 本工程此前**从未调用过** `CreateTimer` / `ToSignal`（那些写法只出现在玩法代码里、
+    /// 未必真的执行过），属于"未经验证"的接口。已被验证的是**每个 Node 都会走的基础回调**
+    /// （`_Ready`/`_Process`），所以这里只用最基础的机制，避免再引入新的崩点。
+    /// </summary>
+    private void ScheduleAutoEnter()
+    {
+        // 【为什么不用 ToLowerInvariant】
+        // 曾在这里用 `WebPerfParams.AutoEnter.ToLowerInvariant()`，Web 上崩在它上面
+        //（会走 .NET 全球化/ICU 路径，见 WebSafeText 的类头说明）。
+        // 改用纯序数比较 StringComparison.OrdinalIgnoreCase（不需要 ICU 数据）。
+        string target = WebPerfParams.AutoEnter;
+        bool ok = TryParseAutoTarget(target, out _autoTargetState);
+        if (!ok)
+        {
+            GD.PrintErr($"[WebPerf] 未知的 auto 目标：{target}（支持 deck/lobby/lobbyonline/room/roomonline/mainmenu）");
+            return;
+        }
+
+        int frames = (int)(WebPerfParams.AutoDelay * 60f);
+        if (frames < 1) frames = 1;
+        _autoEnterFramesLeft = frames;
     }
 
     private void OnStartPressed()

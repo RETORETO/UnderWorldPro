@@ -167,6 +167,17 @@ namespace Script.UI.Interaction
                 return;
             }
 
+            // 【JC082·用户口径】"选择一项"的卡（`PlayerCardData.PlayChoice`）在**打出时**先选一项
+            // （选项＝本卡各目标类别），再选该项的结附目标 ⇒ 与常规附属"拖到目标卡上"的流程不同：
+            // 只要拖出并松开（未拖回手牌区），就交给 `BeginModeCardPlay` 走 JC063 同款"选择一项"窗口。
+            if (cardUI.Instance?.PlayerTemplate is PlayerCardData pcdChoice && pcdChoice.PlayChoice)
+            {
+                GD.Print($"[DragController.DragEnd] {pcdChoice.CardName} 声明了『选择一项』（PlayChoice）⇒ 走 JC063 同款选择流程");
+                ClearDragTargetHighlights();
+                _actionService.BeginModeCardPlay(playerId, cardUI.Instance.UID);
+                return;
+            }
+
             // 方案A：先命中检测场上卡（附属/事务可选目标）
             string targetCardUid = "";
             string targetAreaName = "";

@@ -124,6 +124,9 @@ namespace Script.Manager
         /// 【P3·K13】把一个"关键词触发模板"克隆成**本条收集专用**的 `EffectData`（并带上可辨识的 EffectId）。
         /// 不能直接复用模板实例：模板是共享的（`KeywordEffects.RuntimeTriggerTemplates`），
         /// 而 EffectId 会参与 K23 次数登记与日志辨识，逐次克隆避免相互污染。
+        /// 【判据㉖·纪律】**克隆必须带上该效果声明的每一道门禁**（来源状态 / 朝向 / 次数上限…）：
+        /// 漏拷＝"模板声明了、运行期授予的那份却不过门禁"（本批实测：JC089 授予的【威名】
+        /// 因 `RequireSourceUntapped` 未拷贝 ⇒ 宿主横置仍然触发）。
         /// </summary>
         private static Script.Data.Effects.EffectData CloneKeywordTemplate(Script.Data.Effects.EffectData src, string effectId)
             => new Script.Data.Effects.EffectData
@@ -136,6 +139,11 @@ namespace Script.Manager
                 Actions = src.Actions,
                 Duration = src.Duration,
                 RequireSourceVersionUnchanged = src.RequireSourceVersionUnchanged,
+                // —— 门禁（必须逐项拷贝，否则运行期授予的那份会绕过门禁）——
+                RequireSourceUntapped = src.RequireSourceUntapped,
+                TriggerCovertMode = src.TriggerCovertMode,
+                MaxUsesPerTurn = src.MaxUsesPerTurn,
+                MaxUsesPerGame = src.MaxUsesPerGame,
                 FaqNote = src.FaqNote,
             };
 
@@ -255,6 +263,16 @@ namespace Script.Manager
                         continue;
                     }
 
+                    // 【2026-10 用户口径·威名/声望】**未横置**才有词条：来源卡已横置 ⇒ 该条不收集
+                    // （横置的角色不提供其词条；声望卡文亦明写"更多**未横置**的声望角色"）。
+                    // 与暗藏模式门禁同层（收集期拦下 ⇒ 不进触发排序窗、不占次数）。
+                    if (data.RequireSourceUntapped && card.IsTapped)
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ {tmpl.CardName} 已横置，跳过触发 {data.EffectId}（要求未横置）");
+                        continue;
+                    }
+
                     scanned++;
 
                     // 条件判定（反应触发用 ContextCard 作上下文，如 PlayedSorcery；
@@ -319,12 +337,23 @@ namespace Script.Manager
                     // "只有牺牲那一回合才造成伤害"）。此类效果留到结算时求值（为 0 则自然不做任何事）。
                     if (EE != null && !string.IsNullOrWhiteSpace(data.ValueExpr) && !data.ValueAtResolve)
                     {
-                        var st = EE.EvaluateDynamicValue(data, card, conditionCard, ctx.TargetAreaId,
-                            ctx.ExtraInt, out _, out string dynReason);
-                        if (st == EffectEngine.DynamicValueState.Blocked)
+                        // 【BUG 修复·用户实测 JC083"效果完全没触发"】`ValueExpr="玩家选择"` 的取值**必须**发生在
+                        // 结算阶段（`EffectEngine.ResolveEffectCore` 先弹数值输入窗、再重入结算）——
+                        // 收集阶段永远"尚未取值"（`Blocked`）⇒ 原实现把这类触发整条丢掉，导致连数值窗都弹不出来。
+                        // 故：**玩家选择型不参与收集阶段的动态值门禁**，留到结算时取值（取消/无 UI 时仍 fail-closed 不发动）。
+                        if (Script.Manager.EffectEngine.IsPlayerChoiceValue(data))
                         {
-                            GD.Print($"[Trigger] ⏹ 动态值 X 不可用（EffectId={data.EffectId}, 来源={tmpl.CardName}）→ 不收集（不发动）：{dynReason}");
-                            continue;
+                            GD.Print($"[Trigger] ↻ 动态值『玩家选择』延后到结算取值（EffectId={data.EffectId}, 来源={tmpl.CardName}）");
+                        }
+                        else
+                        {
+                            var st = EE.EvaluateDynamicValue(data, card, conditionCard, ctx.TargetAreaId,
+                                ctx.ExtraInt, out _, out string dynReason);
+                            if (st == EffectEngine.DynamicValueState.Blocked)
+                            {
+                                GD.Print($"[Trigger] ⏹ 动态值 X 不可用（EffectId={data.EffectId}, 来源={tmpl.CardName}）→ 不收集（不发动）：{dynReason}");
+                                continue;
+                            }
                         }
                     }
 
@@ -408,6 +437,14 @@ namespace Script.Manager
                     if (!EffectEngine.IsEffectActiveInZone(template, card, zoneAtTrigger)) { skippedZone++; continue; }
                     if (template.TriggerCovertMode == CovertTriggerMode.FaceUp && card.IsCovert) continue;
                     if (template.TriggerCovertMode == CovertTriggerMode.CovertOnly && !card.IsCovert) continue;
+                    // 【2026-10 用户口径·未横置才有词条】运行期授予的关键词触发**同一门禁**
+                    // （与上方"卡面固有触发"的收集循环同款；缺这条 ⇒ JC089 授予的【威名】在宿主横置时仍会触发）。
+                    if (template.RequireSourceUntapped && card.IsTapped)
+                    {
+                        skippedCond++;
+                        GD.Print($"[Trigger] ⏹ {tmpl.CardName} 已横置，跳过运行期授予的【{kv.Key}】触发 {template.EffectId}（要求未横置）");
+                        continue;
+                    }
                     if (EE == null || !EE.EvaluateCondition(template.Condition?.Predicate, card, conditionCard,
                             conditionCard, ctx.TriggeringPlayerId, ctx.TargetAreaId))
                     {

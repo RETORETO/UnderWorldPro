@@ -228,6 +228,18 @@ namespace Script.Data.Cards
         public Godot.Collections.Array<Script.Data.Effects.TargetRule> TargetRules { get; set; }
             = new Godot.Collections.Array<Script.Data.Effects.TargetRule>();
 
+        /// <summary>
+        /// 【JC082·"选择一项"的**打出**入口】打出时先让玩家**选一项**，再为所选项选目标
+        /// （选项＝本卡 `TargetRules` 里**各类别**各一项，标签取该类别的中文名）。
+        ///
+        /// 与 `EffectData.Modes`（卡牌效果内部"选择一项"）的区别：那些模式的差异在**效果动作**，
+        /// 本标志的差异在**结附目标类别**（JC082：借阅＝结附于角色／收藏＝结附于本方秘社），
+        /// 效果本身按宿主种类各自生效 ⇒ 只能用"打出目标"表达，无法用 `Modes` 表达。
+        /// 打出流程与 JC063 同款：`TurnManager.BeginModeCardPlay`（模式窗 → 该模式目标窗 → `PlayCard(modeIndex)`）。
+        /// </summary>
+        [Export]
+        public bool PlayChoice { get; set; } = false;
+
         // ==================== 逻辑方法 ====================
 
         /// <summary>

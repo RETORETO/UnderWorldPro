@@ -1,4 +1,4 @@
-﻿using Script.Data.Cards;
+using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
 using System;
@@ -518,6 +518,26 @@ namespace Script.Game.Entities
                     else if (value == "防御")
                     {
                         if (CurrentDefense < 0) CurrentDefense = 0;
+                        // 【2026-10 用户口径·JC089】**"获得 -N 防御力"＝上限削减，不等于受到伤害**：
+                        // 按"剩余生命"语义（剩余 = 当前上限 − 已受伤害），削减 N 时**优先吸收已受伤害**：
+                        //   dmg -= min(N, dmg) 然后 max -= N。
+                        // 例：① 2 防御受 1 伤 → −1 上限 ⇒ 伤害被吸收为 0、上限 1 ⇒ **剩余 1 ⇒ 不死**（用户实测口径）；
+                        //     ② 1 防御未受伤 → −1 上限 ⇒ 上限 0 ⇒ 剩余 0 ⇒ 死亡；
+                        //     ③ 3 防御受 2 伤 → −1 上限 ⇒ 伤害 1、上限 2 ⇒ 剩余 1 ⇒ 不死（以"剩余生命"为准）。
+                        // 注意："撤销**正向**授予"（光环消失 / `Revoke`）**不走本分支** ⇒ JC059「减防可能致死」的判例保持不变。
+                        if (amount < 0)
+                        {
+                            int cut = -amount;
+                            int absorb = Math.Min(cut, Damage + Trauma);
+                            if (absorb > 0)
+                            {
+                                int fromTrauma = Math.Min(absorb, Trauma);
+                                Trauma -= fromTrauma;
+                                Damage -= absorb - fromTrauma;
+                                global::Godot.GD.Print($"[CardInstance] 🩹 {PlayerTemplate?.CardName} 上限 -{cut} 吸收已受伤害 {absorb}" +
+                                         $"（剩余 伤害{Damage}＋创伤{Trauma}）");
+                            }
+                        }
                         CurrentDefense += amount;
                         if (CurrentDefense < -1) CurrentDefense = -1;
                     }

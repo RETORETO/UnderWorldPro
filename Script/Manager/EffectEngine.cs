@@ -566,7 +566,7 @@ namespace Script.Manager
         {
             var p = _pendingResolve;
             _pendingResolve = null;
-            if (p == null) return;
+            if (p == null) { ContinuePendingChain(); return; }   // 释放回调型挂起（防决策持锁泄漏）
             if (!takeMainBranch)
             {
                 GD.Print($"[EffectEngine] ⇄ 分支询问『否』→ 走 ElseBranch（{p.Data.EffectId}）");
@@ -577,10 +577,12 @@ namespace Script.Manager
             _askBranchAnsweredYes = true;
             ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
                 p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
+            // 【BUG 修复】重入结算已跑完 ⇒ 释放决策持锁并结算收尾（含**立即下发快照** ⇒ 客户端刷新 UI）。
+            ContinuePendingChain();
         }
-
-        /// <summary>该效果是否声明了"玩家选择"型动态值。</summary>
-        private static bool IsPlayerChoiceValue(EffectData data)
+        /// <summary>该效果是否声明了"玩家选择"型动态值。
+        /// 【BUG 修复·JC083】改为 public：**触发收集阶段**（`TriggerRegistry`）也要据此判定"动态值门禁不得拦"。</summary>
+        public static bool IsPlayerChoiceValue(EffectData data)
             => data != null && !string.IsNullOrWhiteSpace(data.ValueExpr)
                && data.ValueExpr.Trim() == "玩家选择";
 
@@ -613,17 +615,25 @@ namespace Script.Manager
             if (UIHooks == null && InputGateway != null)
             {
                 if (chooser < 0) return false;
+                // 【BUG 修复·用户实测"JC083 输入数字后 UI 没刷新（联机）"】数值窗是**回调型挂起**
+                // （没有"剩余动作"可续算）：必须登记回调型挂起 ⇒ 回包续算后由 `ContinuePendingChain`
+                // 走一次结算收尾（`OnEngineChainSettled` → `NotifyResolutionSettled` ⇒ 服务端**立即下发快照**）。
+                // 原先直接下发请求、回包后只重入结算 ⇒ 客户端要等下一次上行（让过）才看到牌库/手牌变化。
+                // 【判据㉙】记录"本次挂起是否由我方登记"：若被残留链吞掉（返回 false），回包后仍须补一次结算收尾。
+                bool suspendedOnline = SuspendChainForCallback();
                 _pendingResolve = new PendingResolve
                 {
                     Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
                     WinnerId = winnerId, TargetVersionId = targetVersionId, EventAmount = eventAmount,
                     Choices = choices, ModeIndex = modeIndex, TargetPlayerId = targetPlayerId,
                 };
-                _ = AskPlayerValueViaGatewayAsync(chooser, prompt, min, max);
+                _ = AskPlayerValueViaGatewayAsync(chooser, prompt, min, max, suspendedOnline);
                 return true;
             }
             if (UIHooks == null) return false;
             if (chooser < 0) return false;
+            // 【BUG 修复】回调型挂起：等数值窗回包期间保持决策持锁（返回"是否由我方登记"，供回包后收尾用）
+            bool suspendedLocal = SuspendChainForCallback();
             _pendingResolve = new PendingResolve
             {
                 Data = data, Source = source, Target = target, TargetAreaId = targetAreaId,
@@ -634,23 +644,39 @@ namespace Script.Manager
             {
                 var p = _pendingResolve;
                 _pendingResolve = null;
-                if (p == null) return;
+                if (p == null) { SettleAfterValuePrompt(suspendedLocal); return; }   // 防决策持锁泄漏 + 保证收尾
                 if (chosen < 0)
                 {
                     GD.Print($"[EffectEngine] 玩家{chooser} 取消数字选择 → {p.Data.EffectId} 不发动");
+                    SettleAfterValuePrompt(suspendedLocal);
                     return;
                 }
                 GD.Print($"[EffectEngine] 玩家{chooser} 选择数字 {chosen}（{p.Data.EffectId}）");
                 _playerChosenValue = chosen;
                 ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
                     p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
+                // 【BUG 修复】重入结算已跑完 ⇒ 释放决策持锁并结算收尾（单机由 Arena 回调再刷新 View）
+                SettleAfterValuePrompt(suspendedLocal);
             });
             return true;
         }
 
+        /// <summary>
+        /// 【判据㉙·交互收尾单点】回调型挂起（数值窗/确认窗）回包后的统一收尾：
+        ///  · 本次挂起**由我方登记**（`suspended == true`）⇒ `ContinuePendingChain()`（释放持锁 + 结算收尾）；
+        ///  · 未登记（挂起被已有链吞掉等异常情形）⇒ 直接补一次 `OnEngineChainSettled()`
+        ///    （联机靠它下发快照、单机靠它补做解锁/地区赢取），**绝不静默漏收尾**。
+        /// </summary>
+        private void SettleAfterValuePrompt(bool suspended)
+        {
+            if (suspended) ContinuePendingChain();
+            else TurnManagerRef?.OnEngineChainSettled();
+        }
+
         /// <summary>【A55】"选择一个数字"（JC083）的联机落地：`Kind.NumberInput` 回包 → 写回选择值 → 重入结算。
         /// 与单机同一口径：**取消/超时/越界 → 该效果不发动**（fail-closed，绝不替玩家猜）。</summary>
-        private async System.Threading.Tasks.Task AskPlayerValueViaGatewayAsync(int chooser, string prompt, int min, int max)
+        private async System.Threading.Tasks.Task AskPlayerValueViaGatewayAsync(int chooser, string prompt, int min, int max,
+            bool suspended = false)
         {
             Script.Net.ChoiceResult res = null;
             try
@@ -672,18 +698,21 @@ namespace Script.Manager
             }
             var p = _pendingResolve;
             _pendingResolve = null;
-            if (p == null) return;
+            if (p == null) { SettleAfterValuePrompt(suspended); return; }   // 防决策持锁泄漏 + 保证收尾
             bool cancelled = res == null || res.Cancelled || res.SelectedAmounts == null || res.SelectedAmounts.Count == 0;
             int chosen = cancelled ? -1 : res.SelectedAmounts[0];
             if (chosen < min || chosen > max)
             {
                 GD.Print($"[EffectEngine] 玩家{chooser} 取消/非法数字选择（{chosen}）→ {p.Data.EffectId} 不发动");
+                SettleAfterValuePrompt(suspended);   // 释放决策持锁 + 结算收尾（快照）
                 return;
             }
             GD.Print($"[EffectEngine] 玩家{chooser} 选择数字 {chosen}（{p.Data.EffectId}，联机）");
             _playerChosenValue = chosen;
             ResolveEffect(p.Data, p.Source, p.Target, p.TargetAreaId, p.WinnerId, p.TargetVersionId,
                 p.EventAmount, p.Choices, p.ModeIndex, p.TargetPlayerId);
+            // 【判据㉙】联机回包续算完成后同样必须收尾（`OnEngineChainSettled` → 立即下发快照）。
+            SettleAfterValuePrompt(suspended);
         }
 
         /// <summary>
@@ -1118,17 +1147,33 @@ namespace Script.Manager
         /// <summary>
         /// 【2026-09·检视】"回调型"挂起：**不在动作链中断点**上等输入（如最外层结算收尾时的检视窗），
         /// 故不记录"剩余动作"，只登记决策持锁；确认后由 `ContinuePendingChain` 直接做结算收尾。
-        /// 已有挂起（动作链续算点或另一次回调型）时不覆盖。
+        /// 已有"可续算"的挂起（动作链续算点或另一次回调型）时不覆盖。
+        ///
+        /// 【判据㉙】返回"**本次是否由我方登记**"：调用方据此在回包后选择
+        /// `ContinuePendingChain()`（我方登记）或直接补 `OnEngineChainSettled()`（被吞掉时）。
+        /// 另外：残留的"**无续算点**"挂起（`Actions == null && !CallbackType`，例如某条路径
+        /// `SuspendChainForInput()` 后没有登记续算点）会把后续挂起整条吞掉，而 `ContinuePendingChain`
+        /// 在该分支**直接释放持锁返回、不做结算收尾**（联机不下发快照 ⇒ UI 不刷新；实测 JC083 联机复现）
+        /// ⇒ 这里把它识别为残留、释放其持锁并**替换**为本次回调型挂起（并告警便于定位产生残留的调用点）。
         /// </summary>
-        private void SuspendChainForCallback()
+        private bool SuspendChainForCallback()
         {
-            if (_pendingChain != null) return;
+            if (_pendingChain != null)
+            {
+                // 有真正的续算语义（动作链续算点 / 回调型）⇒ 不覆盖（嵌套场景必须保住外层续算）
+                if (_pendingChain.CallbackType || _pendingChain.Actions != null) return false;
+                GD.PrintErr("[EffectEngine] ⚠ 检测到『无续算点』的残留挂起链 → 释放并替换为回调型挂起"
+                             + "（否则本次交互的结算收尾会被吞掉：联机不下发快照 / 单机不刷新）");
+                ReleasePendingChainHold(_pendingChain);
+                _pendingChain = null;
+            }
             _pendingChain = new PendingChain { CallbackType = true };
             if (TurnManagerRef != null)
             {
                 TurnManagerRef.BeginDecisionHold();
                 _pendingChain.HoldsLock = true;
             }
+            return true;
         }
 
         /// <summary>【2026-09】释放某挂起链持有的决策持锁（幂等：`HoldsLock` 置位后只释放一次）。</summary>
@@ -2065,7 +2110,7 @@ namespace Script.Manager
                 case ActionVerb.PlaceToken:
                     // 放置指示物（JC035：在结附地区放置一个本方势力标志；JC018 威名：在本地区放置一个本方势力标志）。
                     // Args[0]=指示物类型（"势力标志"等，仅记录/兜底），Args[1]=数量（缺省 1），
-                    // Args[2]=可选去重标签（"威名" → 启用 D2 单次战斗维度去重）。
+                    // Args[2]=去重标签（**非空即启用**「广播窗口去重」，见 `PlacementDedupTags`）。
                     // 放置地区取 source 当前所属地区（结附地区的附属：source.ZoneDetailId 即结附地区）。
                     if (source != null && source.ControllerId >= 0)
                     {
@@ -2073,17 +2118,28 @@ namespace Script.Manager
                         int amt = (action.Args.Count > 1 && int.TryParse(action.Args[1], out var p)) ? p : 1;
                         if (!string.IsNullOrEmpty(areaUid))
                         {
-                            // D2 威名去重：同一控制者在同一地区（单次战斗对抗内）只放置一个势力标志。
-                            bool isWeiMing = (action.Args.Count > 2 && action.Args[2] == "威名");
-                            string dedupKey = _combatWonKey(areaUid, source.ControllerId);
-                            if (isWeiMing && _combatWonMarkPlaced.ContainsKey(dedupKey))
+                            // 【去重·广播窗口】桶＝去重标签，键＝同一控制者 + 同一地区；
+                            //  · 窗口由广播点划定：`OnCombatWon`（威名）/ `PowerCombatEnded`（声望）在 Emit 前
+                            //    调 `BeginPlacementDedupWindow(标签)`，**只清该标签的桶** ⇒ 两个词条互不干扰；
+                            //  · 不变式：两次广播之间堆叠必已清空（`TurnManager.Pass`：堆叠非空只结算栈顶、不推进阶段），
+                            //    故同窗口内排队的多个同类触发只落地 1 枚。
+                            string dedupTag = (action.Args.Count > 2) ? (action.Args[2] ?? "") : "";
+                            bool dedupEnabled = !string.IsNullOrEmpty(dedupTag);
+                            if (dedupEnabled)
                             {
-                                GD.Print($"[EffectEngine] 放置势力标志（威名）去重跳过：地区 {areaUid} 玩家{source.ControllerId} 本次战斗已放置");
-                                break;
+                                if (!_placementDedupByTag.TryGetValue(dedupTag, out var bucket))
+                                    _placementDedupByTag[dedupTag] = bucket
+                                        = new System.Collections.Generic.Dictionary<string, bool>();
+                                string dedupKey = _placementDedupKey(areaUid, source.ControllerId);
+                                if (bucket.ContainsKey(dedupKey))
+                                {
+                                    GD.Print($"[EffectEngine] 放置势力标志（{dedupTag}）去重跳过：地区 {areaUid} 玩家{source.ControllerId} 本次广播已放置");
+                                    break;
+                                }
+                                bucket[dedupKey] = true;
                             }
-                            if (isWeiMing) _combatWonMarkPlaced[dedupKey] = true;
                             TurnManagerRef?.AreaManagerRef?.AddPowerMark(areaUid, source.ControllerId, amt);
-                            GD.Print($"[EffectEngine] 放置势力标志{(isWeiMing ? "（威名）" : "")}：地区 {areaUid} 玩家{source.ControllerId} ×{amt}（{(action.Args.Count > 0 ? action.Args[0] : "")}）");
+                            GD.Print($"[EffectEngine] 放置势力标志{(dedupEnabled ? "（" + dedupTag + "）" : "")}：地区 {areaUid} 玩家{source.ControllerId} ×{amt}（{(action.Args.Count > 0 ? action.Args[0] : "")}）");
                         }
                         else GD.Print($"[EffectEngine] ⚠ PlaceToken 跳过：无法确定放置地区（source={source.PlayerTemplate?.CardName}, ZoneDetailId={source.ZoneDetailId}）");
                     }
@@ -4914,17 +4970,24 @@ namespace Script.Manager
             return list;
         }
 
-        // ==================== D2 威名去重（战斗对抗获胜放置势力标志） ====================
-        // 维度：areaUid + 控制者，保证"同一控制者多个威名在同一地区只放置一个势力标志"。
-        // 单次战斗对抗只 Emit 一次 OnCombatWon（见 TriggerEmitPoints.OnCombatWon）；
-        // 每次 Emit 前由 ResetCombatWonDedup 清空，结算 PlaceToken 时按维度查重。
-        private readonly System.Collections.Generic.Dictionary<string, bool> _combatWonMarkPlaced
-            = new System.Collections.Generic.Dictionary<string, bool>();
-        private string _combatWonKey(string areaUid, int controller)
+        // ==================== 放置去重（广播窗口 · 按标签分桶） ====================
+        // 机制：桶＝去重标签（`PlacementDedupTags`），键＝`地区UID|控制者`。
+        // 每个广播点在 Emit 前调 `BeginPlacementDedupWindow(标签)` **只清自己的桶** ⇒
+        // ① 同一次广播内同一控制者同一地区只落地 1 枚；② 不同词条（威名／声望…）互不干扰。
+        // 不变式：两次广播之间堆叠必已清空（`TurnManager.Pass`：堆叠非空只结算栈顶、不推进阶段）。
+        private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, bool>>
+            _placementDedupByTag = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, bool>>();
+        private string _placementDedupKey(string areaUid, int controller)
             => $"{areaUid}|{controller}";
 
-        /// <summary>清空威名放置去重表（每次战斗对抗 Emit 前调用，保证单次战斗维度内去重）。</summary>
-        public void ResetCombatWonDedup() => _combatWonMarkPlaced.Clear();
+        /// <summary>开启一次"放置去重窗口"（由广播点在 Emit 前调用）：**只清该标签的桶**，
+        /// 使该次广播内同一控制者同一地区最多落地 1 枚；其它标签的已放置记录不受影响。</summary>
+        public void BeginPlacementDedupWindow(string tag)
+        {
+            if (string.IsNullOrEmpty(tag)) return;
+            if (_placementDedupByTag.TryGetValue(tag, out var bucket)) bucket.Clear();
+            else _placementDedupByTag[tag] = new System.Collections.Generic.Dictionary<string, bool>();
+        }
 
         // ==================== 对局级全量重置（B2：单场景常驻 + 显式 Reset） ====================
         // 一局结束、重开下一局前调用（由 GameInitializer.ResetMatch 编排，且必须先于 CardManager.Reset 调用）。
@@ -4938,7 +5001,7 @@ namespace Script.Manager
             _activePrereqCards.Clear();
             _auraGrants.Clear();
             _timedModStack.Clear();
-            _combatWonMarkPlaced.Clear();
+            _placementDedupByTag.Clear();
             _pendingPrereqCards.Clear();
             _blockDeployCovertPlayers.Clear();
             _areaCombatSkips.Clear();
@@ -4956,6 +5019,14 @@ namespace Script.Manager
             _textBlankedCards.Clear();
             _grantedAbilities.Clear();
             _pendingEffects.Clear();
+            // 【判据㉙·换局卫生】挂起链 / 待续算上下文 / 取值状态**必须**随换局清空：
+            // 否则上一局遗留的"无续算点"挂起链会吞掉下一局的回调型挂起 ⇒ `ContinuePendingChain`
+            // 走"无续算点"分支直接返回、**不做结算收尾**（联机不下发快照 ⇒ 客户端 UI 不刷新；
+            // 实测 JC083 联机复现）。决策持锁计数由 `TurnManager` 在自己的复位里归零。
+            _pendingChain = null;
+            _pendingResolve = null;
+            _resolveDepth = 0;
+            _playerChosenValue = -1;
             CurrentTurn = 1;
             GD.Print("[EffectEngine] ResetAll: 21 个静态注册表已清空, CurrentTurn=1");
         }
@@ -5365,7 +5436,61 @@ namespace Script.Manager
                 // 判定：本卡控制者在该地区的**声望角色数** 严格多于 对手在该地区的声望角色数 → 满足。
                 // 口径：声望角色不要求未横置、不要求参与该次对抗（只要在该地区）；双方相等/均为 0 → 不满足。
                 // 地区 = 本次势力对抗所在的地区（TriggerContext.TargetAreaId → triggeringAreaId）。
-                case "RenownMajority":
+                // 【BUG 修复·用户实测：1 地区的声望角色参与了 2 地区的声望触发】
+        // 复合谓词：RenownMajority（本地区声望角色占多数）∧ 来源卡就在**本次对抗地区**内。
+        // 仅用 RenownMajority 时，任何持有【声望】的卡（含 JC074 跨地区授予的）都会响应**别处**的
+        // `OnPowerCombatEnded` 广播，而 `PlaceToken` 又按 source.ZoneDetailId 落点 ⇒ 会把标志放到
+        // 来源自己的地区（错误地区）。声望规则本身是**地区级**的：只统计/触发"该地区内"的声望角色。
+        // 【BUG 修复·JC082 收藏】"本回合中，当你赢得**下一次**调查对抗时…"：
+        // 判定来源卡**本回合是否已发动过**指定能力（`Param`＝被发动能力的 EffectId；
+        // 引擎在激活/触发结算时经 `MarkAbilityUsedThisTurn` 登记，回合重置清空）。
+        // 【BUG 修复·JC082 收藏】复合谓词：**本效果来源卡的控制者赢下了本次对抗** ∧ **本回合已发动过**指定能力
+        // （`Param`＝能力 EffectId）。两声明的差异（"当你赢得下一次调查对抗时"）必须在**收集阶段**一次判定完
+        // ——收集期只评估 `Condition.Predicate`（不评估 `BranchPredicate`），故这里必须合成单谓词。
+        case "WinnerIsSelfAndAbilityUsed":
+        {
+            if (source == null || string.IsNullOrEmpty(param))
+            {
+                GD.Print("[EffectEngine] 条件「WinnerIsSelfAndAbilityUsed」缺来源卡或 Param（能力 EffectId），不满足");
+                return false;
+            }
+            bool won = source.ControllerId == triggeringPlayerId;
+            int uses = source.GetAbilityUsesThisTurn(param);
+            bool ok = won && uses > 0;
+            GD.Print($"[EffectEngine] 条件「WinnerIsSelfAndAbilityUsed」：控制者=P{source.ControllerId} 胜者=P{triggeringPlayerId}"
+                     + $"（{(won ? "本方获胜" : "非本方获胜")}）；{param} 本回合发动 {uses} 次 → {(ok ? "满足" : "不满足")}");
+            return ok;
+        }
+        case "SourceAbilityUsedThisTurn":
+        {
+            if (source == null || string.IsNullOrEmpty(param))
+            {
+                GD.Print("[EffectEngine] 条件「SourceAbilityUsedThisTurn」缺来源卡或 Param（能力 EffectId），不满足");
+                return false;
+            }
+            int uses = source.GetAbilityUsesThisTurn(param);
+            GD.Print($"[EffectEngine] 条件「SourceAbilityUsedThisTurn」：{source.PlayerTemplate?.CardName} 的 {param} 本回合发动 {uses} 次 → {(uses > 0 ? "满足" : "不满足")}");
+            return uses > 0;
+        }
+        case "RenownMajorityInSameArea":
+        {
+            if (source == null) return false;
+            if (string.IsNullOrEmpty(triggeringAreaId))
+            {
+                GD.Print("[EffectEngine] 条件「RenownMajorityInSameArea」无对抗地区（非势力对抗路径），不满足");
+                return false;
+            }
+            bool inArea = (source.ZoneDetailId ?? "") == triggeringAreaId;
+            int myself = RenownRule.CountRenownCharacters(ZoneManagerRef, triggeringAreaId, source.ControllerId);
+            int rival = RenownRule.CountRenownCharacters(ZoneManagerRef, triggeringAreaId,
+                source.ControllerId == 1 ? 2 : 1);
+            bool majority = myself > 0 && myself > rival;
+            bool ok = inArea && majority;
+            GD.Print($"[EffectEngine] 条件「RenownMajorityInSameArea」：来源地区={source.ZoneDetailId} 对抗地区={triggeringAreaId}"
+                     + $"（{(inArea ? "在本地区" : "不在本地区")}）；本地区我方声望角色={myself}，对手={rival} → {(ok ? "满足" : "不满足")}");
+            return ok;
+        }
+        case "RenownMajority":
                 {
                     if (source == null) return false;
                     if (string.IsNullOrEmpty(triggeringAreaId))
@@ -7414,6 +7539,10 @@ namespace Script.Manager
 
             if (anyApplied)
                 _activePrereqCards.Add(card); // 登记到已生效集合，供 ReevaluatePrereqs 遍历
+            // 【2026-10 用户口径·JC089】持续授予里可能含**负值防御**（"受此结附的角色获得 -1 防御力"）：
+            // 授予会让宿主当前防御力下降 ⇒ 必须像受伤一样补做死亡判定（否则 1 防御的宿主不死亡、
+            // 已受伤的 3 防御宿主也不会因减防而死亡）。与光环撤销路径同一收口。
+            RecheckDeathsAfterDefenseDrop();
             // 【P3·K20】新进场的卡可能**本身带锁定标志**（应被在册的"持续失去图标"抑制）→ 重算一次
             if (_iconSuppressors.Count > 0) ReapplyIconSuppressions();
         }
@@ -8191,6 +8320,10 @@ namespace Script.Manager
         public static bool PassesAttachWhitelist(CardInstance attaching, string whitelistParam)
         {
             if (attaching == null) return false;
+            // 【BUG 修复·用户实测 JC078 无法以 JC081 为目标】白名单语义＝"**除装备与祝福外不受附属**"，
+            // 它约束的是"**结附**"这一动作 ⇒ **只对附属卡生效**。非附属卡（事务卡/角色卡等）根本不是"结附"，
+            // 不应受该静止规则限制（原实现只比对子类别 ⇒ JC078 这类"法术/能量"事务卡被误拦）。
+            if ((attaching.EffectiveCategoryFlag & CardCategory.Attachment) == 0) return true;
             if (string.IsNullOrWhiteSpace(whitelistParam)) return true;
             bool anyValidEntry = false;
             foreach (var raw in whitelistParam.Split(','))

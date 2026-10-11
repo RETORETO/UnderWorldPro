@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -36,6 +36,9 @@ namespace Cards.Effects.PlayerCards.JC
                     new TargetSlot
                     {
                         Label = "目标地区",
+                        // 【2026-10 用户口径·提示文字】选地区窗的提示按**卡文**给：
+                        // "将你墓地中的目标角色牌以暗藏者状态置于该地区"（不是移动类效果的"将移动至该地区"）。
+                        Hint = "将你墓地中的角色牌以暗藏者状态置于该地区",
                         Optional = false,
                         Spec = new TargetSpec { Kind = TargetKind.Area, NeedsSelection = true },
                     },

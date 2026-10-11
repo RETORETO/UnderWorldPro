@@ -71,12 +71,12 @@ namespace Script.Net.Godot
                     if (i + 1 < args.Length && int.TryParse(args[i + 1], out var p)) port = (ushort)p;
                     if (i + 2 < args.Length && int.TryParse(args[i + 2], out var pid)) clientPlayerId = pid;
                     // 第四个参数（可选）：服务端 IP，支持 "--client 18950 1 192.168.1.10"
-                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--")) serverHost = args[i + 3];
+                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 3];
                 }
                 else if (args[i] == "--host")
                 {
                     // 单独写法：--host 192.168.1.10（与 --client 的第四个参数等价，后者优先）
-                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) serverHost = args[i + 1];
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 1];
                 }
                 else if (args[i] == "--bot")
                 {
@@ -85,9 +85,9 @@ namespace Script.Net.Godot
                     _isBot = true;
                     _isClient = true;
                     if (i + 1 < args.Length && int.TryParse(args[i + 1], out var bp)) port = (ushort)bp;
-                    if (i + 2 < args.Length && !args[i + 2].StartsWith("--")) _botRole = args[i + 2];
-                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--")) serverHost = args[i + 3];
-                    if (i + 4 < args.Length && !args[i + 4].StartsWith("--")) _botDeckPath = args[i + 4];
+                    if (i + 2 < args.Length && !args[i + 2].StartsWith("--", System.StringComparison.Ordinal)) _botRole = args[i + 2];
+                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 3];
+                    if (i + 4 < args.Length && !args[i + 4].StartsWith("--", System.StringComparison.Ordinal)) _botDeckPath = args[i + 4];
                 }
                 else if (args[i] == "--lobby")
                 {
@@ -96,9 +96,9 @@ namespace Script.Net.Godot
                     // 只影响联机入口；单机流程（主菜单/单机大厅）不受影响。
                     _startLobby = true;
                     Script.UI.Online.OnlineClientContext.AutoConnect = true;
-                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--")) serverHost = args[i + 1];
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 1];
                     if (i + 2 < args.Length && int.TryParse(args[i + 2], out var lp)) port = (ushort)lp;
-                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--")) _lobbyNick = args[i + 3];
+                    if (i + 3 < args.Length && !args[i + 3].StartsWith("--", System.StringComparison.Ordinal)) _lobbyNick = args[i + 3];
                 }
                 else if (args[i] == "--smoke-host")
                 {

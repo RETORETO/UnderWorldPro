@@ -171,10 +171,15 @@ namespace Script.UI.Interaction
                 CardManager.Instance.NotifyTargetSelectionChanged(validTargetUids);
             }
 
+            // 【2026-10·提示文字】地区选择窗的提示**由效果数据给出**（`EffectData.Hint`，如机动的
+            // "将移动至该地区"）；未声明时用中性文案。原先硬编码移动提示 ⇒ 非移动类效果会显示错误提示。
+            string effectHint = trigger?.EffectDataRef?.Hint;
             string hint = validTargetUids.Count == 0
                 ? "（无合法目标）"
                 : (_targetIsArea
-                    ? "请点击一个高亮的地区（将移动至该地区）。"
+                    ? (string.IsNullOrEmpty(effectHint)
+                        ? "请点击一个高亮的地区。"
+                        : $"请点击一个高亮的地区（{effectHint}）。")
                     : "请在场上选择合法目标卡（点击场上卡完成选择）。");
             OpenTargetSelection(trigger.DisplayName, hint);
 
@@ -224,7 +229,7 @@ namespace Script.UI.Interaction
         /// 否则该次取目标会静默中断（挂死在"等一个永不到来的回调"上）。
         /// </summary>
         public bool RequestActivateTargetSelection(string effectName, bool isArea, List<string> validTargetUids,
-            Action<string> onPicked, string extraLabel = null, Action onExtra = null)
+            Action<string> onPicked, string extraLabel = null, Action onExtra = null, string hint = null)
         {
             if (_targetSelectionWindow == null)
             {
@@ -263,12 +268,17 @@ namespace Script.UI.Interaction
                 CardManager.Instance.NotifyTargetSelectionChanged(new List<string>(_validTargetUids));
             }
 
-            string hint = _validTargetUids.Count == 0
+            // 【2026-10·JC092】提示语由**调用方按数据给出**（`TargetSlot.Hint`，卡文口径）；
+            // 未给出时用**中性**文案——不再硬编码"将移动至该地区"（那是移动类效果的说法，
+            // 用在"把墓地角色牌置于该地区"等效果上就是错误提示）。
+            string resolvedHint = _validTargetUids.Count == 0
                 ? "（无合法目标）"
-                : (_targetIsArea
-                    ? "请点击一个高亮的地区。"
-                    : "请在场上选择合法目标卡（点击场上卡完成选择）。");
-            OpenTargetSelection(effectName, hint, extraLabel);
+                : (!_targetIsArea
+                    ? "请在场上选择合法目标卡（点击场上卡完成选择）。"
+                    : (string.IsNullOrEmpty(hint)
+                        ? "请点击一个高亮的地区。"
+                        : $"请点击一个高亮的地区（{hint}）。"));
+            OpenTargetSelection(effectName, resolvedHint, extraLabel);
 
             _triggerOrderWindow?.SetButtonsEnabled(false);
 

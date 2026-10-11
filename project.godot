@@ -17,6 +17,13 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+; WebFontFallback 排在最前：它要在其它自动加载/UI 创建之前，
+; 给默认字体挂上中文字体回退（仅 web 生效，桌面端直接 return）。
+;
+; 【注意】性能排查开关**刻意不做成 autoload**：启动期的自动加载里调用引擎接口，
+; 在 Web 上实测会触发原生层 abort（RuntimeError: unreachable）。
+; 现在它是纯静态类 Script/Web/WebPerfParams.cs，由需要它的场景按需惰性解析。
+WebFontFallback="*res://Script/Web/WebFontFallback.cs"
 GameManager="*res://Script/Manager/GameManager.cs"
 CardManager="*res://Script/Manager/CardManager.cs"
 PlayerManager="*res://Script/Manager/PlayerManager.cs"

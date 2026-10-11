@@ -46,7 +46,10 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     Kind = TargetKind.Character,
                     NeedsSelection = true,
-                    CanTargetSelf = false,
+                    // 【2026-10 复核·修复·判据⑤㉕】卡文"消灭目标**已横置的角色**"未写"其他/敌方"⇒
+                    // 按"默认允许取自身"口径：自身被横置时同样是合法目标（原 `false` 属静默排除自身）。
+                    CanTargetSelf = true,
+
                     Restrictions = new Array<TargetRestriction> { TargetRestriction.Tapped },
                 },
                 Actions = new Array<EffectAction>

@@ -141,8 +141,8 @@ namespace Script.Data.Effects
 
         /// <summary>【P3】触发：**一次势力对抗结束时**广播（含平局、含无人获得标记的情况）。对应 GameEvent.OnPowerCombatEnded。
         /// 与 `OnCombatWon` 的区别：后者只在"分出胜者的战斗对抗"后发；本时机在势力对抗结束时无条件发。
-        /// 供【声望】（`KeywordEffects.Renown()`）响应：条件谓词 `RenownMajority` 比较该地区双方"声望角色"数量，
-        /// 由较多的一方在该地区放置一个势力标志（多个声望角色也只放一个）。</summary>
+        /// 供【声望】（`KeywordEffects.Renown()`）响应：条件谓词 `RenownMajorityInSameArea` 比较该地区双方"声望角色"数量，
+        /// 由较多的一方在该地区放置一个势力标志（多个声望角色也只放 1 枚，广播窗口去重）。</summary>
         OnPowerCombatEnded,
 
         /// <summary>【P3】触发：**调查对抗（Investigation）获胜**时广播。对应 `GameEvent.OnInvestigationWon`。
@@ -817,6 +817,15 @@ namespace Script.Data.Effects
         [Export] public string Label { get; set; } = "";
 
         /// <summary>
+        /// 【2026-10 用户口径·JC092】选择窗口里的**动作提示**（一句话说明"选中该槽后会怎样"，
+        /// 如"将你墓地中的角色牌以暗藏者状态置于该地区"）。
+        /// 用途：场上点选/地区选择的提示语**由数据给出、不再由 UI 猜**（原先硬编码"将移动至该地区"
+        /// ⇒ JC092 的"选择地区"槽显示成了移动提示，与卡文不符）。
+        /// 空＝UI 用中性兜底文案（"请点击一个高亮的地区。"）。
+        /// </summary>
+        [Export] public string Hint { get; set; } = "";
+
+        /// <summary>
         /// 【K15·槽间依赖】本槽候选是否**排除"位于本效果已选中的『地区槽』内的卡"**
         /// （用户 2026-09 口径：JC021 的 FAQ 禁止原地移动 → 已经在该目的地的角色**不出现在候选里**）。
         /// 因此取目标顺序上，"地区槽"应先于标记了本标志的卡槽被选择。
@@ -1101,6 +1110,19 @@ namespace Script.Data.Effects
         [Export] public int OptionalPayCost { get; set; } = 0;
 
         /// <summary>
+        /// 【2026-10·JC082 用户口径】**入堆叠前的"是/否"确认**（非支付型"你可以…"）：
+        /// 非空 ⇒ 触发在入堆叠前先问来源控制者（两个按钮、**不出现输入框**；文案＝本字符串）；
+        /// **选"否"/取消 ⇒ 该触发不入堆叠**（不产生任何堆叠条目、不结算）。
+        ///
+        /// 与 `OptionalPayCost` 的分工：后者问的是"是否**支付 N**"（要花钱）；本字段问的是
+        /// 纯意愿（如 JC082 收藏"本回合中，当你赢得下一次调查对抗时，你可以抓一张牌"⇒"是否抓一张牌？"）。
+        /// 两者同时声明时：先问支付（付不起直接放弃），再问本确认。
+        /// 单机＝`IGameUIHooks.PromptTwoChoice`；联机＝`ChoiceRequest.Kind.ForceChoice`（是/否两按钮）。
+        /// 无 UI/无网关 ⇒ 按"否"处理（fail-closed，绝不替玩家做选择）。
+        /// </summary>
+        [Export] public string ConfirmPrompt { get; set; } = "";
+
+        /// <summary>
         /// 【秘社批次】**秘社在场期间的静态子类别授予**（用户 2026-09 口径，见 `CouncilStaticGrant`）：
         /// 非空时按该规则对本控制者争夺区内符合条件的卡额外授予子类别（MSJC012"费用≤2 的本方人类获得奴仆类别"）。
         /// 由装配层 `GameInitializer` 的 `OnPostMove` 钩子调用 `EffectEngine.ReevaluateCouncilStaticGrants` 重算。
@@ -1195,6 +1217,15 @@ namespace Script.Data.Effects
         [Export] public bool AreaTargetExcludesCardArea { get; set; } = false;
 
         /// <summary>
+        /// 【2026-10·提示文字】**效果级**的选择窗提示（一句话说明"选中后会怎样"，作为括号补充展示）。
+        /// 与 `TargetSlot.Hint` 的分工：多目标槽卡（JC092/JC133/JC021）用**槽级**提示；
+        /// 无槽位的"取地区目标"流程（如机动 `Maneuver()`、JC117 移动）用**效果级**提示。
+        /// 二者皆空 ⇒ UI 用中性兜底文案（"请点击一个高亮的地区。"）。
+        /// 消费点＝`TriggerInteractionCoordinator`（单机触发/激活取目标窗）＋ `ChoiceRequest.SlotHint`（联机）。
+        /// </summary>
+        [Export] public string Hint { get; set; } = "";
+
+        /// <summary>
         /// 【P3·K21·JC041】**发动前提：来源卡必须处于"暗藏者"状态（背面朝上）**。
         /// 卡文「**快速暗藏者行动2**：令禁婆由暗藏者状态现身。你只能在其位于水域地区时发动此能力。」
         /// 用户口径（A29 追问答复）：这是**暗藏者专用**的激活能力——"**区别于其他效果大多正面在场才能生效，
@@ -1208,6 +1239,15 @@ namespace Script.Data.Effects
         /// 判定经 `AreaManager.AreaHasSubCategory`（读地区卡模板 `AreaCardData.SubCategories`）。
         /// </summary>
         [Export] public string RequireSourceAreaSubCategory { get; set; } = "";
+
+        /// <summary>
+        /// 【2026-10 用户口径·威名/声望】**触发前提：来源卡必须【未横置】**（横置的角色不提供其词条）。
+        /// 本卡文依据：声望卡文"若你比对手操控更多**未横置**的声望角色"（JC070/JC011/JC067/JC076/JC080/JC095），
+        /// 以及项目既有口径"横置的卡不提供任何能力"（`AreaStatsCalculator`）。
+        /// 消费点＝`TriggerRegistry` 收集阶段（横置 ⇒ 该条**不收集**，不进触发排序窗；与暗藏模式门禁同层）。
+        /// 由 `KeywordEffects.WeiMing()` / `Renown()` 声明（两词条同办）。
+        /// </summary>
+        [Export] public bool RequireSourceUntapped { get; set; } = false;
 
         /// <summary>
         /// 【P3·E】光环的**关键词筛选**（空＝不限）：非空时只影响具有该关键字（运行期授予 ∪ 卡面固有）的卡。

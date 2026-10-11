@@ -35,7 +35,8 @@ namespace Script.IO
             string name = dir.GetNext();
             while (!string.IsNullOrEmpty(name))
             {
-                if (!dir.CurrentIsDir() && name.EndsWith(".json"))
+                // 【2026-10-12】显式 OrdinalIgnoreCase：无参 EndsWith 走 ICU，Web 版运行时没有 ICU，会 abort。
+                if (!dir.CurrentIsDir() && name.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase))
                     list.Add($"{DeckDir}/{name}");
                 name = dir.GetNext();
             }

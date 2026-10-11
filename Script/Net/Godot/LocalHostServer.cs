@@ -110,7 +110,7 @@ namespace Script.Net.Godot
             {
                 if (string.IsNullOrEmpty(addr)) continue;
                 if (addr == "127.0.0.1" || addr.Contains(':')) continue;   // 只取 IPv4
-                if (addr.StartsWith("169.254.")) continue;                 // 链路本地：对手用不上
+                if (addr.StartsWith("169.254.", StringComparison.Ordinal)) continue;     // 链路本地：对手用不上
                 list.Add(addr);
             }
             return list;

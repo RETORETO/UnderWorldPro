@@ -35,6 +35,9 @@ namespace Script.UI
         [Signal] public delegate void TappedChangedEventHandler(CardUI cardUI, bool tapped);
         // 附属卡双击激活信号：与秘社双击一致，单击不再弹出激活窗口（JC012 交互修正）。
         [Signal] public delegate void AttachmentDoubleClickedEventHandler(CardUI cardUI);
+        // 【2026-10 用户口径·JC085】墓地中的"墓地行动"卡（`PlayerCardData.PlayableFromGraveyard`）
+        // 双击请求"从墓地正面打出"：由 Arena/ArenaOl 弹**选择地区**窗（墓地牌没有拖拽通道）。
+        [Signal] public delegate void GraveyardPlayRequestedEventHandler(CardUI cardUI);
 
         // ---------- 内部状态 ----------
         private CardInstance _instance;
@@ -176,6 +179,21 @@ namespace Script.UI
                 && _instance.CurrentZone == CardZone.AreaZone)
             {
                 EmitSignal(SignalName.CovertRevealRequested, this);
+                AcceptEvent();
+                return;
+            }
+
+            // 【2026-10 用户口径·JC085】**墓地行动**：墓地中声明 `PlayableFromGraveyard` 的卡双击即请求
+            // "从墓地正面打出"（先于 CanDrag 判断——墓地卡不可拖拽），由 Arena 弹**选择地区**窗。
+            if (@event is InputEventMouseButton graveMouse
+                && graveMouse.ButtonIndex == MouseButton.Left
+                && graveMouse.Pressed
+                && graveMouse.DoubleClick
+                && _instance != null
+                && _instance.CurrentZone == CardZone.Graveyard
+                && _instance.PlayerTemplate?.PlayableFromGraveyard == true)
+            {
+                EmitSignal(SignalName.GraveyardPlayRequested, this);
                 AcceptEvent();
                 return;
             }
@@ -737,9 +755,11 @@ namespace Script.UI
                 return "res://Cards/Image/PlayerCards/JC/unknown.jpg";
 
             // 取 UID 开头的连续字母作为目录名
-            int i = 0;
-            while (i < uid.Length && System.Char.IsLetter(uid[i])) i++;
-            string folder = i > 0 ? uid.Substring(0, i) : "JC";
+            // 【2026-10-12 Web 修复】原来用 System.Char.IsLetter——它属于 Unicode 类别判定，
+            // 在魔改版 Web 运行时上会走全球化路径（同类事故：String.StartsWith(string) 直接让 wasm abort）。
+            // 卡号前缀只可能是 A-Z/a-z，改用共享的 ASCII 序数判断：行为对全部真实卡号完全一致，
+            // 且不触碰任何全球化代码。桌面端结果也完全相同（工程内 UID 无带音标/非拉丁字母者）。
+            string folder = Script.IO.WebSafeText.LeadingAsciiLetters(uid, "JC");
 
             // 首选：{folder}/{uid}.jpg（与卡号同名）
             string exact = $"res://Cards/Image/PlayerCards/{folder}/{uid}.jpg";

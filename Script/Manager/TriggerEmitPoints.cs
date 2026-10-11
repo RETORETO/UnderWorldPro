@@ -78,12 +78,13 @@ namespace Script.Manager
         /// 对应 TriggerRegistry.EventToTiming 中 OnCombatWon → OnCombatWon 的映射。
         /// 按 D1 约定：此处不填 SourceCard（由 TriggerRegistry 收集时按"在场威名卡"各自注入 source）；
         /// 仅携带胜者玩家(TriggeringPlayerId)与战斗地区(TargetAreaId)，供威名类效果条件 CombatWinnerIsSelf 判定。
+        /// Emit 前开启【威名】放置去重窗口 ⇒ 单次战斗对抗内每控制者每地区只放 1 枚。
         /// </summary>
         public void OnCombatWon(int winnerPlayerId, string areaUid)
         {
-            // D2：单次战斗对抗维度去重——每次 Emit 前清空威名放置去重表，
-            // 保证同一控制者多个威名在同一地区只放置一个势力标志。
-            EE.ResetCombatWonDedup();
+            // 放置去重·广播窗口：Emit 前开启【威名】窗口（只清该标签的桶）
+            // ⇒ 同一控制者多个威名在同一地区、本次广播内只落地 1 枚（与「声望」各自分桶、互不干扰）。
+            EE.BeginPlacementDedupWindow(PlacementDedupTags.WeiMing);
 
             _bus.Emit(GameEvent.OnCombatWon, new TriggerContext
             {
@@ -134,22 +135,21 @@ namespace Script.Manager
         }
 
         /// <summary>
-        /// 【P3】势力对抗/对抗阶段结束触发（OnPowerCombatEnded）：**一个地区的所有对抗结束后**广播（含平局）。
-        /// 供【声望】响应：条件谓词 `RenownMajority` 会按该地区双方"声望角色"数量比较，
-        /// 由较多的一方在该地区放置一个势力标记（多个声望角色也只放一个，去重与威名同款）。
+        /// 【P3】势力对抗结束触发（OnPowerCombatEnded）：**每次势力对抗结算完毕**广播（含平局）。
+        /// 供【声望】响应：条件谓词 `RenownMajorityInSameArea` 按该地区双方"声望角色"数量比较，
+        /// 由较多的一方在该地区放置一个势力标记（多个声望角色也只放 1 枚，去重与威名同款、各自分桶）。
         /// 与 `OnCombatWon` 的区别：本时机不要求"分出胜者"，`TriggeringPlayerId` 传 0（无胜者语义）。
         ///
-        /// 【2026-09 用户口径·声望改触发】触发点＝`TurnManager` 在"该地区三种对抗全部结算完毕"
-        /// （含 JC067 追加的那次势力对抗之后）时调用一次；并且**同一地区每回合只广播一次**
-        /// （用户口径："不管势力对抗进行几次（JC067效果多次战斗对抗）声望都只触发一次"）——
-        /// 本方法自带幂等守卫，任何重复调用都会被吞掉（不依赖调用方时序）。
+        /// 【2026-09 用户口径·声望改触发（第二轮）】触发点＝`TurnManager` **每次势力对抗结算完毕**都调用一次
+        /// （JC067「本地区额外进行一次势力对抗」追加的那次**同样触发**）。本方法**不自带**幂等守卫——
+        /// 同一次势力对抗内多个声望角色只放 1 枚，由"广播窗口去重"负责（下方开启窗口 + `PlaceToken` 查桶）。
         /// </summary>
         public void PowerCombatEnded(string areaUid)
         {
             if (string.IsNullOrEmpty(areaUid)) return;
-            // 与威名同款：进入本次"势力对抗"维度前清空放置去重表
-            // ⇒ **一次势力对抗内**同一方多个声望角色也只放一个标志（用户 2026-09 口径）。
-            EE.ResetCombatWonDedup();
+            // 放置去重·广播窗口：Emit 前开启【声望】窗口（只清该标签的桶）
+            // ⇒ 同一方多个声望角色在本次广播内只落地 1 枚；下一次广播（下一次势力对抗）重新开启 ⇒ 再放 1 枚。
+            EE.BeginPlacementDedupWindow(PlacementDedupTags.Renown);
 
             _bus.Emit(GameEvent.OnPowerCombatEnded, new TriggerContext
             {

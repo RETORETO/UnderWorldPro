@@ -117,7 +117,8 @@ public class PlayerActionService
     {
         var inst = _cardManager.GetInstance(cardUid);
         var effect = Script.Manager.MultiTargetSlots.FindModeEffect(
-            inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast);
+                                 inst?.PlayerTemplate, Script.Data.Effects.EffectTiming.OnSorceryCast)
+                             ?? Script.Manager.MultiTargetSlots.PlayChoiceEffect(inst?.PlayerTemplate);   // 【JC082】打出时"选择一项"
         if (effect == null || _turnManager.InputGateway == null) return false;
         if (IsPlayFlowPending(cardUid))
         {

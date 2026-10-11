@@ -42,6 +42,12 @@ namespace Cards.Effects.PlayerCards.JC
                 Duration = "常驻",
                 ContinuousGrants = new Array<EffectGrant>
                 {
+                    // 【2026-10 复核·修复·判据⑰/一致性】本工程"获得［某能力图标］"的既定写法是**双通道**：
+                    //  · `Icon:<图标名>`＝图标**存在性**（`CardInstance.HasIcon`/展示/图标替换与抑制的判定基准）；
+                    //  · `Attribute:<对应属性>`＝**数值**（先手调查/战斗/势力…）。
+                    // 已核实 `EffectEngine.ApplyAuraGrantsTo` **不做** Icon→Attribute 折算（只有形态授予与 `Gain` 动词折算）
+                    // ⇒ 补 `Icon` 不会重复加成（与 JC016/JC030/JC051/JC060/JC105 同款）。
+                    new EffectGrant { Kind = "Icon", Value = "白眼", Amount = 1 },
                     new EffectGrant { Kind = "Attribute", Value = "先手调查", Amount = 1 }
                 }
             });

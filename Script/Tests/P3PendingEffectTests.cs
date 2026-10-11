@@ -157,6 +157,7 @@ namespace Script.Tests
             var tmpl = Load("JC082_suoyazhishu");
             Assert.IsNotNull(tmpl, "JC082 模板应可加载");
             Assert.AreEqual(2, tmpl.TargetRules.Count, "打出目标＝『目标角色』或『本方秘社』两条规则（选择的一项）");
+            Assert.IsTrue(tmpl.PlayChoice, "打出时『选择一项』（PlayChoice）：先选一项再选该项目的目标");
 
             var lend = FindEffect(tmpl, "JC082_A_LendGrantWhiteEye");
             Assert.IsNotNull(lend, "应有『借阅：宿主获得白眼』持续效果");
@@ -166,19 +167,33 @@ namespace Script.Tests
             Assert.AreEqual(PrereqKind.HostKind, lend.PrereqSpec.Kind, "前提＝宿主种类");
             Assert.AreEqual("角色", lend.PrereqSpec.Param, "仅『角色』宿主生效（借阅）");
 
-            var keep = FindEffect(tmpl, "JC082_B_KeepPledgeDrawOnInvestigationWon");
-            Assert.IsNotNull(keep, "应有『收藏：承诺抓牌』激活");
+            // 【用户口径 2026-10】收藏＝"激活（横置＋支付2）"＋"赢得调查对抗时**即时询问**"，**不用 Pending**
+            var keep = FindEffect(tmpl, "JC082_B_KeepPledgeActivate");
+            Assert.IsNotNull(keep, "应有『收藏：横置＋支付2』激活");
             Assert.AreEqual(EffectTiming.AttachmentActivated, keep.Timing, "附属激活");
             Assert.AreEqual(2, keep.Cost, "卡文『快速行动2』→ 费用 2");
             Assert.IsTrue(keep.ActivateCondition.Contains("横置本角色"), "横置本书为代价");
             Assert.AreEqual("HostIsCouncil", keep.Condition.Predicate, "只有结附在秘社上时才可发动");
-            Assert.IsNotNull(keep.Pending, "效果＝登记一次性承诺");
-            Assert.AreEqual(EffectTiming.OnInvestigationWon, keep.Pending.Timing, "承诺时机＝赢得调查对抗");
-            Assert.AreEqual("本回合结束", keep.Pending.Expire, "到期＝本回合结束");
-            Assert.IsTrue(keep.Pending.Optional, "卡文『你可以』→ 可选");
-            Assert.AreEqual(ActionVerb.Draw, keep.Pending.Actions[0].Verb, "兑现＝抓牌");
-        }
+            Assert.IsNull(keep.Pending, "不再登记一次性承诺（用户口径：在获胜时**直接弹选择窗**）");
+            Assert.AreEqual(1, keep.MaxUsesPerTurn, "每回合发动一次");
 
+            var draw = FindEffect(tmpl, "JC082_C_DrawOnInvestigationWon");
+            Assert.IsNotNull(draw, "应有『赢得调查对抗时询问抓牌』触发");
+            Assert.AreEqual(EffectTiming.OnInvestigationWon, draw.Timing, "时机＝赢得调查对抗");
+            Assert.AreEqual("WinnerIsSelfAndAbilityUsed", draw.Condition.Predicate, "门禁＝本方获胜 ∧ 本回合已发动过收藏能力");
+            Assert.AreEqual("JC082_B_KeepPledgeActivate", draw.Condition.Param, "门禁参数＝收藏能力的 EffectId");
+            Assert.IsFalse(string.IsNullOrEmpty(draw.ConfirmPrompt), "入堆叠前弹『是/否』选择窗（ConfirmPrompt）");
+            Assert.AreEqual(1, draw.MaxUsesPerTurn, "『下一次』＝本回合只兑现一次");
+            Assert.AreEqual(1, draw.Actions.Count, "一条动作");
+            Assert.AreEqual(ActionVerb.Draw, draw.Actions[0].Verb, "动作＝抓牌");
+            Assert.IsFalse(draw.Forced, "卡文『你可以』→ 非强制");
+
+            // 【联机侧】打出时"选择一项"的合成声明必须对**联机入口**同样可见
+            // （`ArenaOl` 判断 + `PlayerActionService.TryBeginModeCardPlayOnline` + `TurnManager.PlayModeCardAsync` 共用本实现）
+            var synthetic = MultiTargetSlots.PlayChoiceEffect(tmpl);
+            Assert.IsNotNull(synthetic, "PlayChoiceEffect 应能合成『选择一项』声明（联机侧同款入口）");
+            Assert.AreEqual(2, synthetic.Modes.Count, "两个选项（结附于目标角色／结附于本方秘社）");
+        }
         // ==================== ② 宿主种类：谓词与授予 ====================
 
         public void TestPending_宿主种类谓词()
@@ -229,9 +244,9 @@ namespace Script.Tests
             Assert.IsFalse(council.HasIcon("白眼"), "秘社宿主**不**获得白眼（前提『宿主是角色』不满足）");
         }
 
-        // ==================== ③ 收藏的激活能力只在秘社宿主上可用 ====================
+        // ==================== ③ 收藏：激活（横置＋支付2） ====================
 
-        public void TestPending_收藏能力仅秘社宿主可发动()
+        public void TestJC082收藏_仅秘社宿主可发动()
         {
             var game = NewGame();
             string area = Areas(game)[0];
@@ -247,12 +262,11 @@ namespace Script.Tests
             int manaBefore = game.PlayerManager.GetAvailableMana(1);
             Assert.IsFalse(ActivateEligibility.CanActivate(bookOnChr, game.TurnManager, game.PlayerManager, game.CardManager),
                 "结附于角色 → 收藏能力不可发动（UI 置灰）");
-            var keepOnChr = FindEffect(bookOnChr.PlayerTemplate, "JC082_B_KeepPledgeDrawOnInvestigationWon");
+            var keepOnChr = FindEffect(bookOnChr.PlayerTemplate, "JC082_B_KeepPledgeActivate");
             EffectEngine.Instance.ActivateAbility(bookOnChr, keepOnChr, null);
             Assert.IsTrue(game.StackManager.IsEmpty, "结附于角色 → 拒绝发动");
             Assert.AreEqual(manaBefore, game.PlayerManager.GetAvailableMana(1), "被拒 → 不扣费");
             Assert.IsFalse(bookOnChr.IsTapped, "被拒 → 不横置");
-            Assert.AreEqual(0, EffectEngine.Instance.PendingEffectCount, "被拒 → 未登记承诺");
 
             // 结附于**秘社** → 可发动
             var council = MakeCouncil(game, 1);
@@ -262,10 +276,10 @@ namespace Script.Tests
                 "结附于秘社 → 收藏能力可发动");
         }
 
-        // ==================== ④ 承诺：登记 → 兑现一次 → 消费 ====================
+        // ==================== ④ 赢得调查对抗 → 即时询问（是/否） ====================
 
-        /// <summary>激活 → 只登记承诺（不立即抓牌）；赢得调查对抗 → 兑现为触发 → 抓一张 → 承诺被消费。</summary>
-        public void TestPending_承诺兑现一次()
+        /// <summary>激活（横置＋支付2）→ 赢得调查对抗 → **立即弹选择窗**：选"是"⇒ 抓一张；同回合第二次不再询问。</summary>
+        public void TestJC082收藏_获胜时询问并抓牌()
         {
             var game = NewGame();
             string area = Areas(game)[0];
@@ -277,51 +291,79 @@ namespace Script.Tests
             game.TurnManager.SetTriggerView(new EnterAllTriggerView());
             SetupInvestigationWin(game, area);
 
+            var stub = new ConfirmStub { Answer = true };
+            EffectEngine.Instance.UIHooks = stub;
+
             int handBefore = game.TurnManager.GetHandOf(1).Count;
             int manaBefore = game.PlayerManager.GetAvailableMana(1);
 
-            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeDrawOnInvestigationWon");
+            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeActivate");
             EffectEngine.Instance.ActivateAbility(book, keep, null);
-            Assert.IsFalse(game.StackManager.IsEmpty, "激活入堆叠");
             ResolveStackOnce(game);
-
-            Assert.AreEqual(1, EffectEngine.Instance.PendingEffectCount, "结算后**登记了一份承诺**");
-            Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count, "登记承诺本身**不抓牌**");
             Assert.AreEqual(manaBefore - 2, game.PlayerManager.GetAvailableMana(1), "支付 2 费");
             Assert.IsTrue(book.IsTapped, "横置本书（代价）");
+            Assert.AreEqual(0, stub.Calls, "激活本身不询问抓牌");
 
-            // 赢得调查对抗 → 兑现
             var win = new InstantCombatWindow(game);
             try
             {
                 game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
-                Assert.IsNotNull(FindEntry(game, "Pending_"), "承诺兑现为触发并入堆叠");
-                Assert.AreEqual(0, EffectEngine.Instance.PendingEffectCount, "兑现即**消费**（『下一次』只一次）");
+                Assert.AreEqual(1, stub.Calls, "赢得调查对抗 ⇒ **立即弹出**是/否选择窗");
+                var entry = FindEntry(game, "JC082_C_");
+                Assert.IsNotNull(entry, "选『是』⇒ 抓牌触发入堆叠并结算");
                 ResolveStackOnce(game);
-                Assert.AreEqual(handBefore + 1, game.TurnManager.GetHandOf(1).Count, "兑现后抓了 1 张");
+                Assert.AreEqual(handBefore + 1, game.TurnManager.GetHandOf(1).Count, "抓了 1 张");
             }
-            finally
-            {
-                win.Detach();
-            }
+            finally { win.Detach(); }
 
-            // 第二次赢得调查对抗 → 不再兑现
+            // 同回合第二次赢得调查对抗 → 不再询问（MaxUsesPerTurn=1）
             int handAfter = game.TurnManager.GetHandOf(1).Count;
             var win2 = new InstantCombatWindow(game);
             try
             {
                 game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
                 ResolveStackOnce(game);
-                Assert.AreEqual(handAfter, game.TurnManager.GetHandOf(1).Count, "第二次不再抓牌（承诺已消费）");
+                Assert.AreEqual(1, stub.Calls, "第二次不再询问（本回合只兑现一次）");
+                Assert.AreEqual(handAfter, game.TurnManager.GetHandOf(1).Count, "第二次不再抓牌");
             }
-            finally
-            {
-                win2.Detach();
-            }
+            finally { win2.Detach(); }
         }
 
-        /// <summary>输掉对抗不兑现（承诺仍在表里）。</summary>
-        public void TestPending_输掉对抗不兑现()
+        /// <summary>选"否"⇒ **不入堆叠、不抓牌**（用户口径：不进行再次触发效果进入堆叠）。</summary>
+        public void TestJC082收藏_选择否不入堆叠()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 3, (CardColor)2);
+            var council = MakeCouncil(game, 1);
+            var book = game.CardManager.CreateCardInstance(Load("JC082_suoyazhishu"), 1);
+            Attach(game, council, book);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.SetTriggerView(new EnterAllTriggerView());
+            SetupInvestigationWin(game, area);
+
+            var stub = new ConfirmStub { Answer = false };
+            EffectEngine.Instance.UIHooks = stub;
+
+            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeActivate");
+            EffectEngine.Instance.ActivateAbility(book, keep, null);
+            ResolveStackOnce(game);
+            int handBefore = game.TurnManager.GetHandOf(1).Count;
+
+            var win = new InstantCombatWindow(game);
+            try
+            {
+                game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
+                Assert.AreEqual(1, stub.Calls, "获胜时询问了一次");
+                Assert.IsNull(FindEntry(game, "JC082_C_"), "选『否』⇒ 该触发**不入堆叠**");
+                ResolveStackOnce(game);
+                Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count, "选『否』⇒ 不抓牌");
+            }
+            finally { win.Detach(); }
+        }
+
+        /// <summary>输掉调查对抗 → 不询问、不抓牌。</summary>
+        public void TestJC082收藏_输掉对抗不询问()
         {
             var game = NewGame();
             string area = Areas(game)[0];
@@ -332,32 +374,30 @@ namespace Script.Tests
             game.TurnManager.PriorityPlayerId = 1;
             game.TurnManager.SetTriggerView(new EnterAllTriggerView());
 
-            // P2 调查 3 → P2 赢
             var weak = game.CardManager.CreateCardInstance(Probe("TS_pe_weak2", 0), 1);
             game.ZoneManager.MoveToArea(weak, area, 1);
             var strong = game.CardManager.CreateCardInstance(Probe("TS_pe_strong2", 3), 2);
             game.ZoneManager.MoveToArea(strong, area, 2);
 
-            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeDrawOnInvestigationWon");
+            var stub = new ConfirmStub { Answer = true };
+            EffectEngine.Instance.UIHooks = stub;
+
+            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeActivate");
             EffectEngine.Instance.ActivateAbility(book, keep, null);
             ResolveStackOnce(game);
-            Assert.AreEqual(1, EffectEngine.Instance.PendingEffectCount, "前置：已登记承诺");
 
             var win = new InstantCombatWindow(game);
             try
             {
                 game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
-                Assert.IsNull(FindEntry(game, "Pending_"), "本方未获胜 → 不兑现");
-                Assert.AreEqual(1, EffectEngine.Instance.PendingEffectCount, "承诺仍留存（未被消费）");
+                Assert.AreEqual(0, stub.Calls, "本方未获胜 ⇒ 不询问");
+                Assert.IsNull(FindEntry(game, "JC082_C_"), "未获胜 ⇒ 不入堆叠");
             }
-            finally
-            {
-                win.Detach();
-            }
+            finally { win.Detach(); }
         }
 
-        /// <summary>回合结束到期作废：之后再赢得对抗也不再兑现。</summary>
-        public void TestPending_回合结束作废()
+        /// <summary>本回合**未发动**收藏能力（或已过回合）→ 即使赢得调查对抗也不询问。</summary>
+        public void TestJC082收藏_未发动则不询问()
         {
             var game = NewGame();
             string area = Areas(game)[0];
@@ -369,57 +409,70 @@ namespace Script.Tests
             game.TurnManager.SetTriggerView(new EnterAllTriggerView());
             SetupInvestigationWin(game, area);
 
-            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeDrawOnInvestigationWon");
-            EffectEngine.Instance.ActivateAbility(book, keep, null);
-            ResolveStackOnce(game);
-            Assert.AreEqual(1, EffectEngine.Instance.PendingEffectCount, "前置：已登记承诺");
-
-            EffectEngine.Instance.ExpireTurnEndEffects(game.TurnManager.TurnCount);
-            Assert.AreEqual(0, EffectEngine.Instance.PendingEffectCount, "回合结束 → 未兑现的承诺作废");
+            var stub = new ConfirmStub { Answer = true };
+            EffectEngine.Instance.UIHooks = stub;
 
             int handBefore = game.TurnManager.GetHandOf(1).Count;
             var win = new InstantCombatWindow(game);
             try
             {
+                // 未发动收藏能力：门禁「SourceAbilityUsedThisTurn」不满足
                 game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
+                Assert.AreEqual(0, stub.Calls, "未发动收藏能力 ⇒ 不询问");
                 ResolveStackOnce(game);
-                Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count, "作废后即使获胜也不抓牌");
+                Assert.AreEqual(handBefore, game.TurnManager.GetHandOf(1).Count, "不抓牌");
             }
-            finally
-            {
-                win.Detach();
-            }
-        }
+            finally { win.Detach(); }
 
-        /// <summary>承诺兑现时是**可选**触发（卡文"你可以"）：非强制 → 触发条目 Forced=false。</summary>
-        public void TestPending_兑现为可选触发()
-        {
-            var game = NewGame();
-            string area = Areas(game)[0];
-            GiveAssets(game, 1, 3, (CardColor)2);
-            var council = MakeCouncil(game, 1);
-            var book = game.CardManager.CreateCardInstance(Load("JC082_suoyazhishu"), 1);
-            Attach(game, council, book);
-            game.TurnManager.PriorityPlayerId = 1;
-            game.TurnManager.SetTriggerView(new EnterAllTriggerView());
-            SetupInvestigationWin(game, area);
-
-            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeDrawOnInvestigationWon");
+            // 发动后跨回合（能力计数随回合重置清空）→ 也不再询问
+            var keep = FindEffect(book.PlayerTemplate, "JC082_B_KeepPledgeActivate");
             EffectEngine.Instance.ActivateAbility(book, keep, null);
             ResolveStackOnce(game);
-
-            var win = new InstantCombatWindow(game);
+            book.ResetAbilityUsesThisTurn();
+            var win2 = new InstantCombatWindow(game);
             try
             {
                 game.CombatManager.ResolveAreaCombat(CombatManager.CombatType.Investigation, area, 1, null);
-                var entry = FindEntry(game, "Pending_");
-                Assert.IsNotNull(entry, "承诺已兑现为触发");
-                Assert.IsFalse(entry.EffectDataEffect.Forced, "『你可以』→ 非强制（可在排序窗放弃）");
+                Assert.AreEqual(0, stub.Calls, "回合重置后未再发动 ⇒ 不询问");
             }
-            finally
+            finally { win2.Detach(); }
+        }
+
+        /// <summary>UI 桩：把"是/否"确认窗记为一次调用并按 `Answer` 回包。</summary>
+        private sealed class ConfirmStub : Script.Interfaces.IGameUIHooks
+        {
+            public bool Answer = true;
+            public int Calls;
+            public void PromptTwoChoice(int chooserPlayerId, string prompt, string yesLabel, string noLabel,
+                System.Action<bool> onChosen)
             {
-                win.Detach();
+                Calls++;
+                onChosen?.Invoke(Answer);
             }
+            public void PromptPayOrTap(CardInstance source, int payAmount) { }
+            public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
+                System.Action<CardInstance> onPicked)
+                => onPicked?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : null);
+            public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
+                bool allowCancel, System.Action<CardInstance> onPicked)
+                => onPicked?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : null);
+            public void PromptCurbMarks(int curbedPlayerId, int remaining,
+                List<Script.Interfaces.CurbMarkOption> options, System.Action<string> onPickedAreaUid) { }
+            public void PromptPrediction(int predictorId, int count, List<CardInstance> cards,
+                System.Action<List<CardInstance>, List<CardInstance>> onConfirmed) { }
+            public void PromptMultiTargets(CardInstance source, EffectData data,
+                System.Func<int, List<TargetChoice>, SlotCandidates> candidatesForSlot,
+                System.Action<List<TargetChoice>> onConfirmed) { }
+            public void PromptPlayerTarget(int chooserPlayerId, string prompt, List<int> candidates,
+                System.Action<int> onChosen)
+                => onChosen?.Invoke(candidates != null && candidates.Count > 0 ? candidates[0] : -1);
+            public void PromptEffectMode(CardInstance source, EffectData data, System.Action<int> onChosen)
+                => onChosen?.Invoke(0);
+            public void PromptNumberInput(int chooserPlayerId, string prompt, int min, int max, int defaultValue,
+                string confirmLabel, string cancelLabel, System.Action<int> onChosen)
+                => onChosen?.Invoke(defaultValue);
+            public void PromptPayOrSacrifice(int chooserPlayerId, string sourceName, int amount,
+                System.Action<bool> onChosen) => onChosen?.Invoke(true);
         }
     }
 }

@@ -1,0 +1,7 @@
+# Netlify / Cloudflare Pages 响应头配置
+# 作用：让页面进入「跨源隔离」状态，SharedArrayBuffer 才可用。
+# 若改用 Vercel，请把同样两条头写到 vercel.json 的 headers 里。
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin

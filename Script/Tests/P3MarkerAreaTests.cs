@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -101,21 +101,25 @@ namespace Script.Tests
             Assert.IsNotNull(tmpl, "JC127 模板应可加载");
             Assert.AreEqual(TargetKind.Area, tmpl.TargetRules[0].Kind, "打出目标＝地区");
 
-            var clear = FindEffect(tmpl, "JC127_A_ClearPowerMarksInArea");
-            Assert.IsNotNull(clear, "JC127 应有『清除地区所有势力标志』效果");
-            Assert.AreEqual(2, clear.Actions.Count, "两条 RemoveToken：对手的全部 + 自己的全部");
-            Assert.AreEqual(ActionVerb.RemoveToken, clear.Actions[0].Verb, "动词＝移除地区标志");
-            Assert.AreEqual("全部", clear.Actions[0].Args[1], "数量＝全部");
-            Assert.AreEqual("对手", clear.Actions[0].Args[2], "第 1 条＝对手");
-            Assert.AreEqual("自己", clear.Actions[1].Args[2], "第 2 条＝自己");
-            Assert.AreEqual("目标地区", clear.Actions[0].Args[3], "范围＝目标地区");
+            // 【2026-10 复核·修复·㉑-a/㉑-b】卡文只有一个 `行动：` 前缀段 ⇒ **一条效果、三个动作按序处理**
+            // （原实现拆 A/B 两条 ⇒ 违反㉑-a；段内"然后若…则…"却无 `MassSequential` ⇒ 违反㉑-b）。
+            var e = FindEffect(tmpl, "JC127_1_ClearPowerMarksThenDestroyAll");
+            Assert.IsNotNull(e, "JC127 应有『清标志 → 若时间标志≥3 则消灭该地区所有角色』**单条**效果");
+            Assert.IsTrue(e.Target.MassSequential, "㉑-b：段内次序敏感 ⇒ `MassSequential=true`");
+            Assert.AreEqual(MassMode.AllInArea, e.Target.MassMode, "群体＝目标地区内全体");
+            Assert.AreEqual(3, e.Actions.Count, "三个动作：清对手标志 → 清自己标志 → 条件消灭");
 
-            var destroy = FindEffect(tmpl, "JC127_B_DestroyAllIfMarkers");
-            Assert.IsNotNull(destroy, "JC127 应有『若地区时间标志 ≥3 则消灭该地区所有角色』效果");
-            Assert.AreEqual("AreaMarkerAtLeast", destroy.Condition.Predicate, "条件＝地区标志数 ≥ N（新谓词）");
-            Assert.AreEqual("时间标志,3", destroy.Condition.Param, "参数＝时间标志,3");
-            Assert.AreEqual(MassMode.AllInArea, destroy.Target.MassMode, "群体＝目标地区内全体");
-            Assert.AreEqual(ActionVerb.Destroy, destroy.Actions[0].Verb, "动作＝消灭");
+            Assert.AreEqual(ActionVerb.RemoveToken, e.Actions[0].Verb, "动作①＝移除地区标志");
+            Assert.AreEqual("全部", e.Actions[0].Args[1], "数量＝全部");
+            Assert.AreEqual("对手", e.Actions[0].Args[2], "动作①＝对手");
+            Assert.AreEqual("目标地区", e.Actions[0].Args[3], "范围＝目标地区");
+            Assert.IsFalse(e.Actions[0].MassInArea, "动作①只执行一次（不声明 MassInArea）");
+            Assert.AreEqual("自己", e.Actions[1].Args[2], "动作②＝自己");
+
+            Assert.AreEqual(ActionVerb.Destroy, e.Actions[2].Verb, "动作③＝消灭");
+            Assert.IsTrue(e.Actions[2].MassInArea, "动作③＝动作级群体（该地区内每个角色各一次）");
+            Assert.AreEqual("AreaMarkerAtLeast", e.Actions[2].RequirePredicate, "动作③＝**动作级**条件（地区标志数 ≥ N）");
+            Assert.AreEqual("时间标志,3", e.Actions[2].RequireParam, "参数＝时间标志,3");
         }
 
         // ==================== ③ 新谓词：地区内卡上标志合计 ≥ N ====================
@@ -163,13 +167,13 @@ namespace Script.Tests
             game.CardManager.AddCounter(mine, "时间标志", 1);
             game.CardManager.AddCounter(enemy, "时间标志", 2);   // 合计 3 → 满足
 
-            var clear = FindEffect(spell.PlayerTemplate, "JC127_A_ClearPowerMarksInArea");
-            EffectEngine.Instance.ResolveEffect(clear, spell, null, area);
+            // 单条效果一次结算：动作① ② 清空双方势力标志 → 动作③ 条件消灭（按**同一地区当前的**时间标志数判定）
+            var e = FindEffect(spell.PlayerTemplate, "JC127_1_ClearPowerMarksThenDestroyAll");
+            Assert.IsNotNull(e, "JC127 应有单条『清标志 → 条件消灭』效果");
+            EffectEngine.Instance.ResolveEffect(e, spell, null, area);
+
             Assert.AreEqual(0, game.AreaManager.GetPowerMark(area, 1), "本方势力标志被清空");
             Assert.AreEqual(0, game.AreaManager.GetPowerMark(area, 2), "对手势力标志被清空");
-
-            var destroy = FindEffect(spell.PlayerTemplate, "JC127_B_DestroyAllIfMarkers");
-            EffectEngine.Instance.ResolveEffect(destroy, spell, null, area);
             Assert.AreEqual(CardZone.Graveyard, mine.CurrentZone, "条件满足 → 该地区本方角色被消灭");
             Assert.AreEqual(CardZone.Graveyard, enemy.CurrentZone, "条件满足 → 该地区敌方角色被消灭");
         }
@@ -186,10 +190,11 @@ namespace Script.Tests
             var mine = OnField(game, Probe("TS_mk_mine2"), 1, area);
             game.CardManager.AddCounter(mine, "时间标志", 2);   // 只有 2 个 → 不满足 ≥3
 
-            var destroy = FindEffect(spell.PlayerTemplate, "JC127_B_DestroyAllIfMarkers");
-            EffectEngine.Instance.ResolveEffect(destroy, spell, null, area);
+            var e = FindEffect(spell.PlayerTemplate, "JC127_1_ClearPowerMarksThenDestroyAll");
+            Assert.IsNotNull(e, "JC127 应有单条『清标志 → 条件消灭』效果");
+            EffectEngine.Instance.ResolveEffect(e, spell, null, area);
 
-            Assert.AreEqual(CardZone.AreaZone, mine.CurrentZone, "只有 2 个时间标志 → 不消灭角色");
+            Assert.AreEqual(CardZone.AreaZone, mine.CurrentZone, "只有 2 个时间标志 → 动作③被跳过、不消灭角色");
         }
     }
 }

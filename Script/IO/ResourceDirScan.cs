@@ -46,20 +46,35 @@ namespace Script.IO
         /// <summary>同 <see cref="TresRecursive"/>，但把结果追加进调用方已有的列表。</summary>
         public static void TresRecursiveInto(string dir, List<string> sink)
         {
+            // 【临时定位埋点，2026-10-12】Web 版在 DeckBuilder._Ready 里调用本函数后 2ms 内
+            // 触发 wasm abort。为判断崩在 DirAccess.Open / ListDirBegin / GetNext 的哪一步，
+            // 在每一步之间打标记。DevFlags.VerbosePerf=false 后全部静默，可整段删除。
+            bool dbg = DevFlags.VerbosePerf;
+            if (dbg) GD.Print($"[Scan] 打开目录 {dir}");
             using var d = DirAccess.Open(dir);
+            if (dbg) GD.Print($"[Scan] 打开结果: {(d == null ? "null（目录不存在）" : "OK")} {dir}");
             if (d == null) return;
+            if (dbg) GD.Print($"[Scan] 即将 ListDirBegin {dir}");
             d.ListDirBegin();
+            if (dbg) GD.Print($"[Scan] ListDirBegin OK {dir}");
             string name;
+            int __n = 0;
             while ((name = d.GetNext()) != "")
             {
+                __n++;
                 if (d.CurrentIsDir())
                 {
-                    if (!name.StartsWith(".")) TresRecursiveInto(Join(dir, name), sink);
+                    // 【2026-10-12 Web 崩溃根因】必须显式 StringComparison.Ordinal。
+                    // 只传一个参数的 StartsWith 走 .NET 全球化（ICU）路径，而 Web 版
+                    // 运行时没有 ICU —— 实测这一行会让 wasm 直接 abort（RuntimeError: unreachable）。
+                    if (!name.StartsWith(".", StringComparison.Ordinal)) TresRecursiveInto(Join(dir, name), sink);
                     continue;
                 }
                 if (IsTresEntry(name)) sink.Add(Join(dir, NormalizePackedName(name)));
             }
+            if (dbg) GD.Print($"[Scan] 枚举结束 {dir}：共 {__n} 项");
             d.ListDirEnd();
+            if (dbg) GD.Print($"[Scan] ListDirEnd OK {dir}");
         }
 
         /// <summary>只收集 dir 这一层（不递归）的 .tres。</summary>
@@ -104,7 +119,8 @@ namespace Script.IO
         /// <summary>拼接 res:// 路径，避免 "res://a/" + "/" + "b" 这种双斜杠。</summary>
         private static string Join(string dir, string name)
         {
-            return dir.EndsWith("/") ? dir + name : dir + "/" + name;
+            // 【2026-10-12】同样必须显式 Ordinal：无参 EndsWith 走 ICU，Web 上会 abort。
+            return dir.EndsWith("/", StringComparison.Ordinal) ? dir + name : dir + "/" + name;
         }
     }
 }

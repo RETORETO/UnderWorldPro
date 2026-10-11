@@ -140,9 +140,9 @@ namespace Script.UI
         /// </summary>
         private static string ResolveCardImagePath(string uid)
         {
-            int i = 0;
-            while (i < uid.Length && char.IsLetter(uid[i])) i++;
-            string folder = i > 0 ? uid.Substring(0, i) : "JC";
+            // 【2026-10-12 Web 修复】char.IsLetter 走 Unicode 类别表（全球化路径），Web 上会 abort；
+            // 改用共享的 ASCII 前缀判定（卡号 UID 均为 ASCII，行为一致）。
+            string folder = Script.IO.WebSafeText.LeadingAsciiLetters(uid, "JC");
             return $"res://Cards/Image/PlayerCards/{folder}/{uid}.jpg";
         }
 

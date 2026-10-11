@@ -1028,9 +1028,18 @@ namespace Script.UI
                 onExtra();
             };
             _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡/地区
-            string hint = cardUids.Count == 0 && areaUids.Count > 0
-                ? "请点击一个高亮的地区（将移动至该地区）。"
-                : "请在场上选择合法目标卡（点击场上卡或秘社完成选择）。";
+            // 【2026-10·JC092 用户口径】地区/卡目标窗口的提示**按该槽的动作语义**给：
+            // 服务端把 `TargetSlot.Hint`（卡文口径，如"将你墓地中的角色牌以暗藏者状态置于该地区"）
+            // 随 `ChoiceRequest.SlotHint` 下发；**不再由 UI 硬编码移动提示**（那是移动类效果的说法，
+            // 用在 JC092 这类"置于地区"的效果上就是错误提示）。未下发时退回中性文案。
+            string slotHint = req.SlotHint;
+            string hint;
+            if (cardUids.Count == 0 && areaUids.Count > 0)
+                hint = string.IsNullOrEmpty(slotHint)
+                    ? "请点击一个高亮的地区。"
+                    : $"请点击一个高亮的地区（{slotHint}）。";
+            else
+                hint = "请在场上选择合法目标卡（点击场上卡或秘社完成选择）。";
             _onlineTargetWindow.Open(req.Prompt ?? "请选择目标", hint, extraLabel);
             GD.Print($"[ArenaOl] 触发选目标窗口已打开（卡目标 {cardUids.Count} 个，地区目标 {areaUids.Count} 个，出口={extraLabel ?? "无"}）");
             return true;
@@ -1480,6 +1489,9 @@ namespace Script.UI
             _cardUIMap[inst.UID] = ui;
             ui.AttachmentDoubleClicked -= OnAttachmentDoubleClicked;   // 幂等：防重复订阅
             ui.AttachmentDoubleClicked += OnAttachmentDoubleClicked;
+            // 【2026-10·JC085】墓地行动双击订阅（同一收口点，幂等）。
+            ui.GraveyardPlayRequested -= OnGraveyardPlayRequested;
+            ui.GraveyardPlayRequested += OnGraveyardPlayRequested;
         }
 
         private CardUI FindCardUiByInstance(CardInstance inst)
@@ -1713,6 +1725,20 @@ namespace Script.UI
                 if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
                 ui.SetActivatableHighlight(IsActivatableForClient(inst));
+            }
+            // 【2026-10 用户口径·JC085·联机】**墓地行动**卡的高亮：与单机同一门禁
+            // （`TurnManager.CanPlayFromGraveyardNow`，喂**快照投影**态）＋"服务端投影里该卡是可打出源"
+            // （`GameViewSnap.PlayTargets` 含 SourceUid ⇒ 服务端认可"就是其在你的手上一样"）。
+            foreach (var inst in zone.GetZoneCards(CardZone.Graveyard, 0))
+            {
+                if (inst == null || inst.IsHidden) continue;
+                if (inst.ControllerId != _localPlayerId) continue;
+                if (inst.PlayerTemplate == null || !inst.PlayerTemplate.PlayableFromGraveyard) continue;
+                if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                bool projected = ClientLegalityView?.PlayTargets?.Exists(x => x != null && x.SourceUid == inst.UID) == true;
+                bool can = projected && turn.CanPlayFromGraveyardNow(inst, out _);
+                ui.SetActivatableHighlight(can);
             }
         }
 
@@ -2415,7 +2441,7 @@ namespace Script.UI
             foreach (var raw in text.Split(new[] { '\n', '\r' }, System.StringSplitOptions.RemoveEmptyEntries))
             {
                 var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith("#")) continue;
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
                 _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.DebugCommand, line);
                 GD.Print($"[ArenaOl] 上行 DebugCommand: {line}");
             }
@@ -2679,6 +2705,13 @@ namespace Script.UI
             // 【2026-09 用户口径·JC053】"**不能直接发激活，要打开面板后展示一项可选、一项置灰**"：
             // 只有 1 条能力时**也不得盲目直发**——若该条当前不可用（前置不满足/已横置/无合法目标），
             // 必须开面板把它**置灰**展示（否则就是"有高亮、点了没反应"，用户实测）。可用且仅 1 条时仍直发（省一次点击）。
+            // 【2026-10 用户口径·JC093】**次数上限全部用尽**（如"每回合至多发动两次"已用两次）⇒
+            // 双击**不开面板、无反馈**（用户："使用两次效果后双击不需要反馈"）。
+            if (ActivateEligibility.AllAbilitiesUsesExhausted(inst, abilities))
+            {
+                GD.Print($"[ArenaOl] ⏹ 双击忽略：{inst.PlayerTemplate?.CardName} 的激活能力本回合次数已全部用尽");
+                return;
+            }
             if (abilities.Count == 1 && !IsActivationEffectDisabled(inst, abilities[0]))
             {
                 SendActivation(inst, abilities[0]);
@@ -2686,6 +2719,101 @@ namespace Script.UI
             }
             GD.Print($"[ArenaOl] 打开激活面板：{inst.PlayerTemplate?.CardName} 能力 {abilities.Count} 条（含置灰项）");
             ShowOnlineEffectChoice(inst, abilities);
+        }
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC085】**墓地行动（联机）**：墓地中声明 `PlayerCardData.PlayableFromGraveyard`
+        /// 的卡双击 → **先弹技能/激活选择窗**（只有一条也弹，与单机同款）→ 选该项后再弹**选择地区窗** →
+        /// 上行 `PlayCard{targetAreaUid}`，由**服务端**权威校验费用/忠诚/阶段/来源区（客户端不重算规则）。
+        /// 门禁＝`TurnManager.CanPlayFromGraveyardNow`（同一实现，喂快照投影态）。
+        /// </summary>
+        private void OnGraveyardPlayRequested(CardUI cardUI)
+        {
+            HealStaleLocalModalFlag();
+            if (_activationSelectionBusy || _noticeWindowOpen)
+            {
+                GD.Print($"[ArenaOl] ⏸ 墓地行动被本地模态吞掉（busy={_activationSelectionBusy} notice={_noticeWindowOpen}）");
+                return;
+            }
+            var inst = cardUI?.Instance;
+            if (inst == null || _matchClient == null) return;
+            var tmpl = inst.PlayerTemplate;
+            if (tmpl == null || !tmpl.PlayableFromGraveyard)
+            {
+                GD.Print($"[ArenaOl] 墓地行动忽略：{tmpl?.CardName} 未声明『墓地行动』");
+                return;
+            }
+            if (inst.CurrentZone != CardZone.Graveyard)
+            {
+                GD.Print($"[ArenaOl] 墓地行动忽略：{tmpl.CardName} 当前不在墓地（{inst.CurrentZone}）");
+                return;
+            }
+            if (inst.ControllerId != _localPlayerId)
+            {
+                GD.Print($"[ArenaOl] 墓地行动忽略：{tmpl.CardName} 控制者={inst.ControllerId} ≠ 本方={_localPlayerId}");
+                return;
+            }
+            var clientTurn = _matchClient.ClientTurnManager;
+            if (clientTurn != null && !clientTurn.CanPlayFromGraveyardNow(inst, out string why))
+            {
+                GD.Print($"[ArenaOl] 墓地行动忽略：{tmpl.CardName} → {why}");
+                RefreshActivateHighlights();
+                return;
+            }
+
+            // 第一级：**技能/激活选择窗**（与单机同款；即使只有一条也弹）
+            var actionItems = new List<ActivationChoiceItem>
+            {
+                new ActivationChoiceItem
+                {
+                    Label = $"墓地行动：从墓地正面打出「{tmpl.CardName}」",
+                    OnChosen = () => OpenOnlineGraveyardAreaChoice(inst),
+                },
+            };
+            _activationSelectionBusy = true;
+            OpenOnlineChoiceWindow(actionItems, () => { _activationSelectionBusy = false; });
+            GD.Print($"[ArenaOl] 墓地行动：{tmpl.CardName} 双击 → 弹技能选择窗（1 条）");
+        }
+
+        /// <summary>【2026-10·JC085·联机】墓地行动第二级：**选择地区窗**（地区按钮）→ 上行 `PlayCard{targetAreaUid}`。</summary>
+        private void OpenOnlineGraveyardAreaChoice(CardInstance inst)
+        {
+            if (inst == null || _matchClient == null) return;
+            var tmpl = inst.PlayerTemplate;
+            var clientZone = _matchClient.ClientZoneManager;
+            var areas = new List<string>();
+            if (clientZone?.GetZoneCards(CardZone.AreaZone, 0) != null)
+            {
+                foreach (var a in clientZone.GetZoneCards(CardZone.AreaZone, 0))
+                    if (a != null && !string.IsNullOrEmpty(a.UID) && !areas.Contains(a.UID)) areas.Add(a.UID);
+            }
+            if (areas.Count == 0)
+            {
+                GD.PrintErr($"[ArenaOl] 墓地行动：快照里没有可放置的地区（{tmpl?.CardName}）");
+                _activationSelectionBusy = false;
+                return;
+            }
+
+            var items = new List<ActivationChoiceItem>();
+            for (int i = 0; i < areas.Count; i++)
+            {
+                string areaUid = areas[i];
+                int areaNo = _matchClient?.ClientAreaManager?.GetSlotIndex(areaUid) ?? (i + 1);
+                items.Add(new ActivationChoiceItem
+                {
+                    Label = $"地区{areaNo}",
+                    OnChosen = () =>
+                    {
+                        _activationSelectionBusy = false;
+                        _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard,
+                            inst.UID, areaUid, "");
+                        GD.Print($"[ArenaOl] 墓地行动：上行 PlayCard（从墓地正面打出）{tmpl?.CardName} → 地区{areaNo}");
+                    },
+                });
+            }
+            _activationSelectionBusy = true;
+            OpenOnlineChoiceWindow(items, () => { _activationSelectionBusy = false; });
+            GD.Print($"[ArenaOl] 墓地行动：{tmpl?.CardName} → 弹选择地区窗（{areas.Count} 个地区）");
         }
 
         /// <summary>秘社双击激活：有多个激活选项则弹联机选项列表供选择，再按所选发动。
@@ -2818,9 +2946,12 @@ namespace Script.UI
             return "激活效果";
         }
 
-        /// <summary>联机本地粗筛：某激活效果当前是否置灰不可发动（需横置但已横置 / 需目标但无合法目标）。</summary>
+        /// <summary>联机本地粗筛：某激活效果当前是否置灰不可发动（次数用尽 / 需横置但已横置 / 需目标但无合法目标）。</summary>
         private bool IsActivationEffectDisabled(CardInstance inst, EffectData e)
         {
+            // 【2026-10·JC093】次数上限用尽（每回合/每局）⇒ 置灰（计数随快照下发，客户端可本地判定；
+            // 与单机 `Arena` 的置灰文案同源：`ActivateEligibility.IsAbilityUsesExhausted`）。
+            if (Script.Manager.ActivateEligibility.IsAbilityUsesExhausted(inst, e)) return true;
             // 【2026-09·JC053 口径落地·A78】联机客户端的"可发动"以**服务端投影清单**为准：
             // 若服务端**为这张卡**给出了能力投影，而本能力**不在其中**（＝服务端判不可发动，如前置条件不满足）
             // ⇒ **置灰**。这既实现了"一项可选、一项置灰"，又不依赖客户端本地规则求值（客户端无 `EffectEngine.Instance`）。
@@ -2858,6 +2989,8 @@ namespace Script.UI
         /// <summary>置灰原因后缀（与单机 OpenAttachmentActivateChoice 文案一致）。</summary>
         private static string EffectDisabledReason(CardInstance inst, EffectData e)
         {
+            // 【2026-10·JC093】次数上限用尽（与单机置灰文案一致）
+            if (Script.Manager.ActivateEligibility.IsAbilityUsesExhausted(inst, e)) return "（本回合次数已用尽）";
             // 【2026-09 修复·JC053】前置条件不满足的原因文案（与单机一致）
             if (!Script.Manager.ActivateEligibility.ConditionAllowsActivation(e, inst)) return "（前置条件不满足）";
             bool needsTap = !string.IsNullOrEmpty(e.ActivateCondition) && e.ActivateCondition.Contains("横置本角色");
@@ -3918,6 +4051,14 @@ namespace Script.UI
             }
 
             // ⑥ 事务卡（需目标）：拖出后弹窗选目标（对齐单机 BeginSorceryTargetSelection）
+            // 【JC082·用户口径】声明了 `PlayChoice`（打出时"选择一项"）的**附属卡**同样"拖出即上行裸意图"，
+            // 由服务端按 `SelectEffectMode` → 该模式目标 的顺序驱动（对齐 JC063 的两个窗）。
+            if (tmpl.PlayChoice && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
+            {
+                _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid, "", "");
+                GD.Print($"[ArenaOl] 【JC082 选择一项】上行 PlayCard（无目标，由服务端驱动选择一项再取该项目的目标）: {tmpl.CardName}");
+                return;
+            }
             if (IsSorceryRequiringTarget(inst)
                 && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaUid))
             {
@@ -3929,7 +4070,8 @@ namespace Script.UI
                 // 修法＝与单机 `CardDragController.DragEnd` 的 A110② 同款：模式卡直接上行"裸打出意图"，
                 // 由服务端按 `SelectEffectMode` → 该模式目标 的正确顺序驱动（**最多 2 个窗**）。
                 var modeEffect = Script.Manager.MultiTargetSlots.FindModeEffect(
-                    tmpl, Script.Data.Effects.EffectTiming.OnSorceryCast);
+                    tmpl, Script.Data.Effects.EffectTiming.OnSorceryCast)
+                ?? Script.Manager.MultiTargetSlots.PlayChoiceEffect(tmpl);   // 【JC082】打出时"选择一项"
                 if (modeEffect != null)
                 {
                     _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, cardUid, "", "");
@@ -3990,9 +4132,9 @@ namespace Script.UI
         /// <summary>按卡模板 UID 推断卡图目录（与 CardUI/StackEntryUI 的规则一致）。</summary>
         private static string ResolvePlayerCardImagePath(string uid)
         {
-            int i = 0;
-            while (i < uid.Length && char.IsLetter(uid[i])) i++;
-            string folder = i > 0 ? uid.Substring(0, i) : "JC";
+            // 【2026-10-12 Web 修复】char.IsLetter 走 Unicode 类别表（全球化路径），Web 上会 abort；
+            // 改用共享的 ASCII 前缀判定（卡号 UID 均为 ASCII，行为一致）。
+            string folder = Script.IO.WebSafeText.LeadingAsciiLetters(uid, "JC");
             return $"res://Cards/Image/PlayerCards/{folder}/{uid}.jpg";
         }
 

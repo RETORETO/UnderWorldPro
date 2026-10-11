@@ -181,3 +181,6 @@ appsettings.*.local.json
 !/.gitignore
 !/.gitattributes
 !/.editorconfig
+/.edge-debug-9222
+/.edge-debug-9222b
+/.workbuddy

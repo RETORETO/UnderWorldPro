@@ -201,6 +201,13 @@ namespace Script.Net
         public bool SlotOptional;
         /// <summary>MultiTargetSlot：槽位提示（如"目标地区""本方角色""敌方角色"）。</summary>
         public string SlotLabel;
+        /// <summary>
+        /// 【2026-10·JC092】MultiTargetSlot：该槽的**动作提示**（`TargetSlot.Hint` 原文，如
+        /// "将你墓地中的角色牌以暗藏者状态置于该地区"）。客户端在场点选窗口里作为括号补充展示，
+        /// **不再硬编码**"将移动至该地区"（那是移动类效果的说法，JC092 是"置于地区"）。
+        /// 空＝客户端用中性兜底文案。
+        /// </summary>
+        public string SlotHint;
 
         // ---- 【2026-09·FieldMultiPick】"一个窗多选取目标"（JC062/JC021；服务端聚合下发）----
         /// <summary>FieldMultiPick：**地区槽**候选（地区 UID）。卡槽候选仍走 `OptionUids`。</summary>
