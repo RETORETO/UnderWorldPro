@@ -33,6 +33,18 @@ public static class WebPerfParams
     private static string _autoEnter = DevFlags.AutoEnterDeck ? "deck" : "";
     /// <summary>自动进入前的等待秒数（单位：秒，默认 1.2s = 72 帧）。</summary>
     private static float _autoDelay = 1.2f;
+    /// <summary>【联机排查】在 Web 上也照常调用 ENet（复现"点联机即卡死"的旧路径，对照用）。</summary>
+    private static bool _netRaw;
+    /// <summary>【联机】桌面端也强制用 WebSocket 传输（默认桌面走 ENet）。</summary>
+    private static bool _webSocket;
+    /// <summary>【联机排查】连上大厅后自动走一遍"建房 → 进房间"（等价于原有 `--smoke` 冒烟模式）。</summary>
+    private static bool _smoke;
+    /// <summary>【联机排查】冒烟时**加入**首个房间而不是自己建房（`--wp-join`）。</summary>
+    private static bool _smokeJoin;
+    /// <summary>【联机排查】`--wp-auto=online` 时要连的服务端地址/端口/昵称。</summary>
+    private static string _netHost = "127.0.0.1";
+    private static int _netPort = 18950;
+    private static string _netName = "";
 
     /// <summary>
     /// 【必须在任何读取之前调用一次】解析 index.html 的 GODOT_CONFIG.args。
@@ -81,7 +93,15 @@ public static class WebPerfParams
                 case "nocards":  _skipPoolCards = true; break;  // 连卡牌面板都不建
                 case "pagesize": _pageSizeOverride = ParseInt(val, -1); break;
                 case "delayms":  _autoDelay = ParseInt(val, 1200) / 1000f; break;  // 自动进入的延迟（毫秒）
-                case "auto":     _autoEnter = val; break;       // 目标场景：deck/lobby/room/…
+                case "auto":     _autoEnter = val; break;       // 目标场景：deck/lobby/room/host/online
+                // —— 联机排查（2026-10-13）——
+                case "netraw":   _netRaw = true; break;         // Web 上也照常调 ENet（复现旧崩溃）
+                case "ws":       _webSocket = true; break;      // 桌面也用 WebSocket 传输
+                case "smoke":    _smoke = true; break;          // 连上大厅后自动建房进房间
+                case "join":     _smokeJoin = true; break;      // 冒烟时改为「加入首个房间」（=点「加入」按钮）
+                case "host":     _netHost = val; break;         // 连接目标地址
+                case "port":     _netPort = ParseInt(val, 18950); break;
+                case "name":     _netName = val; break;
                 default:
                     GD.PushWarning("[WebPerf] 未知开关，已忽略: " + raw);
                     break;
@@ -124,6 +144,18 @@ public static class WebPerfParams
     public static string AutoEnter => _autoEnter;
     /// <summary>自动进入前的等待秒数（默认 1.2s；`--wp-delayms=N` 可改）。</summary>
     public static float AutoDelay => _autoDelay;
+    /// <summary>Web 上也照常调用 ENet（`--wp-netraw`；仅用于复现旧崩溃做对照）。</summary>
+    public static bool NetRaw => _netRaw;
+    /// <summary>桌面端也强制用 WebSocket 传输（`--wp-ws`）；Web 端恒为 true（不受此开关影响）。</summary>
+    public static bool WebSocket => _webSocket;
+    /// <summary>连上大厅后自动建房进房间（`--wp-smoke`；仅用于无点击实测）。</summary>
+    public static bool Smoke => _smoke;
+    /// <summary>【联机排查】冒烟时加入首个房间（`--wp-join`），而不是自己建房。</summary>
+    public static bool SmokeJoin => _smokeJoin;
+    /// <summary>`--wp-auto=online` 的目标地址 / 端口 / 昵称。</summary>
+    public static string NetHost => _netHost;
+    public static int NetPort => _netPort;
+    public static string NetName => _netName;
     /// <summary>已解析到的命令行项数（诊断用）。</summary>
     public static int ArgCount => _args.Length;
     /// <summary>已解析（诊断用）。</summary>
@@ -149,6 +181,10 @@ public static class WebPerfParams
                + " sync=" + (_forceSync ? "1" : "0")
                + " prog=" + (_progressiveTextures ? "1" : "0")
                + " pagesize=" + Script.IO.WebSafeText.Int(_pageSizeOverride)
+               + " netraw=" + (_netRaw ? "1" : "0")
+               + " ws=" + (_webSocket ? "1" : "0")
+               + " smoke=" + (_smoke ? "1" : "0")
+               + " join=" + (_smokeJoin ? "1" : "0")
                + " argc=" + Script.IO.WebSafeText.Int(_args.Length));
     }
 

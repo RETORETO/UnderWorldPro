@@ -45,8 +45,10 @@ namespace Script.Net
         public static ZoneCardRef MakeHiddenRef(ZoneCardRef src, int index)
         {
             // 占位 UID 稳定可复现（同一观看者/区域/序号 → 同一 UID），便于客户端跨快照复用同一占位实例。
-            string owner = src != null ? src.ZoneOwnerId.ToString() : "-1";
-            string zone = src != null ? ((int)src.Zone).ToString() : "0";
+            // 【Web 安全 · 2026-10-13】ZoneOwnerId 默认就是 **-1**，`(-1).ToString()` 要取
+            // NumberFormatInfo.NegativeSign → ICU → Web 上直接 abort；改用 WebSafeText.Int。
+            string owner = src != null ? Script.IO.WebSafeText.Int(src.ZoneOwnerId) : "-1";
+            string zone = src != null ? Script.IO.WebSafeText.Int((int)src.Zone) : "0";
             // 【P2】封印卡的"封印在谁身上/哪个地区"是公开信息（否则客户端画不出卡背的挂载位置），
             // 只有牌面身份属于隐藏信息，故 SealedZone 的占位保留宿主/地区引用。
             bool sealZone = src != null && src.Zone == CardZone.SealedZone;

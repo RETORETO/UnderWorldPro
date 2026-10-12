@@ -12,7 +12,8 @@ namespace Script.Tests
     /// 【P3·K3 死亡类·第一批】按用户 2026-09 口径（清单 §7.4b A10）实现并锁定：
     ///  · **走触发路线**（不是替代式效应）：角色**先进入墓地**，再由死亡触发把它**取出**并"封印/回场"；
     ///  · `OnCardDied` + 谓词 `DiedAllySpiritCharacter`（"另一个本方灵体角色死亡"）+
-    ///    `PayOptional{2,2,2}`（"你可以支付2"）→ `Seal{"触发卡","目标"}`；
+    ///    **发动时的可选固定费用** `OptionalPayCost=2`（"你可以支付2"：取完目标 → 入堆叠**之前**问一次是/否）
+    ///    → `Seal{"触发卡","目标"}`；
     ///  · **`"触发卡"` 主体**＝本次触发的上下文卡（`TriggerContext.ContextCard`＝刚死亡的角色），
     ///    由 `TurnManager` 在结算触发条目前从 `StackEffectInstance.TargetCardUid` 下发给
     ///    `EffectEngine.TriggerContextCard`；
@@ -172,13 +173,12 @@ namespace Script.Tests
             Assert.IsFalse(e.Forced, "卡文『你可以』→ 非强制");
             Assert.AreEqual(TargetKind.Character, e.Target.Kind, "目标＝目标角色（封印宿主）");
             Assert.IsTrue(e.Target.NeedsSelection, "宿主需玩家选择");
-            Assert.AreEqual(ActionVerb.PayOptional, e.Actions[0].Verb, "第 1 个动作＝可选支付");
-            Assert.AreEqual("2", e.Actions[0].Args[0], "支付金额＝2");
-            Assert.AreEqual("2", e.Actions[0].Args[1], "最小值＝2（不接受其他金额）");
-            Assert.AreEqual("2", e.Actions[0].Args[2], "最大值＝2");
-            Assert.AreEqual(ActionVerb.Seal, e.Actions[1].Verb, "第 2 个动作＝封印");
-            Assert.AreEqual("触发卡", e.Actions[1].Args[0], "被封印者＝触发卡（刚死亡的角色）");
-            Assert.AreEqual("目标", e.Actions[1].Args[1], "封印宿主＝目标角色");
+            // 【2026-10 用户口径·与 JC061/JC100 同一份】"支付2"＝**发动时**的额外费用（入堆叠前问是/否）
+            Assert.AreEqual(2, e.OptionalPayCost, "费用＝发动时的可选固定 2（入堆叠前问『是否支付 2』）");
+            Assert.AreEqual(1, e.Actions.Count, "动作只剩『封印』（支付不再占结算动作位）");
+            Assert.AreEqual(ActionVerb.Seal, e.Actions[0].Verb, "动作＝封印");
+            Assert.AreEqual("触发卡", e.Actions[0].Args[0], "被封印者＝触发卡（刚死亡的角色）");
+            Assert.AreEqual("目标", e.Actions[0].Args[1], "封印宿主＝目标角色");
         }
 
         // ==================== ② 端到端：支付2 → 死亡角色被封印到目标角色上 ====================
@@ -207,12 +207,17 @@ namespace Script.Tests
             game.CardManager.DestroyInstance(victim);    // 死亡（走 ResolveDeath → OnCardDied）
             Assert.AreEqual(CardZone.Graveyard, victim.CurrentZone, "死亡后先进入墓地（触发路线口径）");
 
-            ResolveStack(game);                          // 结算死亡触发
-
-            Assert.AreEqual(1, hooks.OptionalPayCalls, "询问过一次『是否支付2』（**二选一窗**）");
+            // 【2026-10 用户口径】费用在**发动能力时**支付：死亡触发在**入堆叠之前**就问一次"是否支付 2"
+            // ⇒ `DestroyInstance` 返回时费用已扣、触发已入堆叠（此刻效果尚未结算）。
+            Assert.AreEqual(1, hooks.OptionalPayCalls, "入堆叠前询问过一次『是否支付2』（**二选一窗**）");
             Assert.AreEqual(2, hooks.LastOptionalPayAmount, "询问金额＝2");
             Assert.AreEqual(0, hooks.NumberCalls, "**不再使用数值输入框**（用户口径：这类是/否选择不需要输入框）");
-            Assert.AreEqual(manaBefore - 2, game.PlayerManager.GetAvailableMana(1), "支付了 2 点费用");
+            Assert.AreEqual(manaBefore - 2, game.PlayerManager.GetAvailableMana(1), "支付 2 在**入堆叠前**已扣清");
+            Assert.IsFalse(game.StackManager.IsEmpty, "支付后该死亡触发入堆叠");
+
+            ResolveStack(game);                          // 结算死亡触发（封印动作）
+
+            Assert.AreEqual(1, hooks.OptionalPayCalls, "结算期间不再重复询问支付（费用只在发动时问）");
 
             Assert.AreEqual(CardZone.SealedZone, victim.CurrentZone, "死亡的角色被封印（离开墓地）");
             Assert.AreEqual(host, victim.SealedBy, "封印宿主＝目标角色");
@@ -275,6 +280,7 @@ namespace Script.Tests
             game.CardManager.DestroyInstance(victim);
             ResolveStack(game);
 
+            Assert.AreEqual(0, hooks.OptionalPayCalls, "条件不成立 → 不询问支付（也不开数值框）");
             Assert.AreEqual(0, hooks.NumberCalls, "条件不成立 → 不询问支付");
             Assert.AreEqual(CardZone.Graveyard, victim.CurrentZone, "照常进墓地");
             Assert.IsNull(victim.SealedBy, "未被封印");
@@ -305,6 +311,7 @@ namespace Script.Tests
             game.CardManager.DestroyInstance(enemy);
             ResolveStack(game);
 
+            Assert.AreEqual(0, hooks.OptionalPayCalls, "不询问支付（费用门禁未触发）");
             Assert.AreEqual(0, hooks.NumberCalls, "不询问支付");
             Assert.AreEqual(CardZone.Graveyard, enemy.CurrentZone, "敌方角色照常进墓地");
         }
@@ -332,6 +339,7 @@ namespace Script.Tests
             game.CardManager.DestroyInstance(lord);
             ResolveStack(game);
 
+            Assert.AreEqual(0, hooks.OptionalPayCalls, "不询问支付（费用门禁未触发）");
             Assert.AreEqual(0, hooks.NumberCalls, "不询问支付");
             Assert.AreEqual(CardZone.Graveyard, lord.CurrentZone, "JC105 自身照常进墓地");
         }

@@ -15,8 +15,9 @@ namespace Script.Tests
     ///  · 挂在与 `Timing = Continuous` 同一条 `EffectData` 上 → 前提（常驻）满足时 `RegisterPersistent` 登记；
     ///  · 离场（`UnregisterPersistent`）/ 前提丧失（`ReevaluatePrereqs`）/ 卡失效（`RemoveAllContinuousFor`）时注销；
     ///  · **判定按卡当前所在地实时匹配地区**（`EffectEngine.AreaSkipsCombat`）→ 争夺区之间移动自动跟随；
-    ///  · 消费点＝`TurnManager.ResolveCurrentAreaCombat`：该地区本步骤**不结算对抗**
-    ///    （不开分配窗口、不产生胜负与势力标志），**但仍给让过窗口**，流程照常推进。
+    ///  · 消费点＝`TurnManager.NextCombatStepOfArea`（由 `AdvancePhase` 调用）：被跳过的步骤**在流程里直接不存在**
+    ///    （不进入该阶段、不分配行动权、不开让过窗口、不开对抗窗口）——用户 2026-10 口径：
+    ///    "跳过调查对抗步骤，不是调查对抗这件事，相当于流程里直接没有这个步骤"。
     /// </summary>
     public class P3SkipAreaCombatTests : TestRunner
     {
@@ -179,9 +180,9 @@ namespace Script.Tests
                 "新地区开始略过（按卡当前所在地实时判定）");
         }
 
-        // ==================== ⑤ 端到端：调查步骤真的不结算（对照：不卡则结算） ====================
+        // ==================== ⑤ 端到端：调查步骤在流程里直接不存在（对照：不卡则照常结算） ====================
 
-        public void TestSkip_端到端调查步骤不结算()
+        public void TestSkip_端到端调查步骤直接跳过()
         {
             // 对照组：无 JC098 → 调查步骤照常打开对抗窗口
             var control = NewGame();
@@ -195,23 +196,36 @@ namespace Script.Tests
             Assert.AreEqual(1, controlCounter.Investigation, "对照：调查对抗真的结算了（打开过对抗窗口）");
             controlCounter.Detach();
 
-            // 实验组：本地区有 JC098 → 调查步骤被跳过（不开窗），且流程仍能继续推进
+            // 实验组①：JC098 在**1 地区** → 机动轮后**直接进入 1 地区战斗步骤**（调查步骤不进入）
             var game = NewGame();
             var areas = Areas(game);
             OnField(game, Load("JC098_xianrufengkuangderenqun"), 1, areas[0]);
             OnField(game, Probe("TS_skip_p1b", investigation: 3), 1, areas[0]);
             OnField(game, Probe("TS_skip_p2b", investigation: 0), 2, areas[0]);
             var counter = new WindowCounter(game);
-            AdvanceTo(game, global::TurnManager.TurnPhase.CombatInvestigation);
-            Assert.AreEqual(global::TurnManager.TurnPhase.CombatInvestigation, game.TurnManager.CurrentPhase,
-                "实验组：同样推进到调查对抗阶段");
-            Assert.AreEqual(0, counter.Investigation, "本地区略过调查对抗 → 不开对抗窗口（不结算）");
-
-            // 步骤仍给让过窗口 → 双方让过后可推进到战斗步骤（流程不被卡住）
             AdvanceTo(game, global::TurnManager.TurnPhase.CombatStrength);
             Assert.AreEqual(global::TurnManager.TurnPhase.CombatStrength, game.TurnManager.CurrentPhase,
-                "跳过后仍正常推进到战斗步骤（略过≠卡死）");
+                "JC098 在 1 地区 ⇒ 机动轮后直接进入 1 地区战斗步骤（流程里没有调查步骤）");
+            Assert.AreEqual(1, game.TurnManager.CurrentCombatAreaNo, "仍在 1 地区");
+            Assert.AreEqual(0, counter.Investigation, "调查步骤不在流程里 ⇒ 调查对抗窗口从未打开");
             counter.Detach();
+
+            // 实验组②：JC098 在**2 地区** → 1 地区势力步骤后**直接进入 2 地区战斗步骤**（2 地区调查步骤不进入）
+            var game2 = NewGame();
+            var areas2 = Areas(game2);
+            OnField(game2, Load("JC098_xianrufengkuangderenqun"), 1, areas2[1]);
+            OnField(game2, Probe("TS_skip_p1c", investigation: 3), 1, areas2[0]);
+            OnField(game2, Probe("TS_skip_p2c", investigation: 0), 2, areas2[0]);
+            var counter2 = new WindowCounter(game2);
+            AdvanceTo(game2, global::TurnManager.TurnPhase.CombatPower);
+            Assert.AreEqual(1, game2.TurnManager.CurrentCombatAreaNo, "前置：1 地区势力步骤（1 地区未被略过）");
+            Assert.AreEqual(1, counter2.Investigation, "1 地区调查步骤照常结算（略过按地区各自生效）");
+            AdvanceTo(game2, global::TurnManager.TurnPhase.CombatStrength);
+            Assert.AreEqual(global::TurnManager.TurnPhase.CombatStrength, game2.TurnManager.CurrentPhase,
+                "JC098 在 2 地区 ⇒ 1 地区势力步骤后直接进入 2 地区战斗步骤");
+            Assert.AreEqual(2, game2.TurnManager.CurrentCombatAreaNo, "已推进到 2 地区");
+            Assert.AreEqual(1, counter2.Investigation, "2 地区调查步骤同样在流程里不存在（调查窗口数不再增加）");
+            counter2.Detach();
         }
     }
 }

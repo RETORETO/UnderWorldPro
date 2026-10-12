@@ -42,9 +42,10 @@ namespace Script.IO
             LastHost = cfg.GetValue(Section, "last_host", LastHost).AsString();
             LastPort = (ushort)(int)cfg.GetValue(Section, "last_port", (int)LastPort);
             LastName = cfg.GetValue(Section, "last_nick", LastName).AsString();
-            if (string.IsNullOrWhiteSpace(LastHost)) LastHost = "127.0.0.1";
+            // 【Web 安全】空白判定改用 ASCII 版（Windows 上空实现会经 Unicode 类别表，Web 上不可靠）。
+            if (WebSafeText.IsNullOrWhiteSpaceAscii(LastHost)) LastHost = "127.0.0.1";
             if (LastPort == 0) LastPort = 18950;
-            if (string.IsNullOrWhiteSpace(LastName)) LastName = "玩家";
+            if (WebSafeText.IsNullOrWhiteSpaceAscii(LastName)) LastName = "玩家";
             GD.Print($"[OnlineClientPrefs] 已载入偏好：卡组={LastDeckPath}，服务端={LastHost}:{LastPort}，昵称={LastName}");
         }
 
@@ -55,23 +56,32 @@ namespace Script.IO
         public static void SaveConnection(string host, ushort port, string nick)
         {
             EnsureLoaded();
-            LastHost = string.IsNullOrWhiteSpace(host) ? "127.0.0.1" : host.Trim();
+            LastHost = WebSafeText.IsNullOrWhiteSpaceAscii(host) ? "127.0.0.1" : WebSafeText.TrimAscii(host);
             LastPort = port == 0 ? (ushort)18950 : port;
-            LastName = string.IsNullOrWhiteSpace(nick) ? "玩家" : nick.Trim();
+            LastName = WebSafeText.IsNullOrWhiteSpaceAscii(nick) ? "玩家" : WebSafeText.TrimAscii(nick);
             Save();
         }
 
         private static void Save()
         {
             EnsureLoaded();
-            var cfg = new ConfigFile();
-            cfg.SetValue(Section, "last_deck_path", LastDeckPath);
-            cfg.SetValue(Section, "last_host", LastHost);
-            cfg.SetValue(Section, "last_port", (int)LastPort);
-            cfg.SetValue(Section, "last_nick", LastName);
-            var err = cfg.Save(Path);
-            if (err != Error.Ok) GD.PrintErr($"[OnlineClientPrefs] 偏好写入失败：{err}");
-            else GD.Print($"[OnlineClientPrefs] 偏好已保存：卡组={LastDeckPath}，服务端={LastHost}:{LastPort}，昵称={LastName}");
+            // 【联机排查】整段包 try/catch：托管异常会打印出来；原生 abort 则捕不到（靠调用方的 k5/k5b 夹住）。
+            GD.Print("[OnlineClientPrefs] s1 即将写盘 " + Path);
+            try
+            {
+                var cfg = new ConfigFile();
+                cfg.SetValue(Section, "last_deck_path", LastDeckPath);
+                cfg.SetValue(Section, "last_host", LastHost);
+                cfg.SetValue(Section, "last_port", (int)LastPort);
+                cfg.SetValue(Section, "last_nick", LastName);
+                var err = cfg.Save(Path);
+                if (err != Error.Ok) GD.PrintErr($"[OnlineClientPrefs] 偏好写入失败：{err}");
+                else GD.Print($"[OnlineClientPrefs] 偏好已保存：卡组={LastDeckPath}，服务端={LastHost}:{LastPort}，昵称={LastName}");
+            }
+            catch (System.Exception e)
+            {
+                GD.PrintErr("[OnlineClientPrefs] 写盘抛托管异常（已忽略）: " + e.GetType().Name + " " + e.Message);
+            }
         }
     }
 }

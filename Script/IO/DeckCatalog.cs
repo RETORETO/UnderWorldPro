@@ -24,26 +24,48 @@ namespace Script.IO
         public static List<string> ListDeckPaths()
         {
             var list = new List<string>();
+            // 【联机排查埋点 p1~p10，2026-10-13】Web 版进房间页时崩在本方法内（调用方 d1 之后、d2 之前），
+            // 逐步打标记即可钉到具体那一句。定位完成后整段删除。
+            GD.Print("[DeckCatalog] p1 即将 DirAccess.Open " + DeckDir);
             var dir = DirAccess.Open(DeckDir);
+            GD.Print("[DeckCatalog] p2 Open 已返回, 是否为空=" + (dir == null ? "1" : "0"));
             if (dir == null)
             {
                 GD.PrintErr($"[DeckCatalog] 无法打开卡组目录：{DeckDir}（导出构建请把 Decks/*.json 加入导出过滤）");
                 return list;
             }
 
+            GD.Print("[DeckCatalog] p3 即将 ListDirBegin");
             dir.ListDirBegin();
+            GD.Print("[DeckCatalog] p4 ListDirBegin 完成");
             string name = dir.GetNext();
+            int __guard = 0;
             while (!string.IsNullOrEmpty(name))
             {
-                // 【2026-10-12】显式 OrdinalIgnoreCase：无参 EndsWith 走 ICU，Web 版运行时没有 ICU，会 abort。
-                if (!dir.CurrentIsDir() && name.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase))
-                    list.Add($"{DeckDir}/{name}");
+                if (++__guard > 5000) { GD.PrintErr("[DeckCatalog] 目录项过多，提前中断"); break; }
+                GD.Print("[DeckCatalog] p5 项='" + name + "'");
+                bool isDir = dir.CurrentIsDir();
+                GD.Print("[DeckCatalog] p5b CurrentIsDir=" + (isDir ? "1" : "0"));
+                // 【2026-10-13】EndsWith 的 OrdinalIgnoreCase 在**比较区间含非 ASCII** 时同样会落到
+                // OrdinalCasing -> ICU（见 WebSafeText 类头）。目录里存在中文名文件时这是真风险，
+                // 统一改用只折叠 ASCII 的安全版本。
+                if (!isDir && WebSafeText.EndsWithIgnoreCaseAscii(name, ".json"))
+                    list.Add(DeckDir + "/" + name);
                 name = dir.GetNext();
             }
+            GD.Print("[DeckCatalog] p6 列举结束，条数=" + WebSafeText.Int(list.Count));
             dir.ListDirEnd();
-
-            list.Sort(System.StringComparer.OrdinalIgnoreCase);
-            GD.Print($"[DeckCatalog] 卡组目录共 {list.Count} 个卡组：{string.Join("、", list.ConvertAll(DisplayName))}");
+            GD.Print("[DeckCatalog] p7 ListDirEnd 完成，即将 Sort");
+            // 【Web 崩溃根因 · 2026-10-13】这里原来是 `list.Sort(StringComparer.OrdinalIgnoreCase)`，
+            // 对含中文文件名的目录（Decks/ 下半数是中文名卡组）排序时实测 wasm abort。
+            // 原因：OrdinalIgnoreCase 只对 ASCII 走算术快路径，遇到 >0x7F 的字符即转
+            // OrdinalCasing.CompareStringIgnoreCaseNonAscii -> Interop.Globalization.ChangeCase -> ICU。
+            // 改用只折叠 ASCII 的比较器（中文无大小写，结果与原行为一致）。
+            WebSafeText.SortIgnoreCaseAscii(list);
+            GD.Print("[DeckCatalog] p8 Sort 完成");
+            GD.Print("[DeckCatalog] 卡组目录共 " + WebSafeText.Int(list.Count) + " 个卡组："
+                + string.Join("、", list.ConvertAll(DisplayName)));
+            GD.Print("[DeckCatalog] p10 完成");
             return list;
         }
 
@@ -53,7 +75,9 @@ namespace Script.IO
             if (!string.IsNullOrEmpty(preferred) && FileAccess.FileExists(preferred)) return preferred;
             if (available != null && available.Count > 0)
             {
-                foreach (var p in available) if (System.String.Equals(p, DefaultDeckPath, System.StringComparison.OrdinalIgnoreCase)) return p;
+                // 【2026-10-13】原为 string.Equals(..., OrdinalIgnoreCase)：两侧都是含中文的 res:// 路径，
+                // 比较到第 13 个字符就会跌进 ICU 路径 -> Web 上 abort。改用 ASCII 折叠的安全比较。
+                foreach (var p in available) if (WebSafeText.EqualsIgnoreCaseAscii(p, DefaultDeckPath)) return p;
                 return available[0];
             }
             return DefaultDeckPath;

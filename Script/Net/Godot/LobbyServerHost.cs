@@ -32,11 +32,19 @@ namespace Script.Net.Godot
             if (Started) return true;
             Config = config ?? new ServerConfig();
 
-            _transport = new GodotEnetTransport(EnetRole.Server)
+            // 【Web 联机】按配置选传输：浏览器客户端只能连 WebSocket 服务端（见 ServerConfig.UseWebSocket）。
+            if (Config.UseWebSocket)
             {
-                Port = Config.Port,
-                MaxClients = Config.MaxConnections,
-            };
+                _transport = new GodotWebSocketTransport(EnetRole.Server) { Port = Config.Port };
+            }
+            else
+            {
+                _transport = new GodotEnetTransport(EnetRole.Server)
+                {
+                    Port = Config.Port,
+                    MaxClients = Config.MaxConnections,
+                };
+            }
             try
             {
                 _transport.Start();
@@ -62,7 +70,8 @@ namespace Script.Net.Godot
             _host.Start();
 
             Started = true;
-            GD.Print($"[LobbyServerHost] 大厅服务端就绪：端口 {Config.Port}，最大连接 {Config.MaxConnections}，最大房间 {Config.MaxRooms}"
+            GD.Print($"[LobbyServerHost] 大厅服务端就绪：传输={(Config.UseWebSocket ? "WebSocket(浏览器可连)" : "ENet(桌面)")}"
+                + $"，端口 {Config.Port}，最大连接 {Config.MaxConnections}，最大房间 {Config.MaxRooms}"
                 + $"，昵称上限 {Config.NameMaxLen}，协议版本 {Config.ProtocolVersion}");
             PrintClientHint(Config);
             return true;

@@ -15,8 +15,8 @@ namespace Script.Tests
     /// 交付：`ActionVerb.SkipAreaCombat`（Args[0]＝对抗名清单，缺省＝三步全略过）→
     /// `EffectEngine.RegisterAreaCombatSkipThisTurn(地区, 清单)` 登记 `TimedMod{Kind="AreaCombatSkip"}`
     /// （**TargetUid 存地区 UID**、回合结束随时效栈出栈）；查询 `AreaSkipsCombat` 现为
-    /// "常驻静止规则（JC098 类）∪ 本回合时效登记（JC118）"并联；消费点仍是
-    /// `TurnManager.ResolveCurrentAreaCombat`（不结算对抗、仍给让过窗口）。
+    /// "常驻静止规则（JC098 类）∪ 本回合时效登记（JC118）"并联；消费点＝
+    /// `TurnManager.NextCombatStepOfArea`（被跳过的步骤**在流程里直接不存在**：不进入该阶段、不给让过窗口）。
     /// </summary>
     public class P3TurnAreaCombatSkipTests : TestRunner
     {
@@ -170,7 +170,7 @@ namespace Script.Tests
             Assert.IsFalse(EffectEngine.Instance.AreaSkipsCombat(areas[0], "调查"), "回合结束 → 略过失效（下回合照常结算对抗）");
         }
 
-        // ==================== ⑤ 端到端：打出后该地区三步骤都不结算（对照正常结算） ====================
+        // ==================== ⑤ 端到端：该地区三步骤在流程里直接不存在（对照正常结算） ====================
 
         public void TestTurnSkip_端到端三步骤都不结算()
         {
@@ -184,11 +184,13 @@ namespace Script.Tests
             Assert.AreEqual(1, cCounter.Total, "对照：调查步骤真的开了对抗窗口");
             cCounter.Detach();
 
-            // 实验组：先结算一次 JC118（对目标地区登记本回合略过），再推进到对抗阶段
+            // 实验组：先结算一次 JC118（对 1 地区登记本回合略过），再推进到对抗阶段
             var game = NewGame();
             var areas = Areas(game);
             OnField(game, Probe("TS_ts_p1", investigation: 3, power: 3), 1, areas[0]);
             OnField(game, Probe("TS_ts_p2", investigation: 0, power: 1), 2, areas[0]);
+            OnField(game, Probe("TS_ts_p3", investigation: 3, power: 3), 1, areas[1]);
+            OnField(game, Probe("TS_ts_p4", investigation: 0, power: 1), 2, areas[1]);
             var tmpl = Load("JC118_tingzhanxieyi");
             var spell = game.CardManager.CreateCardInstance(tmpl, 1);
             game.ZoneManager.MoveToHand(spell, 1);
@@ -197,14 +199,12 @@ namespace Script.Tests
             Assert.IsTrue(EffectEngine.Instance.AreaSkipsCombat(areas[0], "战斗"), "前置：登记生效");
 
             var counter = new WindowCounter(game);
+            // 1 地区三步全被略过 ⇒ 机动轮后**直接进入 2 地区调查步骤**（1 地区一步都不进入）
             AdvanceTo(game, global::TurnManager.TurnPhase.CombatInvestigation);
-            Assert.AreEqual(0, counter.Total, "该地区调查步骤被略过（不开对抗窗口）");
-
-            // 跳过调查后仍能推进到战斗/势力步骤，且这两步同样不结算
-            AdvanceTo(game, global::TurnManager.TurnPhase.CombatStrength);
-            Assert.AreEqual(global::TurnManager.TurnPhase.CombatStrength, game.TurnManager.CurrentPhase,
-                "仍正常推进到战斗步骤（略过≠卡死）");
-            Assert.AreEqual(0, counter.Total, "战斗步骤同样被略过");
+            Assert.AreEqual(global::TurnManager.TurnPhase.CombatInvestigation, game.TurnManager.CurrentPhase,
+                "1 地区三步全被略过 ⇒ 直接进入 2 地区的对抗步骤");
+            Assert.AreEqual(2, game.TurnManager.CurrentCombatAreaNo, "地区游标已跳过 1 地区，落在 2 地区");
+            Assert.AreEqual(1, counter.Total, "2 地区调查步骤照常结算（1 地区的窗口数为 0 ⇒ 只此 1 次）");
             counter.Detach();
         }
     }

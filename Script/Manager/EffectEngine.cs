@@ -4416,6 +4416,12 @@ namespace Script.Manager
                     // 时效项同样按**属性**登记（到期经属性通道撤销，字段与授予同时回退且可被重算正确重建）
                     if (timed)
                         RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Attribute", Value = "防御", Amount = amt, ExpireTurn = CurrentTurn });
+                    // 【2026-10 用户口径·JC100"防御降低的效果发动后导致角色死亡没有刷新UI"】
+                    // 减防（`amt < 0`）会让**当前防御力**下降 ⇒ 与"持续授予 / 光环撤销"同一条口径补做死亡判定：
+                    // 满足"伤害＋创伤 ≥ 当前防御力（含被降到 0）"即走既有死亡流程（含死亡广播与墓地处理，
+                    // UI 随 `OnCardMoved` 归位）。**没有这一步**时减防只改数值不判死 ⇒ 按规则已死的角色
+                    // 会留在场上、UI 不刷新（用户实测）。
+                    if (amt < 0) RecheckDeathsAfterDefenseDrop();
                     break;
 
                 case "屏障":

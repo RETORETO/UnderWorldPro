@@ -69,10 +69,45 @@ namespace Script.Net.Godot
         public RoomState CurrentRoom { get; private set; }
 
         /// <summary>是否已连上服务端。</summary>
-        public bool IsConnected => _transport is GodotEnetTransport enet ? enet.IsClientConnected() : true;
+        public bool IsConnected => _transport switch
+        {
+            GodotEnetTransport enet => enet.IsClientConnected(),
+            GodotWebSocketTransport ws => ws.IsClientConnected(),
+            _ => true,
+        };
 
         /// <summary>连接是否已判定失败（不再轮询）。</summary>
-        public bool LinkFailed => _transport is GodotEnetTransport enet && enet.LinkFailed;
+        public bool LinkFailed =>
+            (_transport as GodotEnetTransport)?.LinkFailed == true
+            || (_transport as GodotWebSocketTransport)?.LinkFailed == true;
+
+        /// <summary>
+        /// 【2026-10-13】本会话因"当前平台不支持所选传输"而根本没有建立连接。
+        /// 供 UI 立刻给出可读提示，而不是显示"正在连接…"永远转圈。
+        /// </summary>
+        public bool UnsupportedOnWeb =>
+            (_transport as GodotEnetTransport)?.UnsupportedOnWeb == true
+            || (_transport as GodotWebSocketTransport)?.UnsupportedOnWeb == true;
+
+        /// <summary>本会话使用的传输中文名（诊断/日志用）。</summary>
+        public string TransportName => _transport switch
+        {
+            GodotEnetTransport => "ENet(UDP)",
+            GodotWebSocketTransport => "WebSocket(TCP)",
+            _ => "其它",
+        };
+
+        /// <summary>
+        /// 【Web 联机 · 2026-10-13】该用哪种传输。
+        ///
+        /// 规则：**Web 平台一律 WebSocket**（浏览器开不了 UDP socket，ENet 完全不成立）；
+        /// 桌面默认仍是 ENet，但可以用 `--wp-ws` 强制 WebSocket（用于"桌面客户端连 WebSocket 服务端"的联调）。
+        /// </summary>
+        private static bool PreferWebSocket()
+        {
+            if (GodotWebSocketTransport.IsWeb) return true;
+            return WebPerfParams.WebSocket;
+        }
 
         // ==================== 事件 ====================
         /// <summary>已连上服务端（可开始登录大厅）。</summary>
@@ -100,17 +135,33 @@ namespace Script.Net.Godot
             _transport.OnSessionMessage(OnMessage);
         }
 
-        /// <summary>便捷构造：内部创建 ENet 客户端传输并启动。</summary>
+        /// <summary>便捷构造：内部创建传输并启动（Web 走 WebSocket，桌面默认 ENet）。</summary>
         public static ClientSession Connect(string host, ushort port, string playerName)
         {
-            var transport = new GodotEnetTransport(EnetRole.Client)
+            INetTransport transport;
+            if (PreferWebSocket())
             {
-                Port = port,
-                ServerAddress = string.IsNullOrEmpty(host) ? "127.0.0.1" : host,
-            };
+                // 【Web 联机】浏览器只能用 WebSocket 连服务端：服务端需以 `--ws --port <同号端口>` 启动。
+                string url = GodotWebSocketTransport.BuildUrl(host, port);
+                transport = new GodotWebSocketTransport(EnetRole.Client)
+                {
+                    Port = port,
+                    ServerAddress = string.IsNullOrEmpty(host) ? "127.0.0.1" : host,
+                    Url = url,
+                };
+            }
+            else
+            {
+                transport = new GodotEnetTransport(EnetRole.Client)
+                {
+                    Port = port,
+                    ServerAddress = string.IsNullOrEmpty(host) ? "127.0.0.1" : host,
+                };
+            }
+
             var session = new ClientSession(transport, playerName);
             session._transport.Start();
-            GD.Print($"[ClientSession] 正在连接服务端 {transport.ServerAddress}:{port}（昵称 {playerName}）");
+            GD.Print($"[ClientSession] 正在用 {session.TransportName} 连接服务端 {(host.Length == 0 ? "127.0.0.1" : host)}:{port}（昵称 {playerName}）");
             return session;
         }
 

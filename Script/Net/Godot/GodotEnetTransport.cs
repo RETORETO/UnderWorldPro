@@ -31,7 +31,7 @@ namespace Script.Net.Godot
     public class GodotEnetTransport : INetTransport
     {
         private readonly EnetRole _role;
-        private readonly ENetMultiplayerPeer _peer = new ENetMultiplayerPeer();
+        private ENetMultiplayerPeer _peer;
         private readonly Encoding _utf8 = new UTF8Encoding(false);
 
         private Action<string, string> _sessionMessageHandler;
@@ -60,6 +60,27 @@ namespace Script.Net.Godot
         /// <summary>服务端地址（仅客户端用）。</summary>
         public string ServerAddress { get; set; } = "127.0.0.1";
 
+        /// <summary>
+        /// ENet peer（**懒创建**）。
+        /// 【2026-10-13】改成懒创建而不是字段初始化：Web 上绝不触碰 socket 栈，
+        /// 连 `ENetMultiplayerPeer` 实例都不必真的造出来（见 <see cref="WebUnsupported"/>）。
+        /// </summary>
+        private ENetMultiplayerPeer Peer => _peer ??= new ENetMultiplayerPeer();
+
+        /// <summary>
+        /// 【Web 硬保险·2026-10-13】**浏览器不允许网页打开原始 UDP/TCP socket**，
+        /// 因此 `ENetMultiplayerPeer.CreateServer` / `CreateClient` 在 Web 导出里根本不可能成立
+        ///（Godot 官方口径：Web 只能用 HTTP / WebSocket，ENet 是 UDP，不可用）。
+        ///
+        /// 关掉这道保险时（`--wp-netraw`）实测过：在 Web 上调这两个接口会让 wasm **直接 abort**，
+        /// canvas 冻死 → 用户看到的就是"点建立主机 / 点连接服务器就卡住，无法下一步"。
+        /// 所以默认路径**永不调用**它们，只把 <see cref="UnsupportedOnWeb"/> 置起来交给 UI 提示。
+        /// </summary>
+        public static bool IsWeb => OS.HasFeature("web");
+
+        /// <summary>本传输因"Web 平台不支持 ENet"而未能启动（供上层给出可读提示，而不是抛异常）。</summary>
+        public bool UnsupportedOnWeb { get; private set; }
+
         public GodotEnetTransport(EnetRole role)
         {
             _role = role;
@@ -68,22 +89,40 @@ namespace Script.Net.Godot
         public void Start()
         {
             if (_running) return;
+
+            // 【Web 硬保险】在 Web 上绝不调用 CreateServer/CreateClient（详见 IsWeb 的说明）。
+            // `--wp-netraw` 只用于复现旧崩溃做对照，正常路径不会走到。
+            if (IsWeb && !WebPerfParams.NetRaw)
+            {
+                UnsupportedOnWeb = true;
+                _running = false;
+                GD.PrintErr("[GodotEnetTransport] Web 平台不支持 ENet（浏览器无法打开 UDP/TCP 原始 socket），已跳过启动"
+                          + "；需要 Web 联机请改用 WebSocket 传输（见 联机C-S架构设计方案.md）。");
+                return;
+            }
+
             Error err;
             if (_role == EnetRole.Server)
             {
-                err = _peer.CreateServer(Port, MaxClients);
+                // 【联机排查埋点】下一条若是本进程最后一行日志，说明崩点就在 CreateServer 里。
+                GD.Print($"[ENet] n1 即将 CreateServer  port={Port} maxClients={MaxClients} isWeb={IsWeb}");
+                err = Peer.CreateServer(Port, MaxClients);
+                GD.Print($"[ENet] n2 CreateServer 已返回 err={err}");
                 if (err != Error.Ok)
                     throw new InvalidOperationException($"[GodotEnetTransport] CreateServer failed: {err}");
-                _peer.PeerConnected += OnPeerConnected;
-                _peer.PeerDisconnected += OnPeerDisconnected;
+                Peer.PeerConnected += OnPeerConnected;
+                Peer.PeerDisconnected += OnPeerDisconnected;
             }
             else
             {
-                err = _peer.CreateClient(ServerAddress, Port);
+                GD.Print($"[ENet] n1 即将 CreateClient  addr={ServerAddress} port={Port} isWeb={IsWeb}");
+                err = Peer.CreateClient(ServerAddress, Port);
+                GD.Print($"[ENet] n2 CreateClient 已返回 err={err}");
                 if (err != Error.Ok)
                     throw new InvalidOperationException($"[GodotEnetTransport] CreateClient failed: {err}");
             }
             _running = true;
+            GD.Print("[ENet] n3 传输已启动");
         }
 
         public void Stop()
@@ -92,10 +131,11 @@ namespace Script.Net.Godot
             _running = false;
             if (_role == EnetRole.Server)
             {
-                _peer.PeerConnected -= OnPeerConnected;
-                _peer.PeerDisconnected -= OnPeerDisconnected;
+                Peer.PeerConnected -= OnPeerConnected;
+                Peer.PeerDisconnected -= OnPeerDisconnected;
             }
-            _peer.Close();
+            // 懒创建后可能压根没造过 peer（例如 Web 上被保险拦下），此时不要为了关它而造一个出来。
+            if (_peer != null) _peer.Close();
             _peerToSession.Clear();
             _sessionToPeer.Clear();
             _nextSessionSeq = 0;
@@ -113,8 +153,8 @@ namespace Script.Net.Godot
             }
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_sessionToPeer.TryGetValue(sessionId, out long enetPeerId)) return;   // 会话不存在：静默忽略
-            _peer.SetTargetPeer((int)enetPeerId);
-            _peer.PutPacket(_utf8.GetBytes(message));
+            Peer.SetTargetPeer((int)enetPeerId);
+            Peer.PutPacket(_utf8.GetBytes(message));
         }
 
         public void SendToServer(string message)
@@ -127,12 +167,12 @@ namespace Script.Net.Godot
             }
             // 客户端：发往 server。ENet 客户端只连一个 peer（server），保持默认 target（0）即可。
             // 防御：握手未完成时直接返回，避免 PutPacket 触发 ERR_UNCONFIGURED 崩溃。
-            if (_peer.GetConnectionStatus() != MultiplayerPeer.ConnectionStatus.Connected)
+            if (Peer.GetConnectionStatus() != MultiplayerPeer.ConnectionStatus.Connected)
             {
                 GD.PrintErr("[GodotEnetTransport] SendToServer 被忽略：客户端尚未连接服务器（connection_status != CONNECTED）");
                 return;
             }
-            _peer.PutPacket(_utf8.GetBytes(message));
+            Peer.PutPacket(_utf8.GetBytes(message));
         }
 
         // ==================== 订阅 ====================
@@ -147,7 +187,7 @@ namespace Script.Net.Godot
         /// 由 Godot 节点的 _Process 每帧调用，驱动 ENet 轮询并分发入站消息。
         /// 信号（PeerConnected/PeerDisconnected）在 Poll 内同步触发，先于收包执行。
         ///
-        /// **顺序很重要**：先 `_peer.Poll()` + 收包，**再**判定"链路是否已断"。
+        /// **顺序很重要**：先 `Peer.Poll()` + 收包，**再**判定"链路是否已断"。
         /// 服务端停止/断开前会先下发收尾消息（"房间已关闭"等），若在判定处直接 return，
         /// 这一帧刚到的数据就永远读不出来 —— 客户端会看到连接无声消失（H3 的闭环正是靠这条消息）。
         /// 判定为断开后 `_running = false`，后续帧不再 Poll，因此不会出现"每帧刷引擎错误"。
@@ -156,7 +196,7 @@ namespace Script.Net.Godot
         {
             if (!_running) return;
 
-            _peer.Poll();
+            Peer.Poll();
             DispatchAvailablePackets();
 
             // 客户端链路已彻底断开（ENet 判定连接失败 / 对端关闭）时，peer 已不活跃：
@@ -164,7 +204,7 @@ namespace Script.Net.Godot
             // 说明：用"曾观测到 Connecting/Connected"作闩锁，避免刚创建时状态尚未就绪就误判为失败。
             if (_role == EnetRole.Client)
             {
-                var status = _peer.GetConnectionStatus();
+                var status = Peer.GetConnectionStatus();
                 if (status != MultiplayerPeer.ConnectionStatus.Disconnected) _linkWasUp = true;
                 else if (_linkWasUp)
                 {
@@ -182,13 +222,13 @@ namespace Script.Net.Godot
         /// <summary>把 ENet 队列中已到达的数据包全部分发出去（服务端按 peer 查会话，客户端用占位会话 id）。</summary>
         private void DispatchAvailablePackets()
         {
-            while (_peer.GetAvailablePacketCount() > 0)
+            while (Peer.GetAvailablePacketCount() > 0)
             {
                 // 注意顺序：Godot 4.7 的 ENetMultiplayerPeer.GetPacket() 会消费队列中的包，
                 // 若先 GetPacket 再 GetPacketPeer，后者会在空队列上报错并返回默认 peer(1)。
                 // 必须先取 peer 再取数据。
-                long from = _peer.GetPacketPeer();
-                byte[] bytes = _peer.GetPacket();
+                long from = Peer.GetPacketPeer();
+                byte[] bytes = Peer.GetPacket();
                 string msg = _utf8.GetString(bytes);
                 if (_role == EnetRole.Server)
                 {
@@ -228,12 +268,13 @@ namespace Script.Net.Godot
             GD.Print($"[GodotEnetTransport] 主动断开会话 {sessionId}（peer {peerId}）：{reason}");
             _sessionToPeer.Remove(sessionId);
             _peerToSession.Remove(peerId);
-            _peer.DisconnectPeer((int)peerId, false);
+            Peer.DisconnectPeer((int)peerId, false);
         }
 
         /// <summary>客户端角色：是否已连上服务端（ENet 客户端底层连接状态）。服务端角色下不可用。</summary>
         public bool IsClientConnected()
-            => _role == EnetRole.Client && _peer.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected;
+            => _running && _role == EnetRole.Client
+            && Peer.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected;
 
         // ==================== 会话分配 ====================
 

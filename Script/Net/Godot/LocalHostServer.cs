@@ -50,6 +50,18 @@ namespace Script.Net.Godot
             error = null;
             if (IsRunning) return true;                       // 幂等：重复点「建立主机」不会重复占端口
 
+            // 【Web 硬保险·2026-10-13】浏览器里**不可能**监听端口（没有 listen socket），
+            // 内嵌服务端天然不成立。旧代码没有这道判断，会一路走到 ENet 的 CreateServer，
+            // 在 Web 上直接把 wasm 打 abort → 页面冻死（用户看到的就是"点建立主机就卡住"）。
+            // 这里提前挡下并给出**可读原因**，由 UI 显示在状态栏上，不再抛异常、不再触碰 ENet。
+            if (OS.HasFeature("web"))
+            {
+                error = "Web 版无法建立主机：浏览器不允许网页监听端口，无法作为服务端"
+                      + "（Web 只支持 WebSocket 客户端连到外部服务器）。";
+                GD.PrintErr("[LocalHostServer] 建立主机被拒：" + error);
+                return false;
+            }
+
             var parent = ResolveParent();
             if (parent == null)
             {
@@ -106,7 +118,11 @@ namespace Script.Net.Godot
         public static List<string> LanIPv4()
         {
             var list = new List<string>();
-            foreach (var addr in IP.GetLocalAddresses())
+            // 【联机排查埋点】IP.GetLocalAddresses 在 Web 上的行为需要确认（下一条不出现即崩在这里）。
+            GD.Print("[LocalHostServer] n9 即将 IP.GetLocalAddresses");
+            var addrs = IP.GetLocalAddresses();
+            GD.Print("[LocalHostServer] n10 IP.GetLocalAddresses 已返回，项数=" + Script.IO.WebSafeText.Int(addrs?.Length ?? 0));
+            foreach (var addr in addrs)
             {
                 if (string.IsNullOrEmpty(addr)) continue;
                 if (addr == "127.0.0.1" || addr.Contains(':')) continue;   // 只取 IPv4

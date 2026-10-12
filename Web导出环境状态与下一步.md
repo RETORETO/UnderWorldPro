@@ -8,12 +8,23 @@
 > 2. **新增两条「Web 上绝对不能写」的代码红线**：.NET 全球化 API、以及从托管代码连接
 >    `RenderingServer.FramePostDraw` —— 两者都会让 wasm 直接 `Aborted()`，**详见第八节**；
 > 3. 卡组编辑的"卡死"已定位并修复（就是第 2 条那条信号），`pck` 现为 259.3 MB。
+>
+> **2026-10-13 的变化**：
+> 4. **Web 联机已跑通**：新建了 WebSocket 传输层（浏览器不能用 ENet），
+>    「连接服务器 → 加入房间 → 双方准备 → 开局 → 战场 → 对局结束回房间」**全链路实测通过**；
+>    「建立主机」在 Web 上被明确拒绝（浏览器不能监听端口，这是规范级硬约束）——**详见第八节红线 3**。
+> 5. **第八节红线 1 被修正**：原来把 `OrdinalIgnoreCase` 标成"安全"是**错的**，
+>    它遇到非 ASCII 字符一样会走 ICU → abort（这就是进房间页崩溃的根因）。
 
 ---
 
 ## 一、结论
 
 **环境已齐全，并已实测「在浏览器里真正跑起来」**：主菜单、卡组编辑（698 张卡池 + 分页 + 构筑限制 + 卡图）均可正常渲染；卡组编辑 **240 fps / 180 节点 / 0 未捕获异常**。
+
+**联机（2026-10-13 实测）**：Web 版**只能当客户端**（浏览器不能监听端口），
+连外部 WebSocket 大厅服务端后，「登录大厅 → 建房/加入房间 → 提交卡组 → 准备 → 开局 → 战场 → 对局结束回房间」
+整条链路在无头 Edge 里真跑通过，全程 0 abort。服务端需以 `--ws` 启动（桌面 headless 或独立进程）。
 
 一句话链路：`魔改版引擎 4.7.2-stable` → 导出 Web 预设 → 引擎自动 `dotnet publish -c ExportRelease -r browser-wasm`（**必须关裁剪**，见第五节第 1 条）→ 打成 pck → 由带 COOP/COEP 头的 HTTP 服务打开 → 运行时由 pck 里的 `GodotPlugins.Game.Main` 引导 mono。
 
@@ -267,6 +278,29 @@ RuntimeError: unreachable
 2. 同步改 `Script/UI/CardUI.cs:764-765` 中硬编码的 `.jpg` 判断（建议改为按 UID 匹配、忽略扩展名）；
 3. 若仍慢，再叠加 CDN 按需拉取（预设里用 `exclude_filter` 排除 `Cards/Image/`）。
 
+### 六之二、战场页渲染：**已确认正常**（2026-10-13）
+
+Web 版联机**能进战场并正常渲染**：`战场已挂载（座位 2）` → `对局结束：获胜座位 1` → `[ArenaOl] 展示对局结果：你落败！` → 自动回房间，全程 0 abort。
+
+用 **2 倍设备像素比**（`_wshot.mjs --dpr 2`）抓的战场帧，元素齐全且清晰可读：
+
+- 左侧竖排：`堆叠区（后进先出）`（含空槽）；
+- 中央大块浅灰底：争夺区/主战场（开局时为空，符合预期）；
+- 右侧面板：`当前阶段` + 按钮 `让过` / `投降`；
+- 左下：按钮 `建立资产` / `激活区域`；
+- 上下各一组**牌堆卡背**（三张叠放）——即双方的牌库。
+
+> ⚠️ **教训（截图分辨率）**：画布是 1250×591，直接 `Page.captureScreenshot` 得到的是 1080×527 的缩图，
+> 小字完全读不出来，我一度据此误判"右侧面板只有色块、没有文字"。
+> **读 UI 细节必须 `Emulation.setDeviceMetricsOverride(deviceScaleFactor: 2)` 后再截**。
+
+> 仍待确认的一点：整局里多次截图**字节完全相同**（客户端全程不动、房主 BOT 只是「让过」，
+> 状态本来就不该变），所以**手牌区是否应该在开局就出现牌**这件事还没定论。
+> 若要确认，最省事的办法是在 `ClientMatchView.ApplySnapshot` 与 `ArenaOl` 的卡牌生成处各加一行 `GD.Print`。
+
+> 抓帧技巧：战场页在冒烟模式下只活约 8 秒（自动认输），固定 `--wait` 抓不准，
+> 要用"等日志出现标记再截图"的方式（临时工具 `_wshot.mjs`，注意它靠 CDP，会受日志回放影响，见第十节）。
+
 ---
 
 ## 七、回退与并行方案
@@ -318,9 +352,28 @@ RuntimeError: unreachable
 | `list.Sort()`（无参，文化敏感比较器） | ❌ abort | `list.Sort(StringComparer.Ordinal)` |
 | `DateTime.Now.ToString("HHmmss")`（带格式串） | ❌ abort | `DeckBuilder.NowHHmmss()` |
 | **正整数** 格式化（`$"{12}"`、`"a" + 12`） | ✅ 安全（走 `Int32ToDecStr` 纯算术快路径） | — |
-| `StartsWith/EndsWith(..., StringComparison.Ordinal/OrdinalIgnoreCase)` | ✅ 安全 | — |
-| `string.Equals(a, b, StringComparison.OrdinalIgnoreCase)` | ✅ 安全 | — |
+| `StartsWith/EndsWith(..., StringComparison.Ordinal)` | ✅ 安全 | — |
+| `StartsWith/EndsWith(..., StringComparison.OrdinalIgnoreCase)` / `string.Equals(a, b, OrdinalIgnoreCase)` / `StringComparer.OrdinalIgnoreCase` | ⚠️ **只有两侧全 ASCII 才安全** | 见到非 ASCII 就用 `WebSafeText.StartsWithIgnoreCaseAscii` / `EndsWithIgnoreCaseAscii` / `EqualsIgnoreCaseAscii` / `CompareIgnoreCaseAscii` / `SortIgnoreCaseAscii` |
 | `string.CompareOrdinal` | ✅ 安全 | — |
+| `ushort.TryParse(s, out v)` / `int.Parse(s)` / `int.TryParse(s, out v)`（**不带 IFormatProvider**） | ❌ abort（走 `NumberFormatInfo.CurrentInfo` 取正负号） | `WebSafeText.TryParseUshort` / `TryParseInt` |
+| `string.IsNullOrWhiteSpace(s)` | ❌ abort（`char.IsWhiteSpace` 遇非 ASCII 查 Unicode 类别表） | `WebSafeText.IsNullOrWhiteSpaceAscii` |
+| `s.Trim()`（**首尾是非 ASCII 时**） | ❌ abort（同上） | `WebSafeText.TrimAscii` |
+
+> ⚠️⚠️ **`OrdinalIgnoreCase` 并不是"纯序数"——这是 2026-10-13 用真实崩溃换来的教训。**
+> 上表最初把 `OrdinalIgnoreCase` 整体标成 ✅，**是错的**，并直接导致 Web 版进联机房间页时 wasm abort。
+> .NET 的实现（`Ordinal.CompareStringIgnoreCase`）**只有 ASCII 走算术快路径**：
+> ```csharp
+> while (length != 0 && charA <= 0x7F && charB <= 0x7F) { ... }   // ASCII 快路径
+> ...
+> return CompareStringIgnoreCaseNonAscii(...);  // 一旦有 >0x7F 字符就落到这里
+>                                              //   → OrdinalCasing → Interop.Globalization.ChangeCase → ICU
+> ```
+> 实测现场：`Decks/` 下 21 个卡组**半数文件名是中文**（`卡组073506.json`、`灰色全量测试.json`…），
+> 于是 `list.Sort(StringComparer.OrdinalIgnoreCase)` 必然比较到中文 → ICU → 崩。
+> 这也解释了为什么 `ResourceDirScan` 用 `OrdinalIgnoreCase` 一直没出事：它只比 `.tres` / `.` / `.remap`
+> 这类**纯 ASCII 字面量**，永远走快路径。
+> **判据：比较的任意一侧可能含非 ASCII（卡组名/卡名/昵称/用户输入），就必须换成 ASCII 折叠版。**
+> 中文没有大小写，所以对非 ASCII 串，ASCII 折叠版与 `OrdinalIgnoreCase` 结果**完全一致**，桌面行为不变。
 
 > ⚠️ **`InvariantGlobalization` 不管用**：`AppBundle/UWPro.runtimeconfig.json` 里
 > `System.Globalization.Invariant: true`、`Hybrid: false`、`PredefinedCulturesOnly: true` **本来就都有**，照样崩。
@@ -365,6 +418,43 @@ GetTree().ProcessFrame += OnProbeProcessFrame;
 **帧级计时怎么办**：用 `_Process` / `_PhysicsProcess` 里的 `Time.GetTicksMsec()`。
 注意 `Time.GetTicksMsec()` 是**引擎启动以来的毫秒数**，不是绝对时钟。
 
+### 红线 3：Web 联机必须走 WebSocket，且浏览器**永远不能建立主机**（2026-10-13 实测确定）
+
+**浏览器沙箱不允许网页打开原始 UDP/TCP socket** —— 这条是浏览器规范层面的硬约束，不是引擎缺陷。
+因此在 Web 导出里：
+
+| 行为 | 结果 |
+|---|---|
+| `ENetMultiplayerPeer.CreateServer()`（enabled 主机） | ❌ **wasm abort → canvas 冻死**（用户感知为"点建立主机就卡住"） |
+| `ENetMultiplayerPeer.CreateClient()`（点「连接」） | ❌ **wasm abort**（同上） |
+| `WebSocketMultiplayerPeer.CreateClient("ws://host:port")` | ✅ 正常，能连上、能登录大厅、能进房间 |
+| `WebSocketMultiplayerPeer.CreateServer(port, "*")` | ✅ 引擎层支持（但浏览器里做不到，见下） |
+
+> **"浏览器不能当服务端"仍然是硬约束**：`WebSocketMultiplayerPeer.CreateServer` 需要监听端口，
+> 网页没有这个能力。所以 **Web 联机只有"客户端连外部服务端"这一条路** ——
+> 房主必须是桌面版（或独立服务器进程）跑 `NetServer.tscn`。
+
+**落地实现（本轮）**：
+
+- 新增 `Script/Net/Godot/GodotWebSocketTransport.cs`，与既有 `GodotEnetTransport` **结构同构**，
+  实现同一个 `INetTransport`；协议信封 `V2:<type>|<json>` 与传输无关，所以**上层零改动**。
+- `ClientSession.Connect()` 里 `PreferWebSocket()`：**Web 平台一律 WebSocket**；桌面默认 ENet，
+  可用 `--wp-ws` 强制 WebSocket（方便桌面上调试同一条链路）。
+- 服务端新增开关 `--ws`（`ServerConfig.UseWebSocket`），`LobbyServerHost` 按开关装配 WebSocket 监听。
+  **端口号可以与 ENet 相同**（UDP vs TCP，互不冲突）。
+  ```
+  Godot_v4.7.2-..._console.exe --path . NetServer.tscn -- --ws --port 18950
+  netstat -ano | findstr 18950     # 期望看到 TCP 0.0.0.0:18950 LISTENING
+  ```
+- 两道硬保险，保证"最多是弹出可读提示，绝不冻死"：
+  - `LocalHostServer.Start()`：Web 上直接拒绝建主机，返回可读 error 给 UI；
+  - `GodotEnetTransport.Start()`：Web 上永不调用 ENet（`UnsupportedOnWeb = true`，不抛异常）。
+  - 例外通道：`--wp-netraw` 允许 Web 上照旧调 ENet，**专门用来复现旧崩溃**，排查完务必关掉。
+
+**WebSocket 传输层的一个语义要点**：`MultiplayerPeer.GetPacketPeer()` 返回的是**队列头部那条包**的
+来源（Godot 源码：`return _incoming_packets.front()->get().source;`），所以必须
+**先 `GetPacketPeer()` 再 `GetPacket()`**，顺序与 ENet 版一致 —— 这是两个传输层能同构复用的前提。
+
 ---
 
 ## 九、运行时诊断开关（无需重新导出）
@@ -382,6 +472,20 @@ GetTree().ProcessFrame += OnProbeProcessFrame;
 | `--wp-notex` | 完全不加载卡图（量"摘掉纹理后还剩多少耗时"） |
 | `--wp-pagesize=12` | 卡池每页行数（量"行数 ↔ 耗时是否线性"） |
 | `--wp-nowrap` / `--wp-nocards` / `--wp-sync` / `--wp-prog` | 换行模式 / 不建卡牌面板 / 强制同步加载 / 渐进填图 |
+| `--wp-auto=host\|online` | 进主菜单后自动执行「建立主机」/「联机大厅→连接」（配合 `--wp-host/--wp-port/--wp-name`，用于脚本化联机回归） |
+| `--wp-ws` | **桌面**也用 WebSocket 传输（默认 Web 用 WS、桌面用 ENet） |
+| `--wp-smoke` | 连上大厅后自动建房进房间（冒烟） |
+| `--wp-join` | 冒烟时改为**加入首个房间**（=走「加入」按钮那条路），而不是自己建房 |
+| `--wp-netraw` | ⚠️ 允许 **Web 上照旧调用 ENet** —— 只用于复现旧崩溃，定位完必须去掉 |
+| `--wp-host=127.0.0.1` / `--wp-port=18950` / `--wp-name=玩家` | 联机自动连接的目标地址/端口/昵称 |
+
+> ⚠️ **桌面端用这些 `--wp-*` 开关时，必须写在 `--` 之前**：
+> `Godot_*_console.exe --headless --path <工程> --wp-ws res://Scenes/Net/NetEntry.tscn -- --bot 18950 host 127.0.0.1`
+> 写在 `--` 之后时 `OS.GetCmdlineArgs()` 读不到（实测：放后面走了 ENet，挪前面立刻变 `[WS] w1 …`）。
+> Web 端无此问题（args 由 `GODOT_CONFIG.args` 传给引擎，不在 `--` 之后）。
+>
+> 带 `--wp-` 前缀的联机排查开关（`netraw` / `ws` / `smoke` / `join` / `host` / `port` / `name`）属于**临时诊断口子**，
+> 交付前会从 `WebPerfParams` 里删除。
 
 `DevFlags.cs` 里的四个编译期开关**交付时全部为 false**（`FontFallback=true` 除外），
 所以发布版完全静默、不会自动跳场景、也不会连任何绘制信号。
@@ -398,6 +502,17 @@ node .\Web运行自检.mjs --wait 45 --shot logs\shot.png > logs\shot.txt 2>&1
 > ⚠️ **CDP 的 `Runtime.enable` 会回放上一次的缓存日志**，所以"日志里出现过 Aborted"
 > 不等于"这一次崩了"。判断本轮是否存活，请**只取最后一个 `Godot Engine v4.7.2` 之后**的日志，
 > 或者直接看 `--wp-probe` 的每秒心跳 `[BEAT]`。
+>
+> ⚠️ **这条坑还有一个更隐蔽的变体（2026-10-13 实测）**：报告末尾的「未捕获异常」段
+> **完全没有按轮次过滤**，它会把上一轮的 `RuntimeError: unreachable` 一起列出来，
+> 于是"明明 0 Abort 却报了 12 条未捕获异常"。
+> **判据**：看轮询行里的 `errs=N`（本轮全程 `errs=0` 才是真的干净），
+> 或者按时间戳比对锚点 —— 实测旧崩溃 `+5323709ms` 明显早于本轮启动 `+221865690ms`。
+>
+> ⚠️ **写"等标记再截图"的工具时**：`Runtime.enable` 之后回放的日志会在**几十毫秒内一次性涌入**，
+> 如果直接 `Page.navigate` 就开始匹配标记，会命中**上一份文档**的日志（实测"命中耗时 0.0s"就是被回放骗了）。
+> 正确顺序：`Runtime.enable` → 先跳 `about:blank` 顶掉旧文档 → 再跳目标地址 →
+> **等到看见新的 `Godot Engine v4` 行之后**才开始匹配（见临时工具 `_wshot.mjs`）。
 >
 > ⚠️ `logs/` 下已放 `.gdignore`：否则实验截图会被 Godot 当纹理导入（生成 `.import`）并**打进 pck**
 > （实测会白涨约 1.6MB）。

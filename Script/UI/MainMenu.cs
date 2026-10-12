@@ -66,6 +66,14 @@ public partial class MainMenu : Control
     private GameManager.GameState _autoTargetState = GameManager.GameState.DeckBuilder;
 
     /// <summary>
+    /// 【联机排查·2026-10-13】`--wp-auto=` 的非场景动作：
+    ///   · `host`   = 等价于点首页「建立主机」（走 `OnHostPressed`，含起内嵌服务端 + 自动建房）；
+    ///   · `online` = 进联机大厅并**自动连接**（地址/端口/昵称来自 `--wp-host/--wp-port/--wp-name`）。
+    /// 空串表示走普通的"切到某个场景"路径（见 <see cref="TryParseAutoTarget"/>）。
+    /// </summary>
+    private string _autoAction = "";
+
+    /// <summary>
     /// 【诊断】把 `--wp-auto=` 的取值映射到 GameState。
     /// 只用 `StringComparison.OrdinalIgnoreCase`（不走 ICU），未知目标返回 false。
     /// 支持任意场景是为了做「换一个场景是否也崩」的决定性对照：
@@ -96,6 +104,29 @@ public partial class MainMenu : Control
             GD.PrintErr("[WebPerf] 自动进入失败：GameManager 未就绪");
             return;
         }
+
+        // 【联机排查】非场景动作优先：`--wp-auto=host` / `--wp-auto=online`
+        if (_autoAction == "host")
+        {
+            GD.Print("[WebPerf] 自动动作：建立主机（等价于点首页「建立主机」）");
+            OnHostPressed();
+            return;
+        }
+        if (_autoAction == "online")
+        {
+            string host = string.IsNullOrEmpty(WebPerfParams.NetHost) ? "127.0.0.1" : WebPerfParams.NetHost;
+            string name = string.IsNullOrEmpty(WebPerfParams.NetName) ? "玩家" : WebPerfParams.NetName;
+            GD.Print($"[WebPerf] 自动动作：联机大厅自动连接 host={host} port={WebPerfParams.NetPort}");
+            OnlineClientContext.AutoConnect = true;     // 进大厅页后自动点「连接」
+            OnlineClientContext.SmokeMode = WebPerfParams.Smoke;   // 可选：连上后自动建房进房间
+            OnlineClientContext.SmokeIsHost = !WebPerfParams.SmokeJoin;   // --wp-join：改为加入首个房间（走「加入」按钮那条路）
+            OnlineClientContext.LastHost = host;
+            OnlineClientContext.LastPort = (ushort)WebPerfParams.NetPort;
+            OnlineClientContext.LastName = name;
+            GameManager.Instance.GoToState(GameManager.GameState.LobbyOnline);
+            return;
+        }
+
         GD.Print("[WebPerf] 自动进入：" + _autoTargetState.ToString());
         if (_autoTargetState == GameManager.GameState.DeckBuilder)
             GameManager.Instance.EditingDeckPath = null; // 新建卡组，与点「编辑卡组」一致
@@ -118,10 +149,27 @@ public partial class MainMenu : Control
         //（会走 .NET 全球化/ICU 路径，见 WebSafeText 的类头说明）。
         // 改用纯序数比较 StringComparison.OrdinalIgnoreCase（不需要 ICU 数据）。
         string target = WebPerfParams.AutoEnter;
+
+        // 【联机排查】非场景动作：与点按钮走**同一个**处理函数，保证实验测的就是真实路径。
+        if (string.Equals(target, "host", System.StringComparison.OrdinalIgnoreCase))
+        {
+            _autoAction = "host";
+            int f0 = (int)(WebPerfParams.AutoDelay * 60f);
+            _autoEnterFramesLeft = f0 < 1 ? 1 : f0;
+            return;
+        }
+        if (string.Equals(target, "online", System.StringComparison.OrdinalIgnoreCase))
+        {
+            _autoAction = "online";
+            int f1 = (int)(WebPerfParams.AutoDelay * 60f);
+            _autoEnterFramesLeft = f1 < 1 ? 1 : f1;
+            return;
+        }
+
         bool ok = TryParseAutoTarget(target, out _autoTargetState);
         if (!ok)
         {
-            GD.PrintErr($"[WebPerf] 未知的 auto 目标：{target}（支持 deck/lobby/lobbyonline/room/roomonline/mainmenu）");
+            GD.PrintErr($"[WebPerf] 未知的 auto 目标：{target}（支持 deck/lobby/lobbyonline/room/roomonline/mainmenu/host/online）");
             return;
         }
 
@@ -165,6 +213,7 @@ public partial class MainMenu : Control
             ShowTempMessage($"建立主机失败：{error}");
             return;
         }
+        GD.Print("[主菜单] n2 LocalHostServer.Start 成功");
 
         OnlineClientPrefs.EnsureLoaded();
         OnlineClientContext.HostAutoFlow = true;      // 一次性：进大厅页后自动连接并建房（消费即清零）

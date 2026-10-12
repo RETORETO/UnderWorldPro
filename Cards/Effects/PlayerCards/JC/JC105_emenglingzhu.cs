@@ -1,4 +1,4 @@
-﻿using Godot.Collections;
+using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -15,8 +15,11 @@ namespace Cards.Effects.PlayerCards.JC
     ///  · **持续：所有其他本方灵体角色获得［白星］**（P3·E）：光环 `IsAura` + **关键词筛选**
     ///    `AuraFilterKeyword="灵体"`（运行期授予 ∪ 卡面固有；范围＝来源控制者的全部争夺区角色，用户 2026-09 口径）；
     ///  · **死亡触发**（P3·K3 死亡类第一批，用户 A10 口径＝**触发路线**）：`OnCardDied` + 谓词
-    ///    `DiedAllySpiritCharacter`（另一个本方灵体角色）+ `PayOptional{2,2,2}` + `Seal{"触发卡","目标"}`
-    ///    （"该角色"＝触发上下文卡＝刚死亡的角色；宿主由玩家在入堆叠时选定）。
+    ///    `DiedAllySpiritCharacter`（另一个本方灵体角色）+ **发动时的可选固定费用** `OptionalPayCost=2`
+    ///    + `Seal{"触发卡","目标"}`（"该角色"＝触发上下文卡＝刚死亡的角色；宿主由玩家在入堆叠时选定）。
+    ///    【2026-10 用户口径·与 JC061/JC100 同一份】"你可以支付2，若你如此做…"的**费用在发动能力时**
+    ///    支付（取完目标 → **入堆叠之前**问一次"是否支付 2"，是/否两个选项），不在效果处理时支付 ⇒
+    ///    不再用 `PayOptional`（那是"结算时弹窗问支付"）。不支付 ⇒ 该触发不入堆叠（整条效果不结算）。
     /// </summary>
     public static class JC105_emenglingzhu_Effects
     {
@@ -63,7 +66,8 @@ namespace Cards.Effects.PlayerCards.JC
             // 到玩家选定的宿主角色上（`SealCard` → `MoveToSealedZone` 内部 `RemoveFromAllZones` 会把它移出墓地），
             // 而不是"替代死亡处置"的替代式效应。
             //  · 条件 `DiedAllySpiritCharacter`＝"另一个本方灵体角色死亡"（角色 + 同控制者 + 排除来源自身 + 灵体）；
-            //  · "你可以支付2" ＝ `PayOptional{2,2,2}`（K11：支付/不支付二选一，支付才继续；无 UI → 兜底"不支付"）；
+            //  · "你可以支付2" ＝ `OptionalPayCost=2`（**发动时**的可选固定费用：取完目标 → 入堆叠前问一次
+            //    "是否支付 2"（是/否两选项，不输入金额）；不支付 ⇒ 该触发不入堆叠；付不起 ⇒ 不弹窗）；
             //  · 目标＝**目标角色**（宿主，入堆叠时选定）；动作主体 `"触发卡"`＝**刚死亡的角色**（`TriggerContextCard`）。
             data.EffectDataList.Add(new EffectData
             {
@@ -78,18 +82,14 @@ namespace Cards.Effects.PlayerCards.JC
                 {
                     new EffectAction
                     {
-                        Verb = ActionVerb.PayOptional,
-                        Args = new Array<string> { "2", "2", "2" },
-                    },
-                    new EffectAction
-                    {
                         Verb = ActionVerb.Seal,
                         Args = new Array<string> { "触发卡", "目标" },
                     },
                 },
+                OptionalPayCost = 2,                   // "你可以支付2"：发动时（入堆叠前）问是/否
                 Duration = "瞬时",
-                FaqNote = "另一个本方灵体角色死亡时，你可以支付2；若如此做，把刚死亡的角色封印在目标角色上"
-                        + "（从墓地取出、置入该角色的封印区），而非留在墓地。",
+                FaqNote = "另一个本方灵体角色死亡时，可以在**发动时**支付2（入堆叠前询问『是否支付 2』，两个选项）；"
+                        + "若如此做，把刚死亡的角色封印在目标角色上（从墓地取出、置入该角色的封印区），而非留在墓地。",
             });
         }
     }

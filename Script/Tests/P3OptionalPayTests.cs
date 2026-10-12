@@ -327,44 +327,54 @@ namespace Script.Tests
             Assert.AreEqual(EffectTiming.OnSealed, e.Timing, "时机＝被封印时");
             Assert.AreEqual("TriggerBySelf", e.Condition.Predicate, "条件＝本方封印动作");
             Assert.AreEqual("直到回合结束", e.Duration, "时效＝直到回合结束");
-            Assert.AreEqual(ActionVerb.PayOptional, e.Actions[0].Verb, "动作 1＝可选支付");
-            Assert.AreEqual(ActionVerb.Gain, e.Actions[1].Verb, "动作 2＝获得（-1防御）");
-            Assert.AreEqual("-1", e.Actions[1].Args[1], "防御 -1");
-            Assert.AreEqual("封印宿主", e.Actions[1].Args[2], "主体＝封印宿主（『该角色』）");
+            // 【2026-10 用户口径】"支付1"＝**发动能力时**的额外费用（入堆叠前问是/否，两选项）
+            Assert.AreEqual(1, e.OptionalPayCost, "费用＝发动时的可选固定 1（入堆叠前问『是否支付 1』）");
+            Assert.AreEqual(1, e.Actions.Count, "动作只剩『-1 防御』（支付不再占结算动作位）");
+            Assert.AreEqual(ActionVerb.Gain, e.Actions[0].Verb, "动作＝获得（-1防御）");
+            Assert.AreEqual("-1", e.Actions[0].Args[1], "防御 -1");
+            Assert.AreEqual("封印宿主", e.Actions[0].Args[2], "主体＝封印宿主（『该角色』）");
         }
 
         // ==================== ③ JC100：被封印时支付 → 封印宿主 -1 防御（直到回合结束） ====================
 
+        /// <summary>
+        /// 【2026-10 用户口径】支付发生在**发动能力时**（封印动作 → 入堆叠之前问是/否）：
+        /// 生产路径 `SealCard` 一趟走完后 ⇒ 已问一次"是否支付 1"、费用已扣、触发已入堆叠，
+        /// 而**效果尚未结算**（宿主防御还没变）；随后结算才 -1 防御。
+        /// </summary>
         public void TestOptionalPay_JC100支付则宿主减防御()
         {
             var game = NewGame();
             string area = Areas(game)[0];
             GiveAssets(game, 1, 3, (CardColor)5);   // JC100 颜色忠诚 5:1
 
-            var host = game.CardManager.CreateCardInstance(Probe("TS_op_host"), 2);
+            var hostTmpl = Probe("TS_op_host");
+            hostTmpl.Defense = 3;   // 3 防御：-1 后可观察（1 防御会被减到 0 而死亡，死亡由行为批次用例覆盖）
+            var host = game.CardManager.CreateCardInstance(hostTmpl, 2);
             game.ZoneManager.MoveToArea(host, area, 2);
             int defBefore = host.CurrentDefense;
 
             var fang = game.CardManager.CreateCardInstance(Load("JC100_jianyahuanxiang"), 1);
             game.ZoneManager.MoveToArea(fang, area, 1);
 
-            // 封印：走唯一出口（会广播 OnSealed）
-            game.TurnManager.SetTriggerView(new EnterAllTriggerView());
-            game.SetInputGateway(new EnterAllGateway());
-            game.TurnManager.SealCard(fang, host, false);
-
-            int manaBefore = game.PlayerManager.GetAvailableMana(1);
             var stub = new NumberStub { Answer = 1, PayAnswer = true };   // 【A117】固定金额 ⇒ 走二选一窗（PayAnswer）
             EffectEngine.Instance.UIHooks = stub;
+            // 触发排序视图：把收集到的触发**真的入堆叠**（`EnterAllTriggerView` 是"只看不推"的空实现）
+            game.TurnManager.SetTriggerView(new PushAllTriggerView());
 
-            var e = FindEffect(fang.PlayerTemplate, "JC100_3_PayToWeakenSealingHost");
-            Assert.IsNotNull(e, "JC100 应有被封印时效果");
-            EffectEngine.Instance.ResolveEffect(e, fang, null, area, fang.ControllerId);
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            // 封印：走唯一出口（会广播 OnSealed → 收集触发 → 问支付 → 入堆叠）
+            Assert.IsTrue(game.TurnManager.SealCard(fang, host, false), "前置：封印成功");
 
             Assert.AreEqual(0, stub.Calls, "**不再走数值输入框**（卡文『你可以支付1』＝是/否 ⇒ 二选一窗；见 A117）");
-            Assert.AreEqual(1, stub.PayCalls, "应询问是否支付 1（二选一窗 `PromptOptionalPay`）");
-            Assert.AreEqual(manaBefore - 1, game.PlayerManager.GetAvailableMana(1), "支付 1 → 扣 1 费");
-            Assert.AreEqual(defBefore - 1, host.CurrentDefense, "封印宿主（『该角色』）获得 -1 防御力");
+            Assert.AreEqual(1, stub.PayCalls, "封印（发动）时应询问是否支付 1（二选一窗 `PromptOptionalPay`）");
+            Assert.AreEqual(1, stub.LastPayAmount, "询问金额＝1");
+            Assert.AreEqual(manaBefore - 1, game.PlayerManager.GetAvailableMana(1), "支付 1 → **发动时**（入堆叠前）就扣 1 费");
+            Assert.IsFalse(game.StackManager.IsEmpty, "支付后该触发入堆叠");
+            Assert.AreEqual(defBefore, host.CurrentDefense, "尚未结算 ⇒ 宿主防御不变（费用在发动时付、效果在结算时做）");
+
+            ResolveStackOnce(game);
+            Assert.AreEqual(defBefore - 1, host.CurrentDefense, "结算后封印宿主（『该角色』）获得 -1 防御力");
         }
 
         // ==================== ④ 联机：触发入堆叠前 `Kind.ForceChoice` 两选项回包 ====================

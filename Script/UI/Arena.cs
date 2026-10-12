@@ -42,6 +42,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     internal IEnumerable<CardUI> AttachedCardUIs
         => _cardUIMap.Values.Where(ui => ui != null && ui.Instance != null
             && ui.Instance.CurrentZone == CardZone.AttachedZone && ui.Instance.IsAttached);
+    /// <summary>资产区(AssetZone)的资产卡 UI。
+    /// 【2026-10 用户口径·JC107】"消灭目标附属**或资产**"——资产卡同样在合法目标集合里
+    /// （高亮由 `OnTargetSelectionChangedHandler` 遍历 `_cardUIMap` 覆盖），但命中检测此前只扫
+    /// 争夺区角色与附属区附属 ⇒ 资产卡"**高亮却点不动**"（用户实测）。
+    /// 本枚举供拖拽落点判定 / 选目标点击命中复用（按实例所在区筛出，故手牌/牌库/墓地的在册 UI 不会误命中）。</summary>
+    internal IEnumerable<CardUI> AssetCardUIs
+        => _cardUIMap.Values.Where(ui => ui != null && GodotObject.IsInstanceValid(ui) && ui.Instance != null
+            && ui.Instance.CurrentZone == CardZone.AssetZone);
     internal Control AssetContainer1 => _assetContainer1;
     internal MaskMode ActiveMask => _activeMask;
     internal bool IsDragInteractionLocked => IsInteractionLocked;

@@ -12,8 +12,13 @@ namespace Cards.Effects.PlayerCards.JC
     ///      触发：当尖牙幻象被封印在一个角色上时，你可以支付1，若你如此做，令该角色获得-1防御力直到回合结束。
     /// 实现（效果级推进）：
     ///  · **现身触发**：P2 `ActionVerb.Seal` 的"自身 → 目标"形态；卡文"你可以…"= 触发可选（不设 `Forced`）。
-    ///  · **被封印时·可选支付**（K11）：`OnSealed` + `PayOptional{1,0,1}`（弹**数值输入框**问是否支付1；不支付 → 后续跳过）
-    ///    + `Gain{防御,-1,"封印宿主"}`（主体＝**封印宿主**，即"该角色"；`Duration=直到回合结束` 走时效修正栈自动还原）。
+    ///  · **被封印时·可选支付**（K11 触发版）：`OnSealed` + `OptionalPayCost=1`（**入堆叠之前**问一次
+    ///    "是否支付 1"，只有是/否两个选项；用户 2026-10 口径："**造成防御降低的效果，发动能力时就需要支付费用，
+    ///    而不是效果处理时支付费用**"）⇒ 选"是"先扣费再入堆叠，选"否"该触发不入堆叠（整条效果不结算）；
+    ///    不再用 `PayOptional`（那是"结算时弹窗问支付"，用户实测口径："用错了时机"）。
+    ///  · **结算**：`Gain{防御,-1,"封印宿主"}`（主体＝**封印宿主**，即"该角色"；`Duration=直到回合结束`
+    ///    走时效修正栈自动还原）；减防会让"当前防御力"下降 ⇒ `ApplyGain` 内部同口径补做死亡判定
+    ///    （否则按规则已死的角色会留在场上、UI 不刷新）。
     /// </summary>
     public static class JC100_jianyahuanxiang_Effects
     {
@@ -67,14 +72,6 @@ namespace Cards.Effects.PlayerCards.JC
                 Target = new TargetSpec { Kind = TargetKind.None, NeedsSelection = false },   // 主体＝封印宿主，无需取目标
                 Actions = new Array<EffectAction>
                 {
-                    // 【2026-09 整体复查·修复】可选支付 1：卡文"你可以支付1，若你如此做…"是**是/否**选择
-                    // ⇒ 固定金额 `{1,1,1}`（引擎对 min==max 走二选一窗 `PromptOptionalPay`，**不再弹数值输入框**；
-                    // 旧写法 `{1,0,1}` 是 0..1 区间 ⇒ 仍会退回数值框，与 JC061/JC064 口径冲突）。
-                    new EffectAction
-                    {
-                        Verb = ActionVerb.PayOptional,
-                        Args = new Array<string> { "1", "1", "1" },
-                    },
                     // 令**封印宿主**（"该角色"）获得 -1 防御力，直到回合结束
                     new EffectAction
                     {
@@ -82,8 +79,12 @@ namespace Cards.Effects.PlayerCards.JC
                         Args = new Array<string> { "防御", "-1", "封印宿主" },
                     },
                 },
+                // 【2026-10 用户口径】"支付1"＝**发动能力时**支付的额外费用（入堆叠之前问是/否两个选项，
+                // 不输入金额）；不支付 ⇒ 该触发不入堆叠（整条效果不结算，也不扣费）。
+                OptionalPayCost = 1,
                 Duration = "直到回合结束",
-                FaqNote = "被封印在角色上时可支付1（可选）→ 该角色 -1 防御力直到回合结束；不支付则无事发生。",
+                FaqNote = "被封印在角色上时可在**发动时**支付1（入堆叠前询问『是否支付 1』，两个选项）→ "
+                        + "该角色 -1 防御力直到回合结束；不支付则该触发不结算（放弃整条效果请用触发排序窗）。",
             });
         }
     }

@@ -5100,14 +5100,17 @@ public partial class TurnManager : Node
                 nextPhase = _combatAreaUids.Count > 0 ? TurnPhase.PreCombat : TurnPhase.EndCleanup;
                 break;
 
-            // 对抗前优先权窗口：双方玩家连续让过后才真正开始（首个/新地区的）调查对抗
+            // 对抗前优先权窗口：双方玩家连续让过后才真正开始（首个/新地区的）对抗步骤。
+            // 【2026-10 用户口径·JC098】被"略过对抗"规则跳过的步骤在流程里**直接不存在**：
+            // 下一阶段＝该地区从"调查步骤"起**第一个未被跳过**的对抗步骤
+            // （JC098 在 1 地区 ⇒ 机动轮后直接进入 1 地区战斗步骤）。
             case TurnPhase.PreCombat:
-                nextPhase = TurnPhase.CombatInvestigation;
+                nextPhase = NextCombatStepOfArea(0);
                 break;
 
-            // 同一地区内：调查 → 战斗 → 势力（每一种对抗之间都已经过一次双方连续让过）
-            case TurnPhase.CombatInvestigation: nextPhase = TurnPhase.CombatStrength; break;
-            case TurnPhase.CombatStrength:      nextPhase = TurnPhase.CombatPower; break;
+            // 同一地区内：调查 → 战斗 → 势力（每一种对抗之间都已经过一次双方连续让过；被略过的步骤直接跳过）
+            case TurnPhase.CombatInvestigation: nextPhase = NextCombatStepOfArea(1); break;
+            case TurnPhase.CombatStrength:      nextPhase = NextCombatStepOfArea(2); break;
 
             // 本地区三种对抗结算完毕：推进地区游标，若还有下一地区则直接进入其调查对抗
             // （对抗前优先权窗口 PreCombat 整个回合仅在 ActionSecond 之后进行一次，后续地区不再重复 PreCombat）
@@ -5134,15 +5137,11 @@ public partial class TurnManager : Node
                 // JC067 追加的那一次势力对抗会**再触发一次**。
                 _combatAreaIndex++;
                 if (_combatAreaIndex < _combatAreaUids.Count)
-                {
-                    GD.Print($"🔰 [TurnManager] 地区{_combatAreaIndex} 三种对抗结算完毕，直接进入地区{_combatAreaIndex + 1} 调查对抗（不再重复 PreCombat）");
-                    nextPhase = TurnPhase.CombatInvestigation;
-                }
+                    GD.Print($"🔰 [TurnManager] 地区{_combatAreaIndex} 三种对抗结算完毕，直接进入地区{_combatAreaIndex + 1} 的对抗步骤"
+                             + "（不再重复 PreCombat；被『略过对抗』跳过的步骤不进入）");
                 else
-                {
                     GD.Print("✅ [TurnManager] 所有地区三种对抗结算完毕");
-                    nextPhase = TurnPhase.EndCleanup;
-                }
+                nextPhase = NextCombatStepOfArea(0);
                 break;
 
             case TurnPhase.EndCleanup: nextPhase = TurnPhase.EndRecover; break;
@@ -5376,6 +5375,50 @@ public partial class TurnManager : Node
         _ => "",
     };
 
+    /// <summary>对抗步骤序号（0=调查 / 1=战斗 / 2=势力）→ （对抗类型, 阶段, 卡文对抗名）。</summary>
+    private static (CombatManager.CombatType Type, TurnPhase Phase, string Name) CombatStepAt(int index) => index switch
+    {
+        0 => (CombatManager.CombatType.Investigation, TurnPhase.CombatInvestigation, "调查"),
+        1 => (CombatManager.CombatType.Strength, TurnPhase.CombatStrength, "战斗"),
+        _ => (CombatManager.CombatType.Power, TurnPhase.CombatPower, "势力"),
+    };
+
+    /// <summary>
+    /// 【2026-10 用户口径·JC098"跳过的步骤在流程里直接不存在"】从 `fromStep`（0=调查 1=战斗 2=势力）
+    /// 起，取**当前地区第一个未被『略过对抗』规则跳过的对抗步骤**；该地区剩余步骤全被跳过 ⇒
+    /// 推进地区游标继续找；所有地区都没有可结算的对抗步骤 ⇒ `EndCleanup`。
+    ///
+    /// 与旧口径（"进入步骤但不结算对抗、仍给让过窗口"）的区别（用户原文）："**需要跳过调查对抗步骤，
+    /// 不是调查对抗这件事，相当于流程里直接没有这个步骤**"——例：JC098 在 1 地区 ⇒ 机动轮后**直接进入**
+    /// 1 地区战斗步骤；JC098 在 2 地区 ⇒ 1 地区势力步骤后**直接进入** 2 地区战斗步骤。
+    /// 因此被跳过的步骤**不 `EnterPhase`**：不分配行动权、不开让过窗口、UI 直接显示下一步骤。
+    ///
+    /// 判定入口＝`IsAreaCombatSkipped`（`EffectEngine.AreaSkipsCombat`，按卡**当前**所在地实时匹配，
+    /// 静态 `StaticKind.SkipAreaCombat` 与"本回合略过"（JC118）共用同一份判定）。
+    /// </summary>
+    private TurnPhase NextCombatStepOfArea(int fromStep)
+    {
+        // 防御：最多遍历"地区数 + 1"轮，杜绝游标异常时的死循环
+        for (int guard = 0; guard <= _combatAreaUids.Count + 1; guard++)
+        {
+            string areaUid = CurrentCombatAreaUid;
+            if (string.IsNullOrEmpty(areaUid)) return TurnPhase.EndCleanup;   // 地区游标已走完
+            for (int i = fromStep; i < 3; i++)
+            {
+                var step = CombatStepAt(i);
+                if (!IsAreaCombatSkipped(step.Type, areaUid)) return step.Phase;
+                GD.Print($"⏭ [TurnManager] 地区{CurrentCombatAreaNo} 的{step.Name}步骤被『略过对抗』跳过（流程中不存在该步骤）");
+            }
+            // 本地区三种对抗全被跳过 → 直接推进下一地区（下个地区同样从调查步骤起按同一份判定筛）
+            _combatAreaIndex++;
+            fromStep = 0;
+            if (_combatAreaIndex < _combatAreaUids.Count)
+                GD.Print($"🔰 [TurnManager] 地区{_combatAreaIndex} 三种对抗**全部被略过** → 继续判定地区{_combatAreaIndex + 1}");
+        }
+        GD.PrintErr("[TurnManager] ⚠ NextCombatStepOfArea 超出地区数上限，直接进入结束步骤（防御性兜底）");
+        return TurnPhase.EndCleanup;
+    }
+
     /// <summary>
     /// 阶段/步骤 → 中文显示名（单机 Arena 与联机 ArenaOl **共用唯一口径**，避免两处 switch 漂移）。
     /// 12 个步骤全部中文；对抗三步骤带"{N}地区"前缀（如"1地区调查步骤"，areaNo &lt;= 0 时不带前缀）。
@@ -5450,11 +5493,12 @@ public partial class TurnManager : Node
         if (VerboseSteps) GD.Print($"【{stepName}】结算地区{areaNo}（{areaUid}）的{stepName.Replace("步骤", "对抗")}");
 
         // 【P3·K18】地区级"略过对抗"（JC098 陷入疯狂的人群「本地区略过调查对抗步骤」）：
-        // 该地区在本步骤**不结算对抗**（不产生胜负、不加势力标志、不开分配窗口/伤害分配），
-        // 但仍给出让过窗口 —— 与"无对抗管理器 / 无地区"的降级路径同款，保持"每步骤都有优先权"的一致性。
+        // 正常流程里该步骤**根本不会进入**（`AdvancePhase` 经 `NextCombatStepOfArea` 直接跳到下一个可结算步骤）；
+        // 本分支是**直接 `EnterPhase` / PM `jumpto`** 等旁路入口的兜底：不结算对抗（不产生胜负、不加势力标志、
+        // 不开分配窗口），仅给让过窗口，保证状态机不被撕开。
         if (IsAreaCombatSkipped(type, areaUid))
         {
-            GD.Print($"【{stepName}】地区{areaNo}（{areaUid}）被『略过对抗』静止规则跳过：不结算对抗，仅给优先权窗口");
+            GD.Print($"【{stepName}】地区{areaNo}（{areaUid}）被『略过对抗』规则跳过：不结算对抗，仅给优先权窗口");
             GrantPriorityAfterCombatStep(stepName, areaNo);
             return;
         }

@@ -192,5 +192,169 @@ namespace Script.IO
         {
             return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
         }
+
+        // ==================== 数字解析（2026-10-13 新增） ====================
+
+        /// <summary>
+        /// 【Web 安全】整数解析，**完全不经过 NumberFormatInfo / 全球化**。
+        ///
+        /// 为什么必须要有它：
+        ///   `ushort.TryParse(s, out v)` / `int.Parse(s)` 这类**不带 IFormatProvider** 的重载，
+        ///   内部会走 `NumberFormatInfo.CurrentInfo`（判断正负号/千分位），
+        ///   而 `PositiveSign` / `NegativeSign` 的取值要落到**文化数据（ICU）**上 ——
+        ///   与 `"..." + (-1)` 是同一条必崩路径。
+        ///   （2026-10-13 实测：Web 版大厅页点「连接」时，进程在进到 `ClientSession.Connect` **之前**就 Aborted，
+        ///    夹在"参数解析"与"保存偏好"之间；换成下面的实现后可继续走到连接。）
+        ///
+        /// 语义与 `int.TryParse(s, out v)` 的默认重载一致：允许首尾 ASCII 空白、可选 '+'/'-' 前缀、纯十进制数字。
+        /// </summary>
+        public static bool TryParseInt(string s, out int value)
+        {
+            value = 0;
+            if (string.IsNullOrEmpty(s)) return false;
+
+            int i = 0, n = s.Length;
+            while (i < n && IsAsciiWhitespace(s[i])) i++;
+
+            bool neg = false;
+            if (i < n && (s[i] == '-' || s[i] == '+')) { neg = s[i] == '-'; i++; }
+            if (i >= n) return false;
+
+            long acc = 0;
+            bool any = false;
+            while (i < n && s[i] >= '0' && s[i] <= '9')
+            {
+                acc = acc * 10 + (s[i] - '0');
+                if (acc > 2147483648L) acc = 2147483648L;   // 溢出即钳制，最终会被下面的范围判断拒掉
+                any = true;
+                i++;
+            }
+            if (!any) return false;
+
+            while (i < n && IsAsciiWhitespace(s[i])) i++;
+            if (i != n) return false;                        // 尾部还有别的东西 → 非法
+
+            long v = neg ? -acc : acc;
+            if (v > int.MaxValue || v < int.MinValue) return false;
+            value = (int)v;
+            return true;
+        }
+
+        /// <summary>【Web 安全】等价于 `ushort.TryParse`（范围 0..65535）。见 <see cref="TryParseInt"/>。</summary>
+        public static bool TryParseUshort(string s, out ushort value)
+        {
+            value = 0;
+            if (!TryParseInt(s, out int v)) return false;
+            if (v < 0 || v > 65535) return false;
+            value = (ushort)v;
+            return true;
+        }
+
+        /// <summary>【Web 安全】等价于 `string.IsNullOrWhiteSpace`，但空白判定只认 ASCII（不碰 Unicode 类别表）。</summary>
+        public static bool IsNullOrWhiteSpaceAscii(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return true;
+            for (int i = 0; i < s.Length; i++)
+                if (!IsAsciiWhitespace(s[i])) return false;
+            return true;
+        }
+
+        // ==================== 忽略大小写的比较（2026-10-13 新增） ====================
+        //
+        // 【为什么 "序数忽略大小写" 在 Web 上一样会崩】
+        //   `StringComparison.OrdinalIgnoreCase` / `StringComparer.OrdinalIgnoreCase` 看着像纯序数，
+        //   其实 .NET 的实现（Ordinal.CompareStringIgnoreCase）只对 **ASCII** 字符走算术快路径：
+        //        while (length != 0 && charA <= 0x7F && charB <= 0x7F) { ... }
+        //   一旦比较区间里出现任何一个 >0x7F 的字符，就落到
+        //        OrdinalCasing.CompareStringIgnoreCaseNonAscii -> Interop.Globalization.ChangeCase -> ICU
+        //   Web 版运行时没有 ICU -> 直接 abort。
+        //   2026-10-13 实测：`DeckCatalog.ListDeckPaths()` 里对含中文文件名的卡组目录
+        //   `list.Sort(StringComparer.OrdinalIgnoreCase)`，正好崩在 Sort 这一行
+        //   （日志停在 "p7 ListDirEnd 完成，即将 Sort"，紧接着 Aborted()）。
+        //   这也解释了 `ResourceDirScan` 用 OrdinalIgnoreCase 为何一直没事：它比的是 `.tres`/`.`/`.remap`
+        //   这类**纯 ASCII 字面量**，永远走快路径。
+        //
+        //   结论：只要比较的两侧**可能含非 ASCII**（卡组名、卡名、用户输入……），
+        //   就必须换成下面这套只折叠 ASCII 的版本。中文本身没有大小写，
+        //   因此对非 ASCII 串，本实现与 OrdinalIgnoreCase 的结果完全一致。
+
+        /// <summary>ASCII 大小写折叠（'A'-'Z' → 'a'-'z'），非 ASCII 字符原样保留。不碰 TextInfo/ICU。</summary>
+        private static char FoldAscii(char c)
+        {
+            return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        }
+
+        /// <summary>
+        /// 【Web 安全】等价于 `string.Equals(a, b, StringComparison.OrdinalIgnoreCase)`，但只折叠 ASCII 大小写。
+        /// 见上文“为什么序数忽略大小写也会崩”。
+        /// </summary>
+        public static bool EqualsIgnoreCaseAscii(string a, string b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (FoldAscii(a[i]) != FoldAscii(b[i])) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// 【Web 安全】ASCII 折叠版的序数比较（&lt;0 / 0 / &gt;0）。
+        /// 替代 `StringComparer.OrdinalIgnoreCase.Compare`，可直接当 `Comparison&lt;string&gt;` / `IComparer&lt;string&gt;` 用。
+        /// </summary>
+        public static int CompareIgnoreCaseAscii(string a, string b)
+        {
+            if (ReferenceEquals(a, b)) return 0;
+            if (a == null) return -1;
+            if (b == null) return 1;
+            int n = a.Length < b.Length ? a.Length : b.Length;
+            for (int i = 0; i < n; i++)
+            {
+                char ca = FoldAscii(a[i]), cb = FoldAscii(b[i]);
+                if (ca != cb) return ca < cb ? -1 : 1;
+            }
+            return a.Length - b.Length;
+        }
+
+        /// <summary>
+        /// 【Web 安全】原地按「ASCII 折叠」忽略大小写排序。
+        /// 替代 `list.Sort(StringComparer.OrdinalIgnoreCase)`（该写法在含中文名的目录上实测 abort）。
+        /// `List&lt;T&gt;.Sort(Comparison&lt;T&gt;)` 全程走托管比较器 + 内省排序，不碰 ICU。
+        /// </summary>
+        public static void SortIgnoreCaseAscii(System.Collections.Generic.List<string> list)
+        {
+            if (list == null || list.Count < 2) return;
+            list.Sort(CompareIgnoreCaseAscii);
+        }
+
+        /// <summary>【Web 安全】等价于 `s.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)`（只折叠 ASCII）。</summary>
+        public static bool EndsWithIgnoreCaseAscii(string s, string suffix)
+        {
+            if (s == null || suffix == null) return false;
+            if (suffix.Length > s.Length) return false;
+            int off = s.Length - suffix.Length;
+            for (int i = 0; i < suffix.Length; i++)
+                if (FoldAscii(s[off + i]) != FoldAscii(suffix[i])) return false;
+            return true;
+        }
+
+        /// <summary>【Web 安全】等价于 `s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)`（只折叠 ASCII）。</summary>
+        public static bool StartsWithIgnoreCaseAscii(string s, string prefix)
+        {
+            if (s == null || prefix == null) return false;
+            if (prefix.Length > s.Length) return false;
+            for (int i = 0; i < prefix.Length; i++)
+                if (FoldAscii(s[i]) != FoldAscii(prefix[i])) return false;
+            return true;
+        }
+
+        /// <summary>【Web 安全】在字符串列表里找与 value 忽略大小写（ASCII）相等的项，返回下标，找不到返回 -1。</summary>
+        public static int IndexOfIgnoreCaseAscii(System.Collections.Generic.IReadOnlyList<string> list, string value)
+        {
+            if (list == null) return -1;
+            for (int i = 0; i < list.Count; i++)
+                if (EqualsIgnoreCaseAscii(list[i], value)) return i;
+            return -1;
+        }
     }
 }

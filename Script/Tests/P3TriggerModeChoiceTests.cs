@@ -111,6 +111,16 @@ namespace Script.Tests
                 string confirmLabel, string cancelLabel, System.Action<int> onChosen)
                 => onChosen?.Invoke(-1);
 
+            /// <summary>【2026-10·JC100】触发入堆叠前的"是否支付 N"（`EffectData.OptionalPayCost`）：
+            /// 本桩默认**支付**（付费类的入堆叠门禁不改变本套件原有断言；`PayOptional=false` 可测反面）。</summary>
+            public bool PayOptional = true;
+            public int OptionalPayCalls;
+            public void PromptOptionalPay(int chooserPlayerId, string prompt, int amount, System.Action<bool> onChosen)
+            {
+                OptionalPayCalls++;
+                onChosen?.Invoke(PayOptional);
+            }
+
             public void PromptEffectMode(CardInstance source, EffectData data, System.Action<int> onChosen)
             {
                 Calls++;
@@ -300,8 +310,13 @@ namespace Script.Tests
         {
             var game = NewGame();
             string area = Areas(game)[0];
-            EffectEngine.Instance.UIHooks = null;
+            // 【2026-10·JC100 发动时付费】本卡的"被封印时"触发声明了**发动时的可选费用 1**（入堆叠前问是/否）：
+            // 桩一律支付，并先给玩家 1 张资产作为可用费用；否则"付不起 ⇒ 不弹窗 ⇒ 该触发不入堆叠"。
+            var stub = new ModeStub();
+            EffectEngine.Instance.UIHooks = stub;
             game.TurnManager.SetTriggerView(new EnterAllTriggerView());
+            var asset = game.CardManager.CreateCardInstance(Probe("TS_tmc_asset100", CardCategory.Attachment), 1);
+            game.ZoneManager.MoveToAsset(asset, 1);
 
             var host = game.CardManager.CreateCardInstance(Probe("TS_tmc_host100"), 1);
             game.ZoneManager.MoveToArea(host, area, 1);
@@ -309,6 +324,7 @@ namespace Script.Tests
             game.ZoneManager.MoveToArea(fang, area, 1);
             Assert.IsTrue(game.TurnManager.SealCard(fang, host, false), "前置：封印成功");
 
+            Assert.AreEqual(1, stub.OptionalPayCalls, "封印时问过一次『是否支付 1』（发动时付费）");
             Assert.AreEqual(1, game.StackManager.Entries.Count, "JC100『被封印时』触发已入堆叠（封印区生效区）");
             Assert.AreEqual("JC100_3_PayToWeakenSealingHost",
                 game.StackManager.Entries[0].EffectDataEffect?.EffectId, "入堆叠的正是该被封印时效果");

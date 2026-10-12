@@ -1872,6 +1872,50 @@ namespace Script.Tests
                 // ④ 上限削减 ⇒ 吸收已受伤害（"剩余生命"口径）
                 new Promise("上限削减吸收已受伤害（单一实现）", "Script/Game/Entities/CardInstance.cs",
                     "上限 -{cut} 吸收已受伤害", 1, "TestB2_4B_JC089减防吸收已受伤害_不误杀"),
+
+                // 【2026-10 实测反馈五批（单机复现；联机同源缺陷一并修）】
+                // ① JC098："略过对抗步骤"＝该步骤**在流程里直接不存在**（阶段推进时选"第一个未被跳过的对抗步骤"）
+                new Promise("略过步骤·流程层面跳步（单一实现）", "Script/Manager/TurnManager.cs",
+                    "private TurnPhase NextCombatStepOfArea(int fromStep)", 1,
+                    "TestB3_1A_JC098在1地区_机动轮后直接进1地区战斗步骤"),
+                new Promise("略过步骤·机动轮后／换地区后按判定取下一步骤", "Script/Manager/TurnManager.cs",
+                    "nextPhase = NextCombatStepOfArea(0);", 2,
+                    "TestB3_1B_JC098在2地区_1地区势力后直接进2地区战斗步骤"),
+                new Promise("略过步骤·地区内逐步骤筛选", "Script/Manager/TurnManager.cs",
+                    "nextPhase = NextCombatStepOfArea(1);", 1,
+                    "TestB3_1C_只略过战斗步骤_调查照常势力直接接续"),
+                // ② 减防类效果＝**发动能力时付费**（入堆叠前问是/否）+ 结算动作减防后补死亡判定（UI 随移动事件刷新）
+                new Promise("JC100 发动时付费（触发入堆叠前的可选费用）",
+                    "Cards/Effects/PlayerCards/JC/JC100_jianyahuanxiang.cs",
+                    "OptionalPayCost = 1", 1, "TestB3_2B_JC100支付在入堆叠前_效果尚未结算"),
+                new Promise("JC105 同口径：支付2＝发动时费用",
+                    "Cards/Effects/PlayerCards/JC/JC105_emenglingzhu.cs",
+                    "OptionalPayCost = 2", 1, "TestDeathSeal_支付2则死亡灵体被封印到目标角色上"),
+                new Promise("减防动作后补死亡判定（结算路径）", "Script/Manager/EffectEngine.cs",
+                    "if (amt < 0) RecheckDeathsAfterDefenseDrop();", 1,
+                    "TestB3_2D_JC100减防致死_走死亡流程并广播移动事件"),
+                // ③ JC107：资产卡进入"选目标可点"的命中范围（单机命中/高亮 + 联机命中/高亮）
+                new Promise("资产卡命中范围·在册 UI 单一枚举", "Script/UI/Arena.cs",
+                    "internal IEnumerable<CardUI> AssetCardUIs", 1, "TestB3_3A_JC107目标含附属与资产"),
+                new Promise("资产卡命中范围·单机（落点／拖拽高亮／清高亮）",
+                    "Script/UI/Interaction/CardDragController.cs",
+                    "foreach (var c in _arena.AssetCardUIs)", 3, "TestB3_3A_JC107目标含附属与资产"),
+                new Promise("资产卡命中范围·联机（落点／拖拽高亮）", "Script/UI/ArenaOl.cs",
+                    "zone != CardZone.AreaZone && zone != CardZone.AttachedZone && zone != CardZone.AssetZone", 2,
+                    "TestB3_3A_JC107目标含附属与资产"),
+                // ④ JC108：目标含自身（卡数据 + 单机/联机"拖回自身"落点 + 联机投影/客户端候选）
+                new Promise("JC108 目标含自身（卡数据）",
+                    "Cards/Effects/PlayerCards/JC/JC108_qiaozhipazuozhimengren.cs",
+                    "CanTargetSelf = true", 1, "TestB3_4A_JC108自身是合法目标"),
+                new Promise("拖回自身＝指定自身·单机", "Script/UI/Interaction/CardDragController.cs",
+                    "bool selfTarget = target != null && target == source && dragged;", 1,
+                    "TestB3_4B_JC108以自身为目标发动_牌库顶牌封在自身"),
+                new Promise("拖回自身＝指定自身·联机", "Script/UI/ArenaOl.cs",
+                    "isSelf && dragged", 1, "TestB3_4B_JC108以自身为目标发动_牌库顶牌封在自身"),
+                new Promise("联机客户端候选含自身", "Script/UI/ArenaOl.cs",
+                    "c == source && ability.Target.CanTargetSelf != true", 1, "TestB3_4C_JC108联机投影含自身"),
+                new Promise("服务端合法目标投影含自身", "Script/Manager/LegalityProjection.cs",
+                    "t == card && e.Target?.CanTargetSelf != true", 1, "TestB3_4C_JC108联机投影含自身"),
             };
             foreach (var p in promises)
             {
@@ -1900,6 +1944,15 @@ namespace Script.Tests
             else if (arenaOlSrc.Contains("将移动至该地区"))
                 violations.Add("⑤提示文字｜Script/UI/ArenaOl.cs 仍硬编码『将移动至该地区』"
                                + "⇒ 非移动类效果（如 JC092 死灵召唤）会显示成移动提示（须改用 `req.SlotHint`）");
+
+            // 【2026-10·JC108 用户口径】**反向**断言：单机激活拖拽的落点判定不得再**无条件**拒绝
+            // "落点＝来源卡自身"——那正是"无法选择自己为目标、拖回本卡身上被判取消"的成因。
+            string dragSrc = ReadProjectText("Script/UI/Interaction/CardDragController.cs");
+            if (dragSrc == null)
+                violations.Add("[自检] 承诺『拖回自身＝指定自身·单机』的源码不可读（Script/UI/Interaction/CardDragController.cs）");
+            else if (dragSrc.Contains("target != null && target != source &&"))
+                violations.Add("④JC108｜CardDragController.EndActivateDrag 仍无条件拒绝『落点＝来源自身』"
+                               + "⇒ 拖回本卡身上会被判取消（用户实测：无法选择自己为目标）");
 
             AssertNoViolations(violations);
         }

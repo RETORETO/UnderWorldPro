@@ -37,6 +37,8 @@ namespace Script.UI.Online
 
         public override void _Ready()
         {
+            // 【联机排查埋点 r0~r9】Web 版进房间页会 abort，逐句夹住即可定位（定位完成后删除）。
+            GD.Print("[RoomOl] r0 _Ready 进入");
             _roomLabel = GetNodeOrNull<Label>("Panel/RoomLabel");
             _seat1Label = GetNodeOrNull<Label>("Panel/Seat1Label");
             _seat2Label = GetNodeOrNull<Label>("Panel/Seat2Label");
@@ -49,14 +51,18 @@ namespace Script.UI.Online
             _startButton = GetNodeOrNull<Button>("Panel/StartButton");
             _kickButton = GetNodeOrNull<Button>("Panel/KickButton");
             _leaveButton = GetNodeOrNull<Button>("Panel/LeaveButton");
+            GD.Print("[RoomOl] r1 节点已取完");
 
             if (_deckButton != null) _deckButton.Pressed += () => SubmitDeck(_selectedDeckPath, out _);   // 重新提交（同一卡组不会触发 item_selected，故保留显式按钮）
             if (_readyButton != null) _readyButton.Pressed += ToggleReady;
             if (_startButton != null) _startButton.Pressed += () => _session?.Send(new LobbyRequest { Kind = LobbyRequestKind.StartMatch });
             if (_kickButton != null) _kickButton.Pressed += KickOpponent;
             if (_leaveButton != null) _leaveButton.Pressed += LeaveRoom;
+            GD.Print("[RoomOl] r2 按钮已绑定");
 
+            GD.Print("[RoomOl] r3 即将 BuildDeckDropdown");
             BuildDeckDropdown();
+            GD.Print("[RoomOl] r4 BuildDeckDropdown 完成");
 
             _session = OnlineClientContext.Take();
             if (_session == null)
@@ -64,17 +70,21 @@ namespace Script.UI.Online
                 SetStatus("没有活动连接，请先在大厅连接服务端。");
                 return;
             }
+            GD.Print("[RoomOl] r5 会话已取得");
             _session.OnRoomState += OnRoomState;
             _session.OnLobbyResponse += OnLobbyResponse;
             _session.OnNotice += OnNotice;
             _session.OnDisconnected += OnDisconnected;
+            GD.Print("[RoomOl] r6 事件已订阅, CurrentRoom 是否为空=" + (_session.CurrentRoom == null ? "1" : "0"));
             if (_session.CurrentRoom != null) OnRoomState(_session.CurrentRoom);
+            GD.Print("[RoomOl] r7 OnRoomState(CurrentRoom) 完成");
 
             // 进房即**自动提交**当前选中的卡组（上次使用 / 目录第一个）：
             // 否则玩家只"看到"下拉框选中项但服务端还不知道（且点同一个选项不会再触发 item_selected）。
             // 若我此刻已是"已准备"（例如从战场页回到房间页），卡组处于锁定态，跳过（服务端也会拒绝）。
             if (IsDeckLocked()) GD.Print("[RoomOl] 我已是「已准备」：卡组锁定，跳过自动提交");
             else SubmitDeck(_selectedDeckPath, out _);
+            GD.Print("[RoomOl] r9 _Ready 全部完成");
         }
 
         // ==================== 卡组下拉框 ====================
@@ -87,22 +97,32 @@ namespace Script.UI.Online
         private void BuildDeckDropdown()
         {
             OnlineClientPrefs.EnsureLoaded();
+            GD.Print("[RoomOl] d1 偏好已载入");
             var paths = DeckCatalog.ListDeckPaths();
+            GD.Print("[RoomOl] d2 ListDeckPaths 完成，条数=" + Script.IO.WebSafeText.Int(paths.Count));
             if (paths.Count == 0) paths.Add(DeckCatalog.DefaultDeckPath);   // 目录不可读时至少保留默认项
 
             _deckPaths.Clear();
             _deckPaths.AddRange(paths);
+            GD.Print("[RoomOl] d3 路径列表已拷贝");
 
-            if (_deckOption == null) return;
+            if (_deckOption == null) { GD.Print("[RoomOl] d3b 下拉框节点为空，跳过"); return; }
             _deckOption.Clear();
+            GD.Print("[RoomOl] d4 Clear 完成");
             foreach (var p in paths) _deckOption.AddItem(DeckCatalog.DisplayName(p));
+            GD.Print("[RoomOl] d5 AddItem 全部完成");
             _deckOption.ItemSelected += OnDeckItemSelected;
 
             // 自动选择：偏好里的上次卡组优先；否则目录第一个（通常即 default_deck.json，按名称排序）
             _selectedDeckPath = DeckCatalog.ResolveInitialDeck(paths, OnlineClientPrefs.LastDeckPath);
-            int index = paths.FindIndex(p => string.Equals(p, _selectedDeckPath, System.StringComparison.OrdinalIgnoreCase));
+            GD.Print("[RoomOl] d6 ResolveInitialDeck 完成: " + _selectedDeckPath);
+            // 【2026-10-13】原为 paths.FindIndex(p => string.Equals(p, _selectedDeckPath, OrdinalIgnoreCase))：
+            // 卡组路径含中文名时，序数忽略大小写比较会跌进 ICU -> Web 上 abort。改用只折叠 ASCII 的安全版本。
+            int index = Script.IO.WebSafeText.IndexOfIgnoreCaseAscii(paths, _selectedDeckPath);
             if (index < 0) index = 0;
+            GD.Print("[RoomOl] d7 index=" + Script.IO.WebSafeText.Int(index));
             _deckOption.Selected = index;
+            GD.Print("[RoomOl] d8 Selected 已设置");
             _selectedDeckPath = paths[index];
             GD.Print($"[RoomOl] 卡组下拉框已就绪：{paths.Count} 个，当前选中「{DeckCatalog.DisplayName(_selectedDeckPath)}」"
                 + $"（来源：{(string.IsNullOrEmpty(OnlineClientPrefs.LastDeckPath) ? "目录默认" : "上次使用")}）");
@@ -173,22 +193,30 @@ namespace Script.UI.Online
                 return false;
             }
             if (_session == null || string.IsNullOrEmpty(path)) { error = "未选择卡组"; return false; }
+            GD.Print("[RoomOl] u1 即将 Load 卡组: " + path);
             var deck = DeckListLoader.Load(path);
+            GD.Print("[RoomOl] u2 Load 完成, 是否为空=" + (deck == null ? "1" : "0"));
             if (deck == null)
             {
                 error = $"卡组文件无法读取：{path}";
                 SetStatus(error);
                 return false;
             }
+            GD.Print("[RoomOl] u3 即将 ToJsonText");
+            string json = DeckListLoader.ToJsonText(deck);
+            GD.Print("[RoomOl] u4 ToJsonText 完成, 长度=" + Script.IO.WebSafeText.Int(json == null ? -1 : json.Length));
             _session.Send(new LobbyRequest
             {
                 Kind = LobbyRequestKind.SelectDeck,
                 DeckName = deck.DeckName,
-                DeckJson = DeckListLoader.ToJsonText(deck),
+                DeckJson = json,
             });
+            GD.Print("[RoomOl] u5 Send 完成");
             _committedIndex = _deckOption != null ? _deckOption.Selected : _committedIndex;
             if (persist) OnlineClientPrefs.SaveDeck(path);
+            GD.Print("[RoomOl] u6 SaveDeck 完成");
             SetStatus($"已提交卡组「{DeckCatalog.DisplayName(path)}」（{deck.TotalCardCount} 张），等待服务端校验…");
+            GD.Print("[RoomOl] u7 SetStatus 完成");
             return true;
         }
 
@@ -228,6 +256,7 @@ namespace Script.UI.Online
         {
             if (state == null) return;
             _room = state;
+            GD.Print("[RoomOl] s1 OnRoomState 进入");
 
             // 开局：切到战场页（由 OnlineArenaEntry 负责挂 ArenaOl 并 attach 本会话）
             if (state.Phase == RoomPhase.InMatch)
@@ -242,16 +271,21 @@ namespace Script.UI.Online
                 GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
                 return;
             }
+            GD.Print("[RoomOl] s2 阶段判断通过");
 
             int me = state.ViewerSeat;
             var mine = state.SeatState(me);
             var opp = state.SeatState(me == 1 ? 2 : 1);
+            GD.Print("[RoomOl] s3 座位信息已取 me=" + Script.IO.WebSafeText.Int(me));
 
             if (_roomLabel != null) _roomLabel.Text = $"房间 {state.RoomId}（{state.RoomName}）  阶段：{state.Phase}  我是座位 {me}{(state.HostSeat == me ? "（房主）" : "")}";
             if (_seat1Label != null) _seat1Label.Text = SeatLine(state, 1, state.HostSeat);
+            GD.Print("[RoomOl] s4 房间/座位1 文本已设置");
             if (_seat2Label != null) _seat2Label.Text = SeatLine(state, 2, state.HostSeat);
+            GD.Print("[RoomOl] s5 座位2 文本已设置");
 
             RefreshHostHint();
+            GD.Print("[RoomOl] s6 RefreshHostHint 完成");
 
             if (_readyButton != null)
             {
@@ -260,6 +294,7 @@ namespace Script.UI.Online
             }
             // 卡组锁定：已准备 → 下拉框不可打开、不能重新提交；取消准备/新一局回到未准备 → 自动解锁
             ApplyDeckLock(mine?.Ready == true);
+            GD.Print("[RoomOl] s7 准备按钮/卡组锁定已刷新");
             if (_startButton != null) _startButton.Visible = state.HostSeat == me;
             if (_startButton != null) _startButton.Disabled = state.Phase != RoomPhase.Ready;
             if (_kickButton != null) _kickButton.Visible = state.HostSeat == me;
@@ -276,6 +311,7 @@ namespace Script.UI.Online
                 if (mine?.Ready == true) deckText += "　🔒 已准备：卡组已锁定（取消准备后可更换）";
                 _deckStatusLabel.Text = deckText;
             }
+            GD.Print("[RoomOl] s9 OnRoomState 全部完成");
         }
 
         /// <summary>

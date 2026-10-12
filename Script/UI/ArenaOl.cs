@@ -122,6 +122,10 @@ namespace Script.UI
         private StackArrow _activateArrow;                            // 拖拽中的箭头
         private readonly List<CardUI> _activateHighlighted = new List<CardUI>();
         private readonly HashSet<string> _activateLegalUids = new HashSet<string>();
+        /// <summary>【2026-10 用户口径·JC108】本次激活拖拽期间鼠标**离开过来源卡**（＝确实拖动了）：
+        /// 来源卡自身是合法目标（`Target.CanTargetSelf`）时，"拖出去再松回本卡身上"＝指定自身为目标；
+        /// 原地单击（从未离开）仍按取消处理。与单机 `CardDragController._activateLeftSource` 同一口径。</summary>
+        private bool _activateLeftSource;
 
         // —— 服务端拒绝提示（G4）：联机提示窗 + 模态标记 ——
         private OnlineNoticeWindow _noticeWindow;
@@ -3082,9 +3086,10 @@ namespace Script.UI
                 if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
                 if (ReferenceEquals(ui, dragging)) continue;
                 if (ui.Instance.IsHidden) continue;
-                // 高亮范围与落点命中范围一致：仅争夺区/附属区（对齐单机 UpdateDragTargetHighlights 只遍历 AreaCardUIs）
+                // 高亮范围与落点命中范围一致：争夺区/附属区/**资产区**（对齐单机 UpdateDragTargetHighlights；
+                // 资产区为 2026-10·JC107"消灭目标附属或资产"补齐，落点命中同样含资产）。
                 var zone = ui.Instance.CurrentZone;
-                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone) continue;
+                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone && zone != CardZone.AssetZone) continue;
                 bool legal = IsLegalPlayTargetForClient(dragging.Instance, ui.Instance);
                 bool was = _handDragHighlighted.Contains(ui);
                 if (legal && !was) { ui.SetTargetHighlight(true); _handDragHighlighted.Add(ui); }
@@ -3152,7 +3157,11 @@ namespace Script.UI
             if (cards == null) return legal;
             foreach (var c in cards)
             {
-                if (c == null || c == source) continue;
+                if (c == null) continue;
+                // 【2026-10 用户口径·JC108】声明"目标含自身"（`Target.CanTargetSelf`）的能力，
+                // **来源卡本身也是合法目标**（与服务端 `IsLegalActivateTarget` / 候选枚举同一口径）；
+                // 此前无条件跳过自身 ⇒ 客户端"选不到自己"，拖回自身被判取消。
+                if (c == source && ability.Target.CanTargetSelf != true) continue;
                 if (ability.Target.IsLocalZone && c.ZoneDetailId != source.ZoneDetailId) continue;
                 if (ActivateEligibility.IsLegalActivateTarget(source, ability, c, cardMgr, playerMgr)) legal.Add(c.UID);
             }
@@ -3445,6 +3454,7 @@ namespace Script.UI
 
             _activateDragSource = hit;
             _activateDragAbility = ability;
+            _activateLeftSource = false;   // 【JC108】新一次拖拽：重置"是否离开过来源卡"
             _activateLegalUids.Clear();
             foreach (var u in ComputeLegalCardTargetUids(inst, ability)) _activateLegalUids.Add(u);
             _activationSelectionBusy = true;   // 拖拽期间本地模态：禁止让过/结束回合/重复起手
@@ -3466,6 +3476,10 @@ namespace Script.UI
             if (_activateArrow != null && GodotObject.IsInstanceValid(_activateArrow))
                 _activateArrow.SetPoints(_activateDragSource.GetVisualGlobalRect().GetCenter(), globalPos);
 
+            // 【2026-10·JC108】记录"鼠标确实离开过来源卡"（区分"拖回自身＝指定自身"与"原地单击＝取消"）
+            if (!_activateLeftSource && !_activateDragSource.GetVisualGlobalRect().HasPoint(globalPos))
+                _activateLeftSource = true;
+
             foreach (var kv in _cardUIMap)
             {
                 var ui = kv.Value;
@@ -3476,14 +3490,19 @@ namespace Script.UI
             }
         }
 
-        /// <summary>放手：落点为合法目标则上行 ActivateAbility(sourceUid, effectId, targetUid)；否则取消（与单机 EndActivateDrag 一致）。</summary>
+        /// <summary>放手：落点为合法目标则上行 ActivateAbility(sourceUid, effectId, targetUid)；否则取消（与单机 EndActivateDrag 一致）。
+        /// 【2026-10 用户口径·JC108】落点是**来源卡自身**时不再一律取消：该能力声明"目标含自身"
+        /// （候选集合 `_activateLegalUids` 由 `ComputeLegalCardTargetUids` 按 `CanTargetSelf` 算出，含自身）
+        /// 且本次确实拖动过 ⇒ 以自身为目标上行（服务端权威复检）。原地单击仍按取消处理。</summary>
         private void EndOnlineActivateDrag(Vector2 globalPos)
         {
             var src = _activateDragSource;
             var ab = _activateDragAbility;
             string targetUid = PickLegalTargetAt(globalPos);
+            bool dragged = _activateLeftSource;
+            bool isSelf = src?.Instance != null && targetUid == src.Instance.UID;
             bool ok = src?.Instance != null && ab != null
-                      && !string.IsNullOrEmpty(targetUid) && targetUid != src.Instance.UID;
+                      && !string.IsNullOrEmpty(targetUid) && (targetUid != src.Instance.UID || (isSelf && dragged));
             string srcUid = src?.Instance?.UID;
             string srcName = src?.Instance?.PlayerTemplate?.CardName;
             string effectId = ab?.EffectId;
@@ -3508,6 +3527,7 @@ namespace Script.UI
             _activateArrow = null;
             _activateDragSource = null;
             _activateDragAbility = null;
+            _activateLeftSource = false;
             _activateLegalUids.Clear();
             _activationSelectionBusy = false;
         }
@@ -3614,8 +3634,10 @@ namespace Script.UI
             }
         }
 
-        /// <summary>命中"场上卡"目标（**仅争夺区/附属区**，不含手牌/牌库/墓地，跳过隐藏占位；
-        /// 对齐单机 `CardDragController.PickAreaCardAt` 的命中范围：AreaCardUIs + AttachedCardUIs）。</summary>
+        /// <summary>命中"场上卡"目标（**争夺区角色 / 附属区附属 / 资产区资产**，不含手牌/牌库/墓地，跳过隐藏占位；
+        /// 对齐单机 `CardDragController.PickAreaCardAt` 的命中范围）。
+        /// 【2026-10 用户口径·JC107】资产卡此前不在命中范围内 ⇒ "消灭目标附属**或资产**"在联机端
+        /// 同样是"高亮却点不动"（拖到资产上也不认落点）；纳入后与单机同一份命中范围。</summary>
         private CardUI PickFieldCardAt(Vector2 globalPos)
         {
             CardUI best = null;
@@ -3626,7 +3648,7 @@ namespace Script.UI
                 if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
                 if (ui.Instance.IsHidden) continue;
                 var zone = ui.Instance.CurrentZone;
-                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone) continue;
+                if (zone != CardZone.AreaZone && zone != CardZone.AttachedZone && zone != CardZone.AssetZone) continue;
                 if (!ui.GetVisualGlobalRect().HasPoint(globalPos)) continue;
                 if (ui.ZIndex >= bestZ) { bestZ = ui.ZIndex; best = ui; }
             }

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
@@ -105,7 +105,11 @@ namespace Script.Manager
                     var entry = new AbilityTargetSnap { SourceUid = card.UID, EffectId = e.EffectId };
                     foreach (var t in candidates)
                     {
-                        if (t == null || t == card) continue;
+                        // 【2026-10 用户口径·JC108】声明"目标含自身"（`Target.CanTargetSelf`）的能力，
+                        // **来源卡本身也是合法目标** ⇒ 投影必须一并下发，否则客户端拿不到"自己"这个候选
+                        // （`IsLegalActivateTarget` 本就按 CanTargetSelf 放行，此处跳过自身会与之分叉）。
+                        if (t == null) continue;
+                        if (t == card && e.Target?.CanTargetSelf != true) continue;
                         if (ActivateEligibility.IsLegalActivateTarget(card, e, t, cm, pm))
                             entry.TargetUids.Add(t.UID);
                     }

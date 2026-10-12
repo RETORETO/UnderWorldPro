@@ -1,4 +1,4 @@
-﻿# JC 效果代码核查项（唯一口径来源）
+# JC 效果代码核查项（唯一口径来源）
 
 > **本文件是 JC 扩展包效果代码自查的唯一口径来源。**
 > 核查对象：`Cards/Effects/PlayerCards/JC/*.cs`（134 个效果脚本 + `JCEffects.cs` 注册入口）
@@ -610,6 +610,10 @@ JCEffects.RegisterAll()
 - 卡文含"你可以/选择一个/是否/任意数量/检视"等决策 ⇒ 必须有 `IGameUIHooks.Prompt*`（单机窗口）或网关请求（联机）。
 - 窗口形态按语义选：是/否 ⇒ 两按钮（`PromptOptionalPay`/`PromptTwoChoice`/`PromptPayOrSacrifice`）；多个选项卡 ⇒ `Modes`；
   数值 ⇒ `PromptNumberInput`/`PromptPrediction`/分配窗；**不得**用"退化数值框"表达是/否。
+- **询问时机必须对**：卡文"**你可以支付N，若你如此做…**"（触发类）的费用是**发动能力时**支付的额外费用 ⇒
+  必须用 `EffectData.OptionalPayCost=N`（**取完目标 → 入堆叠之前**问一次是/否），**不得**写成结算动作
+  `ActionVerb.PayOptional`（那是"效果处理时才问支付"）；不支付 ⇒ 该触发不入堆叠；付不起 ⇒ 不弹窗（fail-closed）。
+  收口＝`TurnManager.EnsureOptionalPayThenPush` / `...Async`。已按此口径落地：JC061 / JC100 / **JC105**。
 - 前置不满足（阶段/次数/代价/目标/代价对象）时 UI 与服务端**共用同一判定**并置灰。
 
 ### ⑩/⑪/⑪-b 注册、自指、语义↔动作
@@ -867,3 +871,29 @@ JC105 光环"所有其他本方灵体角色"⇒**全场**；JC059 光环写"本�
   → `OpenGraveyardAreaChoice`；联机 `ArenaOl.OnGraveyardPlayRequested` → `OpenOnlineGraveyardAreaChoice` 后上行
   `PlayCard{targetAreaUid}`，服务端权威校验费用/忠诚/阶段）。信号＝`CardUI.GraveyardPlayRequested`
   （订阅收口在 `Arena.Layout` 的『区域同步唯一收口』与 `ArenaOl.RegisterOnlineCardUI`）。
+
+### 附二补遗六 · 2026-10 实测反馈五批（单机复现；联机同源缺陷一并修）
+
+- **㉘ 地区级"略过对抗"＝该步骤在流程里直接不存在（JC098/JC118，口径修正）**：卡文"本地区略过调查对抗**步骤**"
+  ⇒ 不是"进入该步骤但不结算"，而是**流程里没有这一步**：不进入该阶段、不分配行动权、不开让过窗口、不开对抗窗口。
+  单一消费点＝`TurnManager.NextCombatStepOfArea(fromStep)`（从给定序号起取"当前地区第一个未被跳过的对抗步骤"；
+  该地区全被跳过 ⇒ 推进地区游标；所有地区都无可结算步骤 ⇒ 结束步骤），`AdvancePhase` 在**机动轮后 / 地区内推进 /
+  换地区后**三处接入。`ResolveCurrentAreaCombat` 的旧门禁**保留为旁路兜底**（PM `jumpto` / 直接 `EnterPhase`
+  进到被跳过的步骤时仍不结算对抗）。判定仍按卡**当前**所在地实时匹配地区（`EffectEngine.AreaSkipsCombat`）。
+  同一条消费点让 JC118（`ActionVerb.SkipAreaCombat`，可只指定"战斗"等中间步骤）获得相同语义。
+- **㉚ 减防的**结算动作**路径也要复检死亡（JC100 BUG2）**：㉚ 原文"数值下降 ⇒ 必须复检派生状态"覆盖**所有**减防路径——
+  除持续授予（`RegisterPersistent` 尾）与光环撤销（`ReevaluateAuras` 尾）外，**动作型** `Gain{防御,-N}`
+  （`EffectEngine.ApplyGain` 的"防御"分支，`amt < 0`）同样必须调用 `RecheckDeathsAfterDefenseDrop()`；
+  否则"按规则已死"的角色留在场上、**UI 不刷新**（单机 UI 由 `ZoneManager.OnCardMoved` → `SyncCardUIToZone` 驱动）。
+- **⑦ 询问时机：可选固定费用＝发动时支付（JC100/JC105，同 JC061）**：见 ⑦/⑧/⑨ 新增条目。
+- **⑤/⑤-命中范围：高亮范围必须与"可点/可落点"范围同源（JC107）**：选目标的高亮走 `_cardUIMap`（在册 UI），
+  而点击命中原先只扫"争夺区角色 + 附属区附属" ⇒ **资产卡高亮却点不动**。命中范围＝
+  单机 `Arena.AssetCardUIs`（按实例所在区 `AssetZone` 从在册 UI 筛出）接入 `CardDragController.PickAreaCardAt`
+  与拖拽落点高亮/清理；联机 `ArenaOl.PickFieldCardAt` 的区过滤补 `AssetZone`（拖拽高亮同补）。
+  通用纪律：**凡"能高亮"的目标都必须"能点中"**（两处共用同一份集合）。
+- **⑤/㉕ 自身目标的"能不能点"（JC108）**：`Target.CanTargetSelf=true` 只解决**候选/门禁**；交互侧还必须让"自身"**可被选中**：
+  单机/联机激活拖拽的落点判定不得**无条件**拒绝"落点＝来源卡自身"，判据＝"**确实拖动过**（鼠标离开过来源卡）
+  ∧ 自身是合法目标"（原地单击仍为取消）；联机另需 `LegalityProjection`（服务端投影）与
+  `ArenaOl.ComputeLegalCardTargetUids`（客户端兜底）**不再无条件跳过来源卡**（原写法与
+  `ActivateEligibility.IsLegalActivateTarget` 的 `CanTargetSelf` 放行分叉）。
+  注：JC108 的被封印者是**牌库顶的牌**（不是本卡）⇒ 不适用 JC066/JC100/JC110"不能把自己封印在自己身上"。

@@ -49,6 +49,11 @@ namespace Script.UI.Interaction
         private CardUI _activatingCard;
         private StackArrow _activateArrow;
         private readonly List<CardUI> _activateHighlighted = new();
+        /// <summary>【2026-10 用户口径·JC108】本次激活拖拽期间，鼠标**离开过来源卡**（＝确实拖动了）。
+        /// 用途：来源卡自身也是合法目标（`Target.CanTargetSelf`，如 JC108"封印在目标角色上"含自身）时，
+        /// "拖出去再松开在本卡身上"＝**指定自身为目标**；若从未离开来源卡（＝原地单击），
+        /// 松手仍是"取消"（保持"单击场上卡不误发动效果"的既有行为）。</summary>
+        private bool _activateLeftSource;
         public bool IsActivating => _activatingCard != null;
 
         public void Configure(Arena arena, PlayerActionService actionService, CardManager cardManager, TurnManager turnManager, ModalWindowCoordinator modalCoordinator)
@@ -489,7 +494,10 @@ namespace Script.UI.Interaction
             return _cardManager != null && _cardManager.IsLegalPlayTarget(dragging.Instance, target.Instance);
         }
 
-        /// <summary>按全局坐标命中检测场上卡（争夺区角色 + 附属区附属），返回最上层命中卡。</summary>
+        /// <summary>按全局坐标命中检测场上卡（争夺区角色 + 附属区附属 + **资产区资产**），返回最上层命中卡。
+        /// 【2026-10 用户口径·JC107】资产卡（`AssetZone`）此前**不在命中范围内**：选目标时它被
+        /// `_cardUIMap` 正常高亮，但点它取不到命中 ⇒ "高亮却选中无反馈"（用户实测）。
+        /// 命中优先级保持"争夺区角色 → 附属 → 资产"，与既有落点语义一致（角色压附属、附属压资产区不影响布局）。</summary>
         public CardUI PickAreaCardAt(Vector2 globalPos)
         {
             for (int i = _arena.AreaCardUIs.Count - 1; i >= 0; i--)
@@ -501,6 +509,11 @@ namespace Script.UI.Interaction
             foreach (var c in _arena.AttachedCardUIs)
             {
                 if (c != null && c.GetVisualGlobalRect().HasPoint(globalPos)) return c;
+            }
+            // 扩展：命中资产卡（AssetZone），使"消灭目标附属或资产"类选目标能点中资产（JC107）
+            foreach (var c in _arena.AssetCardUIs)
+            {
+                if (c != null && GodotObject.IsInstanceValid(c) && c.GetVisualGlobalRect().HasPoint(globalPos)) return c;
             }
             return null;
         }
@@ -519,6 +532,13 @@ namespace Script.UI.Interaction
                 bool legal = IsLegalCardTarget(dragging, c);
                 c.SetTargetHighlight(legal);
             }
+            // 【2026-10·JC107】资产卡同为合法落点（"消灭目标附属或资产"）⇒ 拖拽期间一并高亮，
+            // 否则玩家看不到"资产卡可以放"；命中范围与高亮范围保持一致（同一份 IsLegalCardTarget）。
+            foreach (var c in _arena.AssetCardUIs)
+            {
+                if (c == null || !GodotObject.IsInstanceValid(c)) continue;
+                c.SetTargetHighlight(IsLegalCardTarget(dragging, c));
+            }
             _lastDragHoverTarget = hoveredLegal ? hovered : null;
 
             // 结附秘社卡：拖拽中高亮本方秘社（若其为合法目标）。
@@ -535,6 +555,8 @@ namespace Script.UI.Interaction
         {
             foreach (var c in _arena.AreaCardUIs)
                 c?.SetTargetHighlight(false);
+            foreach (var c in _arena.AssetCardUIs)
+                if (c != null && GodotObject.IsInstanceValid(c)) c.SetTargetHighlight(false);
             _arena.ClearCouncilHighlights();
             _lastDragHoverTarget = null;
         }
@@ -591,6 +613,7 @@ namespace Script.UI.Interaction
 
             // 角色卡（非附属）：沿用拖拽手势激活，绘制箭头并高亮合法目标。
             _activatingCard = hit;
+            _activateLeftSource = false;   // 【JC108】新一次拖拽：重置"是否离开过来源卡"
             var arrow = _arena.StackArrowScene?.Instantiate<StackArrow>();
             if (arrow != null)
             {
@@ -621,6 +644,11 @@ namespace Script.UI.Interaction
             var from = _activatingCard.GetVisualGlobalRect().GetCenter();
             _activateArrow.SetPoints(from, globalPos);
 
+            // 【2026-10·JC108】记录"鼠标确实离开过来源卡"：用于区分
+            // ①"拖出去再松回本卡身上"（＝指定自身为目标）与 ②"原地单击"（＝取消，不误发动）。
+            if (!_activateLeftSource && !_activatingCard.GetVisualGlobalRect().HasPoint(globalPos))
+                _activateLeftSource = true;
+
             var hovered = PickAreaCardAt(globalPos);
             bool legal = _arena.IsLegalActivateTargetCached(_activatingCard, hovered);
             foreach (var c in _arena.AreaCardUIs)
@@ -633,28 +661,36 @@ namespace Script.UI.Interaction
             _lastDragHoverTarget = legal ? hovered : null;
         }
 
-        /// <summary>激活拖拽结束：命中合法目标则发动能力并进入堆叠；否则取消归位。</summary>
+        /// <summary>激活拖拽结束：命中合法目标则发动能力并进入堆叠；否则取消归位。
+        /// 【2026-10 用户口径·JC108】落点是**来源卡自身**时不再一律判取消：该能力声明"目标含自身"
+        /// （`Target.CanTargetSelf`，由 `IsLegalActivateTargetCached` 把关）且本次确实拖动过
+        /// （`_activateLeftSource`）⇒ 以**自身为目标**发动（用户："拖拽后在这张卡自己身上松开
+        /// 会识别为取消效果"）；原地单击（从未离开来源卡）仍按取消处理。</summary>
         public void EndActivateDrag(Vector2 globalPos)
         {
             if (!IsActivating || _activatingCard == null) return;
             var source = _activatingCard;
             var ability = GetActivatingAbility(source);
             var target = PickAreaCardAt(globalPos);
+            bool dragged = _activateLeftSource;
+            bool selfTarget = target != null && target == source && dragged;
 
             ClearActivateTargetHighlights();
             if (_activateArrow != null) { _activateArrow.QueueFree(); _activateArrow = null; }
 
             _activatingCard = null;
+            _activateLeftSource = false;
             // 源卡本体不随拖拽移动（仅画箭头），无需归位
 
-            if (ability != null && target != null && target != source &&
-                _arena.IsLegalActivateTargetCached(source, target))
+            if (ability != null && target != null && (target != source || selfTarget)
+                && _arena.IsLegalActivateTargetCached(source, target))
             {
                 _actionService.ActivateAbility(source.Instance, ability, target.Instance);
             }
             else
             {
-                GD.Print("[DragController] 激活拖拽取消（无合法目标）");
+                GD.Print($"[DragController] 激活拖拽取消（无合法目标；落点={target?.Instance?.PlayerTemplate?.CardName ?? "空"}，"
+                         + $"来源自身={target == source}，拖动过={dragged}）");
             }
         }
 

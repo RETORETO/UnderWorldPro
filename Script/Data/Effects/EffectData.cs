@@ -197,11 +197,13 @@ namespace Script.Data.Effects
         CannotBeAttached,   // 不能被装备/附属结附（如 JC001 通灵猫头鹰）
         BlockDeployCovert,  // 全局封锁：当本卡未横置时，控制者的对手不能进行秘密派遣行动（JC068 阿格斯IV）
         /// <summary>
-        /// 【P3·K18】来源卡**所在地区略过指定对抗**（JC098「持续：本地区略过调查对抗步骤」）。
+        /// 【P3·K18】来源卡**所在地区略过指定对抗步骤**（JC098「持续：本地区略过调查对抗步骤」）。
         /// `StaticEffect.Param` ＝对抗名，可 `,` 组合：`"调查"` / `"战斗"` / `"势力"`（缺省空＝"调查"）。
         /// 生命周期：挂 `EffectTiming.Continuous` 的同一 `EffectData` 上 → 前提满足时由 `RegisterPersistent` 登记，
-        /// 离场/前提丧失时注销；消费点＝`TurnManager.ResolveCurrentAreaCombat` 经 `EffectEngine.AreaSkipsCombat`
-        /// 实时判定（按卡**当前**所在争夺区匹配地区，故移动换区自动跟随）。
+        /// 离场/前提丧失时注销；消费点＝`TurnManager.NextCombatStepOfArea`（阶段推进时选"第一个未被跳过的对抗步骤"）
+        /// 经 `EffectEngine.AreaSkipsCombat` 实时判定（按卡**当前**所在争夺区匹配地区，故移动换区自动跟随）。
+        /// 语义＝**该步骤在流程里直接不存在**（不进入该阶段、不给该步骤的优先权窗口），
+        /// 与"进入了但不结算对抗"不同（用户 2026-10 口径）。
         /// </summary>
         SkipAreaCombat,
         /// <summary>

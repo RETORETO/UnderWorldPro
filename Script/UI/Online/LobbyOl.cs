@@ -49,7 +49,18 @@ namespace Script.UI.Online
             if (_backBtn != null) _backBtn.Pressed += OnBackPressed;
 
             SetRoomActionsEnabled(false);
-            SetStatus(OnlineClientContext.HasSession ? "已连接（可刷新房间列表）" : "未连接：请填写服务端地址后点「连接」");
+            if (Script.Net.Godot.GodotWebSocketTransport.IsWeb)
+            {
+                // 【Web 联机】浏览器只能用 WebSocket；服务端必须以 `--ws` 启动，这段提示直接写在状态栏上，
+                // 免得用户对着"正在连接…"猜原因。
+                SetStatus(OnlineClientContext.HasSession
+                    ? "已连接（Web 版走 WebSocket）"
+                    : "Web 版联机：请填「服务端地址:端口」后点「连接」（服务端需以 --ws 启动 WebSocket 监听）");
+            }
+            else
+            {
+                SetStatus(OnlineClientContext.HasSession ? "已连接（可刷新房间列表）" : "未连接：请填写服务端地址后点「连接」");
+            }
             if (OnlineClientContext.HasSession)
             {
                 AttachSession(OnlineClientContext.Take());
@@ -85,25 +96,56 @@ namespace Script.UI.Online
 
         private void OnConnectPressed()
         {
+            // 【联机排查埋点 k0~k5】逐句夹住：最后打印出来的那一条，就是崩点所在。
+            GD.Print("[LobbyOl] k0 OnConnectPressed 进入");
             if (_session != null)   // 已连接：断开后重连（允许改地址）
             {
                 DetachSession();
                 OnlineClientContext.Disconnect();
                 SetStatus("已断开，正在使用新地址重连…");
             }
+            GD.Print("[LobbyOl] k1 旧会话处理完成");
 
-            string host = string.IsNullOrWhiteSpace(_hostInput?.Text) ? "127.0.0.1" : _hostInput.Text.Trim();
-            if (!ushort.TryParse(_portInput?.Text?.Trim(), out var port)) port = 18950;
-            string name = string.IsNullOrWhiteSpace(_nameInput?.Text) ? "玩家" : _nameInput.Text.Trim();
+            // 【Web 安全】这一段的每次"值 -> 字符串 / 字符串 -> 数字"都必须绕开全球化：
+            //   `string.IsNullOrWhiteSpace` / `Trim()` / `ushort.TryParse` 都可能经 NumberFormatInfo 或
+            //   Unicode 类别表落到 ICU 上（Web 上直接 abort）。见 Script/IO/WebSafeText.cs 类头。
+            string host = Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(_hostInput?.Text)
+                ? "127.0.0.1" : Script.IO.WebSafeText.TrimAscii(_hostInput.Text);
+            GD.Print("[LobbyOl] k2 host 解析完成: " + host);
+
+            GD.Print("[LobbyOl] k3 即将解析 port");
+            if (!Script.IO.WebSafeText.TryParseUshort(Script.IO.WebSafeText.TrimAscii(_portInput?.Text), out var port))
+                port = 18950;
+            GD.Print("[LobbyOl] k3b port=" + Script.IO.WebSafeText.Int(port));
+
+            string name = Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(_nameInput?.Text)
+                ? "玩家" : Script.IO.WebSafeText.TrimAscii(_nameInput.Text);
+            GD.Print("[LobbyOl] k4 name 解析完成");
 
             OnlineClientContext.LastHost = host;
             OnlineClientContext.LastPort = port;
             OnlineClientContext.LastName = name;
+            GD.Print("[LobbyOl] k5 即将 SaveConnection");
             Script.IO.OnlineClientPrefs.SaveConnection(host, port, name);   // 持久化：下次自动回填
+            GD.Print("[LobbyOl] k5b SaveConnection 完成");
 
+            // 【联机排查埋点】n1/n2 夹住 Connect：n1 之后若进程没了，说明崩在 Connect 内部（ENet CreateClient）。
+            GD.Print("[LobbyOl] n1 即将 Connect host=" + host + " port=" + Script.IO.WebSafeText.Int(port) + " name=" + name);
             _session = ClientSession.Connect(host, port, name);
+            GD.Print("[LobbyOl] n2 Connect 已返回");
             OnlineClientContext.SetSession(_session);
             AttachSession(_session);
+
+            // 【Web 硬保险】浏览器不支持 ENet：连接根本没建立，必须立刻给出可读原因，
+            // 否则状态栏会永远停在"正在连接…"（旧版更糟——直接 wasm abort，页面冻死）。
+            if (_session.UnsupportedOnWeb)
+            {
+                GD.PrintErr("[LobbyOl] Web 版不支持 ENet 直连，已中止本次连接");
+                SetStatus("Web 版不支持 ENet 直连：浏览器无法打开 UDP 端口。"
+                        + "需联机请部署 WebSocket 服务器（或改用桌面版客户端）。");
+                return;
+            }
+
             SetStatus($"正在连接 {host}:{port} …");
         }
 
