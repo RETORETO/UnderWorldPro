@@ -51,11 +51,11 @@ namespace Script.UI.Online
             SetRoomActionsEnabled(false);
             if (Script.Net.Godot.GodotWebSocketTransport.IsWeb)
             {
-                // 【Web 联机】浏览器只能用 WebSocket；服务端必须以 `--ws` 启动，这段提示直接写在状态栏上，
-                // 免得用户对着"正在连接…"猜原因。
+                // 【传输层统一 · 2026-10-14】浏览器与桌面都走 WebSocket，所以服务端不再需要任何特殊开关；
+                // 这段提示直接写在状态栏上，免得用户对着"正在连接…"猜原因。
                 SetStatus(OnlineClientContext.HasSession
                     ? "已连接（Web 版走 WebSocket）"
-                    : "Web 版联机：请填「服务端地址:端口」后点「连接」（服务端需以 --ws 启动 WebSocket 监听）");
+                    : "Web 版联机：请填「服务端地址:端口」后点「连接」（服务端需已启动，桌面版点「建立主机」或跑 NetServer 均可）");
             }
             else
             {
@@ -129,20 +129,20 @@ namespace Script.UI.Online
             Script.IO.OnlineClientPrefs.SaveConnection(host, port, name);   // 持久化：下次自动回填
             GD.Print("[LobbyOl] k5b SaveConnection 完成");
 
-            // 【联机排查埋点】n1/n2 夹住 Connect：n1 之后若进程没了，说明崩在 Connect 内部（ENet CreateClient）。
+            // 【联机排查埋点】n1/n2 夹住 Connect：n1 之后若进程没了，说明崩在 Connect 内部（CreateClient 一类的原生调用）。
             GD.Print("[LobbyOl] n1 即将 Connect host=" + host + " port=" + Script.IO.WebSafeText.Int(port) + " name=" + name);
             _session = ClientSession.Connect(host, port, name);
             GD.Print("[LobbyOl] n2 Connect 已返回");
             OnlineClientContext.SetSession(_session);
             AttachSession(_session);
 
-            // 【Web 硬保险】浏览器不支持 ENet：连接根本没建立，必须立刻给出可读原因，
-            // 否则状态栏会永远停在"正在连接…"（旧版更糟——直接 wasm abort，页面冻死）。
+            // 【硬保险】客户端传输在本平台不可用（历史上是"浏览器上请求 ENet 服务端"）。
+            // 现在两端都走 WebSocket，正常不会走到这里；保留作兜底，避免状态栏永远停在"正在连接…"。
             if (_session.UnsupportedOnWeb)
             {
-                GD.PrintErr("[LobbyOl] Web 版不支持 ENet 直连，已中止本次连接");
-                SetStatus("Web 版不支持 ENet 直连：浏览器无法打开 UDP 端口。"
-                        + "需联机请部署 WebSocket 服务器（或改用桌面版客户端）。");
+                GD.PrintErr("[LobbyOl] 当前平台的传输不可用，已中止本次连接");
+                SetStatus("当前平台无法建立该网络连接（浏览器不支持监听端口）。"
+                        + "需联机请连接一台已启动的服务端（桌面版「建立主机」或 NetServer）。");
                 return;
             }
 

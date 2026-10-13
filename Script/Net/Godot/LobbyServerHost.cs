@@ -10,8 +10,8 @@ namespace Script.Net.Godot
     ///   · `Scenes/Net/NetServer.tscn`（`NetServerEntry`）——正式 headless 服务端入口（推荐）；
     ///   · `Scenes/Net/NetEntry.tscn --server`（`NetMatchEntry`）——开发/兼容入口（薄适配，内部用本类）。
     ///
-    /// 装配内容：ENet 服务端传输 → `ServerMatchFactory`（每房间一套对局）→ `LobbyServer`（房间状态机 + 对局通道路由）
-    /// → `ServerHost`（会话/协议/幂等底座）。每帧 `Poll()` 驱动 ENet 与房间超时清理。
+    /// 装配内容：WebSocket 服务端传输 → `ServerMatchFactory`（每房间一套对局）→ `LobbyServer`（房间状态机 + 对局通道路由）
+    /// → `ServerHost`（会话/协议/幂等底座）。每帧 `Poll()` 驱动传输与房间超时清理。
     /// </summary>
     public partial class LobbyServerHost : Node
     {
@@ -32,19 +32,11 @@ namespace Script.Net.Godot
             if (Started) return true;
             Config = config ?? new ServerConfig();
 
-            // 【Web 联机】按配置选传输：浏览器客户端只能连 WebSocket 服务端（见 ServerConfig.UseWebSocket）。
-            if (Config.UseWebSocket)
-            {
-                _transport = new GodotWebSocketTransport(EnetRole.Server) { Port = Config.Port };
-            }
-            else
-            {
-                _transport = new GodotEnetTransport(EnetRole.Server)
-                {
-                    Port = Config.Port,
-                    MaxClients = Config.MaxConnections,
-                };
-            }
+            // 【传输层统一 · 2026-10-14】服务端固定用 **WebSocket** 监听：
+            // 桌面客户端与浏览器客户端现在走同一种传输，两端因此能进同一个房间，
+            // 也让"桌面玩家点建立主机开出来的服务端"能被浏览器直接连上。
+            // 连接数上限由 `ServerHost` 层把关（`WebSocketMultiplayerPeer` 本身没有 maxClients 参数）。
+            _transport = new GodotWebSocketTransport(EnetRole.Server) { Port = Config.Port };
             try
             {
                 _transport.Start();
@@ -70,7 +62,7 @@ namespace Script.Net.Godot
             _host.Start();
 
             Started = true;
-            GD.Print($"[LobbyServerHost] 大厅服务端就绪：传输={(Config.UseWebSocket ? "WebSocket(浏览器可连)" : "ENet(桌面)")}"
+            GD.Print($"[LobbyServerHost] 大厅服务端就绪：传输=WebSocket(TCP，桌面与浏览器都能连)"
                 + $"，端口 {Config.Port}，最大连接 {Config.MaxConnections}，最大房间 {Config.MaxRooms}"
                 + $"，昵称上限 {Config.NameMaxLen}，协议版本 {Config.ProtocolVersion}");
             PrintClientHint(Config);
@@ -102,7 +94,7 @@ namespace Script.Net.Godot
             foreach (var addr in IP.GetLocalAddresses())
             {
                 if (addr == "127.0.0.1" || addr.Contains(':')) continue;   // 只列 IPv4
-                GD.Print($"[LobbyServerHost]     {addr}:{config.Port}（Windows 防火墙需允许 UDP 入站）");
+                GD.Print($"[LobbyServerHost]     {addr}:{config.Port}（Windows 防火墙需允许 TCP 入站）");
             }
         }
     }

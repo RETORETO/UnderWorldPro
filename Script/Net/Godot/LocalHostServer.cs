@@ -16,7 +16,7 @@ namespace Script.Net.Godot
     /// `启动大厅服务端.bat` 全部不变）；本类只承载"房主在自己机器上开一局"，两者并存。
     ///
     /// 复用而非复制：服务端装配仍由既有 `LobbyServerHost`（与 headless 服务端同一个类）完成；本类只负责
-    /// "挂到场景树 / 选端口 / 关掉它"。同进程内"真实 ENet 服务端 + 真实客户端会话"已被 `LobbyFlowTests` 证明可行。
+    /// "挂到场景树 / 选端口 / 关掉它"。同进程内"真实 WebSocket 服务端 + 真实客户端会话"已被 `LocalHostTests` 证明可行。
     ///
     /// 纪律：本文件位于 `Net/Godot/`（Godot 桥接层），不污染 `Net/` 根目录的纯托管性。
     /// </summary>
@@ -147,7 +147,7 @@ namespace Script.Net.Godot
 
         /// <summary>
         /// 内嵌服务端的宿主：优先挂在 `GameManager`（autoload，随进程存活、不随切场景被释放；且其子树每帧会被引擎驱动
-        /// `LobbyServerHost._Process`，从而轮询 ENet 与房间超时）；极端情况下退回场景树根。
+        /// `LobbyServerHost._Process`，从而轮询传输与房间超时）；极端情况下退回场景树根。
         /// </summary>
         private static Node ResolveParent()
         {
@@ -157,7 +157,7 @@ namespace Script.Net.Godot
 
         /// <summary>
         /// 从树上摘除并**立即**释放（不用 `QueueFree`）。
-        /// 为什么必须立即：`LobbyServerHost._ExitTree` → `ServerHost.Stop()` → ENet peer 关闭才同步释放 UDP 端口；
+        /// 为什么必须立即：`LobbyServerHost._ExitTree` → `ServerHost.Stop()` → WebSocket peer 关闭才同步释放 TCP 端口；
         /// `QueueFree` 要等帧末，会让"关掉后马上再建立主机"落到下一个端口，也让单测无法确定性地验证端口复用。
         /// 先 `RemoveChild` 再 `Free` 与 `ServerMatchFactory.FreeGameNode` 的"未在 owner 下 → Free"同构（已脱离树，无 busy-parent 风险）。
         /// </summary>

@@ -330,7 +330,7 @@ namespace Script.UI.Online
             ushort port = LocalHostServer.Port;
             _hostHintLabel.Visible = true;
             _hostHintLabel.Text = $"本机已建立主机：请让对手在「联机对战」里连接 {LocalHostServer.AddressHint(port)}\n"
-                + $"（若对手连不上：本机 Windows 防火墙需放行 UDP {port} 入站）";
+                + $"（若对手连不上：本机 Windows 防火墙需放行 TCP {port} 入站）";
         }
 
         private static string SeatLine(RoomState state, int seat, int hostSeat)

@@ -29,16 +29,6 @@ namespace Script.Net.Lobby
         /// <summary>是否打印详细日志。</summary>
         public bool Verbose;
 
-        /// <summary>
-        /// 【Web 联机 · 2026-10-13】用 **WebSocket** 而不是 ENet 监听（`--ws`）。
-        ///
-        /// 为什么要这个开关：浏览器的安全沙箱不允许网页打开原始 UDP/TCP socket，
-        /// 所以 Web 版客户端**只能**用 WebSocket 连服务端，ENet 在浏览器里完全不成立。
-        /// 端口号可以与 ENet 相同（ENet 走 UDP、WebSocket 走 TCP，互不冲突），于是同一台机器可以同时开两个服务端：
-        ///   桌面客户端 → `--port 18950`（ENet/UDP）；浏览器客户端 → `--ws --port 18950`（WebSocket/TCP）。
-        /// </summary>
-        public bool UseWebSocket;
-
         /// <summary>从命令行参数解析（形如 `--port 18950 --max-rooms 8`）；无法识别的参数忽略（不影响 Godot 自带参数）。</summary>
         public static ServerConfig FromArgs(string[] args, ServerConfig baseline = null)
         {
@@ -58,7 +48,8 @@ namespace Script.Net.Lobby
                     case "--finished-ttl": if (Next(out var ft) && int.TryParse(ft, out var ttl)) { cfg.FinishedRoomTtlSeconds = ttl; i++; } break;
                     case "--idle-timeout": if (Next(out var it) && int.TryParse(it, out var idle)) { cfg.SessionIdleTimeoutSeconds = idle; i++; } break;
                     case "--verbose": cfg.Verbose = true; break;
-                    case "--ws": cfg.UseWebSocket = true; break;   // 【Web 联机】改用 WebSocket 监听（供浏览器客户端）
+                    // 说明：`--ws` 曾是"改用 WebSocket 监听"的开关；传输层统一为 WebSocket 后已无意义（默认即是），
+                    // 保留为静默接受的参数以兼容既有脚本与文档，无需任何处理。
                 }
             }
             return cfg;

@@ -14,6 +14,8 @@ namespace Script.Net.Godot
     ///   浏览器唯一能做的双向长连接是 **WebSocket**（`ws://` / `wss://`），因此 Web 客户端必须走本传输。
     ///
     /// 与 <see cref="GodotEnetTransport"/> 的关系：
+    ///   · **2026-10-14 起本类是全工程**唯一**在用的联机传输**（桌面与 Web 都走 WebSocket，见 `ClientSession.Connect`）；
+    ///   · ENet 实现仍保留（回环/历史测试用），但不再进入联机主链路。
     ///   两者都实现 `INetTransport`，**上层（`LobbyServer`/`ServerHost`/`ClientSession`/`MatchHost`）一行都不用改** ——
     ///   协议是文本信封（`V2:&lt;type&gt;|&lt;json&gt;`），与传输无关。本类基本是 ENet 版的"换 peer 类型"版：
     ///   `ENetMultiplayerPeer` → `WebSocketMultiplayerPeer`，`CreateServer(port,maxClients)` → `CreateServer(port, "*", null)`，
@@ -26,9 +28,9 @@ namespace Script.Net.Godot
     ///   · **服务端**：只有桌面/专用服务器能监听（浏览器永远不能当服务端）。
     ///     在 Web 上请求服务端角色会被 <see cref="UnsupportedOnWeb"/> 挡下并给出可读原因，不再 abort。
     ///
-    /// 与 ENet 并存的部署方式（端口号可以相同，因为一个是 UDP、一个是 TCP）：
-    ///   · 桌面客户端：`NetServer.tscn -- --port 18950`（ENet/UDP）
-    ///   · 浏览器客户端：`NetServer.tscn -- --ws --port 18950`（WebSocket/TCP）
+    /// 部署方式（统一后只有一种）：
+    ///   · 专用服务器：`NetServer.tscn -- --port 18950`（WebSocket/TCP，桌面与浏览器都能连）；
+    ///   · 房主自建：主菜单「建立主机」在本进程内起同一套 WebSocket 服务端（浏览器不能当房主）。
     /// </summary>
     public class GodotWebSocketTransport : INetTransport
     {

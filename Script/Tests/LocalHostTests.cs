@@ -83,7 +83,8 @@ namespace Script.Tests
         public void TestEmbeddedHostPortFallback()
         {
             ushort busy = (ushort)(BasePort + 1);
-            var occupied = new GodotEnetTransport(EnetRole.Server) { Port = busy, MaxClients = 4 };
+            // 内嵌服务端现在用 WebSocket(TCP) 监听，所以"占端口"也必须占 TCP 端口才能复现冲突。
+            var occupied = new GodotWebSocketTransport(EnetRole.Server) { Port = busy };
             try
             {
                 occupied.Start();

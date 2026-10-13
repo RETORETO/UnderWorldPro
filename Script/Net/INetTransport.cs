@@ -15,7 +15,8 @@ namespace Script.Net
     ///
     /// 实现可插拔：
     /// - `LoopbackTransport`：同进程回环（测试用，无真实 socket）；
-    /// - `Script.Net.Godot.GodotEnetTransport`：Godot ENet 真实联机（服务端会话池 / 客户端单连接）。
+    /// - `Script.Net.Godot.GodotWebSocketTransport`：Godot WebSocket 真实联机（**2026-10-14 起桌面与 Web 都用它**）；
+    /// - `Script.Net.Godot.GodotEnetTransport`：Godot ENet 实现（保留备用，已不在联机主链路上）。
     ///
     /// 纪律：本接口不依赖 Godot，保持 `Net/` 根目录纯托管（headless 服务端可用）。
     /// </summary>

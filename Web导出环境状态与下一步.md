@@ -15,6 +15,13 @@
 >    「建立主机」在 Web 上被明确拒绝（浏览器不能监听端口，这是规范级硬约束）——**详见第八节红线 3**。
 > 5. **第八节红线 1 被修正**：原来把 `OrdinalIgnoreCase` 标成"安全"是**错的**，
 >    它遇到非 ASCII 字符一样会走 ICU → abort（这就是进房间页崩溃的根因）。
+>
+> **2026-10-14 的变化**：
+> 6. 🌟 **联机传输层已统一为 WebSocket**（桌面与 Web 都走它，不再按平台分叉）。
+>    带来的直接好处：两端天然能进同一个房间；服务端不再需要 `--ws`；桌面客户端不再需要 `--wp-ws`；
+>    桌面玩家点「建立主机」开出来的就是 WebSocket 监听，**浏览器能直接连进来**。
+>    实测（桌面 BOT 房主 + Web 客户端加入）：`Waiting → Ready → Starting → InMatch → Finished → Waiting`，
+>    全程 0 abort —— **详见第八节红线 3**。
 
 ---
 
@@ -22,9 +29,10 @@
 
 **环境已齐全，并已实测「在浏览器里真正跑起来」**：主菜单、卡组编辑（698 张卡池 + 分页 + 构筑限制 + 卡图）均可正常渲染；卡组编辑 **240 fps / 180 节点 / 0 未捕获异常**。
 
-**联机（2026-10-13 实测）**：Web 版**只能当客户端**（浏览器不能监听端口），
-连外部 WebSocket 大厅服务端后，「登录大厅 → 建房/加入房间 → 提交卡组 → 准备 → 开局 → 战场 → 对局结束回房间」
-整条链路在无头 Edge 里真跑通过，全程 0 abort。服务端需以 `--ws` 启动（桌面 headless 或独立进程）。
+**联机（2026-10-14 实测）**：传输层已**统一为 WebSocket**（桌面与 Web 走同一条链路）。
+Web 版**只能当客户端**（浏览器不能监听端口），但「登录大厅 → 建房/加入房间 → 提交卡组 → 准备 → 开局 → 战场 → 对局结束回房间」
+整条链路在无头 Edge 里真跑通过，全程 0 abort；**桌面与 Web 客户端能进同一个房间对战**。
+服务端启动**不需要任何额外开关**：`NetServer.tscn -- --port 18950`（TCP/WebSocket）。
 
 一句话链路：`魔改版引擎 4.7.2-stable` → 导出 Web 预设 → 引擎自动 `dotnet publish -c ExportRelease -r browser-wasm`（**必须关裁剪**，见第五节第 1 条）→ 打成 pck → 由带 COOP/COEP 头的 HTTP 服务打开 → 运行时由 pck 里的 `GodotPlugins.Game.Main` 引导 mono。
 
@@ -434,21 +442,21 @@ GetTree().ProcessFrame += OnProbeProcessFrame;
 > 网页没有这个能力。所以 **Web 联机只有"客户端连外部服务端"这一条路** ——
 > 房主必须是桌面版（或独立服务器进程）跑 `NetServer.tscn`。
 
-**落地实现（本轮）**：
+**落地实现（最终版 · 2026-10-14）**：
 
-- 新增 `Script/Net/Godot/GodotWebSocketTransport.cs`，与既有 `GodotEnetTransport` **结构同构**，
+- `Script/Net/Godot/GodotWebSocketTransport.cs`：与既有 `GodotEnetTransport` **结构同构**，
   实现同一个 `INetTransport`；协议信封 `V2:<type>|<json>` 与传输无关，所以**上层零改动**。
-- `ClientSession.Connect()` 里 `PreferWebSocket()`：**Web 平台一律 WebSocket**；桌面默认 ENet，
-  可用 `--wp-ws` 强制 WebSocket（方便桌面上调试同一条链路）。
-- 服务端新增开关 `--ws`（`ServerConfig.UseWebSocket`），`LobbyServerHost` 按开关装配 WebSocket 监听。
-  **端口号可以与 ENet 相同**（UDP vs TCP，互不冲突）。
+- **传输层统一**：`ClientSession.Connect()` 与 `LobbyServerHost` **都固定用 WebSocket**，不再按平台/开关分叉。
+  这样"桌面与 Web 同房对战"不需要任何额外配置；桌面玩家点「建立主机」开出来的就是 WebSocket 监听，
+  浏览器能直接连进来。`GodotEnetTransport` 仍保留（回环/历史测试用），但**不在联机主链路上**。
+- **启动服务端不再需要 `--ws`**（该参数仍被静默接受，兼容旧脚本）：
   ```
-  Godot_v4.7.2-..._console.exe --path . NetServer.tscn -- --ws --port 18950
+  Godot_v4.7.2-..._console.exe --headless --path . res://Scenes/Net/NetServer.tscn -- --port 18950
   netstat -ano | findstr 18950     # 期望看到 TCP 0.0.0.0:18950 LISTENING
   ```
 - 两道硬保险，保证"最多是弹出可读提示，绝不冻死"：
   - `LocalHostServer.Start()`：Web 上直接拒绝建主机，返回可读 error 给 UI；
-  - `GodotEnetTransport.Start()`：Web 上永不调用 ENet（`UnsupportedOnWeb = true`，不抛异常）。
+  - `GodotWebSocketTransport.Start()`：Web 上请求服务端角色时置 `UnsupportedOnWeb = true`，不 abort。
   - 例外通道：`--wp-netraw` 允许 Web 上照旧调 ENet，**专门用来复现旧崩溃**，排查完务必关掉。
 
 **WebSocket 传输层的一个语义要点**：`MultiplayerPeer.GetPacketPeer()` 返回的是**队列头部那条包**的
@@ -473,15 +481,15 @@ GetTree().ProcessFrame += OnProbeProcessFrame;
 | `--wp-pagesize=12` | 卡池每页行数（量"行数 ↔ 耗时是否线性"） |
 | `--wp-nowrap` / `--wp-nocards` / `--wp-sync` / `--wp-prog` | 换行模式 / 不建卡牌面板 / 强制同步加载 / 渐进填图 |
 | `--wp-auto=host\|online` | 进主菜单后自动执行「建立主机」/「联机大厅→连接」（配合 `--wp-host/--wp-port/--wp-name`，用于脚本化联机回归） |
-| `--wp-ws` | **桌面**也用 WebSocket 传输（默认 Web 用 WS、桌面用 ENet） |
+| `--wp-ws` | ⚠️ **已废弃**：传输层统一为 WebSocket 后无意义（解析仍接受，但不产生任何效果） |
 | `--wp-smoke` | 连上大厅后自动建房进房间（冒烟） |
 | `--wp-join` | 冒烟时改为**加入首个房间**（=走「加入」按钮那条路），而不是自己建房 |
 | `--wp-netraw` | ⚠️ 允许 **Web 上照旧调用 ENet** —— 只用于复现旧崩溃，定位完必须去掉 |
 | `--wp-host=127.0.0.1` / `--wp-port=18950` / `--wp-name=玩家` | 联机自动连接的目标地址/端口/昵称 |
 
 > ⚠️ **桌面端用这些 `--wp-*` 开关时，必须写在 `--` 之前**：
-> `Godot_*_console.exe --headless --path <工程> --wp-ws res://Scenes/Net/NetEntry.tscn -- --bot 18950 host 127.0.0.1`
-> 写在 `--` 之后时 `OS.GetCmdlineArgs()` 读不到（实测：放后面走了 ENet，挪前面立刻变 `[WS] w1 …`）。
+> `Godot_*_console.exe --headless --path <工程> --wp-probe res://Scenes/Net/NetEntry.tscn -- --bot 18950 host 127.0.0.1`
+> 写在 `--` 之后时 `OS.GetCmdlineArgs()` 读不到。
 > Web 端无此问题（args 由 `GODOT_CONFIG.args` 传给引擎，不在 `--` 之后）。
 >
 > 带 `--wp-` 前缀的联机排查开关（`netraw` / `ws` / `smoke` / `join` / `host` / `port` / `name`）属于**临时诊断口子**，
@@ -502,6 +510,19 @@ node .\Web运行自检.mjs --wait 45 --shot logs\shot.png > logs\shot.txt 2>&1
 > ⚠️ **CDP 的 `Runtime.enable` 会回放上一次的缓存日志**，所以"日志里出现过 Aborted"
 > 不等于"这一次崩了"。判断本轮是否存活，请**只取最后一个 `Godot Engine v4.7.2` 之后**的日志，
 > 或者直接看 `--wp-probe` 的每秒心跳 `[BEAT]`。
+>
+> ⚠️ 🌟 **无头浏览器会把页面主循环节流到近乎停摆（2026-10-14 实测，本轮最坑的一条）**：
+> 症状是"页面渲染正常、WebSocket 也连上了，但**头几帧之后画面与日志完全静止**"。
+> 典型表现：日志停在 `[ClientSession] 已连接，已发送 Hello`，**再也没有下一行**；
+> 而服务端日志显示它**收到了该会话并已应答**（`会话 wN 登录大厅：xxx`）——
+> 也就是"客户端不再跑 `_Process`，所以 `Poll()` 不再收包"。
+> **修法（两步都要）**：
+> 1. 启动无头 Edge 时加 `--disable-background-timer-throttling --disable-backgrounding-occluded-windows
+>    --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion`；
+> 2. 采集脚本里再调 `Page.startScreencast`（最小图幅）强制合成器持续产帧。
+>
+> 另一个相关坑：导出后**首次**加载要重新下载/实例化 53MB wasm + 259MB pck，
+> `_Ready` 之后**第一帧可能要等 30~60 秒**才来。所以脚本化联机的 `--wp-delayms` 给 `0`，`--wait` 给足 90 秒+。
 >
 > ⚠️ **这条坑还有一个更隐蔽的变体（2026-10-13 实测）**：报告末尾的「未捕获异常」段
 > **完全没有按轮次过滤**，它会把上一轮的 `RuntimeError: unreachable` 一起列出来，

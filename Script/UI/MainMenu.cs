@@ -219,9 +219,9 @@ public partial class MainMenu : Control
         OnlineClientContext.HostAutoFlow = true;      // 一次性：进大厅页后自动连接并建房（消费即清零）
         OnlineClientContext.LastHost = "127.0.0.1";   // 本机客户端连自己起的内嵌服务端
         OnlineClientContext.LastPort = LocalHostServer.Port;
-        OnlineClientContext.LastName = string.IsNullOrWhiteSpace(OnlineClientPrefs.LastName) ? "主机玩家" : OnlineClientPrefs.LastName;
+        OnlineClientContext.LastName = Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(OnlineClientPrefs.LastName) ? "主机玩家" : OnlineClientPrefs.LastName;
         GD.Print($"【主菜单】已建立主机：端口 {LocalHostServer.Port}；对手可连接 {LocalHostServer.AddressHint(LocalHostServer.Port)}"
-            + "（若对手连不上：Windows 防火墙需放行该 UDP 端口入站）");
+            + "（对手在「联机对战」填上面的地址即可；若连不上：Windows 防火墙需放行该 TCP 端口入站）");
         GameManager.Instance.GoToState(GameManager.GameState.LobbyOnline);
     }
 
