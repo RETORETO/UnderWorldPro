@@ -388,6 +388,9 @@ namespace Script.Manager
             var all = GetAllActivateAbilities(card);
             if (all.Count != 1) return false;
             var e = all[0];
+            // 【2026-10 用户口径·JC108】声明"双击激活"的能力**不进拖拽**（否则左键被全局拖拽吞掉，
+            // `CardUI` 收不到双击信号，双击激活链路根本不可达；见 `EffectData.ActivateByDoubleClick`）。
+            if (e?.ActivateByDoubleClick == true) return false;
             var spec = e?.Target;
             if (spec == null || !spec.NeedsSelection) return false;      // 无目标 ⇒ 双击直接发动
             if (spec.Kind == TargetKind.None) return false;

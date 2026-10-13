@@ -897,3 +897,30 @@ JC105 光环"所有其他本方灵体角色"⇒**全场**；JC059 光环写"本�
   `ArenaOl.ComputeLegalCardTargetUids`（客户端兜底）**不再无条件跳过来源卡**（原写法与
   `ActivateEligibility.IsLegalActivateTarget` 的 `CanTargetSelf` 放行分叉）。
   注：JC108 的被封印者是**牌库顶的牌**（不是本卡）⇒ 不适用 JC066/JC100/JC110"不能把自己封印在自己身上"。
+  **A132 追加**：若"落点＝自身"在拖拽手势里仍难以表达（用户复测"依然无法以自己为目标"），
+  改为**双击激活 → 选择目标**：`EffectData.ActivateByDoubleClick=true` ⇒ `CanDragActivate` 返回 false
+  （左键不再被激活拖拽吞掉）⇒ `CardUI` 双击 → `OpenAttachmentActivateChoice`（单机）/`SendActivation`
+  （联机）→ 目标选择窗（含自身）。（默认 false，既有"1 条能力 + 需选目标 ⇒ 拖拽"手势不变。）
+
+### 附二补遗七 · 2026-10 实测反馈六批
+
+- **⑦ 询问时机（费用修正的消费）**：卡文"你**下一张**X 牌费用减少 N（一次性）"的修正是被**下一张符合条件
+  的牌**消费掉的——判据＝"本张**确实用到了时效减免**"（`costModApplied > 0`），**与"是否真的扣了费"无关**：
+  减免可能把费用降到 0（1 费牌被 −1）⇒ 旧的"写在 `totalCost > 0` 分支里"会**不消费**，表现为
+  ① 修正残留、下一张继续被减；② `CostModChanged` 不广播 ⇒ **手牌减费提示不刷新**。
+  两个付费通道（`PlayCard` 的"打出" / `RevealCovert` 的"现身"）各自按同一判据消费；免费打出不受影响。
+- **⑰ 光环的受影响集合必须跟随"运行期授予的关键字"（JC105/JC106）**：光环按关键字筛选目标
+  （`AuraFilterKeyword`，判定读"运行期授予 ∪ 卡面固有"）时，**该关键字可能来自另一个效果的运行期授予**
+  ⇒ 关键字授予/撤销处必须**立刻重算光环**（`EffectEngine.ReevaluateAurasAfterKeywordChange`，
+  与"卡移动/回合开始"同一份 `ReevaluateAuras`），否则新晋关键字角色拿不到光环授予
+  （实测："JC105 没有让 JC106 授予灵体的卡白星"）。
+- **④ 印刷数值也是卡数据的核查项（JC111）**：`Defense = -1` 是"**无防御**"哨兵（`HasDefense=false` ⇒
+  伤害被静默忽略、不参与判死），与"防御 1"是不同的规则状态；`.tres` 的印刷数值必须与卡面一致
+  （实测：JC111 应为防御 1，原数据写成 -1 ⇒ 该卡整卡免伤）。
+- **⑨ 输入链路：全局"拖拽起手"不得吞掉双击（JC110/JC108）**：`Arena._Input` 的全局拖拽起手
+  （`TryBeginActivateDragAt` / `TryBeginDragAt`）会 `AcceptEvent()` ⇒ `CardUI.OnGuiInput` 收不到鼠标事件、
+  **双击激活分支永不触发**。两条纪律：① 声明"双击激活"的激活能力不进拖拽（`ActivateByDoubleClick`）；
+  ② 手牌行动卡的双击必须在全局输入里先判（`DoubleClick` 标记 + 落点），再决定是否起手拖拽。
+- **⑧/显示：同一份 UI 机制被复用时，文案必须按动作给（JC104）**：窗口**标题栏**、标题、区域标题、提示行
+  都要随动作语义走（`AllocationWindowTexts`：调查对抗 / 预测X 两套，单机与联机共用），
+  不得"复用了别处的窗口，就显示别处的文案"。（复用**机制**是好事，复用**文案**是缺陷。）

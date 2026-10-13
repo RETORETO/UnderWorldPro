@@ -948,7 +948,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         win.Configure(predictorId, 0, cards,
             (pid, toTop, toBottom) => { UnlockChoiceWindow(win); onConfirmed?.Invoke(toTop, toBottom); },
             (pid, n) => { /* 预测不是抽牌：不执行任何抽牌 */ },
-            $"预测{count}：将任意数量置于牌库顶（其余置于牌库底）");
+            // 【2026-10 用户口径·JC104】预测窗必须显示成"**预测动作 UI**"（窗口标题栏 + 标题 + 两区 + 提示），
+            // 不得显示成调查对抗 UI（文案由 `AllocationWindowTexts.Prediction` 数据驱动，任何预测X 都复用）。
+            Script.UI.AllocationWindowTexts.Prediction(count));
         // 未确认即关闭（点窗外/关闭按钮）→ 按"原序全部留在牌库顶"兜底交付一次（回调唯一性）
         win.CloseRequested += () => { UnlockChoiceWindow(win); onConfirmed?.Invoke(null, cards); };
     }
@@ -2951,12 +2953,82 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         _pmCommandManager?.ExecuteCommandBatch(text);
     }
 
-    public override void _Input(InputEvent @event)
+    /// <summary>
+    /// 【2026-10 用户口径·JC110】手牌行动的**双击激活**落点判定。
+    ///
+    /// 手牌中声明了"手牌行动"的卡（`Scope=HandZone` 的激活能力，如 JC110 闲人的绿地）本应在**手牌双击**发动
+    /// （`CardUI.OnGuiInput` 已有该分支），但单机的左键**先被全局输入里的"起手出牌拖拽"吞掉**
+    /// （`CardDragController.TryBeginDragAt` → `AcceptEvent`）⇒ `CardUI` 收不到任何鼠标事件、双击信号永不触发
+    /// （用户实测："无法发动手牌行动效果，要求在手牌双击激活JC110效果"）。
+    /// 故在全局输入里先判"**第二次按下同一张手牌行动卡** ∧ 落点＝手牌行动卡" ⇒ 直接走双击激活链路
+    /// （`OpenAttachmentActivateChoice`，与 `CardUI` 那条分支同一出口）；**单击仍照旧起手拖拽出牌**。
+    ///
+    /// 双击判定**不依赖事件上的 `DoubleClick` 标记**（该标记由 Godot 在 GUI 分发阶段置位，而这里的全局路径
+    /// 先于 GUI 并把事件吞掉 ⇒ 标记可能恒为 false）：`eventSaysDoubleClick` 为真时直接采信；否则用
+    /// **自持的时间窗**（同一张卡 ＋ 两次按下间隔 ≤ `gui/common/double_click_speed`，默认 400ms）判定。
+    /// </summary>
+    /// <returns>true ＝ 已按"双击激活"处理（调用方应吞掉该事件）。</returns>
+    private bool TryHandleHandActivationDoubleClick(Vector2 globalPos, bool eventSaysDoubleClick)
     {
+        CardUI hit = null;
+        // 手牌命中：倒序取最上层（右卡压左卡，与 CardDragController.PickHandCardAt 同口径）
+        for (int i = _handCardUIs.Count - 1; i >= 0 && hit == null; i--)
+        {
+            var c = _handCardUIs[i];
+            if (c != null && GodotObject.IsInstanceValid(c) && c.GetVisualGlobalRect().HasPoint(globalPos)) hit = c;
+        }
+        for (int i = _handCardUIs2.Count - 1; i >= 0 && hit == null; i--)
+        {
+            var c = _handCardUIs2[i];
+            if (c != null && GodotObject.IsInstanceValid(c) && c.GetVisualGlobalRect().HasPoint(globalPos)) hit = c;
+        }
+        // 落点不是"手牌行动"卡 ⇒ 清掉双击记账（避免把随后落在别的卡上的第一次点击误判成双击）
+        if (hit?.Instance == null || hit.Instance.CurrentZone != CardZone.Hand
+            || !ActivateEligibility.IsDoubleClickActivationSource(hit.Instance))
+        {
+            _lastHandActivationClickUid = null;
+            return false;
+        }
+
+        ulong nowMs = Time.GetTicksMsec();
+        int thresholdMs = 400;   // Godot 默认 `gui/common/double_click_speed`（毫秒）
+        var setting = ProjectSettings.GetSetting("gui/common/double_click_speed", thresholdMs);
+        if (setting.VariantType == Variant.Type.Int || setting.VariantType == Variant.Type.Float)
+            thresholdMs = (int)setting.AsInt64();
+        if (thresholdMs < 120) thresholdMs = 120;
+
+        bool sameCard = _lastHandActivationClickUid == hit.Instance.UID;
+        bool withinWindow = sameCard && nowMs - _lastHandActivationClickMs <= (ulong)thresholdMs;
+        _lastHandActivationClickUid = hit.Instance.UID;
+        _lastHandActivationClickMs = nowMs;
+
+        if (!eventSaysDoubleClick && !withinWindow)
+            return false;   // 首次点击：照旧交给"起手出牌拖拽"
+
+        // 第二次点击：先收尾第一次点击留下的拖拽态（同位置松手 ⇒ 已在手牌区取消并归位）
+        if (_cardDragController != null && _cardDragController.IsDragging) _cardDragController.EndDrag();
+        GD.Print($"[Arena] 手牌行动双击：{hit.Instance.PlayerTemplate?.CardName} → 走双击激活链路" +
+                 $"（事件标记={eventSaysDoubleClick} 时间窗={withinWindow}）");
+        OpenAttachmentActivateChoice(hit);
+        return true;
+    }
+
+    /// <summary>【2026-10·JC110】手牌行动双击记账：上一次"手牌行动"卡左键按下的 UID 与时刻（0＝无）。</summary>
+    private string _lastHandActivationClickUid;
+    private ulong _lastHandActivationClickMs;
+
+    public override void _Input(InputEvent @event)    {
         // ---- 手牌拖拽（全局输入驱动，绕开 Godot 命中分发失效问题）----
         // 【MVC 修复 M-08】拖拽起手/放手路由已收归 CardDragController，此处仅转发。
         if (@event is InputEventMouseButton dragDown && dragDown.Pressed && dragDown.ButtonIndex == MouseButton.Left)
         {
+            // 【2026-10 用户口径·JC110】**手牌行动**卡的双击走"双击激活"链路（`CardUI` 那条
+            // `AttachmentDoubleClicked` 分支根本收不到事件——左键在全局输入里就被出牌拖拽吞掉了）。
+            if (TryHandleHandActivationDoubleClick(dragDown.GlobalPosition, dragDown.DoubleClick))
+            {
+                AcceptEvent();
+                return;
+            }
             // [DEBUG] 诊断双击暗藏者无反应：记录左键按下，看 DoubleClick 是否被标记、是否被 Try 拦截
             // D9 激活框架：激活拖拽起手优先于出牌拖拽（命中可发动的场上卡才进入激活模式）
             if (_cardDragController.IsActivating || _cardDragController.TryBeginActivateDragAt(dragDown.GlobalPosition))

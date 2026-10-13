@@ -4444,6 +4444,7 @@ namespace Script.Manager
                     else subject.Grant("Keyword", what, amt);
                     GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 关键字 [{what}]×{amt}");
                     if (timed) RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Keyword", Value = what, Amount = amt, ExpireTurn = CurrentTurn });
+                    ReevaluateAurasAfterKeywordChange();
                     break;
 
                 case "费用减少":
@@ -4496,8 +4497,27 @@ namespace Script.Manager
                     else subject.Grant("Keyword", what, amt);
                     GD.Print($"[EffectEngine] ✓ {subject.PlayerTemplate?.CardName} 授予 [{what}]×{amt}");
                     if (timed) RegisterTimedMod(new TimedMod { TargetUid = subject.UID, Kind = "Keyword", Value = what, Amount = amt, ExpireTurn = CurrentTurn });
+                    ReevaluateAurasAfterKeywordChange();
                     break;
             }
+        }
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC105/JC106】**关键字授予/撤销之后重算光环**。
+        ///
+        /// 光环的受影响集合按关键字筛选（JC105 噩梦领主"所有**其他本方灵体角色**获得［白星］"＝
+        /// `AuraFilterKeyword="灵体"`，判定 `IsAuraTargetEligible` 读"运行期授予 ∪ 卡面固有"），
+        /// 而关键字可能来自**运行期授予**（JC106"并获得灵体"）。
+        /// 光环此前只在"卡移动（`OnPostMove`）/ 回合开始"时重算 ⇒ 授予灵体**不触发重算**，
+        /// 新晋灵体角色拿不到白星（用户实测："JC105 没有让 JC106 授予灵体的卡白星"）。
+        /// 故在关键字授予/撤销的收口处补一次重算（与移动/回合开始同一份实现 `ReevaluateAuras`）。
+        /// 零开销护栏：场上没有任何光环源时直接返回。
+        /// </summary>
+        private void ReevaluateAurasAfterKeywordChange()
+        {
+            if (_auraGrants.Count == 0) return;
+            ReevaluateAuras(1);
+            ReevaluateAuras(2);
         }
 
         /// <summary>

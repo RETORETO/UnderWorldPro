@@ -4072,9 +4072,10 @@ public partial class TurnManager : Node
         EE.CurrentTurn = TurnCount;
         // 【K10】额外费用并入本次费用：总费用 ＝（基础费用 − 时效减免 − 展示减免）+ 额外支付的 X
         // 【K28·JC119】免费打出：费用与额外费用一律为 0（**忠诚已在上方校验、照常生效**）
-        int cost = freePlay
+        int costModApplied = freePlay
             ? 0
-            : tmpl.Cost - EE.GetCostModification(playerId, instance, tmpl.CardName, tmpl.Organization) - extraDiscount;
+            : EE.GetCostModification(playerId, instance, tmpl.CardName, tmpl.Organization);
+        int cost = freePlay ? 0 : tmpl.Cost - costModApplied - extraDiscount;
         if (cost < 0) cost = 0;
         int totalCost = freePlay ? 0 : cost + extraMana;
         if (freePlay) GD.Print($"[TurnManager] 🆓 免费打出：{tmpl.CardName}（不需支付费用，忠诚已校验）");
@@ -4109,9 +4110,15 @@ public partial class TurnManager : Node
                 return false;
             }
             GD.Print($"[TurnManager] 玩家{playerId} 支付 {totalCost} 费用（含额外费用 {extraMana}），剩余可用 {_playerManager.GetAvailableMana(playerId)}");
-            // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项（整回合项不移除）
-            EE.ConsumeCostModification(playerId, instance, tmpl.Organization);
         }
+
+        // 【2026-10 用户口径·JC103】一次性费用修正（"下一张"语义）的消费**与"是否真的扣了费"解耦**：
+        // 减免可能把费用降到 0（如 1 费【梦境行者】被 −1）⇒ 原先消费写在 `totalCost > 0` 分支里就**不消费**：
+        // 修正残留 ⇒ ① 下一张继续被减（多减一次）；② `CostModChanged` 不广播 ⇒ **手牌减费提示不刷新**
+        // （用户实测："JC103 降低费用的效果在打出下一张卡后检查一下UI刷新逻辑"）。
+        // 判据＝本张**确实用到了时效减免**（`costModApplied > 0`；免费打出 `freePlay` 时 costModApplied=0，不受影响）。
+        if (costModApplied > 0)
+            EE.ConsumeCostModification(playerId, instance, tmpl.Organization);
 
         // 资产横置状态已变化，通知 UI 刷新
         OnAssetsChanged?.Invoke();
@@ -4380,8 +4387,8 @@ public partial class TurnManager : Node
         EE.CurrentTurn = TurnCount;
         // 【P3】现身费用：用**实例重载**（子类别类过滤可用）并走**"现身"付费通道**
         // （JC033「所有本方暗藏者，付费翻面时其所需费用减少1」）。
-        int cost = tmpl.Cost - EE.GetCostModification(controller, instance, tmpl.CardName, tmpl.Organization, "现身")
-                   - extraDiscount;
+        int costModApplied = EE.GetCostModification(controller, instance, tmpl.CardName, tmpl.Organization, "现身");
+        int cost = tmpl.Cost - costModApplied - extraDiscount;
         if (cost < 0) cost = 0;
         int totalCost = cost + extraMana;
         // 【K10】先"展示手牌"（给对手公开；不改变规则状态）→ 再"牺牲"（＝死亡，照常广播死亡时机）
@@ -4411,12 +4418,14 @@ public partial class TurnManager : Node
                 return false;
             }
             GD.Print($"[TurnManager] 玩家{controller} 支付暗藏者现身费用 {totalCost}（含额外费用 {extraMana}），剩余可用 {_playerManager.GetAvailableMana(controller)}");
-            // 一次性费用修正（"下一张"语义）：本张已成功支付并使用减免，消费移除该修正项
-            EE.ConsumeCostModification(controller, instance, tmpl.Organization, "现身");
             // 资产卡因付费被横置，经事件总线通知 UI 刷新横置表现（与打牌/派遣暗藏一致，MVC：逻辑层只发事件）。
             // 注：OnPostMove→SyncDerivedUI 只刷标签不刷横置旋转，横置视觉仅由 OnAssetsChangedHandler 驱动。
             OnAssetsChanged?.Invoke();
         }
+        // 【2026-10 用户口径·JC103】现身的"一次性费用修正"消费同样**与是否扣费解耦**（费用被减到 0 也要消费；
+        // 否则修正残留 ⇒ 下一张继续被减、手牌减费提示不刷新）。判据＝本张确实用到了减免。
+        if (costModApplied > 0)
+            EE.ConsumeCostModification(controller, instance, tmpl.Organization, "现身");
 
         // 进堆叠即翻面（Model 层同步移入堆叠区，结算回地区时 fromZone=Stack≠AreaZone 才会触发 EnterTrigger）
         string originArea = instance.ZoneDetailId ?? "";

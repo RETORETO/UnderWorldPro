@@ -830,7 +830,8 @@ namespace Script.UI
                     GD.Print($"[ArenaOl] 预测置顶已回包：牌库顶 {res.SelectedUids.Count} 张");
                 },
                 (pid, count) => { /* 预测不是抽牌：联机同样不抽牌 */ },
-                $"预测{cards.Count}：将任意数量置于牌库顶（其余置于牌库底）");
+                // 【2026-10 用户口径·JC104】与单机同一份文案（预测动作 UI：窗口标题栏 + 标题 + 两区 + 提示）
+                Script.UI.AllocationWindowTexts.Prediction(cards.Count));
 
             _onlineInvestigationWindow = win;
             _onlineCombatWindowOpen = true;

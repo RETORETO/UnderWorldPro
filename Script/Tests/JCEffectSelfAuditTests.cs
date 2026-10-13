@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -1916,6 +1916,59 @@ namespace Script.Tests
                     "c == source && ability.Target.CanTargetSelf != true", 1, "TestB3_4C_JC108联机投影含自身"),
                 new Promise("服务端合法目标投影含自身", "Script/Manager/LegalityProjection.cs",
                     "t == card && e.Target?.CanTargetSelf != true", 1, "TestB3_4C_JC108联机投影含自身"),
+
+                // 【2026-10 实测反馈六批】
+                // ① JC103：一次性费用修正的消费与"是否真的扣费"解耦（费用被减到 0 也要消费 ⇒ UI 才有机会刷新）
+                new Promise("一次性减费消费·打出/现身两条路径均按『用到了减免』消费", "Script/Manager/TurnManager.cs",
+                    "if (costModApplied > 0)", 2, "TestB4_1A_JC103一次性减费_费用被减到0也必须消费"),
+                new Promise("一次性减费消费·打出（实例重载消费点）", "Script/Manager/TurnManager.cs",
+                    "EE.ConsumeCostModification(playerId, instance, tmpl.Organization);", 1,
+                    "TestB4_1A_JC103一次性减费_费用被减到0也必须消费"),
+                new Promise("一次性减费消费·现身（付费通道）", "Script/Manager/TurnManager.cs",
+                    "EE.ConsumeCostModification(controller, instance, tmpl.Organization", 1,
+                    "TestB4_1A_JC103一次性减费_费用被减到0也必须消费"),
+                // ② JC104：预测窗文案（可复用）——窗口标题栏/标题/两区/提示全部按场景给，不再显示成调查对抗 UI
+                new Promise("预测窗文案·单一数据源（可复用）", "Script/UI/AllocationWindowTexts.cs",
+                    "public static AllocationWindowTexts Prediction(int count)", 1,
+                    "TestB4_2A_JC104预测窗文案_不是调查对抗UI"),
+                new Promise("预测窗文案·套用入口（含窗口标题栏）", "Script/UI/InvestigationWindow.cs",
+                    "public void ApplyTexts(AllocationWindowTexts texts)", 1,
+                    "TestB4_2A_JC104预测窗文案_不是调查对抗UI"),
+                new Promise("预测窗文案·单机使用", "Script/UI/Arena.cs",
+                    "AllocationWindowTexts.Prediction(count)", 1, "TestB4_2A_JC104预测窗文案_不是调查对抗UI"),
+                new Promise("预测窗文案·联机使用", "Script/UI/ArenaOl.cs",
+                    "AllocationWindowTexts.Prediction(cards.Count)", 1, "TestB4_2A_JC104预测窗文案_不是调查对抗UI"),
+                // ③ JC105：关键字授予/撤销后重算光环（运行期获得【灵体】的卡也要被 JC105 补授白星）
+                new Promise("关键字变更后重算光环（单一收口）", "Script/Manager/EffectEngine.cs",
+                    "ReevaluateAurasAfterKeywordChange();", 2, "TestB4_3A_JC105光环_JC106授予灵体后立刻补授白星"),
+                new Promise("光环关键词判定读『运行期授予 ∪ 卡面固有』", "Script/Manager/EffectEngine.cs",
+                    "t.HasKeyword(auraEffect.AuraFilterKeyword)", 1,
+                    "TestB4_3A_JC105光环_JC106授予灵体后立刻补授白星"),
+                // ④ JC106：授予的【灵体】链路（识别 → 判定 → 伤害防止挂接）
+                new Promise("灵体识别读『运行期授予 ∪ 卡面固有』", "Script/Manager/DamageRules.cs",
+                    "card.HasActiveKeyword(\"灵体\")", 1, "TestB4_4A_JC106授予灵体_判定与伤害防止"),
+                new Promise("灵体伤害防止挂接点（唯一收口）", "Script/Manager/GameInitializer.cs",
+                    "CardManager.DamagePreventer = (target, amount) =>", 1,
+                    "TestB4_4C_JC106正式打出_目标角色获得灵体并免伤"),
+                // ⑤ JC108：双击激活（不进拖拽）+ 目标含自身
+                new Promise("JC108 双击激活（卡数据）",
+                    "Cards/Effects/PlayerCards/JC/JC108_qiaozhipazuozhimengren.cs",
+                    "ActivateByDoubleClick = true", 1, "TestB4_5A_JC108双击激活_目标含自身"),
+                new Promise("双击激活 ⇒ 不进拖拽（消费点）", "Script/Manager/ActivateEligibility.cs",
+                    "e?.ActivateByDoubleClick == true", 1, "TestB4_5A_JC108双击激活_目标含自身"),
+                // ⑥ JC110：手牌行动的**手牌双击**（全局输入不再把双击吞给拖拽）
+                new Promise("手牌双击激活·全局输入先判双击（含自持时间窗）", "Script/UI/Arena.cs",
+                    "TryHandleHandActivationDoubleClick(dragDown.GlobalPosition, dragDown.DoubleClick)", 1,
+                    "TestB4_6A_JC110手牌双击激活_来源与门禁"),
+                new Promise("手牌双击激活·处理入口", "Script/UI/Arena.cs",
+                    "private bool TryHandleHandActivationDoubleClick(Vector2 globalPos, bool eventSaysDoubleClick)", 1,
+                    "TestB4_6A_JC110手牌双击激活_来源与门禁"),
+                new Promise("手牌双击激活·来源判定单一实现", "Script/Manager/ActivateEligibility.cs",
+                    "ZoneScope.HandZone", 1, "TestB4_6A_JC110手牌双击激活_来源与门禁"),
+                // ⑦ JC111：防御 1（不是无防御卡）
+                new Promise("JC111 印刷防御＝1（卡数据）",
+                    "Cards/Data/PlayerCards/JC/JC111_hundunhudie.tres",
+                    "Defense = 1", 1, "TestB4_7A_JC111是防御1的角色"),
             };
             foreach (var p in promises)
             {

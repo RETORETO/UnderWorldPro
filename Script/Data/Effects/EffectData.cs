@@ -967,6 +967,17 @@ namespace Script.Data.Effects
         [Export] public string OnlyPhases { get; set; } = "";
         [Export] public string ActivateCondition { get; set; } = ""; // 发动许可（横置本角色+快速行动2…）
         [Export] public int Cost { get; set; } = 0;                 // 费用数字（快速行动N 中的 N）
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC108】**该激活能力的发动方式＝双击**（用户："可以把效果改为双击激活效果选择目标"）：
+        /// true ⇒ 不进"拖到目标上"的手势（`ActivateEligibility.CanDragActivate` 返回 false）——
+        /// 因为本效果的目标**含自身**（`CanTargetSelf=true`），而拖拽把"落点＝来源卡自身"表达成**取消**
+        /// （用户实测："拖拽后在这张卡自己身上松开会识别为取消效果"）。
+        /// 走双击时链路：`CardUI` 收到双击 → `Arena.OnAttachmentDoubleClicked` → `OpenAttachmentActivateChoice`
+        /// → 目标选择窗（场上高亮 + 点击，**含自身**）→ 发动。**默认 false**：既有
+        /// "恰好 1 条能力 + 需选场上卡目标 ⇒ 拖拽"的手势完全不变。
+        /// </summary>
+        [Export] public bool ActivateByDoubleClick { get; set; } = false;
         /// <summary>
         /// 【K23·次数上限】本能力**每回合最多发动次数**（0 = 不限次；卡文"该能力每回合只能发动一次/两次"）。
         /// 用户 2026-09 口径：

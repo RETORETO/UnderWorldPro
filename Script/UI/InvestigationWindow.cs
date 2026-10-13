@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Script.Game.Entities;
 using Script.UI;
 using System;
@@ -18,10 +18,13 @@ public partial class InvestigationWindow : Window
     private Control _topDropZone;
     private Control _topCardContainer;
     private Label _topCountLabel;
+    private Label _topZoneHeaderLabel;
     private Control _bottomDropZone;
     private Control _bottomCardContainer;
     private Label _bottomCountLabel;
+    private Label _bottomZoneHeaderLabel;
     private Label _progressLabel;
+    private Label _hintLabel;
     private Control _cardPool;
     private Button _clearButton;
     private Button _confirmButton;
@@ -53,16 +56,22 @@ public partial class InvestigationWindow : Window
     /// <summary>当前对抗所属的地区序号（1-based），用于窗口标题显示。</summary>
     private int _areaNo;
 
+    /// <summary>【2026-10·JC104】本窗当前套用的**可复用文案**（调查对抗 / 预测X…）；日志前缀随它走。</summary>
+    private AllocationWindowTexts _texts = AllocationWindowTexts.Investigation(0);
+
     public override void _Ready()
     {
         _titleLabel = GetNode<Label>("RootControl/TitleLabel");
         _topDropZone = GetNode<Control>("RootControl/TopDropZone");
         _topCardContainer = GetNode<Control>("RootControl/TopDropZone/CardContainer");
         _topCountLabel = GetNode<Label>("RootControl/TopDropZone/CountLabel");
+        _topZoneHeaderLabel = GetNodeOrNull<Label>("RootControl/TopDropZone/ZoneHeaderLabel");
         _bottomDropZone = GetNode<Control>("RootControl/BottomDropZone");
         _bottomCardContainer = GetNode<Control>("RootControl/BottomDropZone/CardContainer");
         _bottomCountLabel = GetNode<Label>("RootControl/BottomDropZone/CountLabel");
+        _bottomZoneHeaderLabel = GetNodeOrNull<Label>("RootControl/BottomDropZone/ZoneHeaderLabel");
         _progressLabel = GetNode<Label>("RootControl/ProgressLabel");
+        _hintLabel = GetNodeOrNull<Label>("RootControl/HintLabel");
         _cardPool = GetNode<Control>("RootControl/CardPool");
         _clearButton = GetNode<Button>("RootControl/ClearButton");
         _confirmButton = GetNode<Button>("RootControl/ConfirmButton");
@@ -73,20 +82,39 @@ public partial class InvestigationWindow : Window
         _cardUIScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
     }
 
+    /// <summary>
+    /// 【2026-10·JC104】套用"同一份分配机制、按场景换文案"的**可复用文案**（`AllocationWindowTexts`）：
+    /// 窗口标题栏、窗内标题、两区标题、提示行一次性写入 ⇒ 预测类效果看到的是"预测X"而不是"调查对抗"
+    /// （用户口径："显示上不能是调查对抗 UI"）。未给出的字段保持场景原值。
+    /// </summary>
+    public void ApplyTexts(AllocationWindowTexts texts)
+    {
+        if (texts == null) return;
+        _texts = texts;
+        if (!string.IsNullOrEmpty(texts.WindowTitle)) Title = texts.WindowTitle;   // 操作系统窗口标题栏
+        if (_titleLabel != null && !string.IsNullOrEmpty(texts.Title)) _titleLabel.Text = texts.Title;
+        if (_topZoneHeaderLabel != null && !string.IsNullOrEmpty(texts.TopZoneHeader))
+            _topZoneHeaderLabel.Text = texts.TopZoneHeader;
+        if (_bottomZoneHeaderLabel != null && !string.IsNullOrEmpty(texts.BottomZoneHeader))
+            _bottomZoneHeaderLabel.Text = texts.BottomZoneHeader;
+        if (_hintLabel != null && !string.IsNullOrEmpty(texts.Hint)) _hintLabel.Text = texts.Hint;
+    }
+
     /// <summary>初始化依赖并打开窗口。
     /// cards 为从胜者牌库顶取出的 X 张实例（已脱离数据层牌库）；
     /// onReturnConfirmed 在确认时回调（仅回传纯数据：牌库顶/底实例列表），由 Controller 统一完成数据层放回 + UI 牌库同步 + 抽牌；
     /// onDraw 为胜者抽牌回调。
-    /// titleOverride：【P4·预测X】复用本窗口时的标题覆盖（缺省 null = 调查对抗标题）；预测不抽牌，
-    /// 调用方传 onDraw = 空实现即可（窗口只负责"分配顶/底"这一件事）。</summary>
+    /// texts：【2026-10·JC104】**可复用文案**（`AllocationWindowTexts`）——调查对抗传
+    /// `AllocationWindowTexts.Investigation(areaNo)`（缺省即此），预测X 传 `AllocationWindowTexts.Prediction(x)`；
+    /// 两者的"拖拽/排序/确认"机制**完全共用**，只有文案不同（用户口径：显示上不能是调查对抗 UI）。
+    /// 传 null 时按 `areaNo` 走调查对抗文案（既有调用点行为不变）。</summary>
     public void Configure(int winnerPlayer, int areaNo, List<CardInstance> cards,
                           System.Action<int, List<CardInstance>, List<CardInstance>> onReturnConfirmed,
-                          Action<int, int> onDraw, string titleOverride = null)
+                          Action<int, int> onDraw, AllocationWindowTexts texts = null)
     {
         _winnerPlayer = winnerPlayer;
         _areaNo = areaNo;
-        if (_titleLabel != null)
-            _titleLabel.Text = string.IsNullOrEmpty(titleOverride) ? $"{areaNo}地区调查对抗获胜" : titleOverride;
+        ApplyTexts(texts ?? AllocationWindowTexts.Investigation(areaNo));
         _onReturnConfirmed = onReturnConfirmed;
         _onDraw = onDraw;
         _cardInstances.Clear();
@@ -114,7 +142,7 @@ public partial class InvestigationWindow : Window
 
         _totalCount = _cardInstances.Count;
         RefreshLabels();
-        GD.Print($"【调查窗口】已打开：胜者P{_winnerPlayer}，共 {_totalCount} 张待分配");
+        GD.Print($"【{_texts.LogTag}】已打开：胜者P{_winnerPlayer}，共 {_totalCount} 张待分配");
     }
 
     // ============================================================
@@ -203,7 +231,7 @@ public partial class InvestigationWindow : Window
         target.AddChild(card);
         target.MoveChild(card, insertIdx);
 
-        GD.Print($"[调查窗口] 卡落至 {zone}，插入索引={insertIdx}");
+        GD.Print($"[{_texts.LogTag}] 卡落至 {zone}，插入索引={insertIdx}");
 
         ArrangeDropZone(_topCardContainer);
         ArrangeDropZone(_bottomCardContainer);
@@ -299,7 +327,7 @@ public partial class InvestigationWindow : Window
         ArrangeDropZone(_topCardContainer);
         ArrangeDropZone(_bottomCardContainer);
         RefreshLabels();
-        GD.Print("【调查窗口】已清除，所有卡回到 CardPool");
+        GD.Print($"【{_texts.LogTag}】已清除，所有卡回到 CardPool");
     }
 
     private bool _confirmed = false;
@@ -318,7 +346,7 @@ public partial class InvestigationWindow : Window
         var toTop = new List<CardInstance>(topCards);
         var toBottom = new List<CardInstance>(bottomCards);
 
-        GD.Print($"【调查窗口】确认：放回牌库顶 {toTop.Count} 张、牌库底 {toBottom.Count} 张");
+        GD.Print($"【{_texts.LogTag}】确认：放回牌库顶 {toTop.Count} 张、牌库底 {toBottom.Count} 张");
 
         // 仅回传纯数据分配结果，牌库最终顺序与 UI 由 Controller（ZoneManager + DeckZone）统一重建
         _onReturnConfirmed?.Invoke(_winnerPlayer, toTop, toBottom);
