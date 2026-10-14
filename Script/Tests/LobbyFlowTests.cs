@@ -10,8 +10,12 @@ using Script.Net.Lobby;
 namespace Script.Tests
 {
     /// <summary>
-    /// 【大厅/房间 · 增量 A】**完整流程自检**（不是单元测试）：同进程内起真实 ENet 服务端 + 两个真实客户端会话，
+    /// 【大厅/房间 · 增量 A】**完整流程自检**（不是单元测试）：同进程内起真实 WebSocket 服务端 + 两个真实客户端会话，
     /// 走完 `连接 → Hello → 房间列表 → 建房 → 加入 → 提交卡组 → 准备 → 开始 → 对局（收快照）→ 结束 → 自动回同一房间`。
+    ///
+    /// 【传输层统一 · 2026-10-15】服务端与客户端**必须同一种传输**：`ClientSession.Connect` 恒用 WebSocket(TCP)，
+    /// 所以这里也只能用 `GodotWebSocketTransport` 监听。此前本测试台用 ENet(UDP) 起服务端（客户端已切 WebSocket 后未同步），
+    /// 两边一个 UDP 一个 TCP，`ws://127.0.0.1:18995` 永远连不上 —— 表现为本套件 5 例全部在首条断言（"应连上服务端"）失败。
     ///
     /// 目的与定位（用户已明确"大厅/房间不写单测"）：本套件只验证**流程能走通且双方视角一致**，
     /// 不断言内部实现细节；真正的交付验收是"一台机器三进程冒烟"（`NetServer + 2×NetEntry --bot`）。
@@ -57,7 +61,10 @@ namespace Script.Tests
             var rig = new Rig();
             var cfg = config ?? new ServerConfig { Port = Port, MaxConnections = 16, MaxRooms = 4, Verbose = false };
             cfg.Port = Port;   // 每个 rig 必须用自己的端口，避免并行/残留实例抢端口
-            rig.Transport = new GodotEnetTransport(EnetRole.Server) { Port = Port, MaxClients = 16 };
+            // 【传输层统一 · 2026-10-15】服务端必须与 `ClientSession.Connect` 的客户端同为 WebSocket。
+            // 连接数上限不在这里设：`WebSocketMultiplayerPeer` 没有 maxClients 参数，超限由 `ServerHost`
+            // 按 `ServerConfig.MaxConnections` 在会话层拒绝（见 LobbyServerHost.Start 的同款说明）。
+            rig.Transport = new GodotWebSocketTransport(EnetRole.Server) { Port = Port };
             rig.Factory = new ServerMatchFactory(null, rig.Transport);
             rig.Lobby = new LobbyServer(cfg, new GameDeckValidator(), factory ?? (room => rig.Factory.Create(room)))
             {

@@ -183,6 +183,13 @@ namespace Script.UI.Interaction
                 return;
             }
 
+            // 【2026-10 用户口径·JC110】手牌中的"**手牌行动**"卡（`Scope = ZoneScope.HandZone` 的激活能力，
+            // 如 JC110 闲人的绿地"手牌行动4：将自身封印在目标角色上"）**拖到合法目标上＝发动该能力**
+            // （付费 → 入堆叠 → 结算封印），与"双击 → 取目标"同一出口（`EffectEngine.ActivateAbility`）。
+            // 必须**先于**普通落点判定：此前这条落点只走普通打出 `PlayCard`——手牌行动卡不是可打出/可结附的
+            // 牌 ⇒ 被判"无合法目标"直接退回手牌（用户实测："无法通过拖拽正面付费打出"）。
+            if (TryHandActivateDrop(cardUI, playerId)) return;
+
             // 方案A：先命中检测场上卡（附属/事务可选目标）
             string targetCardUid = "";
             string targetAreaName = "";
@@ -487,6 +494,49 @@ namespace Script.UI.Interaction
             }
         }
 
+        // ============================================================
+        // 【2026-10·JC110】手牌行动：拖到合法目标上＝发动
+        // ============================================================
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC110】手牌中的"**手牌行动**"卡拖到**合法目标**上松手 ⇒ **发动该激活能力**
+        /// （付费 → 入堆叠 → 结算；与"双击 → 取目标窗"同一条 Controller 出口 `ActivateAbility`）。
+        /// 用户原文："无法通过拖拽正面付费打出"。
+        ///
+        /// 返回 true ＝ 本次拖拽已按"发动"处理（已入堆叠或已取消归位），调用方应直接返回、不得再走打出流程；
+        /// 返回 false ＝ 不是手牌行动卡 / 当前不可发动 / 落点不是该能力的合法目标 ⇒ 交回普通打出流程。
+        /// 规则判定（门禁 + 落点合法性）全部委托 `ActivateEligibility`（View 不写 Model、也不复刻规则）。
+        /// </summary>
+        private bool TryHandActivateDrop(CardUI cardUI, int playerId)
+        {
+            var instance = cardUI?.Instance;
+            if (instance == null) return false;
+            if (instance.CurrentZone != CardZone.Hand) return false;   // 只有手牌中的"手牌行动"走此路
+            var ability = Script.Manager.ActivateEligibility.GetHandScopedActivateAbility(instance);
+            if (ability == null) return false;
+
+            var hit = PickAreaCardAt(_arena.GetGlobalMousePosition());
+            if (Script.Manager.ActivateEligibility.CanHandActivateOn(
+                    instance, hit?.Instance, _turnManager, _arena.PlayerManagerRef, _cardManager))
+            {
+                GD.Print($"[DragController.DragEnd] 手牌行动拖拽发动：{instance.PlayerTemplate?.CardName} " +
+                         $"→ 目标 {hit.Instance.PlayerTemplate?.CardName}（{ability.EffectId}，费用 {ability.Cost}）");
+                ClearDragTargetHighlights();
+                // 发动入口与双击链路同一出口（Controller 内部做权威复检/付费/入堆叠）
+                _actionService.ActivateAbility(instance, ability, hit.Instance);
+                _arena.RefreshActivateHighlights();
+                return true;
+            }
+
+            // 落点不是合法目标（含拖回空白/手牌区）：归位手牌，不误发动（手牌行动卡不是可打出的牌，
+            // 交回普通流程只会打出失败并再归位一次，故这里直接收尾）。
+            GD.Print($"[DragController.DragEnd] 手牌行动拖拽落点非法（落点=" +
+                     $"{hit?.Instance?.PlayerTemplate?.CardName ?? "空"}）→ 不发动，归位手牌");
+            ClearDragTargetHighlights();
+            ReturnCardToHand(cardUI);
+            return true;
+        }
+
         /// <summary>判断 dragging 这张手牌是否能以 target 这张场上卡为合法目标（委托 CardManager 规则判定）。</summary>
         public bool IsLegalCardTarget(CardUI dragging, CardUI target)
         {
@@ -525,11 +575,20 @@ namespace Script.UI.Interaction
             var dragging = _draggingHandCard;
             var mp = _arena.GetGlobalMousePosition();
             CardUI hovered = PickAreaCardAt(mp);
-            bool hoveredLegal = IsLegalCardTarget(dragging, hovered);
+            // 【2026-10·JC110】手牌中的"手牌行动"卡：拖拽期间的**合法落点**是"该激活能力的目标"
+            // （不是打出目标）⇒ 高亮按激活目标算，否则玩家看不到"可以放在哪个角色上"。
+            bool handActivate = Script.Manager.ActivateEligibility.GetHandScopedActivateAbility(dragging.Instance) != null;
+            bool hoveredLegal = handActivate
+                ? Script.Manager.ActivateEligibility.CanHandActivateOn(
+                    dragging.Instance, hovered?.Instance, _turnManager, _arena.PlayerManagerRef, _cardManager)
+                : IsLegalCardTarget(dragging, hovered);
             foreach (var c in _arena.AreaCardUIs)
             {
                 if (c == null) continue;
-                bool legal = IsLegalCardTarget(dragging, c);
+                bool legal = handActivate
+                    ? Script.Manager.ActivateEligibility.CanHandActivateOn(
+                        dragging.Instance, c.Instance, _turnManager, _arena.PlayerManagerRef, _cardManager)
+                    : IsLegalCardTarget(dragging, c);
                 c.SetTargetHighlight(legal);
             }
             // 【2026-10·JC107】资产卡同为合法落点（"消灭目标附属或资产"）⇒ 拖拽期间一并高亮，

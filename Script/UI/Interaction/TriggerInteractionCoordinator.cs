@@ -268,9 +268,19 @@ namespace Script.UI.Interaction
         /// 高亮暗藏者，而不是弹出选择框"），同时保留退出通道，玩家不会卡在点不动的提示窗上。
         /// 返回 false ＝ **选目标窗不可用**（如编辑器未挂场景）→ 调用方必须回退到自己的列表窗，
         /// 否则该次取目标会静默中断（挂死在"等一个永不到来的回调"上）。
+        ///
+        /// 【2026-10 用户口径·JC108】**卡目标（非地区目标）默认不再弹提示窗**：玩家口径
+        /// "JC108 以场上的卡为目标弹出了选择窗，需要**直接选择场上的高亮卡**"。
+        /// 卡目标的"选中"本来就发生在**场上高亮卡**上（点击即完成选择），再叠一个居中的提示窗
+        /// 反而挡住战场、让玩家以为要在窗里选。故 `hintWindow=false` 时：
+        ///  · 只广播高亮（`NotifyTargetSelectionChanged`），**不开窗**；
+        ///  · 若给了 `extraLabel`（如"取消（不发动）"），把该出口挂到窗上（窗不可见也不影响
+        ///    场上点击与取消都能走完收尾）；未给则本次选择没有取消出口（＝必选一个目标）。
+        /// 地区目标（`isArea=true`）必须保留窗口：地区槽位的高亮是几何提示，窗口承载"点哪个高亮地区"。
         /// </summary>
         public bool RequestActivateTargetSelection(string effectName, bool isArea, List<string> validTargetUids,
-            Action<string> onPicked, string extraLabel = null, Action onExtra = null, string hint = null)
+            Action<string> onPicked, string extraLabel = null, Action onExtra = null, string hint = null,
+            bool hintWindow = true)
         {
             if (_targetSelectionWindow == null)
             {
@@ -292,7 +302,12 @@ namespace Script.UI.Interaction
 
             CardManager.Instance.NotifyTargetSelectionChanged(null);
 
-            if (_targetIsArea)
+            // 【2026-10 用户口径·JC108】卡目标是否**开提示窗**：地区目标必须开（窗口承载"点哪个高亮
+            // 地区"的指引）；卡目标由调用方决定（激活效果取卡目标默认 `hintWindow=true` 保持不变，
+            // 显式传 false ⇒ "直接选择场上的高亮卡"，不再被居中提示窗挡住战场）。
+            bool showWindow = _targetIsArea || hintWindow;
+
+            if (_targetIsArea && showWindow)
             {
                 foreach (var uid in _validTargetUids)
                     _validAreaUids.Add(uid);
@@ -319,7 +334,17 @@ namespace Script.UI.Interaction
                     : (string.IsNullOrEmpty(hint)
                         ? "请点击一个高亮的地区。"
                         : $"请点击一个高亮的地区（{hint}）。"));
-            OpenTargetSelection(effectName, resolvedHint, extraLabel);
+            if (!showWindow)
+            {
+                // 卡目标不开窗（用户口径：直接点场上高亮卡）。出口（如"取消（不发动）"）由下方
+                // `OnExtra` 保持可用；没给取消出口就是"必选一个目标"。
+                GD.Print($"[TriggerCoordinator] 卡目标不弹提示窗（用户口径：直接点场上高亮卡）；" +
+                         $"合法目标 {_validTargetUids.Count} 个，本槽出口={(string.IsNullOrEmpty(extraLabel) ? "无（必选）" : extraLabel)}");
+            }
+            else
+            {
+                OpenTargetSelection(effectName, resolvedHint, extraLabel);
+            }
 
             _triggerOrderWindow?.SetButtonsEnabled(false);
 
@@ -342,7 +367,25 @@ namespace Script.UI.Interaction
                 }
                 _targetSelectionWindow.Visible = false;
                 _targetSelectionWindow.OnExtra = null;
+                _cancelActivateTargetSelection = null;
                 _triggerOrderWindow?.SetButtonsEnabled(true);
+            }
+
+            // 【2026-10·JC108】取消出口的统一投递（窗口按钮 / 场上右键共用；**幂等**：`FinishSelection`
+            // 先把 `_targetSelectionActive` 置假，重复投递直接忽略）。仅在调用方给了出口
+            // （`onExtra != null`）时才结束本次选择——没给出口就是"必选一个目标"，此刻右键不生效
+            // （与窗口上没有取消按钮一致，避免"关掉窗却仍在等目标"而挂死流程）。
+            void InvokeExtraExit()
+            {
+                if (!_targetSelectionActive) return;
+                if (onExtra == null)
+                {
+                    GD.Print($"[TriggerCoordinator] 本次取目标无出口（必选）→ 忽略退出请求（{effectName}）");
+                    return;
+                }
+                FinishSelection();
+                _onTargetPicked = null;
+                onExtra.Invoke();
             }
 
             _targetSelectionWindow.OnTargetPicked = (uid) =>
@@ -356,10 +399,10 @@ namespace Script.UI.Interaction
             _targetSelectionWindow.OnExtra = () =>
             {
                 GD.Print($"[TriggerCoordinator] 本槽出口（{extraLabel}）：{effectName}");
-                FinishSelection();
-                _onTargetPicked = null;
-                onExtra?.Invoke();
+                InvokeExtraExit();
             };
+            // 供"卡目标不弹窗"路径使用：窗口不可见时，场上**右键**＝取消（用户口径：手牌行动等取目标可取消）。
+            _cancelActivateTargetSelection = InvokeExtraExit;
 
             if (_validTargetUids.Count == 0)
                 GD.Print($"[TriggerCoordinator] 激活效果 {effectName} 无合法目标，选目标窗口不展示（已过滤）");
@@ -586,6 +629,12 @@ namespace Script.UI.Interaction
         private HashSet<string> _validAreaUids = new HashSet<string>();
         private Action<string> _onTargetPicked;
 
+        /// <summary>【2026-10·JC108】"本次取目标"的**取消出口**（仅当调用方给了出口时非空）。
+        /// 用途：卡目标不弹提示窗时，窗口上的"取消"按钮看不到 → 由**场上右键**触发同一个出口回调
+        /// （用户口径：手牌行动等取目标要能取消）。由 `RequestActivateTargetSelection` 在其局部
+        /// `FinishSelection` 就绪后赋值，收尾时清空（幂等由 `_targetSelectionActive` 保证）。</summary>
+        private Action _cancelActivateTargetSelection;
+
         /// <summary>打开选目标提示窗口。effectName/hint 用于展示；选择由 Arena 转发场上卡点击。
         /// 【2026-09·K15】`extraLabel` 非空时，窗口自带的备用按钮成为该槽的出口（留空该槽 / 取消不打出）。
         /// 【2026-10·触发窗口改造】`allowCancel=true` 时窗口额外显示「取消」按钮（回调 `OnCancelled`），
@@ -626,6 +675,16 @@ namespace Script.UI.Interaction
         /// 【2026-09·JC062/JC021 多选模式】`rightClick` 区分"左键选择 / 右键取消"。</summary>
         public void HandleTargetSelectionClick(Vector2 globalPos, bool rightClick = false)
         {
+            // 【2026-10·JC108】**卡目标不弹提示窗**（激活取卡目标）时的取消手势：场上**右键**＝取消。
+            // 位置放在多选分支之前、且仅当本次取目标确实有出口时才生效——多选模式自身用"右键取消单张"，
+            // 不能被这里整体取消吞掉。
+            if (rightClick && !_multiPickActive && !_targetIsArea && _cancelActivateTargetSelection != null)
+            {
+                GD.Print("[TriggerCoordinator] 场上右键 → 取目标取消出口（卡目标不弹窗时的取消手势）");
+                _cancelActivateTargetSelection.Invoke();
+                return;
+            }
+
             // 【2026-09·多选模式】窗口保持打开，左键加选、右键取消
             if (_multiPickActive)
             {

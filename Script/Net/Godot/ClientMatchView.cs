@@ -163,6 +163,9 @@ namespace Script.Net.Godot
             if (message.StartsWith(SnapshotSerializer.SnapPrefix, StringComparison.Ordinal))
             {
                 var snap = SnapshotSerializer.Deserialize(message.Substring(SnapshotSerializer.SnapPrefix.Length));
+                // 【大包修复 · 2026-10-14】快照反序列化失败**必须出声**：此前是静默 return，
+                // 曾让"快照没到/解析失败"表现为"进战场后一张牌都不显示"且日志毫无线索。
+                if (snap == null) GD.PrintErr($"[ClientMatchView] 快照反序列化失败（报文长度 {message.Length}），本帧忽略");
                 if (snap != null) ApplySnapshot(snap);
                 return;
             }

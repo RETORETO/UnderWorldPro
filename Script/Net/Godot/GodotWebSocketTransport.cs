@@ -58,6 +58,13 @@ namespace Script.Net.Godot
         /// <summary>客户端收到的下行消息所用的会话 id 占位（客户端不需要寻址；真实会话 id 见 Hello 应答）。</summary>
         public const string SelfSessionId = "self";
 
+        /// <summary>
+        /// WebSocket 出/入站缓冲上限（字节）。默认仅 65535，超过的报文会被底层 wslay **静默丢弃**
+        /// （详见 <see cref="Start"/> 内的说明）。抬到 32 MiB 以容纳整局快照（实测约 103 KB）。
+        /// 该值只作"上限校验"，不预分配内存。
+        /// </summary>
+        public const int WsBufferLimitBytes = 32 * 1024 * 1024;
+
         // —— 配置属性（供 INetTransport.Start() 无参启动读取）——
         /// <summary>监听端口（服务端角色）。</summary>
         public ushort Port { get; set; } = 18950;
@@ -97,6 +104,19 @@ namespace Script.Net.Godot
                 GD.PrintErr("[GodotWebSocketTransport] 浏览器不允许网页监听端口，Web 版无法充当服务端。");
                 return;
             }
+
+            // 【大包修复 · 2026-10-14】必须在 CreateServer/CreateClient **之前**设置缓冲：
+            // Godot 的 `WebSocketMultiplayerPeer` 会在握手时把这两个值复制给每个 `WebSocketPeer`（`_make_peer()`），
+            // 而默认值只有 **65535 字节**。底层 wslay 的判定是
+            //     `排队长度 + 本包长度 > outbound_buffer_size` → `ERR_OUT_OF_MEMORY` → **静默丢包**，
+            // 且 `MultiplayerPeer.PutPacket` 在这种情况下**仍返回 Ok**（它只是入队）。
+            // 本工程的整局快照实测 **约 103 KB**（109 张卡 + 合法性投影），正好撞上这个 64 KB 上限：
+            // 表现为「服务端日志说"已下发快照"、客户端一条都没收到；大厅/房间等小消息全部正常」，
+            // 于是进入战场后一张牌都不显示（手牌/牌库/地区/秘社全空）。
+            // 入站缓冲同理（客户端收大包也要放得下）。此处统一抬到 32 MiB：这两项只是"上限校验"，
+            // 不会预分配内存，实际占用等于真实排队字节数。
+            Peer.OutboundBufferSize = WsBufferLimitBytes;
+            Peer.InboundBufferSize = WsBufferLimitBytes;
 
             Error err;
             if (_role == EnetRole.Server)
@@ -152,7 +172,13 @@ namespace Script.Net.Godot
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_sessionToPeer.TryGetValue(sessionId, out long wsPeerId)) return;   // 会话不存在：静默忽略
             Peer.SetTargetPeer((int)wsPeerId);
-            Peer.PutPacket(_utf8.GetBytes(message));
+            byte[] bytes = _utf8.GetBytes(message);
+            Error err = Peer.PutPacket(bytes);
+            // 【大包修复】把"底层丢弃"变成**可见错误**：PutPacket 在出站缓冲不足时会返回非 Ok
+            // （历史上这里被忽略 → 服务端日志显示"已下发快照"、客户端却什么都没收到）。
+            if (err != Error.Ok)
+                GD.PrintErr($"[GodotWebSocketTransport] 下发失败 {sessionId}（{bytes.Length} 字节）：{err}；"
+                    + $"若为 OutOfMemory 说明单包超过出站缓冲（当前上限 {WsBufferLimitBytes} 字节）。");
         }
 
         public void SendToServer(string message)
@@ -200,7 +226,7 @@ namespace Script.Net.Godot
                     _running = false;
                     LinkFailed = true;
                     GD.PrintErr($"[GodotWebSocketTransport] 连接 {Url} 失败（状态=Disconnected），已停止轮询。"
-                        + "请确认：① WebSocket 服务端已启动（`NetServer.tscn -- --ws --port <端口>`）；"
+                        + "请确认：① WebSocket 服务端已启动（`NetServer.tscn -- --port <端口>`）；"
                         + "② 地址端口填对（浏览器需用**服务端机器的局域网 IPv4**，不能是 127.0.0.1 除非同机）；"
                         + "③ 页面若是 https 打开，则必须用 wss://（混合内容会被浏览器拦掉）。");
                 }

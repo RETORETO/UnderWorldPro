@@ -144,19 +144,11 @@ namespace Script.UI
         /// <summary>
         /// 【K27】该卡是否声明了"**手牌行动**"（`Scope = ZoneScope.HandZone` 的激活类效果）。
         /// 供双击分支判断"手牌中的卡是否可按激活处理"（普通手牌卡不受影响，仍走拖拽出牌）。
+        /// 【2026-10·收口】判据统一到 `ActivateEligibility.HasHandScopedActivation`（原先 View/协调器
+        /// 各内联一份，容易漂移），本方法只做转发。
         /// </summary>
         private static bool HasHandScopedActivation(CardInstance inst)
-        {
-            var tmpl = inst?.PlayerTemplate;
-            if (tmpl?.EffectDataList == null) return false;
-            foreach (var e in tmpl.EffectDataList)
-            {
-                if (e == null || e.Scope != ZoneScope.HandZone) continue;
-                if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated
-                    or EffectTiming.CouncilActivated or EffectTiming.ManeuverTrigger) return true;
-            }
-            return false;
-        }
+            => Script.Manager.ActivateEligibility.HasHandScopedActivation(inst);
         // GuiInput 处理按下/释放（Godot 命中分发正常时走这里；若命中失败则由 Arena 全局 _Input 驱动）
         private void OnGuiInput(InputEvent @event)
         {            // 【2026-09 诊断】"卡有高亮但双击完全没日志"（用户实测，单机）：需要区分
@@ -417,9 +409,26 @@ namespace Script.UI
             }
             else
             {
-                // 单机/未接管：原逻辑不变（读 EffectEngine.Instance，异常兜底 0）。
-                try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
-                catch (System.Exception) { mod = 0; }
+                // 【2026-10-14·Web 崩溃修复】单机/未接管：读 `EffectEngine.Instance` 的玩家级费用修正。
+                //
+                // 旧写法是「直接解引用 + 靠 catch 吞异常」：
+                //     try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(...); }
+                //     catch (System.Exception) { mod = 0; }
+                // 桌面端没问题——**联机客户端根本没有 EffectEngine 实例**（`Instance == null`，见
+                // `EffectEngine` 由单机 Composition Root 创建），于是这里抛 NullReferenceException 被 catch 吞掉。
+                // 但 **Web 运行时上任何托管异常都会 abort 整个 wasm 进程**
+                //（浏览器控制台 `Aborted()` + `RuntimeError: unreachable`，wasm 栈固定；try/catch 拦不住，
+                //  日志也拿不到异常文本）——表现为"联机进战场后一张牌都不显示"：
+                // CardUI.Setup → RefreshCostReduction 崩在**第一张真卡**上，整页重建中断。
+                //（已实测定位：CUI 打点显示崩点恰在 `EffectEngine.Instance` 解引用那一行。）
+                //
+                // 结论：**不能靠异常兜底**，必须显式判空。判空后行为与桌面端完全一致（mod=0）。
+                var ee = Script.Manager.EffectEngine.Instance;
+                if (ee != null)
+                {
+                    try { mod = ee.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
+                    catch (System.Exception) { mod = 0; }
+                }
             }
             if (tmpl.Cost >= 0)
             {

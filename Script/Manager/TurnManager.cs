@@ -397,6 +397,23 @@ public partial class TurnManager : Node
         // 收集阶段即用**与实际取目标同一套候选枚举**（`GetValidTargetUidsForTrigger` /
         // `PlayerTargetPool.Collect`）判定；空 ⇒ 不收集（于是排序窗里不会再出现"点了也没法选目标"的条目）。
         registry.HasLegalTargetsForTrigger = HasLegalTargetsForTrigger;
+        // 【秘社·2026-10 用户口径·MSJC016】秘社的"首个准备步骤触发"（`TurnStartEffectList`）不在
+        // `PlayerTemplate.EffectDataList` 里，实例扫描天然扫不到 ⇒ 由 `TriggerRegistry` 显式合成后并入
+        // **同一个触发管线**（排序窗口 → 入堆叠 → 让过 → 结算）。这里只提供两个事实来源：
+        //  ① 秘社区卡实例（Zone 真相源在 ZoneManager）；
+        //  ② "这一回合算不算第一个准备步骤"（一次性门禁，判定权留在 Controller）。
+        registry.CouncilZoneCards = () =>
+        {
+            var all = new System.Collections.Generic.List<CardInstance>();
+            if (_zoneManager == null) return all;
+            for (int pid = 1; pid <= 2; pid++)
+            {
+                var list = _zoneManager.GetZoneCards(CardZone.CouncilZone, pid);
+                if (list != null) all.AddRange(list);
+            }
+            return all;
+        };
+        registry.ShouldCollectCouncilTurnStart = () => TurnCount == 1;
     }
 
     /// <summary>
@@ -5338,30 +5355,17 @@ public partial class TurnManager : Node
     {
         if (VerboseSteps) GD.Print("【准备步骤】广播 OnTurnStarted（双方准备阶段触发点）");
         // 准备阶段为双方共有步骤：不归属单一回合玩家（-1），由每张卡的 EffectData 按各自控制者判定"对手"。
+        // 【2026-10 用户口径·MSJC016 修正】秘社的"触发：在第一个回合的准备步骤开始时磨三张"
+        // （`CouncilTemplate.TurnStartEffectList`）**不再在此直接结算**——用户原文："MSJC016 触发效果是
+        // 第一个准备步骤触发，**需要入堆叠**，现在没有入堆叠直接结算了"。
+        // 现改为：`OnTurnStarted` 广播时由 `TriggerRegistry.CollectCouncilTurnStartTriggers` 把秘社触发
+        // **合成 `StackEffectInstance` 并入同一批收集结果** ⇒ 与普通触发走完全相同的管线
+        // （触发排序窗口 → 玩家确认 → 入堆叠 → 双方让过 → `ResolveStackTop` 结算），
+        // 于是玩家得到响应窗口，而不是"事件发生即静默磨牌"。
+        // 一次性（"在**第一个**回合"）由 `registry.ShouldCollectCouncilTurnStart`（＝`TurnCount == 1`）把关；
+        // 时机必须发生在**发完起手之后**（否则磨掉的是未发完的牌库顶，与正式局不一致），
+        // 故仍放在这里而不是 `GameInitializer.ApplyCouncilOpeningEffects`。
         _triggerEmitPoints?.OnTurnStarted();
-        // 【秘社批次】MSJC016 颂亡者「触发：**在第一个回合的准备步骤开始时**，将你牌库顶的三张牌置于你的墓地」：
-        // 一次性时机（只第一回合），且必须发生在**发完起手之后**（否则磨掉的是未发完的牌库顶，
-        // 张数会与"起手已发完"的正式局不一致）——故不能用 `GameInitializer.ApplyCouncilOpeningEffects`
-        // （那时还没发牌），放在这里按 `TurnCount == 1` 一次性执行。
-        if (TurnCount == 1)
-        {
-            foreach (var pid in new[] { 1, 2 })
-            {
-                if (_zoneManager == null) break;
-                foreach (var council in _zoneManager.GetZoneCards(CardZone.CouncilZone, pid)
-                             ?? new System.Collections.Generic.List<CardInstance>())
-                {
-                    var list = council?.CouncilTemplate?.TurnStartEffectList;
-                    if (list == null) continue;
-                    foreach (var e in list)
-                    {
-                        if (e == null) continue;
-                        GD.Print($"[TurnManager] 秘社首个准备步骤触发：{council.CouncilTemplate.CardName} → {e.EffectId}");
-                        EE?.ResolveEffect(e, council, null);
-                    }
-                }
-            }
-        }
         // 步骤开始：当前优先玩家获得优先权，等待双方连续让过推进
         // 修复 A：OnTurnStarted 可能让 JC035 等触发同步入栈，若堆叠非空则保留堆叠结算流程设定的行动权，
         // 不再无条件覆盖（否则触发链搅乱 PriorityPlayerId，后续让过全部报错）。

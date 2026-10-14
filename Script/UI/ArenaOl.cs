@@ -3081,6 +3081,26 @@ namespace Script.UI
             var cardMgr = _matchClient?.ClientCardManager;
             if (cardMgr == null) return;
 
+            // 【2026-10 用户口径·JC110】手牌中的"手牌行动"卡：拖拽期间的**合法落点**是"该激活能力的目标"
+            // （不是打出目标）⇒ 高亮按激活目标算（服务端投影优先，`ComputeLegalCardTargetUids`），
+            // 否则玩家看不到"可以放在哪个角色上"。只手牌行动卡走这条，不影响其余手牌（返回，不做秘社高亮）。
+            var dragHandAbility = ActivateEligibility.GetHandScopedActivateAbility(dragging.Instance);
+            if (dragHandAbility != null)
+            {
+                var legalTargets = ComputeLegalCardTargetUids(dragging.Instance, dragHandAbility);
+                foreach (var kv in _cardUIMap)
+                {
+                    var ui = kv.Value;
+                    if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                    if (ReferenceEquals(ui, dragging)) continue;
+                    bool legal = legalTargets.Contains(ui.Instance.UID);
+                    bool was = _handDragHighlighted.Contains(ui);
+                    if (legal && !was) { ui.SetTargetHighlight(true); _handDragHighlighted.Add(ui); }
+                    else if (!legal && was) { ui.SetTargetHighlight(false); _handDragHighlighted.Remove(ui); }
+                }
+                return;
+            }
+
             foreach (var kv in _cardUIMap)
             {
                 var ui = kv.Value;
@@ -4037,6 +4057,35 @@ namespace Script.UI
             var clientCardMgr = _matchClient.ClientCardManager;
             bool isCharacter = (tmpl.CategoryFlag & CardCategory.Character) != 0;
             bool requiresTarget = tmpl.GetRequiresTarget();
+
+            // 【2026-10 用户口径·JC110】手牌中的"**手牌行动**"卡（`Scope = ZoneScope.HandZone` 的激活能力，
+            // 如 JC110 闲人的绿地）**拖到合法目标上＝发动该能力**（上行 ActivateAbility，服务端权威付费/入堆叠），
+            // 与"双击 → 取目标"同一出口（`SendActivation`）。对齐单机 `CardDragController.TryHandActivateDrop`。
+            // 必须**先于**普通打出判定：手牌行动卡不是可打出/可结附的牌 ⇒ 原路径会因"无合法目标"丢掉这次拖拽
+            // （用户实测："无法通过拖拽正面付费打出"）。
+            {
+                var handAbility = ActivateEligibility.GetHandScopedActivateAbility(inst);
+                if (handAbility != null)
+                {
+                    var dropHit = PickFieldCardAt(dropPos);
+                    bool canActOnDrop = dropHit?.Instance != null
+                        && ComputeLegalCardTargetUids(inst, handAbility).Contains(dropHit.Instance.UID);
+                    if (canActOnDrop)
+                    {
+                        GD.Print($"[ArenaOl] 手牌行动拖拽发动：{tmpl.CardName} → 目标 {dropHit.Instance.PlayerTemplate?.CardName}" +
+                                 $"（{handAbility.EffectId}，上行 ActivateAbility 由服务端裁决）");
+                        ClearHandDragTargetHighlights();
+                        SendActivation(inst, handAbility);
+                    }
+                    else
+                    {
+                        GD.Print($"[ArenaOl] 手牌行动拖拽落点非法（落点={dropHit?.Instance?.PlayerTemplate?.CardName ?? "空"}）" +
+                                 "→ 不发意图（卡自行归位）");
+                        ClearHandDragTargetHighlights();
+                    }
+                    return;
+                }
+            }
 
             // ③ 目标卡：仅"合法打出目标"才算命中（对齐单机 IsLegalCardTarget；避免把非法落点直接发给服务端）
             // 【P2】合法性判据优先取服务端投影（IsLegalPlayTargetForClient 内部：投影优先 + 同一规则函数兜底）

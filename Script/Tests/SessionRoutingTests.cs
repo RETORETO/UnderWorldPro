@@ -11,7 +11,15 @@ namespace Script.Tests
     ///  1) 会话建立/断开 → 底座会话表正确增减，并通知业务；
     ///  2) `SendToSession` **定向投递**：两个会话互不串（回环）；
     ///  3) 连接数上限：超限会话被拒（通知 ServerFull）；
-    ///  4) 真实 ENet 本机回环：服务端为两条连接分配**不同会话 id**，定向消息各达各的。
+    ///  4) 真实 WebSocket 本机回环：服务端为两条连接分配**不同会话 id**，定向消息各达各的。
+    ///
+    /// 【传输层统一 · 2026-10-15】第 4 条从 ENet 迁到 WebSocket：ENet 已不在联机主链路上
+    /// （`ClientSession.Connect` 恒用 WebSocket），而这条用例是**唯一**在真实 socket 上验证
+    /// "多 peer → 多会话 → 定向投递不串"的用例；继续用 ENet 等于主链路没有真实传输覆盖。
+    /// 尤其 `GodotWebSocketTransport.DispatchAvailablePackets` 有个 WS 特有的硬约束
+    /// （必须先 `GetPacketPeer()` 再 `GetPacket()`，因为前者取的是**队列头部**包的来源），
+    /// 一旦写反就会出现"消息投给了上一个 peer"的串会话 bug —— 只有真实双连接才能暴露。
+    /// ENet 传输自身的真实收发仍由 `NetGodotTests` / `NetP1Batch1Tests` 覆盖，不丢。
     /// </summary>
     public class SessionRoutingTests : TestRunner
     {
@@ -122,20 +130,19 @@ namespace Script.Tests
             Assert.AreEqual(LobbyRequestKind.ListRooms, lobby.Handled[0].kind, "业务应收到正确的请求种类");
         }
 
-        /// <summary>真实 ENet：两条连接 → 两个会话 id；定向消息各达各的，互不串。</summary>
-        public void TestEnetTwoSessionsTargetedDelivery()
+        /// <summary>真实 WebSocket：两条连接 → 两个会话 id；定向消息各达各的，互不串。</summary>
+        public void TestWebSocketTwoSessionsTargetedDelivery()
         {
             const int port = 18912;
-            var server = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Server)
+            var server = new global::Script.Net.Godot.GodotWebSocketTransport(global::Script.Net.Godot.EnetRole.Server)
             {
                 Port = (ushort)port,
-                MaxClients = 16,
             };
-            var clientA = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Client)
+            var clientA = new global::Script.Net.Godot.GodotWebSocketTransport(global::Script.Net.Godot.EnetRole.Client)
             {
                 Port = (ushort)port, ServerAddress = "127.0.0.1",
             };
-            var clientB = new global::Script.Net.Godot.GodotEnetTransport(global::Script.Net.Godot.EnetRole.Client)
+            var clientB = new global::Script.Net.Godot.GodotWebSocketTransport(global::Script.Net.Godot.EnetRole.Client)
             {
                 Port = (ushort)port, ServerAddress = "127.0.0.1",
             };

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -1969,6 +1969,35 @@ namespace Script.Tests
                 new Promise("JC111 印刷防御＝1（卡数据）",
                     "Cards/Data/PlayerCards/JC/JC111_hundunhudie.tres",
                     "Defense = 1", 1, "TestB4_7A_JC111是防御1的角色"),
+                // 【2026-10 实测反馈七批·A133】
+                // ⑧ JC108："以场上的卡为目标弹出了选择窗，需要**直接选择场上的高亮卡**" ⇒
+                //    激活取卡目标的提示窗由调用方按 `hintWindow` 开关，默认卡目标**不开窗**（只高亮）。
+                new Promise("JC108 卡目标不弹提示窗（开关入参）", "Script/UI/Interaction/TriggerInteractionCoordinator.cs",
+                    "bool hintWindow = true)", 1, "TestB4_5A_JC108双击激活_目标含自身"),
+                new Promise("JC108 卡目标不弹提示窗（消费点）", "Script/UI/Arena.cs",
+                    "hintWindow: false);", 1, "TestB4_5A_JC108双击激活_目标含自身"),
+                // ⑨ JC110："无法通过拖拽正面付费打出" ⇒ 手牌行动卡拖到合法目标上＝发动（与双击同一出口）。
+                new Promise("JC110 手牌行动落点判定（单一实现）", "Script/Manager/ActivateEligibility.cs",
+                    "public static bool CanHandActivateOn(", 1,
+                    "TestHandActivate_可拖到合法目标上发动"),
+                new Promise("JC110 手牌行动拖拽接线（消费点）", "Script/UI/Interaction/CardDragController.cs",
+                    "if (TryHandActivateDrop(cardUI, playerId)) return;", 1,
+                    "TestHandActivate_可拖到合法目标上发动"),
+                // ⑩ JC110："双击激活手牌行动效果**可取消**" ⇒ 手牌来源的取目标带取消出口。
+                new Promise("JC110 手牌行动取目标可取消（单机接线）", "Script/UI/Arena.cs",
+                    "OpenAttachmentActivateChoice(hit, cancelable: true);", 1,
+                    "TestHandActivate_手牌双击激活可取消_源码接线"),
+                new Promise("JC110 手牌行动取目标可取消（出口入参）",
+                    "Script/UI/Interaction/TriggerInteractionCoordinator.cs",
+                    "_cancelActivateTargetSelection", 3, "TestHandActivate_手牌双击激活可取消_源码接线"),
+                // ⑪ MSJC016："触发效果是第一个准备步骤触发，**需要入堆叠**，现在没有入堆叠直接结算了" ⇒
+                //    秘社触发并入触发管线（收集 ≠ 结算），不再于 DoPrepare 直接 ResolveEffect。
+                new Promise("MSJC016 秘社触发并入触发管线（收集）", "Script/Manager/TriggerRegistry.cs",
+                    "CollectCouncilTurnStartTriggers(timing, ctx, collected);", 1,
+                    "TestMSJC016首个准备步骤触发入堆叠而不是直接结算"),
+                new Promise("MSJC016 一次性门禁＝第一个回合", "Script/Manager/TurnManager.cs",
+                    "registry.ShouldCollectCouncilTurnStart = () => TurnCount == 1;", 1,
+                    "TestMSJC016非第一回合不再触发"),
             };
             foreach (var p in promises)
             {

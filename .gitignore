@@ -135,6 +135,16 @@ _validate_tres.py
 fix_tres_scriptclass.ps1
 AnalyzeEffects.ps1
 
+# 根目录「下划线前缀」= 一次性调试/验证脚本及其输出。
+# 例如 _waset.py / _wself.mjs / _wshot.mjs / _wtrial.sh / _wzoom.mjs
+# 这类浏览器自动化验证脚本用完即弃，统一忽略，避免再次误提交。
+/_*.py
+/_*.mjs
+/_*.js
+/_*.sh
+/_*.ps1
+/_*.txt
+
 # 手动复制的备份副本（Godot 不会加载 "* - 副本.godot" 这类文件）
 * - 副本.godot
 *副本*
@@ -176,6 +186,11 @@ appsettings.*.local.json
 *.orig
 *.rej
 *.log
+
+# 工程配置的手工备份副本（UWPro.csproj.bak-net8 / .old / .old.1 等）
+*.bak-*
+*.old
+*.old.[0-9]*
 
 # 例外：保留 GitHub 约定文件与说明文档
 !/.gitignore

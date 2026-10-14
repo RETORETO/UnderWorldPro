@@ -288,6 +288,9 @@ RuntimeError: unreachable
 
 ### 六之二、战场页渲染：**已确认正常**（2026-10-13）
 
+> ⚠️ **本节结论在 2026-10-14 一度失效**（传输切到 WebSocket 后"进战场一张牌都没有"）。
+> 根因是两个，已在同日修复并重新实测通过 —— 见下面的 **六之三**。
+
 Web 版联机**能进战场并正常渲染**：`战场已挂载（座位 2）` → `对局结束：获胜座位 1` → `[ArenaOl] 展示对局结果：你落败！` → 自动回房间，全程 0 abort。
 
 用 **2 倍设备像素比**（`_wshot.mjs --dpr 2`）抓的战场帧，元素齐全且清晰可读：
@@ -309,7 +312,85 @@ Web 版联机**能进战场并正常渲染**：`战场已挂载（座位 2）` �
 > 抓帧技巧：战场页在冒烟模式下只活约 8 秒（自动认输），固定 `--wait` 抓不准，
 > 要用"等日志出现标记再截图"的方式（临时工具 `_wshot.mjs`，注意它靠 CDP，会受日志回放影响，见第十节）。
 
+### 六之三、联机「进战场后一张牌都不显示」：两个根因（2026-10-14 已修复并实测通过）
+
+用户口径：**不论什么方式联机（一键三开 / 建立主机 / Web 连服务器），进战场后手牌、卡组、地区卡、秘社全都不显示。**
+
+#### 根因 1 —— WebSocket 默认 64KB 缓冲让 103KB 快照被**静默丢弃**
+
+- `WebSocketMultiplayerPeer` 的 `inbound_buffer_size` / `outbound_buffer_size` **默认都是 65535**。
+- 本工程整局快照（`SNAP:` + JSON，109~116 张卡 + 合法性投影）实测 **≈103 KB**，远超 64 KB。
+- 底层 wslay 判定 `排队长度 + 本包长度 > outbound_buffer_size` → 返回 `ERR_OUT_OF_MEMORY` 并**静默丢包**，
+  但 `MultiplayerPeer.PutPacket` 对外仍返回 `Ok` —— 所以**服务端日志完全看不出异常**，只有客户端"永远收不到快照"。
+- 修复（`Script/Net/Godot/GodotWebSocketTransport.cs`）：
+  1. 新增 `public const int WsBufferLimitBytes = 32 * 1024 * 1024;`
+  2. `Start()` 里**在 `CreateServer` / `CreateClient` 之前**写 `Peer.OutboundBufferSize / InboundBufferSize`
+     （握手时会把这两个值复制给每个 peer，建连接之后再设无效）。
+  3. `SendToSession` 把 `PutPacket` 的非 `Ok` 返回值改成 `GD.PrintErr`，不再静默。
+- 症状对照：修复前客户端只收到 77~598 字节的小消息、**从无 103KB 大包**（服务端日志却写着"下行快照"）。
+
+#### 根因 2 —— `EffectEngine.Instance` 为 null 的 NRE 在 Web 上直接把 wasm 打崩（★本轮新发现）
+
+- 位置：`Script/UI/CardUI.cs` → `RefreshCostReduction()`，它是 `CardUI.Setup()` 的**第一件事**。
+- 旧写法「直接解引用 + 靠 catch 兜底」：
+  ```csharp
+  try { mod = Script.Manager.EffectEngine.Instance.GetCostModification(...); }
+  catch (System.Exception) { mod = 0; }
+  ```
+- **联机客户端没有 EffectEngine 实例**（`EffectEngine` 由单机 Composition Root / `GameInitializer` 创建），
+  于是这里抛 `NullReferenceException`。桌面端被 `catch` 吞掉、无任何副作用；
+  但 **Web 运行时上任何托管异常都会 abort 整个 wasm 进程**
+  （`Aborted()` + `RuntimeError: unreachable`，wasm 栈每次完全一样；**try/catch 拦不住、日志也拿不到异常文本**）。
+- 崩溃链：`CardUI.Setup` → `RefreshCostReduction` 崩在**本地手牌第一张真卡**上
+  → `ArenaOl.ApplySnapshot` 的整页重建中断 → 表现就是"一张牌都没有"。
+  对手手牌是卡背占位（`hiddenUi.Setup(null)` 早返回，不进这条路径），所以**不受影响** ——
+  现象精确对应"对手那边有卡背、自己这边全空"。
+- 修复：**显式判空，不再靠异常兜底**。
+  ```csharp
+  var ee = Script.Manager.EffectEngine.Instance;
+  if (ee != null)
+  {
+      try { mod = ee.GetCostModification(_instance.ControllerId, tmpl.CardName, tmpl.Organization); }
+      catch (System.Exception) { mod = 0; }
+  }
+  ```
+- 同类隐患全局扫描：只有这一处。`EffectEngine.Instance?.`（null 条件）写法安全；
+  `ActivateEligibility.cs` 用 `Instance != null && Instance.X(...)` 有前置守卫；
+  `Arena.cs` / `Arena.Events.cs` 的直接解引用都在单机路径（实例必然存在）。
+
+> **⚠ 新增 Web 移植红线：不能靠 `catch` 吞异常。**
+> 本项目此前的红线是 ① 全球化/ICU API、② `RenderingServer.FramePostDraw`、③ 格式化负整数。
+> 本轮确认第 ④ 条：**托管异常（哪怕只是一个 NRE）在 Web 上 = 直接 abort，`try/catch` 拦不住**。
+> 凡"可能为 null 的对象"一律**显式判空**，不要指望异常兜底。
+
+#### 定位手法（可复用）
+
+逐句 `[CRUMB]` 打点 → `导出Web版.ps1` 重编 → CDP 抓页面完整控制台日志 → **最后一条打点就是崩点**。
+决定性三行：
+```
+[CRUMB] CUI2-a 即将访问 EffectEngine.Instance
+[CRUMB] CUI2-b EffectEngine.Instance=null      ← 旧版到此 Aborted()
+[CRUMB] CUI2-c 委托返回 mod=0                   ← 判空后直接跳过
+```
+> 抓日志用「先 `Runtime.enable` 再 `Page.navigate`，导航后清空缓冲再收集」的脚本；
+> 直接用 `Runtime.enable` 会**回放旧文档的历史日志**，容易误判。
+
+#### 实测结果（两个根因都修完之后）
+
+| 场景 | 结果 |
+|---|---|
+| 浏览器连 headless `NetServer`（`--wp-auto=online --wp-smoke --wp-join`） | 连接 → 加入房间 r1 座位 2 → 自动准备 → 对局开始 → `战场已按快照重建：手牌 6/6，争夺区 12 张，地区 3 个` → `第0回合·已弹出调度框（候选 6 张手牌）` → **0 次 Aborted** |
+| 桌面一键三开（`start_online_3.ps1 -Smoke -Headless`） | 服务端 + 玩家A/玩家B 全链路正常；两端各 `战场已按快照重建：手牌 5/6，争夺区 12 张，地区 3 个` |
+
+浏览器 2x DPR 截图（`logs/arena_final.png`）可见：双方手牌 6 张卡面、3 个地区（含 P1/P2 计数）、
+左侧堆叠区、秘社卡「帷幕守望」、上下牌库卡背、右侧阶段面板、中央调度框 —— **全部渲染正常**。
+
+> **导出后必检**：`导出Web版.ps1` 在 C# **编译失败**时仍会继续打包并把残缺程序集塞进 pck
+> （产物体积会从 313MB 掉到 ~254MB，浏览器启动即退并打印 `Pages in use exist at exit`）。
+> 每次导出后确认 `build/web/index.pck` ≈ **272MB**、总产物体积 ≈ **313MB**。
+
 ---
+
 
 ## 七、回退与并行方案
 
@@ -597,3 +678,68 @@ Start-Process : 参数错误。字典中的关键字:"HTTP_PROXY"包含重复的
   不受上述环境变量问题影响；服务端已**默认** WebSocket，不需要再加 `--ws`。
 - `启动联机三进程测试.bat`：用 cmd 的 `start` 拉起（同样不受影响），但**没有独立用户目录**，
   多实例共用 Godot 用户目录时有日志争用风险，建议优先用 `一键联机三开.bat`。
+
+---
+
+## 十二、逻辑正确性测试套件（`TestsRunner`）
+
+工程自带 1300+ 条逻辑正确性测试（无 NUnit/xUnit，纯手写断言，全在 `Script/Tests/`），一键跑法：
+
+```bash
+# ⚠️ 必须先编译 **Debug**（原因见下面的坑）
+D:/dotnet9/dotnet.exe build UWPro.csproj -c Debug
+
+"D:/Godot/Godot_v4.7.2-stable_mono_web_export_win64/Godot_v4.7.2-stable_mono_web_export_win64_console.exe" \
+  --headless --path "D:/MYPROJECT/UWPro" res://Scenes/TestsRunner.tscn > logs/tests.log 2>&1
+
+# 判据
+grep -E '\[FAIL\]|\[ERR \]|^通过 |>>> ' logs/tests.log
+```
+
+末行出现 `>>> 全部逻辑正确性测试通过` 即全绿；每个套件的 `=== XXXTests ===` 下一行是 `通过 N / 失败 M`。
+（2026-10-15 全量：**总通过 1327 / 总失败 0**。）
+
+### ⚠️ 跑测试前必须 `-c Debug`（2026-10-15 实测踩坑）
+
+Godot **无头运行**（`--headless --path <工程> res://Scenes/xxx.tscn`）加载的是
+`.godot/mono/temp/bin/**Debug**/UWPro.dll`，**不是 Release**。
+只 `dotnet build -c Release` 的话会拿**旧程序集**去跑 —— 症状是"改了测试/业务代码却毫无变化"，
+新增脚本时更会直接报
+`Cannot instantiate C# script because the associated class could not be found`。
+（`导出Web版.ps1` 走 Release，两者互不影响。）
+
+### 2026-10-15：传输层统一后 `LobbyFlowTests` 5 例失败（已修复）
+
+全量跑出来只有 `LobbyFlowTests` 一栏非绿：**通过 2 / 失败 5**，5 例全部在**首条建连断言**就挂
+（`TestFullLobbyFlow` 报"两个客户端应连上服务端"，其余四例共用 `PrepareMatch`，报"房主应建房成功"）。
+
+| 项 | 内容 |
+|---|---|
+| 根因 | `LobbyFlowTests.StartRig()` 的测试台服务端还是 `new GodotEnetTransport(EnetRole.Server){ Port = Port, MaxClients = 16 }`（**UDP**），而 `ClientSession.Connect` 在 2026-10-14 已统一为 **WebSocket(TCP)**。客户端去连 `ws://127.0.0.1:18995`，服务端在 UDP 18995 上等 —— **端口号一样、协议不同**，永远握不上手 |
+| 为什么只有它挂 | `SessionRoutingTests` / `NetGodotTests` / `NetP1Batch1Tests` 里的真实 socket 用例**两端都是 ENet**（自洽），所以照旧能过；只有 `LobbyFlowTests` 是"ENet 服务端 + WebSocket 客户端"的混搭 |
+| 修法 | `LobbyFlowTests.cs`：`rig.Transport` → `new GodotWebSocketTransport(EnetRole.Server) { Port = Port }`。`MaxClients` 一并删除 —— `WebSocketMultiplayerPeer` **没有** maxClients 参数，连接上限由 `ServerHost` 按 `ServerConfig.MaxConnections` 在会话层把关（与 `LobbyServerHost.Start` 同款说明） |
+
+**同批顺手适配（`适配最新逻辑`）**：
+
+- `SessionRoutingTests.TestEnetTwoSessionsTargetedDelivery` → **`TestWebSocketTwoSessionsTargetedDelivery`**
+  （服务端 + 两个客户端全部换成 `GodotWebSocketTransport`）。它是**唯一**在真实 socket 上验证
+  "多 peer → 多会话 → 定向投递不串"的用例，继续留在 ENet 上等于**主链路没有真实传输覆盖**。
+  尤其 `GodotWebSocketTransport.DispatchAvailablePackets` 有个 **WS 特有**硬约束 ——
+  **必须先 `GetPacketPeer()` 再 `GetPacket()`**（前者取的是"队列头部"那条包的来源，
+  Godot 源码 `return _incoming_packets.front()->get().source;`），写反就是"消息投给了上一个 peer"
+  的串会话 bug，只有真实双连接才暴露。ENet 自身的真实收发仍由 `NetGodotTests`/`NetP1Batch1Tests` 覆盖。
+- `GodotWebSocketTransport.Poll()` 连不上时的排查提示去掉已废弃的 `--ws`
+  （`ServerConfig.FromArgs` 里 `--ws` 现在只是静默接受、无任何效果，提示里还写它会误导）。
+
+**验证**：`LobbyFlowTests` 由 **通过 2 / 失败 5** → **通过 7 / 失败 0**；
+日志确认真的走了 WS（`正在用 WebSocket(TCP) 连接服务端 127.0.0.1:18995` + 23 次 `WS 客户端 N 已连接 → 会话 wN`）；
+全量套件 **1327/0** 全绿。
+
+### 遗留（未改，待拍板）
+
+`NetGodotTests.TestEnetRealTransportLoopback` 与 `NetP1Batch1Tests.TestEnetRealTransportSnapshotRoundTrip`
+两端都是 ENet（自洽、能过），但 `GodotEnetTransport` 在**生产代码里已无任何实例化点**
+（`ClientSession.Connect` 恒用 WS，`ClientSession` 里只剩几处类型判断的回退分支 `GodotEnetTransport enet => ...`；
+`EnetPollDriverNode` 也无任何引用）—— 即这两条在测一个**已不在联机链路上**的类。
+要不要一并迁到 WS、或索性删掉 ENet 实现（连带 `EnetRole` 改名、`INetTransport` 瘦身），需要拍板。
+

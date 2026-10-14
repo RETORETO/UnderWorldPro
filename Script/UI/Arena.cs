@@ -129,6 +129,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private GameInitializer _initializer;
     private CardManager _cardManager;
     private PlayerManager _playerManager;
+
+    /// <summary>【2026-10·JC110】规则层只读引用：供 `CardDragController` 的手牌行动落点判定
+    /// （"手牌行动卡拖到合法目标上＝发动"）查询优先权/费用等门禁，避免 View 侧复刻一份判据。
+    /// 只读暴露，不暴露任何写入口。</summary>
+    internal PlayerManager PlayerManagerRef => _playerManager;
     private DeckManager _deckManager;
     private TurnManager _turnManager;
     //【MVC 修复-问题3】玩家意图统一通道：View 所有写操作经此服务表达，不再直接点名各 Manager 命令方法
@@ -574,7 +579,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 return;
             }
             GD.Print($"[Arena] 双击激活请求：{inst.PlayerTemplate?.CardName}（能力 {ActivateEligibility.GetAllActivateAbilities(inst).Count} 条）");
-            OpenAttachmentActivateChoice(c);
+            // 【2026-10·JC110】手牌中的"手牌行动"卡：取目标时给出"取消（不发动）"出口（用户口径：可取消）。
+            OpenAttachmentActivateChoice(c, cancelable: inst.CurrentZone == CardZone.Hand);
         };
         // 【2026-10 用户口径·JC085】墓地行动：墓地中的"墓地行动"卡双击 → **弹选择地区窗** → 从墓地正面打出
         // （卡文"你可以从墓地中正面打出复生行尸，就如同其在你的手上一样"；费用/忠诚/行动步骤照常由 Controller 校验）。
@@ -1914,7 +1920,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     /// <summary>D9 激活框架：刷新所有场上卡的“可发动”高亮边框。
     /// 仅当该卡控制者当前拥有优先权、费用足够、且有合法目标时高亮。
     /// 订阅 TurnManager.OnPriorityChanged 触发；初始化及每次优先权转移后调用。</summary>
-        private void RefreshActivateHighlights(int playerId = 0)
+        // 【2026-10·JC110】改为 `internal`：`CardDragController` 的"手牌行动拖拽发动"落点需要
+        // 在发动/取消后就地刷新激活高亮（与双击链路同一收尾），避免 View 侧高亮与规则状态漂移。
+        internal void RefreshActivateHighlights(int playerId = 0)
         {
             if (_turnManager == null || _playerManager == null || _cardManager == null || _zoneManager == null) return;
             _activateLegalTargetCache.Clear();
@@ -2114,7 +2122,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         /// 此前只读 `PlayerTemplate.EffectDataList` ⇒ JC019 授予宿主的激活能力（模板里没有）永远列不出来，
         /// 宿主高亮却双击无反应。授予项由该入口**追加在模板项之后**（宿主原有激活效果时窗口自动多出这一条）。
         /// </summary>
-        public void OpenAttachmentActivateChoice(CardUI cardUI)
+        public void OpenAttachmentActivateChoice(CardUI cardUI) => OpenAttachmentActivateChoice(cardUI, cancelable: false);
+
+        /// <param name="cancelable">
+        /// 【2026-10 用户口径·JC110】本次双击是否允许**在取目标时取消**（不发动）。
+        /// 手牌行动（"手牌行动4"这类从手牌发动的能力）要求"双击激活手牌行动效果**可取消**" ⇒ 传 true；
+        /// 场上激活能力的双击链路保持 false（选中目标即发动，与既有行为逐字一致）。
+        /// </param>
+        public void OpenAttachmentActivateChoice(CardUI cardUI, bool cancelable)
         {
             if (cardUI == null || cardUI.Instance == null) return;
             var inst = cardUI.Instance;
@@ -2167,7 +2182,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 }
                 if (only.Target is { NeedsSelection: true })
                 {
-                    BeginActivateWithTarget(inst, only);
+                    // 【2026-10·JC110】手牌行动允许在取目标时取消（用户口径："双击激活手牌行动效果可取消"）。
+                    BeginActivateWithTarget(inst, only, allowCancel: cancelable);
                 }
                 else
                 {
@@ -2207,7 +2223,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         if (items[idx].Disabled) return;
                         var ab = abilities[idx];
                         if (ab.Target is { NeedsSelection: true })
-                            BeginActivateWithTarget(inst, ab);
+                            BeginActivateWithTarget(inst, ab, allowCancel: cancelable);
                         else
                         {
                             BeginActivate(inst, ab, null, -1);
@@ -2415,12 +2431,17 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         /// 【K24】激活效果"取目标"的统一分派：**玩家目标**走独立选择窗口（`PromptPlayerTarget`），
         /// 其余（角色/附属/地区/非争夺区牌堆）沿用既有选目标窗。
         /// </summary>
-        private void BeginActivateWithTarget(CardInstance inst, EffectData ability)
+        /// <param name="allowCancel">
+        /// 【2026-10 用户口径·JC110】本次取目标是否给出"取消（不发动）"出口（场上右键 / 窗口取消按钮）。
+        /// 手牌行动（"手牌行动4"这类**从手牌发动**的能力）要求"双击激活手牌行动效果**可取消**" ⇒ 传 true；
+        /// 其余调用点保持默认 false（行为逐字不变：场上的激活能力选中目标即发动）。
+        /// </param>
+        private void BeginActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = false)
         {
             if (Script.Manager.PlayerTargetPool.IsPlayerSpec(ability.Target))
                 BeginActivateWithPlayerTarget(inst, ability);
             else
-                BeginAttachmentActivateWithTarget(inst, ability);
+                BeginAttachmentActivateWithTarget(inst, ability, allowCancel);
         }
 
         /// <summary>
@@ -2676,7 +2697,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         }
 
         /// <summary>为附属激活效果（有目标，如 JC012 ②横置角色）弹出选目标窗。选完后发动并牺牲来源。</summary>
-        private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability)
+        /// <param name="allowCancel">【2026-10·JC110】是否给出"取消（不发动）"出口（手牌行动＝可取消）。</param>
+        private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = false)
         {
             var set = new HashSet<string>();
             // 【2026-09 修复】候选＝争夺区成员（形态角色经 `MoveFormZone` 已迁入争夺区 ⇒ 天然在内），
@@ -2690,6 +2712,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             // 仅角色（AreaZone 中的正面角色；暗藏者由 IncludeCovert=false 已在 IsLegalActivateTarget 内排除）
             var validUids = new System.Collections.Generic.List<string>(set);
+            // 【2026-10 用户口径·JC108】"以场上的卡为目标弹出了选择窗，需要**直接选择场上的高亮卡**"：
+            // 卡目标的选中本来就发生在场上高亮卡上（点击即完成），再叠一个居中提示窗会挡住战场、
+            // 让玩家以为要在窗里选。故本路径传 `hintWindow:false` ⇒ **只高亮、不弹窗**；
+            // 同时给出"取消（不发动）"出口（用户口径·JC110"手牌行动…可取消"）——
+            // 窗不可见时该出口由**场上右键**触发（协调器 `_cancelActivateTargetSelection`）。
             _triggerCoordinator.RequestActivateTargetSelection(
                 inst.PlayerTemplate?.CardName ?? "激活效果",
                 ability.Target is { Kind: TargetKind.Area },
@@ -2699,7 +2726,16 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     var target = _cardManager.GetInstance(uid);
                     BeginActivate(inst, ability, target, -1);
                     RefreshActivateHighlights();
-                });
+                },
+                extraLabel: allowCancel ? "取消（不发动）" : null,
+                onExtra: allowCancel
+                    ? () =>
+                    {
+                        GD.Print($"[Arena] 激活取目标被取消（不发动）：{inst.PlayerTemplate?.CardName}");
+                        RefreshActivateHighlights();
+                    }
+                    : null,
+                hintWindow: false);
         }
 
     /// <summary>
@@ -3009,7 +3045,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (_cardDragController != null && _cardDragController.IsDragging) _cardDragController.EndDrag();
         GD.Print($"[Arena] 手牌行动双击：{hit.Instance.PlayerTemplate?.CardName} → 走双击激活链路" +
                  $"（事件标记={eventSaysDoubleClick} 时间窗={withinWindow}）");
-        OpenAttachmentActivateChoice(hit);
+        // 【2026-10 用户口径·JC110】"双击激活手牌行动效果**可取消**" ⇒ 取目标时给出取消出口。
+        OpenAttachmentActivateChoice(hit, cancelable: true);
         return true;
     }
 

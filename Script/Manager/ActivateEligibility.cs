@@ -339,6 +339,54 @@ namespace Script.Manager
         }
 
         /// <summary>
+        /// 【2026-10·K27 收口】该卡是否声明了"**手牌行动**"（`Scope = ZoneScope.HandZone` 的激活类效果）。
+        /// 供 View 判定"手牌中的这张卡该走激活（双击 / 拖到合法目标上）而不是普通打出拖拽"。
+        /// **单一实现**：原先 `CardUI.HasHandScopedActivation`、`Arena.TryHandleHandActivationDoubleClick`
+        /// 各自内联一份判据（容易漂移），统一到此。
+        /// </summary>
+        public static bool HasHandScopedActivation(CardInstance card)
+        {
+            if (card == null) return false;
+            var list = (card.PlayerTemplate as PlayerCardData)?.EffectDataList;
+            if (list == null) return false;
+            foreach (var e in list)
+            {
+                if (e == null || e.Scope != ZoneScope.HandZone) continue;
+                if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated
+                    or EffectTiming.CouncilActivated or EffectTiming.ManeuverTrigger) return true;
+            }
+            return false;
+        }
+
+        /// <summary>【2026-10·K27 收口】手牌中的"手牌行动"卡的可激活能力（模板 ∪ 运行期授予的第一条）。</summary>
+        public static EffectData GetHandScopedActivateAbility(CardInstance card)
+        {
+            if (card == null || card.CurrentZone != CardZone.Hand) return null;
+            if (!HasHandScopedActivation(card)) return null;
+            foreach (var e in GetAllActivateAbilities(card))
+            {
+                if (e == null || e.Scope != ZoneScope.HandZone) continue;
+                if (e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated
+                    or EffectTiming.CouncilActivated or EffectTiming.ManeuverTrigger) return e;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 【K27】"手牌行动"卡**能否以 `target` 为落点发动**（拖拽落点判定，View 只问结论）：
+        /// 落点必须是该能力 `Target` 声明允许的合法激活目标（与双击取目标候选同源 `IsLegalActivateTarget`），
+        /// 且当前门禁（优先权/阶段/费用/次数/来源生效区）成立。返回 false ⇒ 该落点不是"发动"，交回普通打出流程。
+        /// </summary>
+        public static bool CanHandActivateOn(CardInstance card, CardInstance target,
+            TurnManager tm, PlayerManager pm, CardManager cm)
+        {
+            var e = GetHandScopedActivateAbility(card);
+            if (e == null || target == null) return false;
+            if (!CanActivate(card, tm, pm, cm)) return false;
+            return IsLegalActivateTarget(card, e, target, cm, pm);
+        }
+
+        /// <summary>
         /// 【2026-09 修复·JC019/JC024】**"双击请求激活"的来源判定**（View 与测试共用的单一实现）：
         ///  · 附属（`IsAttached`）：JC012 类；
         ///  · **争夺区正面角色**（非暗藏）：其能力可能来自①运行期授予（JC019 给宿主）②无目标自指激活
@@ -351,14 +399,7 @@ namespace Script.Manager
             if (card == null) return false;
             if (card.IsAttached) return true;
             if (card.CurrentZone == CardZone.AreaZone) return !card.IsCovert;
-            if (card.CurrentZone == CardZone.Hand && card.PlayerTemplate is PlayerCardData t)
-            {
-                if (t.EffectDataList == null) return false;
-                foreach (var e in t.EffectDataList)
-                    if (e != null && e.Scope == ZoneScope.HandZone
-                        && e.Timing is EffectTiming.CharacterActivated or EffectTiming.AttachmentActivated) return true;
-                return false;
-            }
+            if (card.CurrentZone == CardZone.Hand) return HasHandScopedActivation(card);
             return false;
         }
 

@@ -835,5 +835,90 @@ namespace Script.Tests
             Assert.IsTrue(DeckSearchFilter.Matches(e1.Actions[0].Args[3], starCard), "【星】领域手牌命中");
             Assert.IsFalse(DeckSearchFilter.Matches(e1.Actions[0].Args[3], mindCard), "【心】领域手牌不命中");
         }
+
+        // ==================== ⑮ 【2026-10 用户口径】首个准备步骤触发必须**入堆叠** ====================
+
+        /// <summary>反射取 `TurnManager.DoPrepare`（准备步骤入口，private）。</summary>
+        private static void RunDoPrepare(GameInitializer game)
+        {
+            var mi = typeof(global::TurnManager).GetMethod("DoPrepare",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.IsNotNull(mi, "TurnManager.DoPrepare 应存在（准备步骤唯一入口）");
+            mi.Invoke(game.TurnManager, null);
+        }
+
+        /// <summary>往玩家 1 牌库顶插 `n` 张探针，返回插入的张数（用于观察磨牌）。</summary>
+        private static void PushDeckTop(GameInitializer game, int n, string uidPrefix)
+        {
+            var deck = game.DeckManager.GetDeckPlayer1();
+            for (int i = 0; i < n; i++)
+            {
+                var c = game.CardManager.CreateCardInstance(Probe($"{uidPrefix}_{i}", cost: 0), 1);
+                c.CurrentZone = CardZone.Deck;
+                deck.Insert(i, c);
+            }
+        }
+
+        /// <summary>
+        /// 【用户原文】"MSJC016 触发效果是第一个准备步骤触发，**需要入堆叠**，现在没有入堆叠直接结算了"。
+        ///
+        /// 本用例锁死两点：
+        ///  ① **收集 ≠ 结算**：第一个准备步骤时，秘社触发只应**进堆叠**，牌库不得当场被磨；
+        ///     此前 `DoPrepare` 直接 `EffectEngine.ResolveEffect` ⇒ 事件发生即静默磨牌、玩家无响应窗口。
+        ///  ② **仍是"第一个"准备步骤**：非第一回合（`TurnCount != 1`）不得再收集该一次性触发。
+        /// </summary>
+        public void TestMSJC016首个准备步骤触发入堆叠而不是直接结算()
+        {
+            var game = NewGame();
+            var council = game.CardManager.CreateCardInstance(Load("MSJC016_songwangzhe"), 1);
+            game.ZoneManager.MoveToCouncil(council, 1);
+            PushDeckTop(game, 2, "TS_sz_stack");
+
+            int deckBefore = game.DeckManager.GetDeckPlayer1().Count;
+            int gyBefore = game.ZoneManager.GetZoneCards(CardZone.Graveyard, 1).Count;
+            game.TurnManager.TurnCount = 1;                  // "第一个回合"
+            game.StackManager.Clear();
+
+            RunDoPrepare(game);
+
+            // ① 入堆叠：秘社触发成为堆叠条目，且**尚未结算**（牌库/墓地都没变）
+            bool hasCouncilTrigger = false;
+            foreach (var e in game.StackManager.Entries)
+            {
+                if (e?.EffectDataEffect?.EffectId == "MSJC016_T_FirstUpkeepMillThree") hasCouncilTrigger = true;
+            }
+            Assert.IsTrue(hasCouncilTrigger,
+                "秘社『首个准备步骤磨三张』应**进堆叠**（用户口径：需要入堆叠）");
+            Assert.AreEqual(deckBefore, game.DeckManager.GetDeckPlayer1().Count,
+                "**收集阶段不得结算**：牌库顶三张此时仍在牌库（此前直接 ResolveEffect ⇒ 当场少 3 张）");
+            Assert.AreEqual(gyBefore, game.ZoneManager.GetZoneCards(CardZone.Graveyard, 1).Count,
+                "收集阶段墓地不得变化");
+
+            // ② 结算（进堆叠之后）照常落地：牌库 -3、墓地 +3
+            for (int i = 0; i < 4 && !game.StackManager.IsEmpty; i++)
+                game.TurnManager.Pass(game.TurnManager.PriorityPlayerId);
+            Assert.IsTrue(game.StackManager.IsEmpty, "堆叠应已结算完");
+            Assert.AreEqual(deckBefore - 3, game.DeckManager.GetDeckPlayer1().Count, "结算后牌库顶三张已被磨掉");
+            Assert.AreEqual(gyBefore + 3, game.ZoneManager.GetZoneCards(CardZone.Graveyard, 1).Count, "结算后墓地 +3");
+        }
+
+        /// <summary>非第一回合的准备步骤**不得**再收集秘社那一次性触发（"在**第一个**回合"的限定）。</summary>
+        public void TestMSJC016非第一回合不再触发()
+        {
+            var game = NewGame();
+            var council = game.CardManager.CreateCardInstance(Load("MSJC016_songwangzhe"), 1);
+            game.ZoneManager.MoveToCouncil(council, 1);
+            PushDeckTop(game, 2, "TS_sz_later");
+
+            int deckBefore = game.DeckManager.GetDeckPlayer1().Count;
+            game.TurnManager.TurnCount = 2;                  // 第二个回合
+            game.StackManager.Clear();
+
+            RunDoPrepare(game);
+
+            Assert.AreEqual(0, game.StackManager.Entries.Count,
+                "第二回合的准备步骤不得收集『第一个回合』才成立的一次性触发");
+            Assert.AreEqual(deckBefore, game.DeckManager.GetDeckPlayer1().Count, "牌库不受影响");
+        }
     }
 }

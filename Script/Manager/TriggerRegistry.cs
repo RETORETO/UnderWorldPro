@@ -76,6 +76,65 @@ namespace Script.Manager
         /// </summary>
         public Func<CardInstance, EffectData, TriggerContext, bool> HasLegalTargetsForTrigger { get; set; }
 
+        /// <summary>
+        /// 【秘社·2026-10 用户口径·MSJC016】**秘社卡的"首个准备步骤触发"**收集器身份标记：
+        /// 由 `TurnManager` 在首个准备步骤（`TurnCount == 1`）**一次性**置真，其余时间恒假。
+        /// 用途：秘社触发（`CouncilTemplate.TurnStartEffectList`）是"在**第一个**回合的准备步骤开始时"
+        /// 才成立的一次性时机，而 `OnTurnStarted` 每回合都广播 ⇒ 不能按"时机命中"就收集，
+        /// 必须额外问一句"这一回合算不算第一个"（判定权在 Controller，本类只消费结论）。
+        /// </summary>
+        public Func<bool> ShouldCollectCouncilTurnStart { get; set; }
+
+        /// <summary>
+        /// 【秘社·2026-10 用户口径·MSJC016】把**秘社卡**的首个准备步骤触发**合成**为
+        /// `StackEffectInstance` 并并入本批收集结果 —— 于是它走的是**与普通触发完全相同**的管线
+        /// （触发排序窗口 → 玩家确认 → 入堆叠 → 双方让过 → `ResolveStackTop` 结算），
+        /// 而不是"收集阶段直接 `ResolveEffect` 结算"。
+        /// 用户原文："MSJC016 触发效果是第一个准备步骤触发，**需要入堆叠**，现在没有入堆叠直接结算了"。
+        ///
+        /// 为什么必须在这里合成：秘社的触发列表挂在 `CouncilTemplate.TurnStartEffectList`，
+        /// 而上面的实例扫描只读 `PlayerTemplate.EffectDataList` ⇒ 秘社触发**天然扫不到**。
+        /// 时机门禁＝效果自身的 `Timing == 本次事件时机`；一次性门禁＝`ShouldCollectCouncilTurnStart`。
+        /// </summary>
+        private void CollectCouncilTurnStartTriggers(EffectTiming timing, TriggerContext ctx,
+            List<StackEffectInstance> collected)
+        {
+            if (timing != EffectTiming.OnTurnStarted) return;                  // 目前只有"准备步骤开始"这一种秘社触发
+            if (ShouldCollectCouncilTurnStart?.Invoke() != true) return;       // 非"第一个回合的准备步骤"⇒ 不收集
+            var councils = CouncilZoneCards?.Invoke();
+            if (councils == null || councils.Count == 0) return;
+            foreach (var council in councils)
+            {
+                if (council == null) continue;
+                var list = council.CouncilTemplate?.TurnStartEffectList;
+                if (list == null) continue;
+                foreach (var e in list)
+                {
+                    if (e == null || e.Timing != timing) continue;
+                    collected.Add(new StackEffectInstance
+                    {
+                        UID = Guid.NewGuid().ToString("N"),
+                        Source = council,
+                        OwnerPlayerId = council.ControllerId,
+                        ControllerId = council.ControllerId,
+                        EffectDataRef = e,
+                        TargetCardUid = ctx?.ContextCard?.UID ?? "",
+                        HasValidTarget = true,
+                        IsAreaTarget = false,
+                        EventAmount = ctx?.ExtraInt ?? -1,
+                        WinnerId = ctx?.TriggeringPlayerId ?? -1,
+                        TargetAreaId = ctx?.TargetAreaId,
+                        SourceAreaAtTrigger = ctx?.SourceAreaAtTrigger,
+                    });
+                    GD.Print($"[Trigger] 秘社首个准备步骤触发收集（入堆叠）：{council.CouncilTemplate?.CardName} " +
+                             $"→ {e.EffectId}（控制者=P{council.ControllerId}）");
+                }
+            }
+        }
+
+        /// <summary>秘社区卡实例（按玩家 1/2）——由 `TurnManager` 注入（Region/Zone 真相源在 ZoneManager）。</summary>
+        public Func<List<CardInstance>> CouncilZoneCards { get; set; }
+
         /// <summary>走排序窗口（RunTriggerPhase）的时机集合。</summary>
         /// 注意：进场触发(EnterTrigger)/现身触发(UncoverTrigger) 现已统一走 RunTriggerPhase 排序窗口
         /// （需求：触发效果收集后先经玩家排序窗口确认，再依次入堆叠，而非直接入栈）；
@@ -470,6 +529,15 @@ namespace Script.Manager
                     GD.Print($"[Trigger] 【K13 关键词触发】{tmpl.CardName}：运行期授予的【{kv.Key}】按 `{timing}` 收集");
                 }
             }
+
+            // 【秘社批次·2026-10 用户口径】**秘社卡的"首个准备步骤触发"必须入堆叠**：
+            // 用户原文："MSJC016 触发效果是第一个准备步骤触发，**需要入堆叠**，现在没有入堆叠直接结算了"。
+            // 秘社的触发列表挂在 `CouncilTemplate.TurnStartEffectList`（不在 `PlayerTemplate.EffectDataList` 里，
+            // 上面的实例扫描自然扫不到），故必须在此**显式合成** `StackEffectInstance` 并交给同一个
+            // `RunTriggerPhase`（触发排序窗口 → 入堆叠 → 让过 → 结算），不得再走"直接 `ResolveEffect` 结算"。
+            // 时机门禁＝效果自身的 `Timing == 本次事件时机`（当前只有 `OnTurnStarted`），
+            // 一次性（"在**第一个**回合的准备步骤"）由 `TurnManager.DoPrepare` 的 `TurnCount == 1` 把关。
+            CollectCouncilTurnStartTriggers(timing, ctx, collected);
 
             // 【P3·一次性待触发承诺】把"本回合中，当你…下一次…时，你可以…"类承诺在**时机出现时**兑现一次：
             // 承诺由 `EffectEngine.RegisterPending` 登记（效果声明 `EffectData.Pending`），此处按

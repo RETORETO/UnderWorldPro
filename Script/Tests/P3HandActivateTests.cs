@@ -204,5 +204,168 @@ namespace Script.Tests
             Assert.IsTrue(hasUnit, "手牌中的『手牌行动』进入可发动候选");
             Assert.IsFalse(hasPlain, "普通手牌卡（无手牌生效区能力）不在候选里");
         }
+
+        // ==================== ⑥ 【2026-10 用户口径】拖到合法目标上＝发动（可拖拽付费打出） ====================
+
+        /// <summary>
+        /// 用户原文："JC110 **无法通过拖拽正面付费打出**"。
+        /// 落点判定（单一实现 `ActivateEligibility.CanHandActivateOn`）必须成立：手牌中的『手牌行动』卡
+        /// 拖到**该能力声明的合法角色目标**上松手 ⇒ 发动（与"双击 → 取目标"同一出口）。
+        /// 这是"拖拽链路也能发动"的规则侧前提；View 侧接线见 `CardDragController.TryHandActivateDrop`。
+        /// </summary>
+        public void TestHandActivate_可拖到合法目标上发动()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 5, (CardColor)5);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            game.ZoneManager.MoveToHand(unit, 1);
+            var victim = game.CardManager.CreateCardInstance(Probe("TS_ha_drop_target"), 2);
+            game.ZoneManager.MoveToArea(victim, area, 2);
+
+            var e = ActivateEligibility.GetHandScopedActivateAbility(unit);
+            Assert.IsNotNull(e, "手牌中的 JC110 应取到『手牌行动』能力（供落点判定用）");
+            Assert.AreEqual("JC110_1_HandActionSealSelfOnCharacter", e.EffectId, "取到的正是手牌行动那条");
+            Assert.IsTrue(ActivateEligibility.HasHandScopedActivation(unit),
+                "HasHandScopedActivation（View/协调器共用判据）应为真");
+
+            Assert.IsTrue(ActivateEligibility.CanHandActivateOn(unit, victim,
+                    game.TurnManager, game.PlayerManager, game.CardManager),
+                "拖到**合法角色目标**上应判『可发动』（用户口径：拖拽正面付费打出）");
+        }
+
+        /// <summary>落点不是合法目标（敌方角色之外的空白 / 无目标）时**不得**误发动，交回普通流程。</summary>
+        public void TestHandActivate_落点非法则不发动()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 5, (CardColor)5);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            game.ZoneManager.MoveToHand(unit, 1);
+            var victim = game.CardManager.CreateCardInstance(Probe("TS_ha_drop_ok"), 2);
+            game.ZoneManager.MoveToArea(victim, area, 2);
+
+            Assert.IsFalse(ActivateEligibility.CanHandActivateOn(unit, null,
+                game.TurnManager, game.PlayerManager, game.CardManager), "落点为空 ⇒ 不发动");
+            Assert.IsFalse(ActivateEligibility.CanHandActivateOn(unit, unit,
+                game.TurnManager, game.PlayerManager, game.CardManager),
+                "把自身当作宿主＝非法（卡文『封印在**目标角色**上』，不适用自封）");
+
+            // 费用不足时同样不得发动（门禁复用 CanActivate）
+            var poor = new GameInitializer { DebugSeed = 7 };
+            poor.InitializeAll();
+            poor.StartMatch();
+            poor.PlayerActionService.SetupInitialAreas(1);
+            var poorUnit = poor.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            poor.ZoneManager.MoveToHand(poorUnit, 1);
+            var poorVictim = poor.CardManager.CreateCardInstance(Probe("TS_ha_drop_poor"), 2);
+            poor.ZoneManager.MoveToArea(poorVictim, Areas(poor)[0], 2);
+            poor.TurnManager.PriorityPlayerId = 1;
+            poor.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+            Assert.IsFalse(ActivateEligibility.CanHandActivateOn(poorUnit, poorVictim,
+                    poor.TurnManager, poor.PlayerManager, poor.CardManager),
+                "无资产付不起 4 费 ⇒ 不算可发动（回落到普通流程/归位）");
+        }
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC110 端到端】"拖拽链路"用的调用的形态（`ActivateAbility(卡, 能力, 目标)`）
+        /// 必须与双击链路**完全同效**：付费 → 入堆叠 → 结算 ⇒ 本卡进入封印区、挂在目标角色上。
+        /// （单机 `CardDragController.TryHandActivateDrop` 走的正是这一句。）
+        /// </summary>
+        public void TestHandActivate_拖拽发动与双击同效_封印在目标上()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 5, (CardColor)5);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            game.ZoneManager.MoveToHand(unit, 1);
+            var host = game.CardManager.CreateCardInstance(Probe("TS_ha_drag_host"), 2);
+            game.ZoneManager.MoveToArea(host, area, 2);
+
+            var ability = ActivateEligibility.GetHandScopedActivateAbility(unit);
+            Assert.IsNotNull(ability, "手牌中的 JC110 应取到『手牌行动』能力");
+            Assert.IsTrue(ActivateEligibility.CanHandActivateOn(unit, host,
+                    game.TurnManager, game.PlayerManager, game.CardManager),
+                "前置：拖到该宿主上应判可发动");
+
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            // 与 CardDragController.TryHandActivateDrop 的发动调用完全一致
+            EffectEngine.Instance.ActivateAbility(unit, ability, host);
+
+            Assert.IsFalse(game.StackManager.IsEmpty, "拖拽发动 ⇒ 入堆叠");
+            Assert.AreEqual(manaBefore - 4, game.PlayerManager.GetAvailableMana(1), "支付 4 费");
+
+            ResolveStackOnce(game);
+            Assert.AreEqual(CardZone.SealedZone, unit.CurrentZone, "本卡已进入封印区");
+            Assert.IsTrue(ReferenceEquals(host, unit.SealedBy), "封印宿主＝拖拽落点角色");
+            Assert.IsTrue(host.SealedCards.Contains(unit), "宿主记录被封印的本卡");
+        }
+
+        // ==================== ⑦ 【2026-10 用户口径】取目标可取消（源码接线锁） ====================
+
+        // 需要断言的源码片段（含成对双引号，故用 char 拼接避免在 C# 字符串里再转义引号；
+        // 用静态构造集中初始化，避免"静态字段初始化顺序"导致 Q 尚未赋值）
+        private static readonly string Q;
+        private static readonly string CancelableWire;
+        private static readonly string CancelExtraLabelWire;
+        private static readonly string NoHintWindowWire;
+        private static readonly string CancelFieldWire;
+        private static readonly string CancelInvokeWire;
+
+        static P3HandActivateTests()
+        {
+            Q = ((char)34).ToString();
+            CancelableWire = "OpenAttachmentActivateChoice(hit, cancelable: true);";
+            CancelExtraLabelWire = "extraLabel: allowCancel ? " + Q + "取消（不发动）" + Q + " : null,";
+            NoHintWindowWire = "hintWindow: false);";
+            CancelFieldWire = "_cancelActivateTargetSelection = InvokeExtraExit;";
+            CancelInvokeWire = "void InvokeExtraExit()";
+        }
+
+        private static string ReadProjectText(string rel)
+        {
+            foreach (var basePath in new[] { "res://", "res://../" })
+            {
+                var f = Godot.FileAccess.Open(basePath + rel, Godot.FileAccess.ModeFlags.Read);
+                if (f != null) { var t = f.GetAsText(); f.Close(); return t; }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 用户原文："同时需要**双击激活手牌行动效果可取消**"。
+        /// 行为侧（"取目标时点了取消 ⇒ 不入堆叠、不扣费"）依赖 View 的窗口/右键手势，headless 无法驱动；
+        /// 故这里用**源码接线锁**钉住三处消费点，防止将来"改了取目标签名但漏传取消出口"这类静默回退：
+        ///  ① 手牌双击链路传入 `cancelable: true`；
+        ///  ② 协调器的取消出口字段（窗口按钮与场上右键**共用**同一份投递）；
+        ///  ③ 手牌行动的取目标走"不弹窗 + 可取消"的 `RequestActivateTargetSelection` 重载。
+        /// </summary>
+        public void TestHandActivate_手牌双击激活可取消_源码接线()
+        {
+            var arena = ReadProjectText("Script/UI/Arena.cs");
+            Assert.IsNotNull(arena, "Arena.cs 源码应可读（请在项目目录内运行测试）");
+            Assert.IsTrue(arena.Contains(CancelableWire),
+                "手牌双击链路必须传 `cancelable: true`（用户口径：双击激活手牌行动效果可取消）");
+            Assert.IsTrue(arena.Contains(CancelExtraLabelWire),
+                "取目标必须把手牌来源的取消出口交给协调器（allowCancel ⇒ 场上右键=取消）");
+            Assert.IsTrue(arena.Contains(NoHintWindowWire),
+                "激活取卡目标不再弹提示窗（用户口径：直接选择场上的高亮卡）");
+
+            var coord = ReadProjectText("Script/UI/Interaction/TriggerInteractionCoordinator.cs");
+            Assert.IsNotNull(coord, "TriggerInteractionCoordinator.cs 源码应可读");
+            Assert.IsTrue(coord.Contains(CancelFieldWire),
+                "取消出口必须挂在协调器上（场上右键走同一份投递）");
+            Assert.IsTrue(coord.Contains(CancelInvokeWire),
+                "取消出口投递必须是单一实现（窗口按钮 / 场上右键共用）");
+        }
     }
 }
