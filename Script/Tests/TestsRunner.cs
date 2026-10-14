@@ -48,6 +48,7 @@ namespace Script.Tests
                 new OnlineEffectChainTests(),        // 联机效果系统接入：客户端可发动判定 / 费用修正快照 / 服务端目标校验
                 new NetPhaseBTests(),                // Phase B：信息隔离（按玩家过滤快照 + 占位实例）/ 信封 v2 / 决策超时按 Kind
                 new NetChoicePanelTests(),           // 第 3 版：触发排序顺序应用/强制忽略取消、PayOrTap PayAllowed、蒙版资格、决策窗口场景
+                new TriggerWindowBatchTests(),        // 触发窗口改造：单列表场景契约 / 非批量视图回归 / 全部入堆叠批量预选与整体中止
                 new LobbyProtocolTests(),            // 批次 1：大厅协议往返 / RoomState 按查看者裁剪（对手卡组不可见）/ 信封新类型 / 服务端配置
                 new SessionRoutingTests(),           // 批次 1：会话生命周期 / SendToSession 定向投递 / 连接上限 / 真实 ENet 两会话不串
                 new SessionGuardTests(),             // 批次 1：未 Hello 拒绝 / 版本不匹配断开 / 幂等（重复 RequestId）/ 脏数据 / 非对局通道拒绝

@@ -16,6 +16,12 @@ namespace Script.UI
         [Export] public Control DiscardZoneContainer;
         [Export] public Control DragHandle;
 
+        /// <summary>
+        /// 【2026-10·触发窗口改造】条目排布是否自动换行。
+        /// false（默认）＝ 单行居中（联机窗沿用，行为不变）；true ＝ 按容器宽度折行（单机新排序窗口用）。
+        /// </summary>
+        [Export] public bool WrapEntries = false;
+
         private List<TriggerEntryUI> _entries = new();
 
         /// <summary>条目在 OrderZone / DiscardZone 间移动后触发，供 TriggerOrderWindow 刷新按钮状态
@@ -130,7 +136,8 @@ namespace Script.UI
             _dragFromZone = null;
         }
 
-        private TriggerEntryUI PickEntryAt(Vector2 globalMouse)
+        /// <summary>命中测试：返回全局坐标处的条目（ZIndex 最高者）。供窗口做双击判定复用（原为私有）。</summary>
+        public TriggerEntryUI PickEntryAt(Vector2 globalMouse)
         {
             TriggerEntryUI best = null;
             int bestZ = int.MinValue;
@@ -149,11 +156,19 @@ namespace Script.UI
             GD.Print($"[触发排序] PickEntryAt 命中={(best != null ? best.NameLabel?.Text : "null")} pos={globalMouse}");
             return best;
         }
-
         private void DropEntryAt(Vector2 globalMouse)
         {
             GD.Print($"[触发排序] 松开拖拽 落点={globalMouse}");
             var orderRect = OrderZoneContainer.GetGlobalRect();
+
+            // 【2026-10·触发窗口改造】单机新排序窗口只有一个列表（DiscardZoneContainer == null）：
+            // 此时条目只能回到列表，不做放弃区判定（联机窗仍注入放弃区，行为不变）。
+            if (DiscardZoneContainer == null)
+            {
+                DropIntoZone(OrderZoneContainer, globalMouse);
+                return;
+            }
+
             var discardRect = DiscardZoneContainer.GetGlobalRect();
             GD.Print($"[触发排序] OrderRect={orderRect} DiscardRect={discardRect}");
             GD.Print($"[触发排序] OrderSize={OrderZoneContainer.Size} DiscardSize={DiscardZoneContainer.Size}");
@@ -179,6 +194,13 @@ namespace Script.UI
                 return;
             }
 
+            DropIntoZone(targetZone, globalMouse);
+        }
+
+        /// <summary>把正在拖拽的条目放入 targetZone（必要时迁移父节点 + 计算插入位），随后重排并通知外层。</summary>
+        private void DropIntoZone(Control targetZone, Vector2 globalMouse)
+        {
+            if (targetZone == null) { ArrangeOrderZone(); return; }
             if (_dragEntry.GetParent() != targetZone)
             {
                 _dragEntry.GetParent()?.RemoveChild(_dragEntry);
@@ -210,27 +232,43 @@ namespace Script.UI
             return idx;
         }
 
-        /// <summary>手动锚点排布各 Zone 内条目（父是普通 Control，不自动布局）。</summary>
+        /// <summary>手动锚点排布各 Zone 内条目（父是普通 Control，不自动布局）。
+        /// 【2026-10】DiscardZoneContainer 可为 null（单机新排序窗口只有单一列表）；
+        /// WrapEntries=true 时按容器宽度折行（每行居中）。</summary>
         public void ArrangeOrderZone()
         {
-            const float cw = 110f, ch = 150f, gap = 14f;
+            const float cw = 110f, ch = 150f, gap = 14f, rowGap = 10f;
             foreach (var zone in new[] { OrderZoneContainer, DiscardZoneContainer })
             {
+                if (zone == null) continue;
                 var items = new List<TriggerEntryUI>();
                 foreach (var c in zone.GetChildren())
                     if (c is TriggerEntryUI t) items.Add(t);
                 int n = items.Count;
+                if (n == 0) continue;
+
                 float containerW = zone.Size.X;
                 float containerH = zone.Size.Y;
-                float totalW = n * cw + (n - 1) * gap;
-                float startX = Mathf.Max(0, (containerW - totalW) / 2f);
-                float y = Mathf.Max(0, (containerH - ch) / 2f);
+
+                int perRow = n;
+                if (WrapEntries)
+                    perRow = Mathf.Clamp(Mathf.FloorToInt((containerW + gap) / (cw + gap)), 1, n);
+                int rows = (n + perRow - 1) / perRow;
+
+                float totalH = rows * ch + (rows - 1) * rowGap;
+                float startY = Mathf.Max(0, (containerH - totalH) / 2f);
                 for (int i = 0; i < n; i++)
                 {
+                    int r = i / perRow;
+                    int c = i % perRow;
+                    int inRow = System.Math.Min(perRow, n - r * perRow);
+                    float totalW = inRow * cw + (inRow - 1) * gap;
+                    float startX = Mathf.Max(0, (containerW - totalW) / 2f);
+
                     var it = items[i];
                     it.AnchorLeft = 0; it.AnchorTop = 0; it.AnchorRight = 0; it.AnchorBottom = 0;
-                    it.OffsetLeft = startX + i * (cw + gap);
-                    it.OffsetTop = y;
+                    it.OffsetLeft = startX + c * (cw + gap);
+                    it.OffsetTop = startY + r * (ch + rowGap);
                     it.OffsetRight = it.OffsetLeft + cw;
                     it.OffsetBottom = it.OffsetTop + ch;
                     it.MouseFilter = MouseFilterEnum.Pass;

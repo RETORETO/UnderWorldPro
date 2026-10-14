@@ -24,7 +24,7 @@ namespace Script.UI.Interaction
     /// - 模态锁（LockModal/UnlockModal）与场上卡命中测试（PickAreaCardAt）属 Arena 根职责，
     ///   通过委托暴露给本类，避免把 Arena 的私有状态搬过来造成重复真相。
     /// </summary>
-    public partial class TriggerInteractionCoordinator : Node, ITriggerView
+    public partial class TriggerInteractionCoordinator : Node, ITriggerView, ITriggerBatchView
     {
         // ---- 由 Arena 注入的依赖 ----
         private TriggerOrderWindow _triggerOrderWindow;
@@ -68,11 +68,22 @@ namespace Script.UI.Interaction
         // ITriggerView 实现
         // ============================================================
 
+        // ---- 【2026-10·触发窗口改造】批量入堆叠（ITriggerBatchView）状态 ----
+        /// <summary>「全部入堆叠」处理器（由 TurnManager 注入；见 <see cref="SetBatchEnterHandler"/>）。</summary>
+        private Action<List<StackEffectInstance>, Action<bool>> _batchEnterHandler;
+        /// <summary>批量预选目标进行中：期间选目标窗带「取消」出口，且排序窗由窗口自身冻结（协调器不再改禁用态）。</summary>
+        private bool _batchSelectMode;
+
+        /// <summary>【ITriggerBatchView】注入「全部入堆叠」处理器。</summary>
+        public void SetBatchEnterHandler(Action<List<StackEffectInstance>, Action<bool>> handler)
+            => _batchEnterHandler = handler;
+
         /// <summary>打开触发排序窗口。ownerPlayerId 为排序归属玩家；triggers 为已过滤（含合法目标）的触发实例。</summary>
         public void OpenTriggerOrderForPlayer(int ownerPlayerId, List<StackEffectInstance> triggers,
             Action<List<StackEffectInstance>> onEnterStack, Action onDone)
         {
             if (_triggerOrderWindow == null || _triggerEntryScene == null) return;
+            _batchSelectMode = false;
 
             var entries = new List<TriggerEntryUI>();
             foreach (var t in triggers)
@@ -80,7 +91,7 @@ namespace Script.UI.Interaction
                 var entry = _triggerEntryScene.Instantiate<TriggerEntryUI>();
                 var sourceTemplate = t.Source?.PlayerTemplate;
                 // 强制触发（EffectData.Forced=true，如 JC068 阿格斯IV准备维护）标记为强制，
-                // 供 TriggerOrderRoot 阻止拖入放弃区（新规范下仅此路径读取 Forced 作为 IsMandatory）。
+                // 供排序窗口「放弃剩余效果」置灰（新规范下仅此路径读取 Forced 作为 IsMandatory）。
                 bool isMandatory = t.EffectDataRef?.Forced == true;
                 entry.Setup(t.DisplayName, t.DisplayText, isMandatory, t, sourceTemplate);
                 entries.Add(entry);
@@ -91,11 +102,29 @@ namespace Script.UI.Interaction
                 var ordered = new List<StackEffectInstance>();
                 foreach (var o in orderedObjs)
                     if (o is StackEffectInstance ti) ordered.Add(ti);
-                // 记录本轮入栈的触发：Arena 处理完（含选目标）后回填"仍未处理"的触发总数，
-                // 供「第一张进入堆叠」判断"排序窗口内已无剩余卡牌/效果需加入堆叠"→ 自动关窗。
-                _pendingEnterStack = ordered;
                 onEnterStack?.Invoke(ordered);
             };
+
+            // 【2026-10·触发窗口改造】「全部入堆叠」：整份顺序交给 TurnManager 做"先批量预选目标 → 再统一入堆叠"。
+            _triggerOrderWindow.OnEnterAllStack = (orderedObjs) =>
+            {
+                var ordered = new List<StackEffectInstance>();
+                foreach (var o in orderedObjs)
+                    if (o is StackEffectInstance ti) ordered.Add(ti);
+                if (_batchEnterHandler == null)
+                {
+                    GD.PrintErr("[TriggerCoordinator] ⚠ 未装配批量入堆叠处理器 → 「全部入堆叠」忽略（窗口保持原样）");
+                    _triggerOrderWindow.NotifyBatchFinished(false);
+                    return;
+                }
+                _batchSelectMode = true;   // 预选阶段：选目标窗带「取消」出口
+                _batchEnterHandler(ordered, pushedAny =>
+                {
+                    _batchSelectMode = false;
+                    _triggerOrderWindow.NotifyBatchFinished(pushedAny);
+                });
+            };
+
             _triggerOrderWindow.OnDone = () =>
             {
                 _unlockTriggerOrderModal?.Invoke();   // 本次排序结束，解冻出牌/Pass（窗口为复用单例，非 QueueFree）
@@ -104,30 +133,20 @@ namespace Script.UI.Interaction
             };
 
             _lockTriggerOrderModal?.Invoke();
-            // 先记录"本轮待处理触发总数"再开窗：Open 之后的兜底判定才不会被开窗瞬间的默认值误关。
-            _pendingEnterStack = null;
+            // 先记录"本轮待处理触发总数"再开窗（仅诊断；自动关窗口径＝窗口列表为空，见 TriggerOrderWindow）。
             _triggerOrderWindow.SetRemainingTriggerCount(triggers?.Count ?? 0);
             _triggerOrderWindow.Open(ownerPlayerId, entries);
         }
 
-        /// <summary>本轮「进入堆叠」的触发列表（OnEnterStack 记录）；用于把剩余数回填给排序窗口。</summary>
-        private List<StackEffectInstance> _pendingEnterStack;
-
-        /// <summary>触发实际入栈后由 TurnManager 调用：从 OrderZone 移除已入栈条目。
-        /// 取目标触发在玩家选完目标后才触发本方法，故条目保留到选目标完成（修复"卡提前从 OrderZone 消失"）。
-        /// 移除后回填"仍未处理"的触发总数：归零时若本次来自「第一张进入堆叠」，排序窗口自动关闭并推进。</summary>
-        public void RemoveOrderEntries(List<StackEffectInstance> pushed)
-        {
-            _triggerOrderWindow?.RemoveEntries(pushed);
-            // 剩余节点数＝本次点击时窗口内的条目（尚未从 OrderZone 移除）－本次已入栈数；
-            // 与引擎侧"剩余触发"同解（取消选目标的触发也已从 OrderZone 移除）。
-            // 注意：本计数**不含放弃框（DiscardZone）内的条目**——放弃框内容由窗口自身在自动关窗判定时检查
-            // （TriggerOrderWindow.TryAutoCloseIfNothingRemaining 要求排序框与放弃框皆空才关窗）。
-            int remainingUi = Math.Max(0, (_triggerOrderWindow?.GetOrderZoneChildren().Count ?? 0) - (pushed?.Count ?? 0));
-            int pending = _pendingEnterStack?.Count ?? 0;
-            _pendingEnterStack = null;
-            _triggerOrderWindow?.UpdateRemainingTriggerCount(pending + remainingUi);
-        }
+        /// <summary>
+        /// 触发实际处理完后由 TurnManager 调用：从排序窗口列表移除**已了结**的条目。
+        /// `consumed` ＝ 已入堆叠 / 无合法目标而跳过 / 模式或支付被否定 的触发；
+        /// **玩家在取目标时取消的触发不在其中**（＝不入堆叠，但保留在窗口内，玩家可重新处理）。
+        /// 取目标触发在玩家选完目标后才触发本方法，故条目保留到选目标完成。
+        /// 移除后由窗口自身判定"列表空了 → 自动关窗"（口径单一，收敛在 TriggerOrderWindow）。
+        /// </summary>
+        public void RemoveOrderEntries(List<StackEffectInstance> consumed)
+            => _triggerOrderWindow?.RemoveEntries(consumed);
 
         /// <summary>
         /// 请求玩家为触发效果选择合法目标。打开选目标提示窗口，记录合法目标集合；
@@ -181,18 +200,20 @@ namespace Script.UI.Interaction
                         ? "请点击一个高亮的地区。"
                         : $"请点击一个高亮的地区（{effectHint}）。")
                     : "请在场上选择合法目标卡（点击场上卡完成选择）。");
-            OpenTargetSelection(trigger.DisplayName, hint);
+            OpenTargetSelection(trigger.DisplayName, hint, extraLabel: null,
+                allowCancel: true, cancelLabel: "取消（不入堆叠）");
 
-            // 选目标期间禁用触发排序窗口的三个操作按钮
-            _triggerOrderWindow?.SetButtonsEnabled(false);
+            // 选目标期间禁用触发排序窗口的操作按钮。
+            // 【2026-10】批量预选阶段不改禁用态：排序窗口已由自身 _batchInProgress 冻结，
+            // 此处若置 false/true 会在批量中途把窗口解冻（批量结束由 NotifyBatchFinished 统一恢复）。
+            if (!_batchSelectMode) _triggerOrderWindow?.SetButtonsEnabled(false);
 
             // 选目标模态独占：加锁，禁止期间激活/出牌其他卡（原子锁，修复"选目标时还能激活"）
             _lockTargetSelectionModal?.Invoke();
 
-            // 注册一次性回调：选完关闭窗口并通知调用方
-            _targetSelectionWindow.OnTargetPicked = (uid) =>
+            // 选中/取消共用的收尾（解锁 → 清高亮 → 关窗 → 恢复排序窗按钮），保证"回调唯一性"。
+            void FinishTargetSelection()
             {
-                GD.Print($"[TriggerCoordinator] OnTargetPicked 收到回调 UID={uid}，准备转发给调用方 _onTargetPicked（挂接={_onTargetPicked != null}）");
                 _unlockTargetSelectionModal?.Invoke();   // 先解锁（选目标已结束），再继续后续流程（入栈会自行 EnterAtomic）
                 _targetSelectionActive = false;
                 // 选目标窗口关闭：统一经总线取消高光（卡片目标 + 地区槽位）。
@@ -207,10 +228,30 @@ namespace Script.UI.Interaction
                     slot.OnAreaClicked = null;
                 }
                 _targetSelectionWindow.Visible = false;
-                // 选目标结束，恢复按钮状态
-                _triggerOrderWindow?.SetButtonsEnabled(true);
-                _onTargetPicked?.Invoke(uid);
+                _targetSelectionWindow.OnCancelled = null;
+                // 选目标结束，恢复按钮状态（批量预选期间不改，由 NotifyBatchFinished 统一恢复）
+                if (!_batchSelectMode) _triggerOrderWindow?.SetButtonsEnabled(true);
+            }
+
+            // 注册一次性回调：选完关闭窗口并通知调用方
+            _targetSelectionWindow.OnTargetPicked = (uid) =>
+            {
+                GD.Print($"[TriggerCoordinator] OnTargetPicked 收到回调 UID={uid}，准备转发给调用方 _onTargetPicked（挂接={_onTargetPicked != null}）");
+                var cb = _onTargetPicked;
                 _onTargetPicked = null;
+                FinishTargetSelection();
+                cb?.Invoke(uid);
+            };
+
+            // 【2026-10·触发窗口改造】取消出口：玩家在选目标窗点「取消」⇒ 该效果**不入堆叠**，
+            // 但保留在触发排序窗口（可重新双击/全部入堆叠处理）。以**空 UID** 通知调用方。
+            _targetSelectionWindow.OnCancelled = () =>
+            {
+                var cb = _onTargetPicked;
+                _onTargetPicked = null;
+                GD.Print($"[TriggerCoordinator] 选目标被取消（{trigger?.DisplayName}）→ 该效果不入堆叠，保留在排序窗口");
+                FinishTargetSelection();
+                cb?.Invoke(null);
             };
 
             if (validTargetUids.Count == 0)
@@ -546,13 +587,16 @@ namespace Script.UI.Interaction
         private Action<string> _onTargetPicked;
 
         /// <summary>打开选目标提示窗口。effectName/hint 用于展示；选择由 Arena 转发场上卡点击。
-        /// 【2026-09·K15】`extraLabel` 非空时，窗口自带的备用按钮成为该槽的出口（留空该槽 / 取消不打出）。</summary>
-        public void OpenTargetSelection(string effectName, string hint, string extraLabel = null)
+        /// 【2026-09·K15】`extraLabel` 非空时，窗口自带的备用按钮成为该槽的出口（留空该槽 / 取消不打出）。
+        /// 【2026-10·触发窗口改造】`allowCancel=true` 时窗口额外显示「取消」按钮（回调 `OnCancelled`），
+        /// 供"触发入堆叠取目标"使用；默认 false ＝ 既有激活等路径行为不变。</summary>
+        public void OpenTargetSelection(string effectName, string hint, string extraLabel = null,
+            bool allowCancel = false, string cancelLabel = null)
         {
             if (_targetSelectionWindow == null) return;
             // 选目标需点击穿透到下层（场上卡 / 高亮地区槽位），故关闭全屏遮罩的点击拦截
             _targetSelectionWindow.SetBlocking(false);
-            _targetSelectionWindow.Open(effectName, hint, extraLabel);
+            _targetSelectionWindow.Open(effectName, hint, extraLabel, allowCancel, cancelLabel);
         }
 
         /// <summary>AreaSlot._GuiInput 直接回传的点击（机动取地区目标 / 多选地区）。仅当 UID 合法时生效。</summary>

@@ -1510,16 +1510,74 @@ public partial class TurnManager : Node
             if (_view == null)
             {
                 GD.PrintErr($"[Trigger] ⚠ 未注入触发排序视图 → 玩家{owner} 的 {byOwner[owner].Count} 条触发按收集顺序直接入栈（降级）");
-                PushOrderedTriggers(byOwner[owner], 0, processNext);
+                PushOrderedTriggers(byOwner[owner], 0, _ => processNext());
                 return;
+            }
+            // 【2026-10·触发窗口改造】「全部入堆叠」：整份顺序 → 先按序**预选目标**（任一取消则整体中止、一条都不入堆叠），
+            // 全部成功后再按原顺序统一入堆叠。仅当视图实现了可选的 ITriggerBatchView 能力时注入；
+            // 未实现者（测试桩/headless）不注入 ⇒ 窗口上该按钮自动置灰，既有行为完全不变。
+            if (_view is Script.Interfaces.ITriggerBatchView batchView)
+            {
+                batchView.SetBatchEnterHandler((ordered, onFinished) =>
+                    PreSelectTargetsThenPushAll(ordered,
+                        consumed => { _view.RemoveOrderEntries(consumed); onFinished?.Invoke(true); },
+                        () => onFinished?.Invoke(false)));
             }
             GD.Print($"[Trigger] 打开玩家{owner} 的触发排序窗口（触发数={byOwner[owner].Count}）");
             _view.OpenTriggerOrderForPlayer(owner, byOwner[owner],
-                // 触发实际入栈（含选目标完成）后，从 OrderZone 移除对应条目
-                onEnterStack: ordered => PushOrderedTriggers(ordered, 0, () => _view.RemoveOrderEntries(ordered)),
+                // 触发实际入栈（含选目标完成）后，从列表移除**已了结**的条目（被取消的取目标条目保留在窗口内）
+                onEnterStack: ordered => PushOrderedTriggers(ordered, 0, consumed => _view.RemoveOrderEntries(consumed)),
                 onDone: processNext);
         };
         processNext();
+    }
+
+    /// <summary>
+    /// 【触发窗口改造】「全部入堆叠」的两段式执行：
+    /// **第一段**：按窗口顺序为"需要取目标且尚未选定"的效果**逐个预选目标**（复用既有选目标窗，带「取消」出口）；
+    ///   · 任一取消 ⇒ `onAborted`（**整体中止，一条都不入堆叠**，窗口保留全部待处理效果）；
+    ///   · 只预选"卡目标 / 地区目标"：玩家目标、区域牌堆目标仍沿用各自窗口在入堆叠阶段当场询问（既有口径）。
+    /// **第二段**：全部预选成功后调用既有 `PushOrderedTriggers`（目标已选定 ⇒ 自动跳过取目标），按原顺序统一入堆叠。
+    /// 纪律：不新增任何入堆叠/目标合法性规则，只是把**既有的取目标**提前到入堆叠之前完成。
+    /// </summary>
+    private void PreSelectTargetsThenPushAll(List<Script.Data.Effects.StackEffectInstance> list,
+        System.Action<List<Script.Data.Effects.StackEffectInstance>> onPushed, System.Action onAborted)
+    {
+        if (list == null || list.Count == 0) { onPushed?.Invoke(new List<Script.Data.Effects.StackEffectInstance>()); return; }
+        int cursor = 0;
+        // 本轮批量中**已预选成功**的触发：整体中止时回滚它们的目标（"整体回滚"口径——
+        // 否则中止后再点「全部入堆叠」会跳过这些条目、双击它们也会不再问目标，玩家无从改选）。
+        var preSelected = new List<Script.Data.Effects.StackEffectInstance>();
+        void Step()
+        {
+            while (cursor < list.Count)
+            {
+                var t = list[cursor++];
+                if (!NeedSelectAnyTarget(t) || !string.IsNullOrEmpty(t.SelectedTargetUid)) continue;
+                var spec = t.EffectDataRef?.Target;
+                if (PlayerTargetPool.IsPlayerSpec(spec)) continue;
+                if (TargetZonePool.IsZonePileSpec(spec) && !TargetZonePool.IsFieldVisibleSpec(spec)) continue;
+                var valid = GetValidTargetUidsForTrigger(t);
+                if (valid.Count == 0) continue;      // 与 EnsureTargetThenPush 同口径：无合法目标 ⇒ 该条不入堆叠
+                if (_view == null) continue;
+                _view.RequestTargetSelection(t, valid, uid =>
+                {
+                    if (string.IsNullOrEmpty(uid))
+                    {
+                        GD.Print($"[Trigger] 玩家取消预选目标 → 整体中止「全部入堆叠」（回滚 {preSelected.Count} 条已选目标，全部效果均不入堆叠）");
+                        foreach (var done in preSelected) done.SelectedTargetUid = null;
+                        onAborted?.Invoke();
+                        return;
+                    }
+                    t.SelectedTargetUid = uid;
+                    preSelected.Add(t);
+                    Step();
+                });
+                return;   // 等玩家选完这一条再继续下一条
+            }
+            PushOrderedTriggers(list, 0, onPushed);
+        }
+        Step();
     }
 
     // ==================== C/S 化 P0-B：触发排序窗口异步版 ====================
@@ -1848,19 +1906,30 @@ public partial class TurnManager : Node
         return new List<string>();
     }
 
-    /// <summary>按列表顺序逐个触发：需目标且未选的先弹选目标窗口，选完再入栈；处理完所有后调用 onAllDone。</summary>
-    private void PushOrderedTriggers(List<Script.Data.Effects.StackEffectInstance> list, int index, System.Action onAllDone)
+    /// <summary>按列表顺序逐个触发：需目标且未选的先弹选目标窗口，选完再入栈；处理完所有后调用 onAllDone(consumed)。
+    /// consumed ＝ 本轮**已了结**的触发（已入堆叠 / 无合法目标而跳过 / 模式或支付被否定而放弃）；
+    /// **玩家在取目标时取消的触发不在其中**（＝不入堆叠，但保留在触发排序窗口，玩家可重新处理）。
+    /// 调用方据此只从排序窗口移除已了结的条目（见 ITriggerView.RemoveOrderEntries）。</summary>
+    private void PushOrderedTriggers(List<Script.Data.Effects.StackEffectInstance> list, int index,
+        System.Action<List<Script.Data.Effects.StackEffectInstance>> onAllDone)
     {
-        if (list == null || index >= list.Count)
+        var consumed = new List<Script.Data.Effects.StackEffectInstance>();
+        void Step(int i)
         {
-            onAllDone?.Invoke();
-            return;
+            if (list == null || i >= list.Count)
+            {
+                onAllDone?.Invoke(consumed);
+                return;
+            }
+            var t = list[i];
+            // 模式选择（若有）先于目标选择；**否定 → 该触发不入堆叠（已了结）**，流程继续到下一个触发。
+            EnsureTriggerModeThenPush(t,
+                onReady: () => EnsureTargetThenPush(t,
+                    onPushed: () => { consumed.Add(t); Step(i + 1); },
+                    onCancelled: () => Step(i + 1)),          // 取目标取消：不入堆叠、留在排序窗口
+                onSkip: () => { consumed.Add(t); Step(i + 1); });
         }
-        var t = list[index];
-        // 模式选择（若有）先于目标选择；**取消 → 该触发不入堆叠**，但流程继续到下一个触发。
-        EnsureTriggerModeThenPush(t,
-            onReady: () => EnsureTargetThenPush(t, () => PushOrderedTriggers(list, index + 1, onAllDone)),
-            onSkip: () => PushOrderedTriggers(list, index + 1, onAllDone));
+        Step(index);
     }
 
     /// <summary>
@@ -1915,7 +1984,8 @@ public partial class TurnManager : Node
     /// **无 UI 时确定性兜底**取第一个候选（与卡目标既有口径一致，供测试/headless）；
     /// 取消 / 无候选 → 该触发**不入堆叠**（绝不静默代选）。
     /// </summary>
-    private void EnsurePlayerTargetThenPush(Script.Data.Effects.StackEffectInstance t, System.Action onPushed)
+    private void EnsurePlayerTargetThenPush(Script.Data.Effects.StackEffectInstance t, System.Action onPushed,
+        System.Action onCancelled = null)
     {
         var spec = t.EffectDataRef?.Target;
         int chooser = t.Source?.ControllerId ?? t.ControllerId;
@@ -1933,8 +2003,9 @@ public partial class TurnManager : Node
             {
                 if (picked <= 0)
                 {
-                    GD.Print($"[Trigger] {t.DisplayName} 玩家取消/未选目标玩家，跳过入栈");
-                    onPushed?.Invoke();
+                    // 【2026-10·触发窗口改造】取消 → 该触发不入堆叠，保留在触发排序窗口（可重新处理）。
+                    GD.Print($"[Trigger] {t.DisplayName} 玩家取消选择目标玩家 → 该触发不入堆叠（保留在排序窗口）");
+                    onCancelled?.Invoke();
                     return;
                 }
                 // 【P2·联机权威复检】回包的玩家号必须是"服务端下发的候选"之一（`PlayerTargetPool` 权威枚举）。
@@ -1954,8 +2025,11 @@ public partial class TurnManager : Node
         EnsureOptionalPayThenPush(t, onPushed);
     }
 
-    /// <summary>确保触发已选定目标后压入堆叠。需目标且未选时，先通过 Arena 弹选目标窗口收集目标。</summary>
-    private void EnsureTargetThenPush(Script.Data.Effects.StackEffectInstance t, System.Action onPushed)
+    /// <summary>确保触发已选定目标后压入堆叠。需目标且未选时，先通过 Arena 弹选目标窗口收集目标。
+    /// 【2026-10·触发窗口改造】`onCancelled`：玩家在取目标环节主动取消 ⇒ **该触发不入堆叠**，
+    /// 但保留在触发排序窗口（由调用方决定是否收录进 consumed）；未传时退化为"onPushed 继续"的行为不变。</summary>
+    private void EnsureTargetThenPush(Script.Data.Effects.StackEffectInstance t, System.Action onPushed,
+        System.Action onCancelled = null)
     {
         if (NeedSelectAnyTarget(t) && string.IsNullOrEmpty(t.SelectedTargetUid))
         {
@@ -1964,7 +2038,7 @@ public partial class TurnManager : Node
             var pSpec = t.EffectDataRef?.Target;
             if (PlayerTargetPool.IsPlayerSpec(pSpec))
             {
-                EnsurePlayerTargetThenPush(t, onPushed);
+                EnsurePlayerTargetThenPush(t, onPushed, onCancelled);
                 return;
             }
 
@@ -1993,12 +2067,13 @@ public partial class TurnManager : Node
                         var inst = _cardManager?.GetInstance(uid);
                         if (inst != null) candidates.Add(inst);
                     }
+                    // 【2026-10·触发窗口改造】入堆叠取目标**允许取消**（取消 ⇒ 不入堆叠、保留在排序窗口）。
                     hooks.PromptPickCard(t.Source?.ControllerId ?? 0,
                         $"请选择{TargetZonePool.DescribeZone(spec.Kind)}中的目标牌",
-                        candidates, allowCancel: false,
+                        candidates, allowCancel: true,
                         picked =>
                         {
-                            if (picked == null) { onPushed?.Invoke(); return; }   // 无选择 → 不结算（与"无合法目标"同结果）
+                            if (picked == null) { onCancelled?.Invoke(); return; }
                             t.SelectedTargetUid = picked.UID;
                             EnsureOptionalPayThenPush(t, onPushed);
                         });
@@ -2018,6 +2093,8 @@ public partial class TurnManager : Node
                 // 候选计算与异步选目标共用 GetValidTargetUidsForTrigger（单一真相源）。
                 _view.RequestTargetSelection(t, valid, (uid) =>
                 {
+                    // 【2026-10·触发窗口改造】空 UID ＝ 玩家在选目标窗点了「取消」⇒ 不入堆叠、留在排序窗口。
+                    if (string.IsNullOrEmpty(uid)) { onCancelled?.Invoke(); return; }
                     t.SelectedTargetUid = uid;
                     EnsureOptionalPayThenPush(t, onPushed);
                 });
