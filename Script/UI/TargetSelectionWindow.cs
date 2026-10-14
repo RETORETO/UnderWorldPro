@@ -34,6 +34,9 @@ namespace Script.UI
         /// <summary>【2026-09 用户口径 JC062·多选模式】"取消（不发动）"回调。</summary>
         public System.Action OnCancelled;
 
+        /// <summary>【2026-10·触发窗口改造】单选取目标是否显示「取消」出口（由调用方经 Open 指定）。</summary>
+        public bool AllowCancel { get; private set; }
+
         private string _pickedUid;
         private Button _cancelButton;
         private bool _multiPick;
@@ -45,6 +48,25 @@ namespace Script.UI
         {
             if (ConfirmButton != null) ConfirmButton.Pressed += OnConfirmPressed;
             _blockLayer = GetNodeOrNull<ColorRect>("BlockLayer");
+            // 【2026-10·触发窗口改造】点标题栏关闭键 ＝ 「取消」：避免"窗被关掉但没有任何回调"
+            // 导致调用方永久等待（触发入堆叠流程会因此被冻结）。
+            CloseRequested += OnCloseRequested;
+        }
+
+        /// <summary>标题栏关闭键：优先按「取消」交付回调；没有取消回调时退回该槽的「出口」（K15 激活路径）。</summary>
+        private void OnCloseRequested()
+        {
+            if (_multiPick || OnCancelled != null) { OnCancelPressed(); return; }
+            var extra = OnExtra;
+            if (extra != null)
+            {
+                OnExtra = null;
+                GD.Print("[TargetSelectionWindow] 窗口被关闭 → 视为该槽出口");
+                Hide();
+                extra();
+                return;
+            }
+            Hide();
         }
 
         /// <summary>
@@ -94,6 +116,7 @@ namespace Script.UI
         {
             if (multi)
             {
+                AllowCancel = false;   // 多选模式自带「取消（不发动）」，不叠加单选的取消出口
                 Size = new Vector2I(560, 240);
                 if (TitleLabel != null)
                 {
@@ -111,12 +134,8 @@ namespace Script.UI
                     ConfirmButton.OffsetLeft = 16; ConfirmButton.OffsetTop = 176;
                     ConfirmButton.OffsetRight = 270; ConfirmButton.OffsetBottom = 212;
                 }
-                if (_cancelButton == null)
-                {
-                    _cancelButton = new Button { Text = "取消（不发动）" };
-                    _cancelButton.Pressed += OnCancelPressed;
-                    AddChildToPanel(_cancelButton);
-                }
+                EnsureCancelButton();
+                _cancelButton.Text = "取消（不发动）";
                 _cancelButton.Visible = true;
                 _cancelButton.OffsetLeft = 290; _cancelButton.OffsetTop = 176;
                 _cancelButton.OffsetRight = 544; _cancelButton.OffsetBottom = 212;
@@ -149,7 +168,53 @@ namespace Script.UI
             (panel ?? (Node)this).AddChild(child);
         }
 
-        /// <summary>【2026-09 用户口径 JC062】"取消（不发动）"：关闭窗口并回调。</summary>
+        /// <summary>懒创建「取消」按钮（多选模式的「取消（不发动）」与单选取目标新增的取消出口共用同一实例）。</summary>
+        private void EnsureCancelButton()
+        {
+            if (_cancelButton != null) return;
+            _cancelButton = new Button { Text = "取消" };
+            _cancelButton.Pressed += OnCancelPressed;
+            AddChildToPanel(_cancelButton);
+        }
+
+        /// <summary>
+        /// 【2026-10·触发窗口改造】单选取目标的「取消」出口布局（`allowCancel=false` 时还原原布局）。
+        /// 口径：玩家在**入堆叠取目标**时可以取消 ⇒ 该效果不入堆叠，但**保留在触发排序窗口**（可重新处理）。
+        /// 布局上把确认按钮让出右侧空间、窗口加宽到 560，保证两行文案都不被挤压。
+        /// </summary>
+        private void ApplySingleCancelLayout(bool allowCancel, string cancelLabel)
+        {
+            AllowCancel = allowCancel;
+            if (!allowCancel)
+            {
+                if (_cancelButton != null) _cancelButton.Visible = false;
+                Size = new Vector2I(500, 150);
+                if (TitleLabel != null) TitleLabel.OffsetRight = 486;
+                if (HintLabel != null) HintLabel.OffsetRight = 486;
+                if (ConfirmButton != null)
+                {
+                    ConfirmButton.OffsetLeft = 16; ConfirmButton.OffsetTop = 108;
+                    ConfirmButton.OffsetRight = 486; ConfirmButton.OffsetBottom = 144;
+                }
+                return;
+            }
+            EnsureCancelButton();
+            Size = new Vector2I(560, 150);
+            if (TitleLabel != null) TitleLabel.OffsetRight = 546;
+            if (HintLabel != null) HintLabel.OffsetRight = 546;
+            if (ConfirmButton != null)
+            {
+                ConfirmButton.OffsetLeft = 16; ConfirmButton.OffsetTop = 108;
+                ConfirmButton.OffsetRight = 350; ConfirmButton.OffsetBottom = 144;
+            }
+            _cancelButton.Text = string.IsNullOrEmpty(cancelLabel) ? "取消" : cancelLabel;
+            _cancelButton.Visible = true;
+            _cancelButton.OffsetLeft = 366; _cancelButton.OffsetTop = 108;
+            _cancelButton.OffsetRight = 546; _cancelButton.OffsetBottom = 144;
+        }
+
+        /// <summary>「取消」按钮：关闭窗口并回调 `OnCancelled`（**回调唯一性**：交付后置空）。
+        /// 多选模式＝"取消（不发动）"；【2026-10】单选取目标＝"取消（不入堆叠）"出口。</summary>
         private void OnCancelPressed()
         {
             _multiPick = false;
@@ -178,10 +243,15 @@ namespace Script.UI
         ///  · 必选槽 → "取消（不打出）"（回调 `OnExtra`）。
         /// 取目标仍然发生在**场上高亮目标**上（点击即选中并关闭），本按钮只是退出通道 —— 用户口径：
         /// "选择查看的暗藏者应该选择场上的高亮暗藏者，而不是弹出选择框"。
+        ///
+        /// 【2026-10·触发窗口改造】新增 `allowCancel`/`cancelLabel`：为**触发入堆叠取目标**提供取消出口
+        /// （玩家取消 ⇒ 该触发不入堆叠，但保留在触发排序窗口）。默认 false ＝ 既有所有调用点行为逐字不变。
         /// </summary>
-        public void Open(string effectName, string hint, string extraLabel = null)
+        public void Open(string effectName, string hint, string extraLabel = null,
+            bool allowCancel = false, string cancelLabel = null)
         {
-            SetMultiPickLayout(false);   // 还原单选取目标布局（多选模式可能改过尺寸/按钮）
+            SetMultiPickLayout(false);                                    // 还原单选取目标布局（多选模式可能改过尺寸/按钮）
+            ApplySingleCancelLayout(allowCancel, cancelLabel);            // 再叠加/还原「取消」出口
             // 水平居中、顶边位于实际视口垂直中点偏下 150px
             var vp = GetViewport().GetVisibleRect().Size;
             Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)(vp.Y / 2) + 150);

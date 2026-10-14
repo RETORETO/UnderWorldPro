@@ -1,27 +1,31 @@
 using Godot;
 using System.Collections.Generic;
 using Script.Data.Cards;
+using Script.Data.Effects;
 
 namespace Script.UI
 {
     /// <summary>
     /// 触发效果排序窗口（独立 Window 弹出，模态独占）。
-    /// 规则：
-    ///  - 窗口弹出期间冻结所有操作。
-    ///  - 入堆叠区域（OrderZoneContainer）：玩家可把触发拖入/拖出；强制触发不能放入放弃区。
-    ///  - 放弃区域（DiscardZoneContainer）：仅非强制触发可放入；关窗前可拖回入堆叠区。
-    ///  - 第一张进入堆叠：仅 OrderZone 最左侧一个触发压入堆叠（如需目标则弹选目标窗口）；
-    ///    入堆叠完成后仅当**排序框与放弃框都为空**（且引擎剩余计数归零）才自动关窗推进；任一框还有内容则保持打开。
-    ///  - 确认（Done，"完成排序并放弃下方效果"）：**仅当排序框（OrderZone）为空时可点击，不看放弃框**，
-    ///    表示放弃剩余触发（含放弃框内内容），关闭窗口推进。
+    /// 【2026-10·触发窗口改造】由"双区拖拽（入堆叠区 + 放弃区）"改为**单一效果列表 + 三个入口**：
+    ///  - **效果列表区**：统一展示本窗口内全部"待排序"（尚未入堆叠）的触发效果，左→右即入堆叠先后；
+    ///  - **双击**某条目 → 该效果入堆叠（需选目标时进入既有选目标流程；选目标被取消则该效果留在列表）；
+    ///  - **全部入堆叠**：按列表顺序先逐条**预选目标**，任一取消则整体中止（一条都不入堆叠）；全部成功再统一入堆叠；
+    ///  - **放弃剩余效果**：放弃列表内全部剩余触发并关窗（**列表内存在强制效果时置灰不可点**）；
+    ///  - **自动关闭**：列表空了（全部处理完）自动关窗并推进流程。
     ///
+    /// 纪律：本窗口只负责"展示 + 收集玩家意图"，入堆叠/选目标/强制判定/放弃规则全部由
+    /// TurnManager 的既有链路执行（OnEnterStack / OnEnterAllStack / OnDone 三个回调）。
     /// 拖拽排序与鼠标接管由子节点 TriggerOrderRoot(Control) 负责（Window 非 Control，无 _GuiInput）。
     /// </summary>
     public partial class TriggerOrderWindow : Window
     {
         [Export] public Control OrderZoneContainer;
+        /// <summary>放弃区容器。【2026-10】单机新排序窗口不再使用（可为 null）；保留导出仅为兼容联机/旧场景。</summary>
         [Export] public Control DiscardZoneContainer;
-        [Export] public Button FirstEnterButton;
+        /// <summary>「全部入堆叠」按钮（新增）。</summary>
+        [Export] public Button AllEnterButton;
+        /// <summary>「放弃剩余效果」按钮。</summary>
         [Export] public Button DoneButton;
         [Export] public Label TitleLabel;
         [Export] public Label HintLabel;
@@ -30,47 +34,175 @@ namespace Script.UI
         /// <summary>当前排序窗口归属玩家（先手=1 / 后手=2）。</summary>
         public int OwnerPlayerId { get; private set; }
 
-        /// <summary>入堆叠回调：参数为当前要入堆叠的触发数据列表（按顺序）。不关闭窗口。</summary>
+        /// <summary>单条入堆叠回调（双击）：参数为要入堆叠的触发数据列表（本窗口恒为 1 条）。不关闭窗口。</summary>
         public System.Action<List<object>> OnEnterStack;
-        /// <summary>完成/确认回调：OrderZone 为空时关闭窗口后触发，用于推进下一步。</summary>
+        /// <summary>【2026-10】「全部入堆叠」回调：参数为**按列表左→右顺序**的全部待处理触发数据。</summary>
+        public System.Action<List<object>> OnEnterAllStack;
+        /// <summary>完成/确认回调：关窗后触发，用于推进到下一个所有者窗口。</summary>
         public System.Action OnDone;
 
         private TriggerOrderRoot _root;
 
-        /// <summary>本次排序尚未入堆叠的触发总数（由 Arena 注入，仅含"仍需玩家处理"的触发）。
-        /// 「第一张进入堆叠」后若本值归零（＝最后一张触发已入栈，无剩余效果需要加入堆叠），自动关窗推进。</summary>
+        /// <summary>本窗口是否已弹出（用于"只在开窗后才允许自动关窗"的兜底）。</summary>
+        public bool IsOpen => Visible;
+
+        /// <summary>本次排序尚未入堆叠的触发总数（由 Arena/TurnManager 注入，**仅作诊断日志**）。
+        /// 【2026-10】自动关窗口径已简化为"列表为空"，本计数不再作为门槛（保留以免改动既有调用点）。</summary>
         private int _remainingTriggerCount = -1;
+
+        /// <summary>选目标等外部流程要求的整体禁用（由协调器 SetButtonsEnabled 驱动）。</summary>
+        private bool _externalEnabled = true;
+        /// <summary>单条入堆叠在途（双击后到引擎回填 RemoveEntries 之间）。</summary>
+        private bool _busy;
+        /// <summary>「全部入堆叠」批量在途（预选 + 入堆叠期间，禁止一切重入）。</summary>
+        private bool _batchInProgress;
+        /// <summary>本窗口已 Open 过（未 Close）。</summary>
+        private bool _opened;
+        /// <summary>本次会话已关窗（防止 OnDone 被重复交付）。</summary>
+        private bool _closed;
 
         public override void _Ready()
         {
-            if (FirstEnterButton != null) FirstEnterButton.Pressed += OnFirstEnterPressed;
+            if (AllEnterButton != null) AllEnterButton.Pressed += OnAllEnterPressed;
             if (DoneButton != null) DoneButton.Pressed += OnDonePressed;
             _root = GetNode<TriggerOrderRoot>("RootControl");
             _root.OnOrderZoneChanged += RefreshButtonStates;
         }
 
-        /// <summary>
-        /// 本窗口已打开（Visible）后，由 Arena 同步"本次排序仍未处理的触发总数"。
-        /// 在窗口打开**前**调用只记录数值、不判定自动关闭（避免开窗瞬间就被当成"已无剩余"而误关）。
-        /// </summary>
+        /// <summary>注入"本次排序仍未处理的触发总数"（仅诊断用）。在窗口打开**前**调用只记录数值。</summary>
         public void SetRemainingTriggerCount(int count)
         {
             _remainingTriggerCount = count;
-            if (Visible) TryAutoCloseIfNothingRemaining();
+            GD.Print($"[TriggerOrderWindow] 引擎剩余触发计数 = {count}（诊断）");
         }
 
-        /// <summary>本窗口是否已弹出（Arena 据此决定 SetRemainingTriggerCount 是记录还是即时判定）。</summary>
-        public bool IsOpen => Visible;
-        // 与 InvestigationWindow 完全对称：用 Window 自身的 _Input（全局输入）驱动条目拖拽，
+        /// <summary>由 TurnManager/协调器在推进时刷新剩余计数（诊断）。</summary>
+        public void UpdateRemainingTriggerCount(int count) => SetRemainingTriggerCount(count);
+
+        // ============================================================
+        // 入口：打开 / 关闭
+        // ============================================================
+
+        /// <summary>打开排序窗口：注入归属玩家与待排序触发条目。</summary>
+        public void Open(int ownerPlayerId, IEnumerable<TriggerEntryUI> entries)
+        {
+            OwnerPlayerId = ownerPlayerId;
+            _busy = false;
+            _batchInProgress = false;
+            _opened = true;
+            _closed = false;
+            _externalEnabled = true;
+
+            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            var vp = GetViewport().GetVisibleRect().Size;
+            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)(vp.Y / 2) + 150);
+            Popup(); // Window 显示并定位
+            var list = new List<TriggerEntryUI>(entries);
+            _root?.Setup(list);
+            ApplyButtonStates();
+            TryAutoCloseIfEmpty();
+        }
+
+        /// <summary>关闭窗口并推进（OnDone 每会话只交付一次）。</summary>
+        public void Close()
+        {
+            if (_closed) return;
+            _closed = true;
+            _opened = false;
+            _busy = false;
+            _batchInProgress = false;
+            Hide(); // Window 隐藏
+            OnDone?.Invoke();
+        }
+
+        // ============================================================
+        // 列表内容查询
+        // ============================================================
+
+        /// <summary>当前效果列表内条目（按顺序），供外部查询。</summary>
+        public Godot.Collections.Array<Godot.Node> GetOrderZoneChildren()
+            => OrderZoneContainer != null ? OrderZoneContainer.GetChildren() : new Godot.Collections.Array<Godot.Node>();
+
+        /// <summary>放弃区条目（单机新窗口恒为空；保留以兼容联机/旧调用点）。</summary>
+        public Godot.Collections.Array<Godot.Node> GetDiscardZoneChildren()
+            => DiscardZoneContainer != null ? DiscardZoneContainer.GetChildren() : new Godot.Collections.Array<Godot.Node>();
+
+        private int EntryCount => OrderZoneContainer?.GetChildCount() ?? 0;
+
+        /// <summary>列表内是否存在强制效果（强制触发不可放弃 ⇒ 「放弃剩余效果」置灰）。</summary>
+        private bool AnyMandatory()
+        {
+            if (OrderZoneContainer == null) return false;
+            foreach (var c in OrderZoneContainer.GetChildren())
+                if (c is TriggerEntryUI t && t.IsMandatory) return true;
+            return false;
+        }
+
+        /// <summary>按列表左→右顺序取出待处理触发的原始数据（StackEffectInstance），供批量入堆叠。</summary>
+        private List<StackEffectInstance> CurrentOrderedStackEffects()
+        {
+            var list = new List<StackEffectInstance>();
+            if (OrderZoneContainer == null) return list;
+            foreach (var c in OrderZoneContainer.GetChildren())
+                if (c is TriggerEntryUI t && t.TriggerData is StackEffectInstance si) list.Add(si);
+            return list;
+        }
+
+        // ============================================================
+        // 按钮 / 拖拽可用性（单一收口）
+        // ============================================================
+
+        /// <summary>
+        /// 控制整体可用状态（选目标期间由协调器调用 disabled=false 之外的语义保持兼容：
+        /// 参数 enabled=false ⇒ 整体禁用；true ⇒ 恢复为"按列表内容自动判定"）。
+        /// </summary>
+        public void SetButtonsEnabled(bool enabled)
+        {
+            _externalEnabled = enabled;
+            ApplyButtonStates();
+        }
+
+        /// <summary>按当前状态重算两个按钮与拖拽冻结（唯一收口，避免散落的 Disabled 赋值）。
+        /// · 全部入堆叠：可操作 且 列表非空；
+        /// · 放弃剩余效果：可操作 且 列表非空 且 **无强制效果**。</summary>
+        private void ApplyButtonStates()
+        {
+            bool interactive = _externalEnabled && !_busy && !_batchInProgress;
+            bool hasEntries = EntryCount > 0;
+            if (AllEnterButton != null) AllEnterButton.Disabled = !interactive || !hasEntries;
+            if (DoneButton != null) DoneButton.Disabled = !interactive || !hasEntries || AnyMandatory();
+            _root?.SetDragFrozen(!interactive);
+        }
+
+        private void RefreshButtonStates() => ApplyButtonStates();
+
+        // ============================================================
+        // 输入：双击入堆叠 / 拖拽排序
+        // ============================================================
+
+        // 与 InvestigationWindow 完全对称：用 Window 自身的 _Input（全局输入）驱动条目交互，
         // 不受子 Control 的 mouse_filter 限制。仅命中条目或正在拖拽时才 SetInputAsHandled，避免吞掉其它输入。
         public override void _Input(InputEvent @event)
         {
             if (!Visible) return;
+            bool interactive = _externalEnabled && !_busy && !_batchInProgress;
             var globalMouse = GetViewport().GetMousePosition();
             if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
             {
                 if (mb.Pressed)
                 {
+                    if (!interactive) return;
+                    // 【2026-10】双击条目 ＝ 该效果入堆叠（先于拖拽拾取判定，避免第二次按下被当成新拖拽）。
+                    if (mb.DoubleClick)
+                    {
+                        var hit = _root?.PickEntryAt(globalMouse);
+                        if (hit != null)
+                        {
+                            OnEntryDoubleClicked(hit);
+                            GetViewport().SetInputAsHandled();
+                            return;
+                        }
+                    }
                     if (_root != null && _root.BeginEntryDrag(globalMouse)) GetViewport().SetInputAsHandled();
                 }
                 else if (_root != null && _root.IsEntryDragging)
@@ -86,135 +218,108 @@ namespace Script.UI
             }
         }
 
-        /// <summary>打开排序窗口：注入归属玩家与待排序触发条目。</summary>
-        public void Open(int ownerPlayerId, IEnumerable<TriggerEntryUI> entries)
+        /// <summary>双击条目：把该效果交给既有单条入堆叠链路（需选目标则由引擎弹原选目标窗）。
+        /// 条目**不在此处移除**——由引擎在"实际入堆叠/取消"回填 RemoveEntries 时统一处理，
+        /// 因此"选目标被取消"时条目会自然留在列表内。</summary>
+        private void OnEntryDoubleClicked(TriggerEntryUI entry)
         {
-            OwnerPlayerId = ownerPlayerId;
-            _firedFirstEnter = false;
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
-            var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)(vp.Y / 2) + 150);
-            Popup(); // Window 显示并定位
-            var list = new List<TriggerEntryUI>(entries);
-            _root?.Setup(list);
-            SetButtonsEnabled(true);
-            // 开窗后立即按已注入的剩余数做一次兜底判定（本例中首次入栈已由 onEnterStack 判定，这里只覆盖异常装配）。
-            TryAutoCloseIfNothingRemaining();
+            if (entry == null || _busy || _batchInProgress) return;
+            if (!(entry.TriggerData is StackEffectInstance)) return;
+            _busy = true;
+            ApplyButtonStates();
+            GD.Print($"[TriggerOrderWindow] 双击入堆叠: {entry.NameLabel?.Text}");
+            OnEnterStack?.Invoke(new List<object> { entry.TriggerData });
         }
 
-        public void Close()
+        // ============================================================
+        // 「全部入堆叠」
+        // ============================================================
+
+        private void OnAllEnterPressed()
         {
-            Hide(); // Window 隐藏
-            OnDone?.Invoke();
-        }
-
-        /// <summary>当前 OrderZone 内条目（按顺序），供外部查询。</summary>
-        public Godot.Collections.Array<Godot.Node> GetOrderZoneChildren()
-            => OrderZoneContainer != null ? OrderZoneContainer.GetChildren() : new Godot.Collections.Array<Godot.Node>();
-
-        /// <summary>当前 DiscardZone 内条目，供外部/自动关闭判定查询（与 <see cref="GetOrderZoneChildren"/> 对称）。</summary>
-        public Godot.Collections.Array<Godot.Node> GetDiscardZoneChildren()
-            => DiscardZoneContainer != null ? DiscardZoneContainer.GetChildren() : new Godot.Collections.Array<Godot.Node>();
-
-        /// <summary>
-        /// 控制两个操作按钮的可用状态（选目标期间可整体禁用）。
-        /// 「完成排序并放弃下方效果」启用口径（用户 2026-10）：**仅排序框为空**时可点，**不看放弃框**
-        /// （放弃框非空时点它＝放弃下方内容并结束）。「第一张进入堆叠」启用口径：排序框非空时可点。
-        /// </summary>
-        public void SetButtonsEnabled(bool enabled)
-        {
-            if (FirstEnterButton != null) FirstEnterButton.Disabled = !enabled || (OrderZoneContainer?.GetChildCount() ?? 0) == 0;
-            if (DoneButton != null) DoneButton.Disabled = !enabled || (OrderZoneContainer?.GetChildCount() ?? 0) > 0;
-            // 与两个按钮同步：选目标窗口打开（enabled=false）时冻结条目与窗口拖拽，关闭时恢复
-            if (_root != null) _root.SetDragFrozen(!enabled);
-        }
-
-        private void RefreshButtonStates()
-        {
-            SetButtonsEnabled(true);
-        }
-
-        private void OnFirstEnterPressed()
-        {
-            if (OrderZoneContainer.GetChildCount() == 0) return;
-            TriggerEntryUI first = null;
-            foreach (var c in OrderZoneContainer.GetChildren())
+            if (_batchInProgress || _busy) return;      // 重入防护
+            if (EntryCount == 0) return;
+            var ordered = CurrentOrderedStackEffects();
+            if (ordered.Count == 0) return;
+            if (OnEnterAllStack == null)
             {
-                if (c is TriggerEntryUI t) { first = t; break; }
-            }
-            if (first == null) return;
-            _firedFirstEnter = true;
-            var single = new List<object> { first.TriggerData };
-            GD.Print($"[TriggerOrderWindow] 第一张进入堆叠: {first.NameLabel?.Text}");
-            // 节点移除延后到触发实际入栈之后（含选目标）。
-            OnEnterStack?.Invoke(single);
-        }
-
-        /// <summary>本次窗口是否点过「第一张进入堆叠」（自动关闭仅在该路径生效）。</summary>
-        private bool _firedFirstEnter;
-
-        /// <summary>
-        /// 「第一张进入堆叠」路径的自动关闭判定：本次点击的触发已实际入栈（Arena 在选目标完成后回填剩余数），
-        /// 且**排序框与放弃框都为空** → 自动关窗并推进流程（无需再点"完成排序"）。
-        /// 门槛（三者同时满足）：点过第一张进入堆叠、引擎注入的剩余计数归零、且两框（OrderZone/DiscardZone）均无条目。
-        /// 只在该路径生效：窗口首次打开即"全程无待处理触发"的兜底场景不适用（此时无"进入堆叠"动作）。
-        /// </summary>
-        private void TryAutoCloseIfNothingRemaining()
-        {
-            if (!_firedFirstEnter) return;
-            if (_remainingTriggerCount != 0) return;
-            if ((OrderZoneContainer?.GetChildCount() ?? 0) > 0 || (DiscardZoneContainer?.GetChildCount() ?? 0) > 0)
-            {
-                GD.Print("[TriggerOrderWindow] 第一张入堆叠后仍有剩余条目（排序框或放弃框非空）→ 暂不关闭排序窗口");
+                GD.PrintErr("[TriggerOrderWindow] 未装配「全部入堆叠」处理器 → 忽略本次点击");
                 return;
             }
-            GD.Print("[TriggerOrderWindow] 第一张入堆叠后已无剩余触发（双框皆空）→ 自动关闭排序窗口");
-            _firedFirstEnter = false;
-            Close();
+            _batchInProgress = true;
+            ApplyButtonStates();                        // 冻结按钮与拖拽（批量期间不让改顺序）
+            GD.Print($"[TriggerOrderWindow] 全部入堆叠：{ordered.Count} 条（先按序预选目标）");
+            OnEnterAllStack(new List<object>(ordered));
         }
 
-        /// <summary>
-        /// 触发实际入栈后由 Arena 调用：从 OrderZone 移除已入栈条目。
-        /// 取目标触发在玩家选完目标后才调用本方法，故条目会保留到选目标完成。
-        /// </summary>
-        public void RemoveEntries(System.Collections.Generic.List<Script.Data.Effects.StackEffectInstance> pushed)
+        /// <summary>由协调器在批量流程结束后调用（**必须**恰好一次）。
+        /// pushedAny=false（预选被取消 ⇒ 整体中止）⇒ 列表保持原样、恢复可用；
+        /// pushedAny=true ⇒ 引擎已回填 RemoveEntries，此处补一次"空列表自动关窗"判定。</summary>
+        public void NotifyBatchFinished(bool pushedAny)
         {
-            if (pushed == null || pushed.Count == 0)
+            _batchInProgress = false;
+            ApplyButtonStates();
+            if (pushedAny) TryAutoCloseIfEmpty();
+        }
+
+        // ============================================================
+        // 「放弃剩余效果」
+        // ============================================================
+
+        private void OnDonePressed()
+        {
+            if (_batchInProgress || _busy) return;
+            if (EntryCount == 0) return;                 // 空列表本应已自动关窗
+            if (AnyMandatory())
             {
-                _root?.ArrangeOrderZone();
-                RefreshButtonStates();
+                GD.Print("[TriggerOrderWindow] 放弃剩余效果被忽略：列表内存在强制效果");
                 return;
             }
-            foreach (var t in pushed)
+            GD.Print("[TriggerOrderWindow] 放弃剩余效果（放弃列表内全部未处理触发）");
+            Close();                                     // → Hide + OnDone（推进到下一个所有者窗口）
+        }
+
+        // ============================================================
+        // 入堆叠回填 / 自动关窗
+        // ============================================================
+
+        /// <summary>
+        /// 触发实际处理完后由 TurnManager/协调器调用：从列表移除**已了结**的条目。
+        /// · consumed 内含已入堆叠、以及"无合法目标而跳过 / 模式或支付被否定"的触发；
+        /// · **玩家取消取目标**的触发不在 consumed 中 ⇒ 保留在列表内（可重新处理）。
+        /// 取目标的触发在玩家选完目标后才回填，故条目会保留到选目标完成。
+        /// </summary>
+        public void RemoveEntries(List<StackEffectInstance> consumed)
+        {
+            _busy = false;                               // 单条入堆叠在途结束（含"被取消"的情形）
+            if (consumed != null && consumed.Count > 0)
             {
-                foreach (var c in OrderZoneContainer.GetChildren())
+                foreach (var t in consumed)
                 {
-                    if (c is TriggerEntryUI ui && ui.TriggerData == t)
+                    foreach (var c in OrderZoneContainer.GetChildren())
                     {
-                        OrderZoneContainer.RemoveChild(ui);
-                        ui.QueueFree();
-                        break;
+                        if (c is TriggerEntryUI ui && ui.TriggerData == t)
+                        {
+                            OrderZoneContainer.RemoveChild(ui);
+                            ui.QueueFree();
+                            break;
+                        }
                     }
                 }
             }
             _root?.ArrangeOrderZone();
-            RefreshButtonStates();
+            ApplyButtonStates();
+            TryAutoCloseIfEmpty();
         }
 
-        /// <summary>
-        /// 由 Arena 在「本次排序继续推进」时调用（onEnterStack 回调里）：刷新本窗口记录的剩余触发总数，
-        /// 覆盖"入栈后 OrderZone 非空但整轮剩余数已变"的情形，并在"第一张入堆叠后已无剩余"时自动关窗。
-        /// </summary>
-        public void UpdateRemainingTriggerCount(int count) => SetRemainingTriggerCount(count);
-
-        private void OnDonePressed()
+        /// <summary>列表为空 ⇒ 自动关窗并推进（唯一自动关闭口径）。
+        /// 门槛：本窗已 Open、且当前不在批量/单条流程中（避免把"过程态"误判为"已无剩余"）。</summary>
+        private void TryAutoCloseIfEmpty()
         {
-            if (OrderZoneContainer.GetChildCount() > 0)
-            {
-                GD.Print("[TriggerOrderWindow] 完成排序被忽略：OrderZone 仍非空");
-                return;
-            }
-            GD.Print("[TriggerOrderWindow] 完成排序（放弃剩余触发）");
+            if (!_opened || _closed) return;
+            if (_batchInProgress || _busy) return;
+            if (EntryCount > 0) return;
+            GD.Print("[TriggerOrderWindow] 列表已无待排序效果 → 自动关闭排序窗口");
             Close();
         }
     }
