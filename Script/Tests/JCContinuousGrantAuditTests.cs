@@ -6,7 +6,7 @@ using Script.Data.Effects;
 namespace Script.Tests
 {
     /// <summary>
-    /// 【2026-10·统一属性账本改造前置审计】**卡文（`.tres` 的 `Effects`）声明了能力图标 ⇒ 脚本必须真的授予该图标**。
+    /// 【2026-10·层级计算改造前置审计】**卡文（`.tres` 的 `Effects`）声明了能力图标 ⇒ 脚本必须真的授予该图标**。
     ///
     /// 判据来源（用户 2026-10 口径）："卡的效果不要直接根据代码效果分层，需要结合 TRES 内实际描述分层
     /// （**tres 的描述是实际判据**）"。本套件把该口径落成一条**可执行**判据。
@@ -113,7 +113,7 @@ namespace Script.Tests
         /// 期望 0 违规；当前 4 张已知违规由 `[KnownDefect]` 标记为已知缺陷（可见、不拖红主线）。
         /// </summary>
         [KnownDefect("4 张卡的持续效果只写了 Attribute、漏授 Icon（JC018/JC030/JC060/JC085）；"
-                   + "根因＝持续通道 ContinuousGrants 不做图标→属性折算。修法见《连续效果层系统改造计划》P0①②（统一属性账本：一本账 + 一次重算）")]
+                   + "根因＝持续通道 ContinuousGrants 不做图标→属性折算。修法见《连续效果层系统改造计划》P0①②（层级计算：按万智层序 + 生效时戳，只算四种基础属性）")]
         public void TestAudit_卡文能力图标与脚本授予一致()
         {
             var violations = new List<string>();
