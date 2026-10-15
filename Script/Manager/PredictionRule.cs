@@ -146,8 +146,16 @@ namespace Script.Manager
                     if (!toTop.Contains(c)) toTop.Add(c);
                 }
             }
+            // 【2026-10】底框顺序：优先按回包的 BottomUids（顺序＝底组内上→下）；
+            // 未回传时退化为"未列出的卡按原牌序置底"（旧行为，兼容旧客户端 / 兜底面板）。
             var toBottom = new List<CardInstance>();
-            foreach (var c in cards) if (!toTop.Contains(c)) toBottom.Add(c);
+            if (result.BottomUids != null)
+                foreach (var uid in result.BottomUids)
+                {
+                    var c = cards.Find(x => x.UID == uid);
+                    if (c != null && !toTop.Contains(c) && !toBottom.Contains(c)) toBottom.Add(c);
+                }
+            foreach (var c in cards) if (!toTop.Contains(c) && !toBottom.Contains(c)) toBottom.Add(c);
 
             Apply(zm, predictor, cards, toTop, toBottom);
             // 【A55·联机 UI 刷新】异步落地 ⇒ 主动通知下发快照（牌库顶/底顺序变化客户端需立刻看到）

@@ -5,7 +5,7 @@
 [node name="InvestigationWindow" type="Window" unique_id=1921446950]
 oversampling_override = 1.0
 title = "调查对抗"
-size = Vector2i(800, 710)
+size = Vector2i(1200, 340)
 script = ExtResource("1_iw")
 
 [node name="RootControl" type="Control" parent="." unique_id=476899053]
@@ -20,23 +20,40 @@ mouse_filter = 1
 [node name="TitleLabel" type="Label" parent="RootControl" unique_id=101100201]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 20.0
-offset_right = 420.0
-offset_bottom = 50.0
+offset_top = 12.0
+offset_right = 620.0
+offset_bottom = 42.0
 text = "🔍 调查对抗 - 选择卡牌去向"
+
+[node name="HintLabel" type="Label" parent="RootControl" unique_id=101100209]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 50.0
+offset_right = 480.0
+offset_bottom = 76.0
+text = "💡 拖拽卡牌到左侧（牌库顶）或右侧（牌库底）区域"
+
+[node name="ProgressLabel" type="Label" parent="RootControl" unique_id=101100202]
+layout_mode = 0
+offset_left = 960.0
+offset_top = 50.0
+offset_right = 1180.0
+offset_bottom = 76.0
+text = "牌库顶 0 张 / 牌库底 0 张"
+horizontal_alignment = 2
 
 [node name="TopDropZone" type="Panel" parent="RootControl" unique_id=101100204]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 45.0
-offset_right = 780.0
-offset_bottom = 225.0
+offset_top = 84.0
+offset_right = 590.0
+offset_bottom = 264.0
 
 [node name="ZoneHeaderLabel" type="Label" parent="RootControl/TopDropZone" unique_id=101100205]
 layout_mode = 1
 offset_right = 300.0
 offset_bottom = 25.0
-text = "⬆ 放到牌库顶（左侧卡在上方）"
+text = "⬅ 放到牌库顶（左侧卡在上方）"
 
 [node name="CountLabel" type="Label" parent="RootControl/TopDropZone" unique_id=101100206]
 layout_mode = 1
@@ -52,60 +69,23 @@ horizontal_alignment = 2
 [node name="CardContainer" type="Control" parent="RootControl/TopDropZone" unique_id=1801313834]
 layout_mode = 1
 anchors_preset = 0
+offset_left = 10.0
 offset_top = 30.0
-offset_right = 760.0
+offset_right = 560.0
 offset_bottom = 170.0
-
-[node name="Divider1" type="HSeparator" parent="RootControl" unique_id=101100208]
-layout_mode = 0
-offset_left = 20.0
-offset_top = 240.0
-offset_right = 780.0
-offset_bottom = 242.0
-
-[node name="HintLabel" type="Label" parent="RootControl" unique_id=101100209]
-layout_mode = 0
-offset_left = 20.0
-offset_top = 255.0
-offset_right = 320.0
-offset_bottom = 280.0
-text = "💡 拖拽卡牌到上方或下方区域"
-
-[node name="ProgressLabel" type="Label" parent="RootControl" unique_id=101100202]
-layout_mode = 0
-offset_left = 620.0
-offset_top = 255.0
-offset_right = 780.0
-offset_bottom = 285.0
-text = "已放置：0 / 5 张"
-horizontal_alignment = 2
-
-[node name="CardPool" type="HBoxContainer" parent="RootControl" unique_id=101100210]
-layout_mode = 0
-offset_left = 20.0
-offset_top = 290.0
-offset_right = 780.0
-offset_bottom = 430.0
-
-[node name="Divider2" type="HSeparator" parent="RootControl" unique_id=101100211]
-layout_mode = 0
-offset_left = 20.0
-offset_top = 455.0
-offset_right = 780.0
-offset_bottom = 457.0
 
 [node name="BottomDropZone" type="Panel" parent="RootControl" unique_id=101100212]
 layout_mode = 0
-offset_left = 20.0
-offset_top = 470.0
-offset_right = 780.0
-offset_bottom = 650.0
+offset_left = 610.0
+offset_top = 84.0
+offset_right = 1180.0
+offset_bottom = 264.0
 
 [node name="ZoneHeaderLabel" type="Label" parent="RootControl/BottomDropZone" unique_id=101100213]
 layout_mode = 1
 offset_right = 300.0
 offset_bottom = 25.0
-text = "⬇ 放到牌库底（左侧卡在上方）"
+text = "➡ 放到牌库底（左侧卡在上方）"
 
 [node name="CountLabel" type="Label" parent="RootControl/BottomDropZone" unique_id=101100214]
 layout_mode = 1
@@ -121,23 +101,23 @@ horizontal_alignment = 2
 [node name="CardContainer" type="Control" parent="RootControl/BottomDropZone" unique_id=1517102156]
 layout_mode = 1
 anchors_preset = 0
+offset_left = 10.0
 offset_top = 30.0
-offset_right = 760.0
+offset_right = 560.0
 offset_bottom = 170.0
 
 [node name="ClearButton" type="Button" parent="RootControl" unique_id=101100217]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 660.0
-offset_right = 140.0
-offset_bottom = 695.0
+offset_top = 274.0
+offset_right = 160.0
+offset_bottom = 309.0
 text = "清除选择"
 
 [node name="ConfirmButton" type="Button" parent="RootControl" unique_id=101100219]
 layout_mode = 0
-offset_left = 660.0
-offset_top = 660.0
-offset_right = 780.0
-offset_bottom = 695.0
-disabled = true
+offset_left = 1040.0
+offset_top = 274.0
+offset_right = 1180.0
+offset_bottom = 309.0
 text = "确认"

@@ -32,9 +32,9 @@ namespace Script.UI
         {
             WindowTitle = "调查对抗",
             Title = areaNo > 0 ? $"{areaNo}地区调查对抗获胜" : "调查对抗获胜",
-            TopZoneHeader = "⬆ 放到牌库顶（左侧卡在上方）",
-            BottomZoneHeader = "⬇ 放到牌库底（左侧卡在上方）",
-            Hint = "💡 拖拽卡牌到上方或下方区域",
+            TopZoneHeader = "⬅ 放到牌库顶（左侧卡在上方）",
+            BottomZoneHeader = "➡ 放到牌库底（左侧卡在上方）",
+            Hint = "💡 拖拽卡牌到左侧（牌库顶）或右侧（牌库底）区域",
             LogTag = "调查窗口",
         };
 
@@ -43,9 +43,9 @@ namespace Script.UI
         {
             WindowTitle = $"预测{count}",
             Title = $"🔮 预测{count}：检视牌库顶 {count} 张，任意数量置于牌库顶（其余置于牌库底）",
-            TopZoneHeader = "⬆ 置于牌库顶（左侧卡在上方）",
-            BottomZoneHeader = "⬇ 置于牌库底（左侧卡在上方）",
-            Hint = "💡 拖拽卡牌到上方或下方区域（预测：牌库顶/底的顺序按左侧在上的顺序）",
+            TopZoneHeader = "⬅ 置于牌库顶（左侧卡在上方）",
+            BottomZoneHeader = "➡ 置于牌库底（左侧卡在上方）",
+            Hint = "💡 拖拽到左侧（牌库顶）或右侧（牌库底）区域（顺序按左侧在上）",
             LogTag = "预测窗口",
         };
     }

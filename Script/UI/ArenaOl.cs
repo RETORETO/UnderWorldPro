@@ -402,7 +402,7 @@ namespace Script.UI
                 GD.Print($"[ArenaOl] 调度已上报：{picked.Count} 张");
             });
             var vpSize = GetViewport().GetVisibleRect().Size;
-            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
+            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)((vpSize.Y - _choicePromptPanel.Size.Y) / 2));
             _choicePromptPanel.Popup();
             GD.Print($"[ArenaOl] 第0回合·已弹出调度框（候选 {req.OptionUids.Count} 张手牌）");
         }
@@ -433,7 +433,7 @@ namespace Script.UI
                     _matchClient.SendChoiceResult(result);
             });
             var vpSize = GetViewport().GetVisibleRect().Size;
-            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)(vpSize.Y / 2) + 120);
+            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)((vpSize.Y - _choicePromptPanel.Size.Y) / 2));
             _choicePromptPanel.Popup();
         }
 
@@ -716,7 +716,7 @@ namespace Script.UI
             };
             win.Configure(req.PlayerId, req.Amount, req.AreaUid, req.AreaNo);
             var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
             win.Popup();
 
             _onlineStrengthWindow = win;
@@ -760,7 +760,7 @@ namespace Script.UI
 
             AddChild(win);
             var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 150);
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
             win.Popup();
             win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
             win.Configure(req.PlayerId, req.AreaNo, cards,
@@ -769,6 +769,8 @@ namespace Script.UI
                     // 回包语义：SelectedUids = 放回牌库顶的顺序（未选中的由服务端放牌库底）
                     var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
                     if (toTop != null) foreach (var c in toTop) if (c != null) res.SelectedUids.Add(c.UID);
+                    // 【2026-10】底框顺序也要回传（此前只回顶框 ⇒ 服务端按原牌序置底、玩家在底框内排的顺序被丢弃）
+                    if (toBottom != null) foreach (var c in toBottom) if (c != null) res.BottomUids.Add(c.UID);
                     _matchClient?.SendChoiceResult(res);
                     _onlineInvestigationWindow = null;
                     _onlineCombatWindowOpen = false;
@@ -815,7 +817,7 @@ namespace Script.UI
 
             AddChild(win);
             var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 150);
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
             win.Popup();
             win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
             win.Configure(req.PlayerId, 0, cards,
@@ -823,6 +825,8 @@ namespace Script.UI
                 {
                     var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
                     if (toTop != null) foreach (var c in toTop) if (c != null) res.SelectedUids.Add(c.UID);
+                    // 【2026-10】底框顺序也要回传（此前只回顶框 ⇒ 服务端按原牌序置底、玩家在底框内排的顺序被丢弃）
+                    if (toBottom != null) foreach (var c in toBottom) if (c != null) res.BottomUids.Add(c.UID);
                     _matchClient?.SendChoiceResult(res);
                     _onlineInvestigationWindow = null;
                     _onlineCombatWindowOpen = false;
@@ -913,7 +917,7 @@ namespace Script.UI
                 GD.Print($"[ArenaOl] 先手破平回包：{(confirmed ? "确认" : "取消")}");
             });
             var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
             win.Popup();
 
             _onlineCombatWindowOpen = true;
@@ -955,7 +959,7 @@ namespace Script.UI
             });
 
             var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)(vp.Y / 2) + 120);
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
             win.Popup();
 
             _onlinePayOrTapWindow = win;

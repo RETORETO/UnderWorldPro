@@ -255,6 +255,13 @@ namespace Script.Net
         /// <summary>与 SelectedUids 一一对应的数值：CombatStrength=各目标分配伤害点数。</summary>
         public List<int> SelectedAmounts = new List<int>();
         /// <summary>
+        /// 【2026-10】CombatInvestigation / Prediction 回包：**置于牌库底的卡 UID（有序，顺序＝底组内上→下）**。
+        /// 与 `SelectedUids`（＝置于牌库顶的卡，有序）一起表达两个框各自的内部顺序。
+        /// 未回传（null/空）时服务端退化为"未选中的卡按原牌序置底"（旧行为；
+        /// 兼容旧客户端 / 客户端兜底面板 / Bot，且保证不丢牌）。
+        /// </summary>
+        public List<string> BottomUids = new List<string>();
+        /// <summary>
         /// SelectTriggerOrder：本次要入堆叠的条目**下标序列**（指向该次请求的 `OptionUids`，顺序即入栈先后）。
         /// 语义：本次请求里"玩家已放入入堆叠区"的触发；未列出的条目视为仍在排序窗（服务端据此续发下一轮请求）。
         /// 空列表 + `Cancelled=false` 表示"没有要入堆叠的条目"；`Cancelled=true` 表示放弃剩余。

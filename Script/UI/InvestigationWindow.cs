@@ -8,8 +8,9 @@ using System.Linq;
 /// <summary>
 /// 调查对抗窗口（InvestigationWindow）。
 /// 调查对抗胜利后由 Arena 调用 Open(playerId, x, areaUid) 弹出。
-/// 从胜者牌库顶取出 X 张卡放入 CardPool，玩家拖拽分配到 TopDropZone（牌库顶）或
-/// BottomDropZone（牌库底）。Confirm 时按"从右到左"顺序放回牌库并让胜者抽 1 张。
+/// 从胜者牌库顶取出 X 张卡，**初始全部置于 TopDropZone（牌库顶）**；
+/// 玩家在左右两个区域（左＝牌库顶 / 右＝牌库底）之间拖拽分配。
+/// Confirm 时按各区内"左→右"顺序放回牌库（最左＝该组最靠牌库顶），并让胜者抽 1 张。
 /// </summary>
 public partial class InvestigationWindow : Window
 {
@@ -25,7 +26,6 @@ public partial class InvestigationWindow : Window
     private Label _bottomZoneHeaderLabel;
     private Label _progressLabel;
     private Label _hintLabel;
-    private Control _cardPool;
     private Button _clearButton;
     private Button _confirmButton;
 
@@ -51,7 +51,9 @@ public partial class InvestigationWindow : Window
     private readonly Dictionary<CardInstance, DropZone> _placement = new Dictionary<CardInstance, DropZone>();
     private PackedScene _cardUIScene;
 
-    private enum DropZone { Pool, Top, Bottom }
+    /// <summary>【2026-10】两槽模型：左框＝牌库顶、右框＝牌库底。
+    /// 原"资产池（Pool）"第三槽已取消——打开时所有卡直接落在 Top，玩家仅在两框之间拖拽。</summary>
+    private enum DropZone { Top, Bottom }
 
     /// <summary>当前对抗所属的地区序号（1-based），用于窗口标题显示。</summary>
     private int _areaNo;
@@ -72,7 +74,6 @@ public partial class InvestigationWindow : Window
         _bottomZoneHeaderLabel = GetNodeOrNull<Label>("RootControl/BottomDropZone/ZoneHeaderLabel");
         _progressLabel = GetNode<Label>("RootControl/ProgressLabel");
         _hintLabel = GetNodeOrNull<Label>("RootControl/HintLabel");
-        _cardPool = GetNode<Control>("RootControl/CardPool");
         _clearButton = GetNode<Button>("RootControl/ClearButton");
         _confirmButton = GetNode<Button>("RootControl/ConfirmButton");
 
@@ -134,13 +135,16 @@ public partial class InvestigationWindow : Window
             ui.FreezeSmoothMove = true;   // 禁用平滑归位，位置由本窗口直接控制
             ui.GetParent()?.RemoveChild(ui);
             _uiMap[inst] = ui;
-            _placement[inst] = DropZone.Pool;
-            _cardPool.AddChild(ui);       // 先入树
-            ui.Setup(inst);               // 入树后再 Setup + 翻正面，避免被 _Ready 覆盖
+            _placement[inst] = DropZone.Top;      // 【2026-10】初始全部落在"牌库顶"框（不再有暂存池）
+            _topCardContainer.AddChild(ui);       // 先入树
+            ui.Setup(inst);                       // 入树后再 Setup + 翻正面，避免被 _Ready 覆盖
             ui.SetFace(true);
         }
 
         _totalCount = _cardInstances.Count;
+        // 【2026-10】Top 容器不再是 HBoxContainer（无自动排布）⇒ 必须手动摆位一次，
+        // 否则所有卡会叠在容器 (0,0)，且 PickCardAt 命中错乱。
+        ArrangeDropZone(_topCardContainer);
         RefreshLabels();
         GD.Print($"【{_texts.LogTag}】已打开：胜者P{_winnerPlayer}，共 {_totalCount} 张待分配");
     }
@@ -156,7 +160,7 @@ public partial class InvestigationWindow : Window
     {
         if (@event is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
         {
-            // 在任意一张卡上按下 → 开始拖拽（无论它在 Pool 还是 DropZone）
+            // 在任意一张卡上按下 → 开始拖拽（无论在牌库顶框还是牌库底框）
             var card = PickCardAt(mb.GlobalPosition);
             if (card != null)
             {
@@ -185,33 +189,41 @@ public partial class InvestigationWindow : Window
 
     private CardUI PickCardAt(Vector2 globalPos)
     {
-        // 倒序遍历，优先命中上层卡
+        // 【2026-10】按 ZIndex 取**最上层**的命中卡：ArrangeDropZone 中 ZIndex = 区内左→右序号，
+        // 即"右卡压在左卡之上"。原实现按 Dictionary 枚举序返回"首个命中"，与视觉层次无关，
+        // 卡重叠时会抓到被压在下面的那张（拖错卡）。
+        CardUI best = null;
         foreach (var ui in _uiMap.Values)
         {
-            if (ui.GetVisualGlobalRect().HasPoint(globalPos))
-                return ui;
+            if (!ui.GetVisualGlobalRect().HasPoint(globalPos)) continue;
+            if (best == null || ui.ZIndex > best.ZIndex) best = ui;
         }
-        return null;
+        return best;
     }
 
     private void DropCardToZone(CardUI card, Vector2 globalPos)
     {
         if (!_uiMap.ContainsValue(card)) return;
         var inst = card.Instance;
-        DropZone zone = DropZone.Pool;
 
-        if (_topCardContainer.GetGlobalRect().HasPoint(globalPos) ||
-            _topDropZone.GetGlobalRect().HasPoint(globalPos))
-            zone = DropZone.Top;
-        else if (_bottomCardContainer.GetGlobalRect().HasPoint(globalPos) ||
-                 _bottomDropZone.GetGlobalRect().HasPoint(globalPos))
-            zone = DropZone.Bottom;
+        bool overTop = _topCardContainer.GetGlobalRect().HasPoint(globalPos) ||
+                       _topDropZone.GetGlobalRect().HasPoint(globalPos);
+        bool overBottom = _bottomCardContainer.GetGlobalRect().HasPoint(globalPos) ||
+                          _bottomDropZone.GetGlobalRect().HasPoint(globalPos);
 
+        if (!overTop && !overBottom)
+        {
+            // 【2026-10】两框之外松手：视为取消本次拖拽 → 被拖卡吸回原槽位，不改 _placement。
+            // （原实现在此落回"资产池"，该槽已取消；改为原位复位，避免卡凭空消失或错位。）
+            ArrangeDropZone(_topCardContainer);
+            ArrangeDropZone(_bottomCardContainer);
+            return;
+        }
+
+        DropZone zone = overTop ? DropZone.Top : DropZone.Bottom;
         _placement[inst] = zone;
 
-        Control target = zone == DropZone.Top ? _topCardContainer
-                        : zone == DropZone.Bottom ? _bottomCardContainer
-                        : _cardPool;
+        Control target = zone == DropZone.Top ? _topCardContainer : _bottomCardContainer;
 
         // 按放手 X 坐标在目标池的【现有卡序列（排除自身）】中找最接近的插入点，
         // 用 MoveChild 对齐节点树顺序，从而真正调整该池内卡的顺序（影响最终返回牌库顺序）。
@@ -240,10 +252,8 @@ public partial class InvestigationWindow : Window
 
     private void ArrangeDropZone(Control container)
     {
-        // CardPool 是 HBoxContainer，自动布局会忽略手动 Position，故跳过（交给 HBox 默认均匀排列）。
-        // 仅对普通 Control 容器（Top/Bottom 的 CardContainer）应用"放得下居中、放不下重叠"逻辑。
-        if (container is HBoxContainer) return;
-
+        // 【2026-10】窗口内已无 HBoxContainer（CardPool 槽取消），两区均为普通 Control 容器，
+        // 统一应用"放得下居中、放不下重叠"逻辑。
         const float cw = 100f, ch = 140f, gap = 8f;
         // 收集容器内卡（按节点树顺序 = 左→右用户拖拽顺序）
         var cards = container.GetChildren().OfType<CardUI>().ToList();
@@ -305,11 +315,12 @@ public partial class InvestigationWindow : Window
             if (kv.Value == DropZone.Top) top++;
             else if (kv.Value == DropZone.Bottom) bottom++;
         }
-        int placed = top + bottom;
         if (_topCountLabel != null) _topCountLabel.Text = $"{top} 张";
         if (_bottomCountLabel != null) _bottomCountLabel.Text = $"{bottom} 张";
-        if (_progressLabel != null) _progressLabel.Text = $"已放置：{placed} / {_totalCount} 张";
-        if (_confirmButton != null) _confirmButton.Disabled = placed < _totalCount;
+        // 【2026-10】两槽模型下每张卡**恒在** Top 或 Bottom，"未放置"状态不复存在 ⇒
+        // 进度行改为顶/底分布信息，"确认"按钮恒可用（确认后 OnConfirmPressed 会置灰防连点）。
+        if (_progressLabel != null) _progressLabel.Text = $"牌库顶 {top} 张 / 牌库底 {bottom} 张";
+        if (_confirmButton != null) _confirmButton.Disabled = false;
     }
 
     // ============================================================
@@ -317,17 +328,18 @@ public partial class InvestigationWindow : Window
     // ============================================================
     private void OnClearPressed()
     {
+        // 【2026-10】暂存池取消后，"清除选择"语义＝把所有卡收回"牌库顶"框（回到打开时的初始状态）。
         foreach (var inst in _cardInstances)
         {
-            _placement[inst] = DropZone.Pool;
+            _placement[inst] = DropZone.Top;
             var ui = _uiMap[inst];
             ui.GetParent()?.RemoveChild(ui);
-            _cardPool.AddChild(ui);
+            _topCardContainer.AddChild(ui);
         }
         ArrangeDropZone(_topCardContainer);
         ArrangeDropZone(_bottomCardContainer);
         RefreshLabels();
-        GD.Print($"【{_texts.LogTag}】已清除，所有卡回到 CardPool");
+        GD.Print($"【{_texts.LogTag}】已清除，所有卡回到牌库顶框");
     }
 
     private bool _confirmed = false;

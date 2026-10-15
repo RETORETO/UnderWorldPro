@@ -212,7 +212,7 @@ namespace Script.Tests
             Assert.AreEqual("调查对抗", inv.WindowTitle, "调查对抗那份文案不变（同一机制、两套文案）");
             Assert.AreEqual("2地区调查对抗获胜", inv.Title, "调查对抗标题不变");
             Assert.AreEqual("调查窗口", inv.LogTag, "调查对抗日志前缀不变");
-            Assert.AreEqual("⬆ 放到牌库顶（左侧卡在上方）", inv.TopZoneHeader, "调查对抗上区标题不变");
+            Assert.AreEqual("⬅ 放到牌库顶（左侧卡在上方）", inv.TopZoneHeader, "调查对抗上区标题不变（2026-10 起改为左右布局口径）");
         }
 
         // ==================== ③ JC105：光环必须覆盖"运行期获得灵体"的卡 ====================

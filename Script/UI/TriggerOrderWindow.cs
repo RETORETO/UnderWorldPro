@@ -93,9 +93,9 @@ namespace Script.UI
             _closed = false;
             _externalEnabled = true;
 
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            // 水平、垂直双向居中
             var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)(vp.Y / 2) + 150);
+            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
             Popup(); // Window 显示并定位
             var list = new List<TriggerEntryUI>(entries);
             _root?.Setup(list);

@@ -949,7 +949,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         // 【2026-09】预测窗也是"玩家决策窗"：等待期间持原子锁（选完先解锁再交回 Controller）
         LockChoiceWindow(win);
         var vpSize = GetViewport().GetVisibleRect().Size;
-        win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
+        win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)((vpSize.Y - win.Size.Y) / 2));
         win.Popup();
         win.Configure(predictorId, 0, cards,
             (pid, toTop, toBottom) => { UnlockChoiceWindow(win); onConfirmed?.Invoke(toTop, toBottom); },

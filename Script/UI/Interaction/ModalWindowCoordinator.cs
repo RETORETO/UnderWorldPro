@@ -107,9 +107,9 @@ namespace Script.UI.Interaction
             }
             var window = _tieBreakWindowScene.Instantiate<TieBreakWindow>();
             AddChild(window);
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            // 水平、垂直双向居中
             var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
+            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
             window.Popup();
             _lockModal?.Invoke(ModalWindow.TieBreak);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.TieBreak);
@@ -168,9 +168,9 @@ namespace Script.UI.Interaction
 
             var window = _investigationWindowScene.Instantiate<InvestigationWindow>();
             AddChild(window);
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            // 水平、垂直双向居中
             var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
+            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
             window.Popup();
             _lockModal?.Invoke(ModalWindow.Investigation);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Investigation);
@@ -218,9 +218,9 @@ namespace Script.UI.Interaction
 
             var window = _strengthWindowScene.Instantiate<StrengthWindow>();
             AddChild(window);
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            // 水平、垂直双向居中
             var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)(vpSize.Y / 2) + 150);
+            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
             window.Popup();
             _lockModal?.Invoke(ModalWindow.Strength);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Strength);

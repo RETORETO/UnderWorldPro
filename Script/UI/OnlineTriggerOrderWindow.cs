@@ -178,7 +178,7 @@ namespace Script.UI
             if (!Visible)
             {
                 var vp = GetViewport().GetVisibleRect().Size;
-                Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2) + 150);
+                Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
                 Popup();
             }
 

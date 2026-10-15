@@ -26,6 +26,8 @@ namespace Script.Tests
         {
             public readonly List<ChoiceRequest> Requests = new List<ChoiceRequest>();
             public List<string> TopUids = new List<string>();
+            /// <summary>【2026-10】置于牌库底的卡（有序）——验证底框顺序也参与回包。</summary>
+            public List<string> BottomUids = new List<string>();
             public bool Cancel;
 
             public Task<ChoiceResult> RequestChoice(int playerId, ChoiceRequest req)
@@ -36,6 +38,7 @@ namespace Script.Tests
                     if (Cancel) return Task.FromResult(new ChoiceResult { RequestId = req.RequestId, Cancelled = true });
                     var r = new ChoiceResult { RequestId = req.RequestId, Cancelled = false };
                     r.SelectedUids.AddRange(TopUids);
+                    r.BottomUids.AddRange(BottomUids);
                     return Task.FromResult(r);
                 }
                 if (req.RequestKind == ChoiceRequest.Kind.SelectTriggerOrder)
@@ -194,6 +197,58 @@ namespace Script.Tests
             Assert.AreEqual(c5.UID, after[3].UID, "未参与检视的牌保持原相对顺序");
             Assert.AreEqual(c2.UID, after[4].UID, "未列入回包的牌置于牌库底");
             Assert.AreEqual(5, after.Count, "牌数不变（不得凭空少牌/多牌）");
+        }
+
+        /// <summary>
+        /// 【2026-10】联机：**底框内部顺序（`BottomUids`）也必须生效**——与单机口径一致。
+        /// 修复前服务端只认顶框（`SelectedUids`），底框一律按"牌库原序"摆放 ⇒ 玩家在底框内拖动调整的顺序被丢弃。
+        /// </summary>
+        public void TestP4_预测_联机底框顺序生效()
+        {
+            var game = NewGame();
+            var gateway = new PredictGateway();
+            game.SetInputGateway(gateway);
+            var deck = KnownDeck(game, 5);
+            var c1 = deck[0]; var c2 = deck[1]; var c3 = deck[2]; var c4 = deck[3]; var c5 = deck[4];
+
+            // 顶框放 c3；底框排成 [c2, c1]（与牌库原相对顺序 c1→c2 相反 ⇒ 只能来自回传顺序）
+            gateway.TopUids = new List<string> { c3.UID };
+            gateway.BottomUids = new List<string> { c2.UID, c1.UID };
+
+            EffectEngine.Instance.ResolveEffect(PredictEffect("T_pre_bottom_order", "3"), Predictor(game), null);
+
+            var after = game.DeckManager.GetPlayer1DeckData();
+            Assert.AreEqual(5, after.Count, "牌数不变（不得凭空少牌/多牌）");
+            Assert.AreEqual(c3.UID, after[0].UID, "置顶牌排在最前");
+            Assert.AreEqual(c4.UID, after[1].UID, "未参与检视的牌保持原相对顺序，随置顶牌之后");
+            Assert.AreEqual(c5.UID, after[2].UID, "未参与检视的牌保持原相对顺序");
+            Assert.AreEqual(c2.UID, after[3].UID, "底框第 1 张＝回传 BottomUids 第 1 张");
+            Assert.AreEqual(c1.UID, after[4].UID, "底框第 2 张＝回传 BottomUids 第 2 张（证明用的是回传顺序而非原牌序）");
+        }
+
+        /// <summary>
+        /// 【2026-10】兼容性：**未回传 `BottomUids`**（旧客户端 / 兜底面板）⇒ 退化为
+        /// "未列出的卡按原牌序置底"（旧行为逐字不变），且不丢牌。
+        /// </summary>
+        public void TestP4_预测_未回传底框顺序时退化为原序()
+        {
+            var game = NewGame();
+            var gateway = new PredictGateway();
+            game.SetInputGateway(gateway);
+            var deck = KnownDeck(game, 5);
+            var c1 = deck[0]; var c2 = deck[1]; var c3 = deck[2]; var c4 = deck[3]; var c5 = deck[4];
+
+            gateway.TopUids = new List<string> { c3.UID };   // 只回顶框，不回底框（模拟旧客户端）
+
+            EffectEngine.Instance.ResolveEffect(PredictEffect("T_pre_compat", "3"), Predictor(game), null);
+
+            var after = game.DeckManager.GetPlayer1DeckData();
+            Assert.AreEqual(5, after.Count, "牌数不变");
+            Assert.AreEqual(c3.UID, after[0].UID, "置顶牌排在最前");
+            Assert.AreEqual(c4.UID, after[1].UID, "未参与检视的牌随其后");
+            Assert.AreEqual(c5.UID, after[2].UID, "未参与检视的牌随其后");
+            Assert.AreEqual(c1.UID, after[3].UID, "未回传底序 ⇒ 未列出的卡按原牌序置底（第 1 张）");
+            Assert.AreEqual(c2.UID, after[4].UID, "未回传底序 ⇒ 未列出的卡按原牌序置底（第 2 张）");
         }
 
         /// <summary>回包里的非法 UID 被忽略；取消回包 → 全部按原序留在牌库顶（兜底，不丢牌）。</summary>

@@ -367,17 +367,25 @@ public partial class CombatManager : Node
         _pendingInvestigationCards = null;
         _pendingInvestigationOwner = 0;
 
-        // SelectedUids = 放牌库顶顺序；未选中的卡按原顺序放牌库底。
-        var selectedSet = new HashSet<string>(resInv?.SelectedUids ?? new List<string>());
+        // SelectedUids = 放牌库顶顺序（有序）；BottomUids = 放牌库底顺序（有序）。
+        // 【2026-10】底框顺序此前被丢弃（服务端一律按原牌序置底），现与顶框同等对待；
+        // 未回传 BottomUids 时退化为旧行为（未选中的卡按原牌序置底），兼容旧客户端 / Bot / 兜底面板。
         var toTop = new List<CardInstance>();
         foreach (var uid in (resInv?.SelectedUids ?? new List<string>()))
         {
             var c = cards.Find(x => x.UID == uid);
-            if (c != null) toTop.Add(c);
+            if (c != null && !toTop.Contains(c)) toTop.Add(c);
         }
         var toBottom = new List<CardInstance>();
-        foreach (var c in cards)
-            if (!selectedSet.Contains(c.UID)) toBottom.Add(c);
+        var inTopInst = new HashSet<CardInstance>(toTop);
+        if (resInv?.BottomUids != null)
+            foreach (var uid in resInv.BottomUids)
+            {
+                var c = cards.Find(x => x.UID == uid);
+                if (c != null && !inTopInst.Contains(c) && !toBottom.Contains(c)) toBottom.Add(c);
+            }
+        foreach (var c in cards)   // 兜底：两列都没出现过的卡按原牌序补到末尾（绝不丢牌）
+            if (!inTopInst.Contains(c) && !toBottom.Contains(c)) toBottom.Add(c);
 
         ActionService.ReturnAfterInvestigation(winner, toTop, toBottom);
         ActionService.DrawCards(winner, 1);

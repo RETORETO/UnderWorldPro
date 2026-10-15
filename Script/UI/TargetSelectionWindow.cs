@@ -99,7 +99,7 @@ namespace Script.UI
             if (_cancelButton != null) _cancelButton.Text = "取消";
             if (HintLabel != null) HintLabel.Text = string.IsNullOrEmpty(hint) ? "左键选择右键取消" : hint;
             var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2) + 120);
+            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
             Popup();
         }
 
@@ -252,9 +252,9 @@ namespace Script.UI
         {
             SetMultiPickLayout(false);                                    // 还原单选取目标布局（多选模式可能改过尺寸/按钮）
             ApplySingleCancelLayout(allowCancel, cancelLabel);            // 再叠加/还原「取消」出口
-            // 水平居中、顶边位于实际视口垂直中点偏下 150px
+            // 水平、垂直双向居中
             var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)(vp.Y / 2) + 150);
+            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
             Popup();
             _pickedUid = null;
             if (TitleLabel != null) TitleLabel.Text = $"选择目标：{effectName}";
