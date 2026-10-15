@@ -1969,21 +1969,28 @@ namespace Script.Tests
                 new Promise("JC111 印刷防御＝1（卡数据）",
                     "Cards/Data/PlayerCards/JC/JC111_hundunhudie.tres",
                     "Defense = 1", 1, "TestB4_7A_JC111是防御1的角色"),
-                // 【2026-10 实测反馈七批·A133】
-                // ⑧ JC108："以场上的卡为目标弹出了选择窗，需要**直接选择场上的高亮卡**" ⇒
-                //    激活取卡目标的提示窗由调用方按 `hintWindow` 开关，默认卡目标**不开窗**（只高亮）。
-                new Promise("JC108 卡目标不弹提示窗（开关入参）", "Script/UI/Interaction/TriggerInteractionCoordinator.cs",
-                    "bool hintWindow = true)", 1, "TestB4_5A_JC108双击激活_目标含自身"),
-                new Promise("JC108 卡目标不弹提示窗（消费点）", "Script/UI/Arena.cs",
-                    "hintWindow: false);", 1, "TestB4_5A_JC108双击激活_目标含自身"),
-                // ⑨ JC110："无法通过拖拽正面付费打出" ⇒ 手牌行动卡拖到合法目标上＝发动（与双击同一出口）。
+                // 【2026-10 实测反馈八批·A134】
+                // ⑧ JC108/JC110："**需要弹出提示框并且支持取消效果**，选择完目标才横置卡片/支付费用，
+                //    没选择目标直接取消不要支付费用效果也不要进入堆叠" ⇒ 取目标开窗 + 取消出口（取消不付费）。
+                new Promise("取目标开提示窗（开关入参）", "Script/UI/Interaction/TriggerInteractionCoordinator.cs",
+                    "bool hintWindow = true)", 1, "TestHandActivate_手牌双击激活可取消_源码接线"),
+                new Promise("取目标开提示窗（激活链路消费点）", "Script/UI/Arena.cs",
+                    "hintWindow: true);", 1, "TestHandActivate_手牌双击激活可取消_源码接线"),
+                new Promise("取目标取消出口（默认允许取消）", "Script/UI/Arena.cs",
+                    "BeginActivateWithTarget(inst, only, allowCancel: true);", 1,
+                    "TestHandActivate_手牌双击激活可取消_源码接线"),
+                new Promise("取消不付费（引擎侧：缺目标⇒代价未付出）", "Script/Manager/EffectEngine.cs",
+                    "缺少目标", 2, "TestHandActivate_取消取目标时无任何副作用"),
+                // ⑨ JC110①："依然无法**付费正面打出**" ⇒ 落点判定**只在真的发动了**才截断，
+                //    普通打出（JC110 自身 3 费角色卡 → 己方争夺区）必须继续走 PlayCard。
                 new Promise("JC110 手牌行动落点判定（单一实现）", "Script/Manager/ActivateEligibility.cs",
                     "public static bool CanHandActivateOn(", 1,
-                    "TestHandActivate_可拖到合法目标上发动"),
-                new Promise("JC110 手牌行动拖拽接线（消费点）", "Script/UI/Interaction/CardDragController.cs",
+                    "TestHandActivate_JC110仍可普通付费正面打出"),
+                new Promise("JC110 落点判定只在发动时截断（不吞普通打出）",
+                    "Script/UI/Interaction/CardDragController.cs",
                     "if (TryHandActivateDrop(cardUI, playerId)) return;", 1,
-                    "TestHandActivate_可拖到合法目标上发动"),
-                // ⑩ JC110："双击激活手牌行动效果**可取消**" ⇒ 手牌来源的取目标带取消出口。
+                    "TestHandActivate_JC110仍可普通付费正面打出"),
+                // ⑩ JC110②："双击激活 inst_104 效果**可取消**" ⇒ 手牌来源的取目标带取消出口。
                 new Promise("JC110 手牌行动取目标可取消（单机接线）", "Script/UI/Arena.cs",
                     "OpenAttachmentActivateChoice(hit, cancelable: true);", 1,
                     "TestHandActivate_手牌双击激活可取消_源码接线"),

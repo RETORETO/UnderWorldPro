@@ -3220,10 +3220,19 @@ namespace Script.UI
             EnsureTargetWindow();
             if (_onlineTargetWindow != null)
             {
+                // 【2026-10 用户口径·JC108/JC110】取目标**必须弹提示框且支持取消**；
+                // 取消 ⇒ 不上行任何意图（不付费、不入堆叠，卡留在原处），只清掉高亮与本地状态。
                 _onlineTargetWindow.OnTargetPicked = OnActivationTargetPicked;
                 _onlineTargetWindow.SetBlocking(false);   // 点击穿透到场上卡
                 _onlineTargetWindow.Open(source.PlayerTemplate?.CardName ?? "激活效果",
-                    "请点击场上高亮的合法目标卡完成选择。");
+                    "请点击场上高亮的合法目标卡完成选择。",
+                    extraLabel: "取消（不发动）");
+                _onlineTargetWindow.OnExtra = () =>
+                {
+                    GD.Print($"[ArenaOl] 激活取目标被取消（不上行意图、不付费、不入堆叠）：" +
+                             $"{source.PlayerTemplate?.CardName}");
+                    ClearActivationTargetSelection();
+                };
             }
         }
 
@@ -3364,10 +3373,17 @@ namespace Script.UI
             EnsureTargetWindow();
             if (_onlineTargetWindow != null)
             {
+                // 【2026-10 用户口径】事务卡取目标同样给出取消出口：取消 ⇒ 不上行 PlayCard（卡留在手牌）。
                 _onlineTargetWindow.OnTargetPicked = OnActivationTargetPicked;
                 _onlineTargetWindow.SetBlocking(false);
                 _onlineTargetWindow.Open(card.PlayerTemplate.CardName ?? "事务卡",
-                    "请点击场上高亮的合法目标卡完成选择。");
+                    "请点击场上高亮的合法目标卡完成选择。",
+                    extraLabel: "取消（不打出）");
+                _onlineTargetWindow.OnExtra = () =>
+                {
+                    GD.Print($"[ArenaOl] 事务卡取目标被取消（不上行 PlayCard）：{card.PlayerTemplate.CardName}");
+                    ClearActivationTargetSelection();
+                };
             }
             GD.Print($"[ArenaOl] 事务卡选目标：{card.PlayerTemplate.CardName} 合法目标={legal.Count}");
         }
@@ -4065,8 +4081,8 @@ namespace Script.UI
             // 【2026-10 用户口径·JC110】手牌中的"**手牌行动**"卡（`Scope = ZoneScope.HandZone` 的激活能力，
             // 如 JC110 闲人的绿地）**拖到合法目标上＝发动该能力**（上行 ActivateAbility，服务端权威付费/入堆叠），
             // 与"双击 → 取目标"同一出口（`SendActivation`）。对齐单机 `CardDragController.TryHandActivateDrop`。
-            // 必须**先于**普通打出判定：手牌行动卡不是可打出/可结附的牌 ⇒ 原路径会因"无合法目标"丢掉这次拖拽
-            // （用户实测："无法通过拖拽正面付费打出"）。
+            // **只在真的发动了**才提前返回 —— 手牌行动卡往往**同时是可正常打出的牌**（JC110 自身是 3 费角色卡），
+            // 拖到己方争夺区的普通打出必须继续走下面的 `PlayCard` 流程（用户实测·JC110①："依然无法付费正面打出"）。
             {
                 var handAbility = ActivateEligibility.GetHandScopedActivateAbility(inst);
                 if (handAbility != null)
@@ -4080,14 +4096,10 @@ namespace Script.UI
                                  $"（{handAbility.EffectId}，上行 ActivateAbility 由服务端裁决）");
                         ClearHandDragTargetHighlights();
                         SendActivation(inst, handAbility);
+                        return;
                     }
-                    else
-                    {
-                        GD.Print($"[ArenaOl] 手牌行动拖拽落点非法（落点={dropHit?.Instance?.PlayerTemplate?.CardName ?? "空"}）" +
-                                 "→ 不发意图（卡自行归位）");
-                        ClearHandDragTargetHighlights();
-                    }
-                    return;
+                    GD.Print($"[ArenaOl] 手牌行动落点不是激活目标（落点={dropHit?.Instance?.PlayerTemplate?.CardName ?? "空"}）" +
+                             "→ 交回普通打出流程");
                 }
             }
 

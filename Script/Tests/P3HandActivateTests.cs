@@ -310,6 +310,80 @@ namespace Script.Tests
             Assert.IsTrue(host.SealedCards.Contains(unit), "宿主记录被封印的本卡");
         }
 
+        /// <summary>
+        /// 【2026-10 用户口径·JC110①】"依然无法**付费正面打出**"。
+        /// JC110 自身**也是 3 费角色卡** ⇒ 拖到己方争夺区必须走**普通打出**（`PlayCard`：付费 → 入堆叠 → 进场）。
+        /// 回归锁：手牌行动落点判定**不得**把"普通落点"吞成"落点非法 → 归位手牌"
+        /// （View 侧约定见 `CardDragController.TryHandActivateDrop`：只有**真的发动了**才返回 true）。
+        /// </summary>
+        public void TestHandActivate_JC110仍可普通付费正面打出()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 5, (CardColor)5);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            game.ZoneManager.MoveToHand(unit, 1);
+
+            // 前置：它确实带"手牌行动"（会被落点判定先看一眼）
+            Assert.IsNotNull(ActivateEligibility.GetHandScopedActivateAbility(unit),
+                "前置：JC110 带『手牌行动』能力（落点判定会先尝试激活）");
+            // 但拖到**己方争夺区**（无角色卡落点）时，激活目标不存在 ⇒ 必须交回普通打出
+            Assert.IsFalse(ActivateEligibility.CanHandActivateOn(unit, null,
+                    game.TurnManager, game.PlayerManager, game.CardManager),
+                "落点＝空白/地区（非角色）⇒ 不按激活处理 ⇒ 交回普通打出流程");
+
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            bool played = game.PlayerActionService.PlayCard(1, unit.UID, area, null);
+            Assert.IsTrue(played, "普通付费正面打出应成功（3 费 → 入堆叠）");
+            Assert.AreEqual(manaBefore - unit.PlayerTemplate.Cost, game.PlayerManager.GetAvailableMana(1),
+                "按印刷费用 3 付费");
+            Assert.IsFalse(game.StackManager.IsEmpty, "已入堆叠");
+
+            ResolveStackOnce(game);
+            Assert.AreEqual(CardZone.AreaZone, unit.CurrentZone, "结算后进场到争夺区");
+            Assert.AreEqual(area, unit.ZoneDetailId, "落在所选的己方地区");
+        }
+
+        /// <summary>
+        /// 【2026-10 用户口径·JC108/JC110】**取消 ⇒ 不横置、不付费、不入堆叠**。
+        /// 取目标阶段取消时（协调器 `InvokeExtraExit` → `Arena` 的 `onExtra`）唯一做的事是刷新高亮：
+        /// 全程**不调用** `ActivateAbility` ⇒ 代价与效果都不发生。本用例锁"没有目标就没有任何副作用"这一侧。
+        /// </summary>
+        public void TestHandActivate_取消取目标时无任何副作用()
+        {
+            var game = NewGame();
+            string area = Areas(game)[0];
+            GiveAssets(game, 1, 5, (CardColor)5);
+            game.TurnManager.PriorityPlayerId = 1;
+            game.TurnManager.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
+
+            var unit = game.CardManager.CreateCardInstance(Load("JC110_xianrendelvdi"), 1);
+            game.ZoneManager.MoveToHand(unit, 1);
+            var host = game.CardManager.CreateCardInstance(Probe("TS_ha_cancel_host"), 2);
+            game.ZoneManager.MoveToArea(host, area, 2);
+            var ability = ActivateEligibility.GetHandScopedActivateAbility(unit);
+            Assert.IsNotNull(ability, "前置：JC110 带『手牌行动』能力");
+
+            int manaBefore = game.PlayerManager.GetAvailableMana(1);
+            int stackBefore = game.StackManager.Entries.Count;
+            bool tappedBefore = unit.IsTapped;
+
+            // 用户口径的实际保证：**没有目标就没有任何副作用**。
+            // 引擎侧锁死"缺目标 ⇒ 代价未付出"（`ActivateAbility` 的目标门禁在付费/横置之前），
+            // 这正是"取消＝不调用 ActivateAbility"能成立的原因。
+            EffectEngine.Instance.ActivateAbility(unit, ability, null);
+
+            Assert.AreEqual(manaBefore, game.PlayerManager.GetAvailableMana(1), "取消（无目标）⇒ 不付费");
+            Assert.AreEqual(stackBefore, game.StackManager.Entries.Count, "取消（无目标）⇒ 不入堆叠");
+            Assert.AreEqual(tappedBefore, unit.IsTapped, "取消（无目标）⇒ 不横置");
+            Assert.AreEqual(CardZone.Hand, unit.CurrentZone, "取消 ⇒ 卡仍在手牌");
+            Assert.IsFalse(host.IsSealed, "取消 ⇒ 没有发生封印");
+            Assert.IsFalse(host.SealedCards.Contains(unit), "取消 ⇒ 宿主上没有封印本卡");
+        }
+
         // ==================== ⑦ 【2026-10 用户口径】取目标可取消（源码接线锁） ====================
 
         // 需要断言的源码片段（含成对双引号，故用 char 拼接避免在 C# 字符串里再转义引号；
@@ -320,15 +394,22 @@ namespace Script.Tests
         private static readonly string NoHintWindowWire;
         private static readonly string CancelFieldWire;
         private static readonly string CancelInvokeWire;
+        /// <summary>【2026-10·复查补强】双击链路**两个分支**都必须给取消出口（单能力直发 / 多能力面板）。
+        /// 这两条是"取消能力"的真正消费点：只断言 `extraLabel: allowCancel ? …` 存在的话，
+        /// 有人把调用处改成 `allowCancel: false` 时窗里就没有取消按钮了，而旧断言仍会通过（守卫空转）。</summary>
+        private static readonly string AllowCancelSingleWire;
+        private static readonly string AllowCancelPanelWire;
 
         static P3HandActivateTests()
         {
             Q = ((char)34).ToString();
             CancelableWire = "OpenAttachmentActivateChoice(hit, cancelable: true);";
             CancelExtraLabelWire = "extraLabel: allowCancel ? " + Q + "取消（不发动）" + Q + " : null,";
-            NoHintWindowWire = "hintWindow: false);";
+            NoHintWindowWire = "hintWindow: true);";
             CancelFieldWire = "_cancelActivateTargetSelection = InvokeExtraExit;";
             CancelInvokeWire = "void InvokeExtraExit()";
+            AllowCancelSingleWire = "BeginActivateWithTarget(inst, only, allowCancel: true);";
+            AllowCancelPanelWire = "BeginActivateWithTarget(inst, ab, allowCancel: true);";
         }
 
         private static string ReadProjectText(string rel)
@@ -342,12 +423,14 @@ namespace Script.Tests
         }
 
         /// <summary>
-        /// 用户原文："同时需要**双击激活手牌行动效果可取消**"。
-        /// 行为侧（"取目标时点了取消 ⇒ 不入堆叠、不扣费"）依赖 View 的窗口/右键手势，headless 无法驱动；
-        /// 故这里用**源码接线锁**钉住三处消费点，防止将来"改了取目标签名但漏传取消出口"这类静默回退：
+        /// 用户原文："**需要弹出提示框并且支持取消效果**，选择完目标才横置卡片/支付费用，
+        /// 没选择目标直接取消不要支付费用效果也不要进入堆叠"（JC108 + JC110③）。
+        /// 行为侧（"取目标窗里的取消按钮 / 场上右键 ⇒ 不入堆叠、不扣费"）依赖 View 的窗口手势，
+        /// headless 无法驱动；故这里用**源码接线锁**钉住消费点，防止将来"改了取目标签名但漏传取消出口"
+        /// 这类静默回退：
         ///  ① 手牌双击链路传入 `cancelable: true`；
-        ///  ② 协调器的取消出口字段（窗口按钮与场上右键**共用**同一份投递）；
-        ///  ③ 手牌行动的取目标走"不弹窗 + 可取消"的 `RequestActivateTargetSelection` 重载。
+        ///  ② 取目标**开提示窗**（`hintWindow: true`）且把手牌/激活来源的取消出口交给协调器；
+        ///  ③ 协调器的取消出口字段（窗口取消按钮与场上右键**共用**同一份投递）。
         /// </summary>
         public void TestHandActivate_手牌双击激活可取消_源码接线()
         {
@@ -356,14 +439,20 @@ namespace Script.Tests
             Assert.IsTrue(arena.Contains(CancelableWire),
                 "手牌双击链路必须传 `cancelable: true`（用户口径：双击激活手牌行动效果可取消）");
             Assert.IsTrue(arena.Contains(CancelExtraLabelWire),
-                "取目标必须把手牌来源的取消出口交给协调器（allowCancel ⇒ 场上右键=取消）");
+                "取目标必须把取消出口交给协调器（allowCancel ⇒ 窗口取消按钮/场上右键=取消）");
             Assert.IsTrue(arena.Contains(NoHintWindowWire),
-                "激活取卡目标不再弹提示窗（用户口径：直接选择场上的高亮卡）");
+                "取卡目标**必须弹出提示框**（用户口径：需要弹出提示框并且支持取消效果）");
+            // 【2026-10·复查补强】取消出口的**两个消费点**：单能力直发 / 多能力面板都必须传
+            // `allowCancel: true`（否则窗里没有取消按钮，而旧断言仍会通过 ⇒ 守卫空转）。
+            Assert.IsTrue(arena.Contains(AllowCancelSingleWire),
+                "单能力双击取目标必须给取消出口（`allowCancel: true`）");
+            Assert.IsTrue(arena.Contains(AllowCancelPanelWire),
+                "多能力面板取目标同样必须给取消出口（`allowCancel: true`）");
 
             var coord = ReadProjectText("Script/UI/Interaction/TriggerInteractionCoordinator.cs");
             Assert.IsNotNull(coord, "TriggerInteractionCoordinator.cs 源码应可读");
             Assert.IsTrue(coord.Contains(CancelFieldWire),
-                "取消出口必须挂在协调器上（场上右键走同一份投递）");
+                "取消出口必须挂在协调器上（窗口取消按钮/场上右键走同一份投递）");
             Assert.IsTrue(coord.Contains(CancelInvokeWire),
                 "取消出口投递必须是单一实现（窗口按钮 / 场上右键共用）");
         }

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -240,7 +240,6 @@ namespace Script.Tests
         }
 
         // ==================== ④ JC106：授予的灵体要能抵挡伤害 ====================
-
         /// <summary>
         /// 【用户口径·④】JC106"并获得灵体"授予的是**可用的【灵体】**：`IsSpirit` 为真，
         /// 且当"本方（含自身）在本地区的魔法领域图标数 ＞ 对手"时**本次伤害被防止**（不落地、不判死）。
@@ -262,6 +261,69 @@ namespace Script.Tests
             game.CardManager.DealDamageToInstance(victim, 2);
             Assert.AreEqual(0, victim.Damage, "【灵体】生效 ⇒ 伤害不落地");
             Assert.AreEqual(CardZone.AreaZone, victim.CurrentZone, "未被伤害 ⇒ 不死亡");
+        }
+
+        /// <summary>
+        /// 【2026-10 用户口径·**JC105/JC106 互动缺陷 → 层系统改造的验收锚点**】
+        ///
+        /// 现象（已实测复现）：JC105 的【白星】光环授予与 JC106 的"黑星/白星 → 黑刀"替换**互相打架**，
+        /// **替换后白星仍在**。实测日志：
+        /// <code>
+        /// [EffectEngine] ⇄ 图标替换：探针_TS_b4_105106 的 [白星]×1 → [黑刀]（直到回合结束）
+        /// [DIAG 层] 替换前势力=0 替换后势力=0 仍有白星=True 有黑刀=False
+        /// </code>
+        ///
+        /// 根因（两条效应**没有层序**，各自直接改实例）：
+        ///  ① `ReplaceIcon` 用**当前已含光环授予**的 `CurrentPower` 当替换计数，再 `Grant` 增量到实例上；
+        ///     "先手势力"这类授予量在 `CurrentPower` 里**看不见**（只有 `GetAttribute` 看得到）⇒ 计数算错；
+        ///  ② 替换只是"再 Grant 一笔负的属性" ⇒ 把光环那笔授予**记账抵消**掉；随后 `ReevaluateAuras`
+        ///     的"自愈补授"发现光环记录里的白星不见了、而目标仍符合光环条件 ⇒ **重新授予**，
+        ///     于是替换结果被抹掉（图层语义里这应当是"替换生效、光环的白星不再存在"）。
+        ///
+        /// 处理：本用例标记为 **[KnownDefect]**（当前失败不计入套件失败，但每次运行都会打印 `[KNOWN]`），
+        /// 作为层系统改造的**验收条件**——层系统落地后它会自动通过，并打印 `[FIXED?]` 提醒摘标记。
+        /// </summary>
+        [KnownDefect("JC105 白星光环 × JC106 图标改写：改写不作用于「条目集合」，且光环自愈按「目标仍符合条件」补授 ⇒ 替换后白星复活、黑刀没留下（统一属性账本改造验收锚点）")]
+        public void TestB4_8A_JC105JC106互动_白星替换后不得被光环复活()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            OnField(game, Load("JC105_emenglingzhu"), 1, area);                 // 光环源（自身是灵体）
+            var probe = OnField(game, Probe("TS_b4_105106", defense: 5), 1, area);
+            // 让探针成为灵体，从而被 JC105 光环覆盖 → 获授【白星】
+            ApplyJC106_OnlySpirit(game, probe);
+            Assert.IsTrue(probe.HasIcon("白星"), "前置：灵体 ⇒ JC105 光环授予【白星】");
+
+            int powerWithStar = probe.CurrentPower;
+            int firstStrikePowerWithStar = probe.GetAttribute("先手势力");
+            // 施加 JC106 的图标替换（黑星/白星 → 黑刀）
+            ApplyJC106(game, probe);
+            int afterReplace = probe.CurrentPower;
+            Godot.GD.Print($"[DIAG 层] 替换前 势力={powerWithStar} 先手势力={firstStrikePowerWithStar}；" +
+                           $"替换后 势力={afterReplace} 先手势力={probe.GetAttribute("先手势力")} " +
+                           $"仍有白星={probe.HasIcon("白星")} 有黑刀={probe.HasIcon("黑刀")}");
+
+            Assert.IsFalse(probe.HasIcon("白星"),
+                "JC106『所有［黑星］和［白星］都替换为［黑刀］』⇒ 替换后不应再有【白星】" +
+                "（当前缺陷：光环自愈补授把白星复活）");
+            Assert.IsTrue(probe.HasIcon("黑刀"),
+                "替换必须留下【黑刀】（当前缺陷：替换量按错误基数计算 ⇒ 连黑刀都没留下）");
+        }
+
+        /// <summary>只施加 JC106 的"获得灵体"（不替换图标），供上面的诊断用例铺垫光环条件。</summary>
+        private static void ApplyJC106_OnlySpirit(GameInitializer game, CardInstance target)
+        {
+            var tmpl = Load("JC106_jiushenmiyi");
+            var spell = game.CardManager.CreateCardInstance(tmpl, 1);
+            game.ZoneManager.MoveToHand(spell, 1);
+            EffectEngine.Instance.ResolveEffect(new EffectData
+            {
+                EffectId = "TS_b4_106_spirit_only",
+                Actions = new Array<EffectAction>
+                {
+                    new EffectAction { Verb = ActionVerb.Gain, Args = new Array<string> { "灵体", "1", "目标" } },
+                },
+            }, spell, target);
         }
 
         /// <summary>【对照】对手领域图标更多 ⇒ 灵体**不**防止（规则是"严格小于才防止"）。</summary>

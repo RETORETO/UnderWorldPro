@@ -4078,7 +4078,22 @@ public partial class TurnManager : Node
         // 且所选模式的序号必须合法（用户 2026-09 口径：模式在打出时选定，入堆叠后不可更改）。
         EffectMode chosenMode = null;
         {
-            var modeEffect = MultiTargetSlots.FindModeEffect(tmpl, isSorceryCard ? EffectTiming.OnSorceryCast : (EffectTiming?)null)
+            // 【2026-10 修复·JC110①"依然无法付费正面打出"】——**模式查找必须限定到"打出时机"**：
+            // `FindModeEffect(tmpl, null)` 的语义是"任意时机的第一个带 Modes 的效果"，于是**角色/附属卡上
+            // 的"激活类"模式效果（`CharacterActivated` / `AttachmentActivated`，如 JC110『手牌行动4』二选一）
+            // 会被误当成"打出的选择一项"** ⇒ 普通打出时直接以"需要先选择一项模式（modeIndex=-1 非法）"被拒，
+            // 玩家表现为"卡打不出去"。打出路径能选模式的只有两类：
+            //   ① 事务卡：`OnSorceryCast` 的 `Modes`；
+            //   ② `PlayChoice` 卡（JC082，选项＝结附目标类别，由 `PlayChoiceEffect` 合成）。
+            // 故此处按**卡类**给定时机：事务卡 → `OnSorceryCast`；角色/附属 → `CharacterActivated` /
+            // `AttachmentActivated`（二者在本项目里语义同一：卡级"选择一项"）。激活能力自身的模式选择
+            // 不在此路径（由 `EnsureTriggerModeThenPush` / 激活链路负责），这里只是**不再误匹配**。
+            EffectTiming? playModeTiming = isSorceryCard
+                ? EffectTiming.OnSorceryCast
+                : ((tmpl.CategoryFlag & CardCategory.Attachment) != 0
+                    ? EffectTiming.AttachmentActivated
+                    : EffectTiming.CharacterActivated);
+            var modeEffect = MultiTargetSlots.FindModeEffect(tmpl, playModeTiming)
                                  ?? PlayChoiceEffect(tmpl);   // 【JC082】选择一项的打出（选项＝结附目标类别）
             if (modeEffect != null)
             {

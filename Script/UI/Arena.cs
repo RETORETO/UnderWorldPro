@@ -2125,9 +2125,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         public void OpenAttachmentActivateChoice(CardUI cardUI) => OpenAttachmentActivateChoice(cardUI, cancelable: false);
 
         /// <param name="cancelable">
-        /// 【2026-10 用户口径·JC110】本次双击是否允许**在取目标时取消**（不发动）。
-        /// 手牌行动（"手牌行动4"这类从手牌发动的能力）要求"双击激活手牌行动效果**可取消**" ⇒ 传 true；
-        /// 场上激活能力的双击链路保持 false（选中目标即发动，与既有行为逐字一致）。
+        /// 【2026-10 用户口径·JC108/JC110】保留参数以兼容既有调用点。**当前实现恒为可取消**
+        /// （用户口径："需要弹出提示框并且支持取消效果，选择完目标才横置卡片/支付费用，
+        /// 没选择目标直接取消不要支付费用效果也不要进入堆叠"），故该值不再影响行为。
         /// </param>
         public void OpenAttachmentActivateChoice(CardUI cardUI, bool cancelable)
         {
@@ -2182,8 +2182,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 }
                 if (only.Target is { NeedsSelection: true })
                 {
-                    // 【2026-10·JC110】手牌行动允许在取目标时取消（用户口径："双击激活手牌行动效果可取消"）。
-                    BeginActivateWithTarget(inst, only, allowCancel: cancelable);
+                    // 【2026-10 用户口径·JC108/JC110】取目标**必须弹提示框且可取消**；
+                    // 取消 ⇒ 不横置/不付费/不入堆叠。故此处统一允许取消（不再按来源区分）。
+                    BeginActivateWithTarget(inst, only, allowCancel: true);
                 }
                 else
                 {
@@ -2223,7 +2224,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         if (items[idx].Disabled) return;
                         var ab = abilities[idx];
                         if (ab.Target is { NeedsSelection: true })
-                            BeginActivateWithTarget(inst, ab, allowCancel: cancelable);
+                            BeginActivateWithTarget(inst, ab, allowCancel: true);
                         else
                         {
                             BeginActivate(inst, ab, null, -1);
@@ -2432,11 +2433,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         /// 其余（角色/附属/地区/非争夺区牌堆）沿用既有选目标窗。
         /// </summary>
         /// <param name="allowCancel">
-        /// 【2026-10 用户口径·JC110】本次取目标是否给出"取消（不发动）"出口（场上右键 / 窗口取消按钮）。
-        /// 手牌行动（"手牌行动4"这类**从手牌发动**的能力）要求"双击激活手牌行动效果**可取消**" ⇒ 传 true；
-        /// 其余调用点保持默认 false（行为逐字不变：场上的激活能力选中目标即发动）。
+        /// 【2026-10 用户口径·JC108/JC110】本次取目标是否给出"取消（不发动）"出口（窗口取消按钮 / 场上右键）。
+        /// 用户口径："需要弹出提示框并且支持取消效果，选择完目标才横置卡片/支付费用，
+        /// 没选择目标直接取消不要支付费用效果也不要进入堆叠" ⇒ 双击链路恒传 true。
         /// </param>
-        private void BeginActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = false)
+        private void BeginActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = true)
         {
             if (Script.Manager.PlayerTargetPool.IsPlayerSpec(ability.Target))
                 BeginActivateWithPlayerTarget(inst, ability);
@@ -2696,9 +2697,12 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             });
         }
 
-        /// <summary>为附属激活效果（有目标，如 JC012 ②横置角色）弹出选目标窗。选完后发动并牺牲来源。</summary>
-        /// <param name="allowCancel">【2026-10·JC110】是否给出"取消（不发动）"出口（手牌行动＝可取消）。</param>
-        private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = false)
+        /// <summary>为附属/角色激活效果（有目标，如 JC012 ②横置角色、JC108 封印牌库顶）弹出选目标窗。
+        /// 选完后发动并牺牲来源；**取消 ⇒ 不横置、不付费、不入堆叠**（代价与效果都不发生）。</summary>
+        /// <param name="allowCancel">【2026-10 用户口径·JC108/JC110】是否给出"取消（不发动）"出口。
+        /// 默认 true（用户口径："需要弹出提示框并且支持取消效果，选择完目标才横置卡片/支付费用，
+        /// 没选择目标直接取消不要支付费用效果也不要进入堆叠"）。</param>
+        private void BeginAttachmentActivateWithTarget(CardInstance inst, EffectData ability, bool allowCancel = true)
         {
             var set = new HashSet<string>();
             // 【2026-09 修复】候选＝争夺区成员（形态角色经 `MoveFormZone` 已迁入争夺区 ⇒ 天然在内），
@@ -2712,11 +2716,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             // 仅角色（AreaZone 中的正面角色；暗藏者由 IncludeCovert=false 已在 IsLegalActivateTarget 内排除）
             var validUids = new System.Collections.Generic.List<string>(set);
-            // 【2026-10 用户口径·JC108】"以场上的卡为目标弹出了选择窗，需要**直接选择场上的高亮卡**"：
-            // 卡目标的选中本来就发生在场上高亮卡上（点击即完成），再叠一个居中提示窗会挡住战场、
-            // 让玩家以为要在窗里选。故本路径传 `hintWindow:false` ⇒ **只高亮、不弹窗**；
-            // 同时给出"取消（不发动）"出口（用户口径·JC110"手牌行动…可取消"）——
-            // 窗不可见时该出口由**场上右键**触发（协调器 `_cancelActivateTargetSelection`）。
+            // 【2026-10 用户口径·JC108/JC110】**必须弹出提示框且支持取消**：
+            //  · 窗口 = `TargetSelectionWindow`（"选择目标：<卡名>" + 提示 + 「取消（不发动）」按钮），
+            //    场上合法目标同时高亮（点高亮卡即完成选择，窗只作提示与取消出口）；
+            //  · **取消 ⇒ 不发起动**：`onExtra` 只刷新高亮，**不调用** `BeginActivate`
+            //    ⇒ 横置/付费/入堆叠全部不发生（代价与效果都不兑现）。
             _triggerCoordinator.RequestActivateTargetSelection(
                 inst.PlayerTemplate?.CardName ?? "激活效果",
                 ability.Target is { Kind: TargetKind.Area },
@@ -2731,11 +2735,12 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 onExtra: allowCancel
                     ? () =>
                     {
-                        GD.Print($"[Arena] 激活取目标被取消（不发动）：{inst.PlayerTemplate?.CardName}");
+                        GD.Print($"[Arena] 激活取目标被取消（不发动、不横置、不付费、不入堆叠）：" +
+                                 $"{inst.PlayerTemplate?.CardName}");
                         RefreshActivateHighlights();
                     }
                     : null,
-                hintWindow: false);
+                hintWindow: true);
         }
 
     /// <summary>

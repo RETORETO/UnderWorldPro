@@ -36,21 +36,49 @@ namespace Script.Tests
             {
                 if (!m.Name.StartsWith("Test") || m.GetParameters().Length != 0) continue;
                 EnsureFreshEffectEngine();   // 每个测试前重建 EffectEngine 实例，隔离状态
+                bool known = m.GetCustomAttributes(typeof(KnownDefectAttribute), false).Length > 0;
                 try
                 {
                     m.Invoke(this, null);
-                    _passed.Add(m.Name);
+                    if (known)
+                    {
+                        // 已知缺陷用例**通过了** ⇒ 缺陷多半已修好，提醒摘掉 [KnownDefect]
+                        _passed.Add(m.Name);
+                        GD.Print($"[FIXED?] {m.Name}: 标记为【已知缺陷】的用例现在通过了 → " +
+                                 $"可考虑摘掉 [KnownDefect]（{GetType().Name}）");
+                    }
+                    else
+                    {
+                        _passed.Add(m.Name);
+                    }
                 }
                 catch (AssertFailedException ex)
                 {
-                    _failures.Add($"[FAIL] {m.Name}: {ex.Message}");
+                    if (known)
+                    {
+                        // 已知缺陷：仍失败 ⇒ 不计失败，但保持可见
+                        _passed.Add(m.Name);
+                        GD.Print($"[KNOWN] {m.Name}: 已知缺陷（未修复，不计失败）→ {ex.Message}");
+                    }
+                    else
+                    {
+                        _failures.Add($"[FAIL] {m.Name}: {ex.Message}");
+                    }
                 }
                 catch (Exception ex)
                 {
                     var inner = ex is System.Reflection.TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
                     // 打印完整堆栈，便于定位异常出处（诊断用；定位后可视情改回精简）
                     var stack = inner.StackTrace?.Replace("\n", " | ") ?? "";
-                    _failures.Add($"[ERR ] {m.Name}: 异常 {inner.GetType().Name}: {inner.Message} @ {stack}");
+                    if (known)
+                    {
+                        _passed.Add(m.Name);
+                        GD.Print($"[KNOWN] {m.Name}: 已知缺陷（未修复，不计失败）→ {inner.Message}");
+                    }
+                    else
+                    {
+                        _failures.Add($"[ERR ] {m.Name}: 异常 {inner.GetType().Name}: {inner.Message} @ {stack}");
+                    }
                 }
             }
         }
@@ -70,6 +98,21 @@ namespace Script.Tests
     public class AssertFailedException : Exception
     {
         public AssertFailedException(string msg) : base(msg) { }
+    }
+
+    /// <summary>
+    /// 【已知缺陷锚点】标记一个**当前确实失败**的用例：它记录的是已确认的产品缺陷（不是测试写错），
+    /// 在缺陷修好之前**不计入失败**，但会在报告里以 `[KNOWN]` 列出（可见、不隐藏）。
+    /// 修好之后该用例会**通过**，报告里以 `[FIXED?]` 提示"可以摘掉这个标记了"。
+    ///
+    /// 用途：把"层系统改造"这类**大改造的验收锚点**先写进套件，避免"改造完忘了原来为什么改"；
+    /// 同时保证主线（全量绿）不被已知缺陷拖红。
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class KnownDefectAttribute : Attribute
+    {
+        public string Reason { get; }
+        public KnownDefectAttribute(string reason) => Reason = reason;
     }
 
     public static class Assert

@@ -184,10 +184,12 @@ namespace Script.UI.Interaction
             }
 
             // 【2026-10 用户口径·JC110】手牌中的"**手牌行动**"卡（`Scope = ZoneScope.HandZone` 的激活能力，
-            // 如 JC110 闲人的绿地"手牌行动4：将自身封印在目标角色上"）**拖到合法目标上＝发动该能力**
+            // 如 JC110 闲人的绿地"手牌行动4：将自身封印在目标角色上"）**拖到该能力的合法目标上＝发动该能力**
             // （付费 → 入堆叠 → 结算封印），与"双击 → 取目标"同一出口（`EffectEngine.ActivateAbility`）。
-            // 必须**先于**普通落点判定：此前这条落点只走普通打出 `PlayCard`——手牌行动卡不是可打出/可结附的
-            // 牌 ⇒ 被判"无合法目标"直接退回手牌（用户实测："无法通过拖拽正面付费打出"）。
+            // 位置：在普通落点判定**之前**尝试，但**只在真的发动了**才返回 true（`TryHandActivateDrop` 的约定）
+            // —— 手牌行动卡**同时是可正常打出的角色卡**（JC110 自身 3 费），拖到己方争夺区的普通打出
+            // 必须继续走下面的 `PlayCard` 流程（用户实测·JC110①："依然无法付费正面打出"就是这里
+            // 被"落点非法→归位手牌"提前吞掉的）。
             if (TryHandActivateDrop(cardUI, playerId)) return;
 
             // 方案A：先命中检测场上卡（附属/事务可选目标）
@@ -503,8 +505,10 @@ namespace Script.UI.Interaction
         /// （付费 → 入堆叠 → 结算；与"双击 → 取目标窗"同一条 Controller 出口 `ActivateAbility`）。
         /// 用户原文："无法通过拖拽正面付费打出"。
         ///
-        /// 返回 true ＝ 本次拖拽已按"发动"处理（已入堆叠或已取消归位），调用方应直接返回、不得再走打出流程；
-        /// 返回 false ＝ 不是手牌行动卡 / 当前不可发动 / 落点不是该能力的合法目标 ⇒ 交回普通打出流程。
+        /// 返回 true ＝ **本次拖拽真的按"发动"处理了**（已入堆叠），调用方应直接返回、不得再走打出流程；
+        /// 返回 false ＝ 不是手牌行动卡 / 当前不可发动 / 落点不是该能力的合法目标
+        /// ⇒ **交回普通打出流程**（关键：手牌行动卡往往**同时是可正常打出的牌**——JC110 自身就是 3 费角色卡，
+        /// 拖到己方争夺区必须照常付费打出，不能被这里提前吞成"归位手牌"）。
         /// 规则判定（门禁 + 落点合法性）全部委托 `ActivateEligibility`（View 不写 Model、也不复刻规则）。
         /// </summary>
         private bool TryHandActivateDrop(CardUI cardUI, int playerId)
@@ -516,24 +520,22 @@ namespace Script.UI.Interaction
             if (ability == null) return false;
 
             var hit = PickAreaCardAt(_arena.GetGlobalMousePosition());
-            if (Script.Manager.ActivateEligibility.CanHandActivateOn(
+            if (!Script.Manager.ActivateEligibility.CanHandActivateOn(
                     instance, hit?.Instance, _turnManager, _arena.PlayerManagerRef, _cardManager))
             {
-                GD.Print($"[DragController.DragEnd] 手牌行动拖拽发动：{instance.PlayerTemplate?.CardName} " +
-                         $"→ 目标 {hit.Instance.PlayerTemplate?.CardName}（{ability.EffectId}，费用 {ability.Cost}）");
-                ClearDragTargetHighlights();
-                // 发动入口与双击链路同一出口（Controller 内部做权威复检/付费/入堆叠）
-                _actionService.ActivateAbility(instance, ability, hit.Instance);
-                _arena.RefreshActivateHighlights();
-                return true;
+                // 落点不是该能力的合法目标 ⇒ **不发动、也不归位**，交回普通打出流程
+                // （普通落点可能是己方争夺区＝正常付费打出；由下方既有分支决定打出/退回手牌）。
+                GD.Print($"[DragController.DragEnd] 手牌行动落点不是激活目标（落点=" +
+                         $"{hit?.Instance?.PlayerTemplate?.CardName ?? "空"}）→ 交回普通打出流程");
+                return false;
             }
 
-            // 落点不是合法目标（含拖回空白/手牌区）：归位手牌，不误发动（手牌行动卡不是可打出的牌，
-            // 交回普通流程只会打出失败并再归位一次，故这里直接收尾）。
-            GD.Print($"[DragController.DragEnd] 手牌行动拖拽落点非法（落点=" +
-                     $"{hit?.Instance?.PlayerTemplate?.CardName ?? "空"}）→ 不发动，归位手牌");
+            GD.Print($"[DragController.DragEnd] 手牌行动拖拽发动：{instance.PlayerTemplate?.CardName} " +
+                     $"→ 目标 {hit.Instance.PlayerTemplate?.CardName}（{ability.EffectId}，费用 {ability.Cost}）");
             ClearDragTargetHighlights();
-            ReturnCardToHand(cardUI);
+            // 发动入口与双击链路同一出口（Controller 内部做权威复检/付费/入堆叠）
+            _actionService.ActivateAbility(instance, ability, hit.Instance);
+            _arena.RefreshActivateHighlights();
             return true;
         }
 

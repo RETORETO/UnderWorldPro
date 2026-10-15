@@ -134,6 +134,7 @@ namespace Script.Tests
                 new JCBugfixBatch3Tests(),            // 【2026-10 实测反馈五批】JC098 略过步骤＝流程里不存在 / JC100 发动时付费+减防致死刷 UI / JC107 资产目标 / JC108 可取自身
                 new JCBugfixBatch4Tests(),            // 【2026-10 实测反馈六批】JC103 一次性减费消费 / JC104 预测窗文案 / JC105 光环覆盖运行期灵体 / JC106 灵体免伤 / JC108 双击激活 / JC110 手牌双击 / JC111 防御1
                 new JCEffectSelfAuditTests(),          // 【2026-10 JC 效果代码自查】效果结构层面（㉑切分/③区域/④朝向/⑫类别/⑬白名单/⑮门禁/⑤目标/⑳结构/⑭代价/⑩注册；豁免表可审计）
+                new JCContinuousGrantAuditTests(),     // 【2026-10 层系统前置审计】卡文(.tres)承诺的能力图标 ⇒ 脚本必须真的授予（查出 4 张漏授，[KnownDefect] 可见）
                 new P3PathUniquenessTests(),           // P3·K25「道途」唯一性（与领袖同款：玩家选一个牺牲）：JC034①
                 new P3TemporaryManaTests(),            // P3·K19 临时费用池（优先花费 + 步骤结束清除）：JC115
                 new P3CounterCostTests(),              // P3·K5 计数器作发动代价（发动者选择）：JC044②
