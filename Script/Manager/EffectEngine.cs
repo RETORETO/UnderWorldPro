@@ -2932,12 +2932,15 @@ namespace Script.Manager
 
                 case ActionVerb.ReplaceIcon:
                 {
-                    // 【P3·K20】**图标替换＝属性替换**（用户 2026-09 口径）：把某卡上"指定能力图标"的**有效贡献**
-                    // 全部换成另一种图标对应的属性；整套替换在**效果内部一次做完**（原子锁期间不会插入其它触发）。
-                    // Args[0] = 来源图标清单（`,` 分隔，如 `"黑星,白星"`）；Args[1] = 目标图标（如 `"黑刀"`）；
-                    // Args[2] = 对象（`"目标"` 缺省 / `"自身"` / `"结附宿主"`）。
-                    // 计数＝该属性的**当前有效贡献**（如 势力＝`CurrentPower`、先手势力＝授予的『先手势力』），
-                    // 故替换后该卡**不再提供任何来源图标的属性**；`Duration` 含"回合结束"时登记时效项（到期精确还原）。
+                    // 【2026-10 用户口径·**7e 交换/近似交换层**】JC106「目标角色上的所有［黑星］和［白星］
+                    // 能力图标都**替换为**［黑刀］」——语义＝**对"图标集合"整体改写**，且**在层序最后施加**
+                    // （层0→7a→7b→7c→7d→**7e**）。故此处**不再当场算一笔加减账**（旧实现会漏掉"改写之后才
+                    // 由光环发出来的［白星］"，且不产出 `Icon:黑刀`），而是：
+                    //   ① 在目标卡上**登记一条 7e 改写记录**（来源图标集合 → 目标图标）；
+                    //   ② `CardInstance` 在**每次重算**（`ResetToBaseValues` 末尾 / 来源属性变动时）先撤销上一轮
+                    //      输出、再按"印刷 ＋ 7c 授予"重新计数并改写 ⇒ **幂等、顺序无关**；
+                    //   ③ `Duration` 含"回合结束" ⇒ 登记时效项，到期 `RemoveIconRewrite` ⇒ 精确还原。
+                    // Args[0] = 来源图标清单（`,` 分隔）；Args[1] = 目标图标；Args[2] = 对象（目标/自身/结附宿主）。
                     CardInstance rSubject = ArgAt(action, 2, "目标") switch
                     {
                         "自身" => source,
@@ -2951,34 +2954,36 @@ namespace Script.Manager
                         GD.Print($"[EffectEngine] ⚠ ReplaceIcon 跳过：对象为空或目标图标「{dstIcon}」未登记");
                         break;
                     }
-                    bool rTimed = durationText != null && durationText.Contains("回合结束");
-                    int replacedTotal = 0;
+                    var rSrcIcons = new System.Collections.Generic.List<string>();
+                    var rSrcAttrs = new System.Collections.Generic.List<string>();
                     foreach (var srcIconRaw in (ArgAt(action, 0, "") ?? "").Split(','))
                     {
                         string srcIcon = srcIconRaw.Trim();
                         if (string.IsNullOrEmpty(srcIcon)) continue;
                         string srcAttr = IconToAttribute(srcIcon);
                         if (string.IsNullOrEmpty(srcAttr)) { GD.Print($"[EffectEngine] ⚠ ReplaceIcon：来源图标「{srcIcon}」未登记 → 跳过"); continue; }
-                        int n = srcAttr == "势力" ? rSubject.CurrentPower : rSubject.GetAttribute(srcAttr);
-                        if (srcAttr == "先手势力") n = rSubject.GetAttribute("先手势力");
-                        if (n <= 0) continue;
-                        rSubject.Grant("Attribute", srcAttr, -n);            // 抹掉来源图标
-                        rSubject.Grant("Attribute", dstAttr, n);             // 换成目标图标
-                        replacedTotal += n;
-                        if (rTimed)
-                            RegisterTimedMod(new TimedMod
-                            {
-                                TargetUid = rSubject.UID,
-                                Kind = "IconReplace",
-                                Value = srcAttr + "|" + dstAttr,             // 来源属性|目标属性
-                                Amount = n,
-                                ExpireTurn = NowTurn,
-                            });
-                        GD.Print($"[EffectEngine] ⇄ 图标替换：{rSubject.PlayerTemplate?.CardName} 的 [{srcIcon}]×{n} → [{dstIcon}]" +
-                                 (rTimed ? "（直到回合结束）" : ""));
+                        rSrcIcons.Add(srcIcon);
+                        rSrcAttrs.Add(srcAttr);
                     }
-                    if (replacedTotal == 0)
-                        GD.Print($"[EffectEngine] ⚠ ReplaceIcon：{rSubject.PlayerTemplate?.CardName} 上没有可替换的[{ArgAt(action, 0, "")}]图标");
+                    if (rSrcIcons.Count == 0)
+                    {
+                        GD.Print($"[EffectEngine] ⚠ ReplaceIcon：{rSubject.PlayerTemplate?.CardName} 的来源图标清单为空 → 不改写");
+                        break;
+                    }
+                    bool rTimed = durationText != null && durationText.Contains("回合结束");
+                    string rKey = string.Join(",", rSrcIcons) + "|" + dstIcon;
+                    rSubject.AddIconRewrite(rKey, rSrcIcons.ToArray(), rSrcAttrs.ToArray(), dstIcon, dstAttr);
+                    if (rTimed)
+                        RegisterTimedMod(new TimedMod
+                        {
+                            TargetUid = rSubject.UID,
+                            Kind = "IconReplace",
+                            Value = rKey,                 // 来源图标清单|目标图标（到期按同 Key 移除改写记录）
+                            Amount = 0,
+                            ExpireTurn = NowTurn,
+                        });
+                    GD.Print($"[EffectEngine] ⇄ 图标改写（7e）：{rSubject.PlayerTemplate?.CardName} 的 " +
+                             $"[{string.Join(",", rSrcIcons)}] → [{dstIcon}]" + (rTimed ? "（直到回合结束）" : ""));
                     Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                     break;
                 }
@@ -4606,6 +4611,75 @@ namespace Script.Manager
             }
         }
 
+        /// <summary>【2026-10 用户口径·"图标即属性"】属性名 → 能力图标名（`IconToAttribute` 的**逆映射**）。
+        /// **防御没有对应图标** ⇒ 返回 null（不折算）。</summary>
+        public static string AttributeToIcon(string attrOrIcon)
+        {
+            switch (attrOrIcon)
+            {
+                case "战斗": case "黑刀": return "黑刀";
+                case "先手调查": case "白眼": return "白眼";
+                case "调查": case "黑眼": return "黑眼";
+                case "先手战斗": case "白刀": return "白刀";
+                case "势力": case "黑星": return "黑星";
+                case "先手势力": case "白星": return "白星";
+                default: return null;
+            }
+        }
+
+        /// <summary>【2026-10·**7c 写入收口**】把一份持续授予清单补齐为"**图标 ⇄ 属性成对**"：
+        /// · 只写 `Icon:黑刀` ⇒ 自动补 `Attribute:战斗`（否则"图标对了、数值没加"）；
+        /// · 只写 `Attribute:战斗` ⇒ 自动补 `Icon:黑刀`（否则"数值对了、`HasIcon` 为假"——本项目
+        ///   `Icon` 与 `Attribute` 是**两套集合**，三条通道三种折算规则，历史上因此漏了 4 张卡）；
+        /// · 两侧都写（既有 14 张卡）⇒ 按 `(Kind,Value)` **去重合并**，**不重复计数**。
+        /// 返回清单同时用于"实际施加"与"登记撤销"（撤销一并还原两条账）。
+        /// </summary>
+        private static System.Collections.Generic.List<EffectGrant> FoldIconAttributePairs(
+            System.Collections.Generic.IEnumerable<EffectGrant> declared)
+        {
+            var result = new System.Collections.Generic.List<EffectGrant>();
+            var index = new System.Collections.Generic.Dictionary<string, int>();
+            // 声明项：同 (Kind,Value) 累积（卡脚本自己写了两条时按合计）
+            void AddDeclared(string kind, string value, int amount)
+            {
+                string k = kind + "|" + value;
+                if (index.TryGetValue(k, out int at)) { result[at].Amount += amount; return; }
+                index[k] = result.Count;
+                result.Add(new EffectGrant { Kind = kind, Value = value, Amount = amount });
+            }
+            // 折算补齐项：**仅当另一侧缺席时**才补（已写"成对两条"的卡不得被加第二次）
+            void AddDerived(string kind, string value, int amount)
+            {
+                string k = kind + "|" + value;
+                if (index.ContainsKey(k)) return;
+                index[k] = result.Count;
+                result.Add(new EffectGrant { Kind = kind, Value = value, Amount = amount });
+            }
+            foreach (var g in declared ?? System.Array.Empty<EffectGrant>())
+            {
+                if (g == null || string.IsNullOrEmpty(g.Value)) continue;
+                AddDeclared(g.Kind, g.Value, g.Amount);
+            }
+            // 第二趟才补折算项：**必须等声明项全部入表**，否则"成对但顺序为 Icon→Attribute"的卡
+            //（如 JC037 先写 `Icon:黑眼` 后写 `Attribute:调查`）会在第一趟先把属性补进去、
+            // 第二趟再按声明累加一次 ⇒ 数值翻倍（实测：调查 +2）。
+            foreach (var g in declared ?? System.Array.Empty<EffectGrant>())
+            {
+                if (g == null || string.IsNullOrEmpty(g.Value)) continue;
+                if (g.Kind == "Icon")
+                {
+                    string attr = IconToAttribute(g.Value);
+                    if (!string.IsNullOrEmpty(attr)) AddDerived("Attribute", attr, g.Amount);
+                }
+                else if (g.Kind == "Attribute")
+                {
+                    string icon = AttributeToIcon(g.Value);
+                    if (!string.IsNullOrEmpty(icon)) AddDerived("Icon", icon, g.Amount);
+                }
+            }
+            return result;
+        }
+
         /// <summary>【P3·图标镜像】把"被封印在**本卡**上的**角色牌**"的**印刷能力图标**汇总成一批属性授予（JC066 封魔瓶瑟琳娜）。
         /// 图标→属性沿用 `IconToAttribute` 的既有映射：黑刀=战斗 / 黑眼=调查 / 黑星=势力 / 白刀=先手战斗 / 白眼=先手调查 / 白星=先手势力。
         /// 口径：① 只镜像**角色牌**（`CategoryFlag` 含 Character；非角色封印牌不提供能力图标）；
@@ -4798,14 +4872,13 @@ namespace Script.Manager
                 }
                 else if (m.Kind == "IconReplace")
                 {
-                    // 【P3·K20】图标替换到期（JC106）：`Value = 来源属性|目标属性` → 把来源属性还回去、把目标属性收回。
+                    // 【2026-10·7e】图标改写到期（JC106）：`Value = 来源图标清单|目标图标`（与登记时同 Key）
+                    // ⇒ 移除该改写记录；`RemoveIconRewrite` 内部会**先撤销上一轮输出**并按（已无改写的）
+                    // 当前账本重算 ⇒ **精确还原**（不留任何加减残账）。
                     var ic = CM?.GetInstance(m.TargetUid);
-                    var parts = (m.Value ?? "").Split('|');
-                    if (ic != null && parts.Length == 2)
+                    if (ic != null && ic.RemoveIconRewrite(m.Value))
                     {
-                        ic.Grant("Attribute", parts[1], -m.Amount);   // 收回换来的图标
-                        ic.Grant("Attribute", parts[0], m.Amount);    // 还原原图标
-                        GD.Print($"[EffectEngine] ⌛ 时效还原：{ic.PlayerTemplate?.CardName} 的图标替换 [{parts[0]}→{parts[1]}]×{m.Amount} 到期");
+                        GD.Print($"[EffectEngine] ⌛ 时效还原：{ic.PlayerTemplate?.CardName} 的图标改写 [{m.Value}] 到期");
                         Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                     }
                 }
@@ -7533,9 +7606,11 @@ namespace Script.Manager
                         }
                         // 【修复·P3·B】逐效果分别登记（键＝卡 UID+效果 Id）：同卡多条条件持续效果互不干扰
                         var applied = new System.Collections.Generic.List<EffectGrant>();
-                        var grantList = mirrorIcons
+                        // 【2026-10·7c 写入收口】声明清单先补齐为"图标 ⇄ 属性成对"（"图标即属性"），
+                        // 再逐条施加并登记（撤销时按同一份清单还原两条账）。
+                        var grantList = FoldIconAttributePairs(mirrorIcons
                             ? (System.Collections.Generic.IEnumerable<EffectGrant>)BuildMirroredIconGrants(card)
-                            : e.ContinuousGrants;
+                            : (System.Collections.Generic.IEnumerable<EffectGrant>)e.ContinuousGrants);
                         foreach (var g in grantList)
                         {
                             if (g == null || string.IsNullOrEmpty(g.Value)) continue;
@@ -7930,9 +8005,10 @@ namespace Script.Manager
                         }
                         var applied = new System.Collections.Generic.List<EffectGrant>();
                         // 【P3·图标镜像】授予源改写：按"被封印在本卡上的角色牌"现算能力图标（JC066）
-                        var grantList = mirrorIcons
+                        // 【2026-10·7c 写入收口】同样先补齐为"图标 ⇄ 属性成对"（与 `RegisterPersistent` 同源）
+                        var grantList = FoldIconAttributePairs(mirrorIcons
                             ? (System.Collections.Generic.IEnumerable<EffectGrant>)BuildMirroredIconGrants(card)
-                            : (System.Collections.Generic.IEnumerable<EffectGrant>)(e.ContinuousGrants ?? new Array<EffectGrant>());
+                            : (System.Collections.Generic.IEnumerable<EffectGrant>)(e.ContinuousGrants ?? new Array<EffectGrant>()));
                         foreach (var g in grantList)
                         {
                             if (g == null || string.IsNullOrEmpty(g.Value)) continue;
@@ -8159,9 +8235,13 @@ namespace Script.Manager
             switch (g.Kind)
             {
                 case "Keyword": return t.HasKeyword(g.Value);
-                case "Icon": return t.HasIcon(g.Value);
+                case "Icon": return t.HasIconRaw(g.Value);
                 case "Attribute":
                 {
+                    // 【2026-10·7e】来源属性被图标改写清零（如 先手势力 ← JC106「白星→黑刀」）：
+                    // **条目仍在账本里**（只是净账被 7e 改写）⇒ 视为"已授予"，否则光环会反复补授
+                    // （实测：每轮自愈都重授一次白星 ⇒ 被改写后战斗被多算）。
+                    if (t.IsRewriteSourceAttribute(g.Value)) return true;
                     // 【P3】**符号感知**：负值授予（如 JC089「获得-1防御」）在属性表里记成负计数，
                     // 若仍按 `> 0` 判定"已授予"，自愈路径每次重算都会再授一次 → 防御被反复扣减。
                     int cur = t.GetAttribute(g.Value);
@@ -8189,7 +8269,8 @@ namespace Script.Manager
             if (!grantedTo.ContainsKey(t.UID))
             {
                 grantedTo[t.UID] = new System.Collections.Generic.List<EffectGrant>();
-                foreach (var g in auraEffect.ContinuousGrants ?? new Array<EffectGrant>())
+                // 【2026-10·7c 写入收口】光环补授同样走"图标 ⇄ 属性成对"折算（与 `RegisterPersistent` 同源）
+                foreach (var g in FoldIconAttributePairs(auraEffect.ContinuousGrants ?? new Array<EffectGrant>()))
                 {
                     if (g == null || string.IsNullOrEmpty(g.Value)) continue;
                     t.Grant(g.Kind, g.Value, g.Amount);

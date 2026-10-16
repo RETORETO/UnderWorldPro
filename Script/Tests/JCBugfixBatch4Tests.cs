@@ -232,11 +232,12 @@ namespace Script.Tests
             Assert.IsFalse(DamageRules.IsSpirit(plain), "前置：本卡不是灵体");
             Assert.IsFalse(plain.HasIcon("白星"), "前置：非灵体 ⇒ 不上白星");
 
-            ApplyJC106(game, plain);   // 授予【灵体】
+            ApplyJC106_OnlySpirit(game, plain);   // 只授予【灵体】（**不**施加 7e 图标改写，否则白星会被改写成黑刀）
 
             Assert.IsTrue(DamageRules.IsSpirit(plain), "JC106 已授予【灵体】");
             Assert.IsTrue(plain.HasIcon("白星"),
                 "获得【灵体】后应被 JC105 光环补授【白星】（光环受影响集合必须含运行期获得灵体的卡）");
+            // 注：JC106 的 7e 改写与光环的互动另见 TestB4_8A / TestB4_8B（改写最后施加 ⇒ 白星被改写成黑刀）。
         }
 
         // ==================== ④ JC106：授予的灵体要能抵挡伤害 ====================
@@ -263,6 +264,55 @@ namespace Script.Tests
             Assert.AreEqual(CardZone.AreaZone, victim.CurrentZone, "未被伤害 ⇒ 不死亡");
         }
 
+        // ============ 【2026-10 用户实测场景】JC105 光环 × JC106 改写（第二个层序验收锚点） ============
+
+        /// <summary>
+        /// 【用户实测场景】JC105 噩梦领主（灵体·光环"所有其他本方灵体角色获得［白星］"）＋ JC108 乔治·帕佐
+        /// （印刷 **势力 2**、先手调查 2）同场，对 JC108 使用 **JC106**（"所有［黑星］和［白星］都替换为［黑刀］，
+        /// 并获得灵体"）。
+        ///
+        /// **按"层级计算"口径**（7e 最后施加；替换对象＝**图标集合**，且**含印刷图标**——`BuildMirroredIconGrants`
+        /// 证明本项目把印刷 `Strength/Investigation/Power/FirstStrike*` 就当能力图标读）：
+        ///   · 7c：JC106 授予【灵体】⇒ JC105 光环对 JC108 授予［白星］（＋先手势力 1）
+        ///   · 7e：JC108 的 **2 个印刷［黑星］**（＝印刷势力 2）＋ 光环的 **1 个［白星］** 一律改写为［黑刀］
+        ///   ⇒ **战斗 3**（0 印刷 ＋ 3 个黑刀）、**势力 0**、先手势力 0、`HasIcon(白星)=false`、`HasIcon(黑刀)=true`
+        /// 现状（改造前）实测：**战斗 2、势力 1、白星仍在、无黑刀**（见 DIAG 打印）。
+        /// </summary>
+        public void TestB4_8B_JC105光环白星_必须先于JC106改写生效()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var jc105 = OnField(game, Load("JC105_emenglingzhu"), 1, area);
+            var jc108 = OnField(game, Load("JC108_qiaozhipazuozhimengren"), 1, area);
+            DumpB4_8B("施放前", jc108, jc105, game);
+            ApplyJC106(game, jc108);
+            DumpB4_8B("施放后", jc108, jc105, game);
+
+            Assert.AreEqual(2, AreaStatsCalculator.ValueOf(jc108, CombatManager.CombatType.Investigation, game.PlayerManager),
+                "调查不受影响（先手：印刷先手调查 2；JC106 只动黑星/白星）");
+            Assert.AreEqual(3, jc108.CurrentStrength,
+                "战斗 = 印刷 0 ＋ 2 个印刷［黑星］→黑刀 ＋ 1 个光环［白星］→黑刀 = 3");
+            Assert.AreEqual(0, jc108.CurrentPower, "势力：印刷 2（＝2 个［黑星］）被整体改写为［黑刀］⇒ 0");
+            Assert.AreEqual(0, jc108.GetAttribute("先手势力"), "白星（＝先手势力 +1）被改写 ⇒ 0");
+            Assert.IsFalse(jc108.HasIcon("白星"), "改写后 JC108 不应再有［白星］（含光环发的那一枚）");
+            Assert.IsTrue(jc108.HasIcon("黑刀"), "改写必须产出［黑刀］");
+        }
+
+        /// <summary>【锚点诊断】打印 JC108/JC105 的全部口径（图标／属性／总值／对抗值），供层序改造核对。</summary>
+        private static void DumpB4_8B(string tag, CardInstance jc108, CardInstance jc105, GameInitializer game)
+        {
+            Godot.GD.Print($"[DIAG {tag}] JC108 调={jc108.CurrentInvestigation} 战={jc108.CurrentStrength} 势={jc108.CurrentPower} " +
+                           $"先手调={jc108.GetAttribute("先手调查")} 先手战={jc108.GetAttribute("先手战斗")} 先手势={jc108.GetAttribute("先手势力")} " +
+                           $"灵体={jc108.HasKeyword("灵体")} " +
+                           $"图标[黑星={jc108.HasIcon("黑星")} 白星={jc108.HasIcon("白星")} 黑刀={jc108.HasIcon("黑刀")} 白眼={jc108.HasIcon("白眼")} 黑眼={jc108.HasIcon("黑眼")} 白刀={jc108.HasIcon("白刀")}] " +
+                           $"授予表[调={jc108.GetAttribute("调查")} 战={jc108.GetAttribute("战斗")} 势={jc108.GetAttribute("势力")} 防={jc108.GetAttribute("防御")}]");
+            Godot.GD.Print($"[DIAG {tag}] JC108 对抗值：调查={AreaStatsCalculator.ValueOf(jc108, CombatManager.CombatType.Investigation, game.PlayerManager)} " +
+                           $"战斗={AreaStatsCalculator.ValueOf(jc108, CombatManager.CombatType.Strength, game.PlayerManager)} " +
+                           $"势力={AreaStatsCalculator.ValueOf(jc108, CombatManager.CombatType.Power, game.PlayerManager)}");
+            Godot.GD.Print($"[DIAG {tag}] JC105 调={jc105.CurrentInvestigation} 战={jc105.CurrentStrength} 势={jc105.CurrentPower} " +
+                           $"先手战={jc105.GetAttribute("先手战斗")} 灵体={jc105.HasKeyword("灵体")} 白星={jc105.HasIcon("白星")} 黑刀={jc105.HasIcon("黑刀")}");
+        }
+
         /// <summary>
         /// 【2026-10 用户口径·**JC105/JC106 互动缺陷 → 层系统改造的验收锚点**】
         ///
@@ -283,7 +333,6 @@ namespace Script.Tests
         /// 处理：本用例标记为 **[KnownDefect]**（当前失败不计入套件失败，但每次运行都会打印 `[KNOWN]`），
         /// 作为层系统改造的**验收条件**——层系统落地后它会自动通过，并打印 `[FIXED?]` 提醒摘标记。
         /// </summary>
-        [KnownDefect("JC105 白星光环 × JC106 图标改写：改写不作用于「条目集合」，且光环自愈按「目标仍符合条件」补授 ⇒ 替换后白星复活、黑刀没留下（层级计算改造验收锚点）")]
         public void TestB4_8A_JC105JC106互动_白星替换后不得被光环复活()
         {
             var game = NewGame();

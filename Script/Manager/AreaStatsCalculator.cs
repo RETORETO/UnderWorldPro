@@ -29,9 +29,8 @@ namespace Script.Manager
                 // 暗藏者：调查=0、战斗=0、势力=1（+先手势力）
                 if (type == CombatManager.CombatType.Investigation) return 0;
                 if (type == CombatManager.CombatType.Strength) return 0;
-                var t = card.PlayerTemplate;
-                int firstPower = (t != null && isFirst) ? t.FirstStrikePower : 0;
-                return 1 + firstPower;
+                // 【2026-10】先手势力读**实例**总值（印刷 ＋ 授予的白星），不再只读模板
+                return 1 + (isFirst ? card.FirstStrikePowerTotal : 0);
             }
 
             var tmpl = card.PlayerTemplate;
@@ -39,21 +38,16 @@ namespace Script.Manager
 
             return type switch
             {
-                // 调查能力加成来源（二者不同属性，互不影响）：
-                //  - 基础调查值(card.CurrentInvestigation) 已含黑眼=调查（由 CardInstance.Grant 同步，
-                //    且 ResetToBaseValues 重算时含 GetAttribute("调查")，不在此重复叠加）；
-                //  - 白眼=先手调查：仅当结算者为先手玩家时叠加（每白眼+1，卡文"白眼白眼"叠加）。
+                // 【2026-10 用户口径·层级计算】**先手加成在层序（层0→7a→7b→7c→7d→7e）之后**加到
+                // "用于本对抗的那条属性"上；三条基础属性各自独立（`CurrentX` 已**不再折入**印刷先手值）。
+                // 本函数是**唯一加算点**：对抗结算（`CombatManager`）、卡面（`CardUI.ComputeDisplayed`）、
+                // 地区合计（`AreaSlot`）全部走这里 ⇒ 显示与结算同口径。
                 CombatManager.CombatType.Investigation => card.CurrentInvestigation
-                    + (isFirst ? card.GetAttribute("先手调查") : 0),
-                // 战斗结算读实例当前战力值（含 JC060 光环授予的"战斗"属性 +1），而非仅模板 GetTotalStrength
-                // 【P1】白刀=先手战斗：与"白眼=先手调查"同构——仅先手方叠加（白刀不折进 CurrentStrength，避免非先手时误加）。
+                    + (isFirst ? card.FirstStrikeInvestigationTotal : 0),
                 CombatManager.CombatType.Strength => card.CurrentStrength
-                    + (isFirst ? card.GetAttribute("先手战斗") : 0),
-                // 【P1】势力改用实例值：原实现只读模板 GetTotalPower(isFirst)，导致"黑星=势力"（实例授予 CurrentPower）
-                // 与"白星=先手势力"（实时授予属性）完全不参与对抗结算。改读实例后与调查/战力口径统一。
-                // 【2026-09·JC051】卡面（`CardUI`）按**本行同一口径**补算先手势力，保证"卡面看到的 = 对抗用的"。
+                    + (isFirst ? card.FirstStrikeStrengthTotal : 0),
                 CombatManager.CombatType.Power => card.CurrentPower
-                    + (isFirst ? card.GetAttribute("先手势力") : 0),
+                    + (isFirst ? card.FirstStrikePowerTotal : 0),
                 _ => 0
             };
         }

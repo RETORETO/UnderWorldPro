@@ -45,6 +45,10 @@ public static class WebPerfParams
     private static string _netHost = "127.0.0.1";
     private static int _netPort = 18950;
     private static string _netName = "";
+    /// <summary>【卡池检索·2026-10-17】`--wp-index=off`：禁用 card_index.json，强制走旧的编号子串过滤（A/B 对照）。</summary>
+    private static bool _indexDisabled;
+    /// <summary>【卡池检索·2026-10-17】`--wp-filter=on`：进卡组编辑时自动展开「高级筛选」面板（量布局用）。</summary>
+    private static bool _autoExpandFilter;
 
     /// <summary>
     /// 【必须在任何读取之前调用一次】解析 index.html 的 GODOT_CONFIG.args。
@@ -102,6 +106,9 @@ public static class WebPerfParams
                 case "host":     _netHost = val; break;         // 连接目标地址
                 case "port":     _netPort = ParseInt(val, 18950); break;
                 case "name":     _netName = val; break;
+                // —— 卡池结构化检索（2026-10-17）——
+                case "index":    _indexDisabled = string.Equals(val, "off", System.StringComparison.OrdinalIgnoreCase); break;
+                case "filter":   _autoExpandFilter = string.Equals(val, "on", System.StringComparison.OrdinalIgnoreCase); break;
                 default:
                     GD.PushWarning("[WebPerf] 未知开关，已忽略: " + raw);
                     break;
@@ -156,6 +163,10 @@ public static class WebPerfParams
     public static string NetHost => _netHost;
     public static int NetPort => _netPort;
     public static string NetName => _netName;
+    /// <summary>`--wp-index=off`：禁用卡池检索索引，强制走旧编号过滤（用于 A/B 证明索引未引入回归）。</summary>
+    public static bool IndexDisabled => _indexDisabled;
+    /// <summary>`--wp-filter=on`：进卡组编辑时自动展开高级筛选面板（用于量"展开后卡池可视高度"）。</summary>
+    public static bool AutoExpandFilter => _autoExpandFilter;
     /// <summary>已解析到的命令行项数（诊断用）。</summary>
     public static int ArgCount => _args.Length;
     /// <summary>已解析（诊断用）。</summary>
@@ -185,6 +196,8 @@ public static class WebPerfParams
                + " ws=" + (_webSocket ? "1" : "0")
                + " smoke=" + (_smoke ? "1" : "0")
                + " join=" + (_smokeJoin ? "1" : "0")
+               + " index=" + (_indexDisabled ? "off" : "on")
+               + " filter=" + (_autoExpandFilter ? "on" : "off")
                + " argc=" + Script.IO.WebSafeText.Int(_args.Length));
     }
 

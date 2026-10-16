@@ -171,6 +171,7 @@ namespace Script.Tests
                 new CouncilAssignTests(),              // 秘社归属：双方各拿自己卡组的秘社 / 起手数各自取 / 无卡组方回退默认秘社 / 重开不串场 / 开局效果落最终实例
                 new DeckInstanceBindingTests(),        // 开局发牌必须沿用 View 绑定的同一批卡实例（单人模式"看不到起始手牌/PM draw 无 UI"根因回归）
                 new LocalHostTests(),                  // 增量 D：首页「建立主机」内嵌服务端（起/连自己/自动建房、端口顺延、Stop 同步释放端口）
+                new DeckFilterTests(),                 // 卡池结构化检索：类别位掩码包含/属性≥/领域/忠诚AND且点数≥/文本与独有 + 真实索引一致性
             };
 
             var redlines = new List<string>();

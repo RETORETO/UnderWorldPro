@@ -71,10 +71,18 @@ public partial class DeckBuilder : Control
 
     // 卡池（模板路径列表，用于渲染）
     private List<string> _poolPaths = new List<string>();          // 过滤后用于渲染
-    private List<string> _allPoolPaths = new List<string>();        // 全量，供过滤
+    private List<string> _allPoolPaths = new List<string>();        // 全量，供过滤（索引不可用时的回退源）
     private string _poolFilter = "";                                // 搜索框过滤关键字
     // 秘社候选
     private List<string> _councilPaths = new List<string>();
+
+    // 【卡池结构化检索 · 2026-10-17】索引过滤引擎与可用性标志。
+    // 索引可用时：`_filter` 里的结构化条件走索引过滤（见 ApplyPoolFilter）；
+    // 索引缺失/损坏：回退到改造前的"按文件名子串"逻辑（`_allPoolPaths`）。
+    private DeckFilterModel _filter = new DeckFilterModel();
+    private bool _indexReady;
+    /// <summary>是否已尝试加载索引（含失败）。失败后不再重试，避免每次搜索都付出一次失败开销。</summary>
+    private bool _indexTried;
 
     private const string PlayerCardsDir = "res://Cards/Data/PlayerCards";
     private const string CouncilCardsDir = "res://Cards/Data/CouncilCards";
@@ -120,6 +128,12 @@ public partial class DeckBuilder : Control
         // 【秘社批次】构筑限制面板：运行期动态创建（不依赖场景改动，避免 .tscn 与本类字段不同步）。
         BuildRestrictionPanel();
 
+        // 【卡池结构化检索 · 2026-10-17】高级筛选面板（同样运行期创建）
+        BuildFilterPanel();
+        // 量布局用：`--wp-filter=on` 时自动展开（等价于点一下「高级筛选」）
+        if (WebPerfParams.AutoExpandFilter && _filterToggleButton != null)
+            _filterToggleButton.ButtonPressed = true;
+
         // 搜索防抖计时器
         _searchTimer = new Timer();
         _searchTimer.WaitTime = 0.25f;
@@ -164,6 +178,12 @@ public partial class DeckBuilder : Control
 
             WebPerfParams.Summary($"deck._Ready done total={Time.GetTicksMsec() - __tStart}ms");
             StartFirstFrameProbe();
+            // 首帧后布局已就绪：按像素排布高级筛选区并把 PoolScroll 顶边钉到位
+            Callable.From(ReflowPoolTop).CallDeferred();
+            // 【2026-10-17】索引加载实测约 170ms（System.Text.Json 首次反序列化偏慢），
+            // 放在 _Ready 里会白白拖慢"进卡组编辑"。改为进屏 0.4s 后空闲预热：
+            // 用户点开「高级筛选」再点「搜索」时索引早已就绪，首次结构化搜索无需等待。
+            StartIndexWarmup();
         }
         catch (System.Exception __ex)
         {
@@ -306,7 +326,11 @@ public partial class DeckBuilder : Control
         // 【2026-10-12 Web 修复】`.Trim()` 保留（待验证），但大小写折叠必须换成手写 ASCII 版：
         // 实测 `ToLowerInvariant()` 在 Web 上同样让 wasm abort（TextInfo 仍走原生）。
         // 卡池过滤只需要 ASCII 语义（卡号/英文名/中文名），手写折叠行为一致。
-        string f = string.IsNullOrWhiteSpace(_poolFilter) ? "" : WebSafeText.ToLowerAscii(_poolFilter.Trim());
+        // 【2026-10-17】顺带把判空/裁剪也换成 ASCII 版：`string.IsNullOrWhiteSpace` / `Trim()`
+        // 的空白判定同样可能落到 Unicode 类别表（见 WebSafeText 类头），换掉更保险、对卡号搜索无行为差异。
+        string f = WebSafeText.IsNullOrWhiteSpaceAscii(_poolFilter)
+            ? ""
+            : WebSafeText.ToLowerAscii(WebSafeText.TrimAscii(_poolFilter));
 
         if (_councilMode)
         {
@@ -328,6 +352,32 @@ public partial class DeckBuilder : Control
         }
 
         _poolPaths.Clear();
+
+        // 【2026-10-17 结构化检索】索引可用 → 走索引过滤：
+        //   编号（文件名/卡号子串）AND 结构化条件（卡名/副卡名/类别/子类别/领域/忠诚/7 属性/独有）。
+        //   结构化条件全空时，结果与改造前的"纯文件名子串"逐条等价（保证不退化）。
+        _filter.UidQuery = _poolFilter;
+        _filter.PrepareForSearch();
+        // 只有真的用到结构化条件时才需要索引（编号搜索走旧路径即可，零额外成本）
+        if (_filter.HasStructured) EnsureIndexForStructured();
+        if (_indexReady)
+        {
+            var cards = CardSearchIndex.Cards;
+            bool needStruct = _filter.HasStructured;
+            ulong __tF = Time.GetTicksMsec();
+            for (int i = 0; i < cards.Count; i++)
+            {
+                var e = cards[i];
+                if (!_filter.MatchesUid(e)) continue;
+                if (needStruct && !_filter.Matches(e)) continue;
+                _poolPaths.Add(e.ResPath);
+            }
+            WebPerfParams.Summary("deck.filter hits=" + WebSafeText.Int(_poolPaths.Count)
+                + " ms=" + WebSafeText.Int((int)(Time.GetTicksMsec() - __tF)));
+            return;
+        }
+
+        // 回退（索引不可用/失败）：沿用改造前的"按文件名（含卡号）子串"过滤，行为逐字节不变。
         if (f.Length == 0)
         {
             _poolPaths.AddRange(_allPoolPaths);
@@ -382,6 +432,23 @@ public partial class DeckBuilder : Control
             _searchBox.PlaceholderText = _councilMode ? "输入秘社名或编号过滤，如 MSJC" : "输入卡号过滤，如 JC";
         if (_poolPager != null)
             _poolPager.Visible = !_councilMode;
+        // 【2026-10-17】秘社模式不做结构化筛选：收起并隐藏高级筛选入口，
+        // 保证秘社模式完全走原逻辑（ApplyPoolFilter 的秘社分支未改动）。
+        if (_filterToggleBar != null)
+        {
+            _filterToggleBar.Visible = !_councilMode;
+            if (_councilMode && _filterExpanded)
+            {
+                _filterExpanded = false;
+                if (_filterToggleButton != null)
+                {
+                    _filterToggleButton.ButtonPressed = false;
+                    _filterToggleButton.Text = "▼ 高级筛选（类别 / 属性 / 忠诚）";
+                }
+                if (_filterBoxScroll != null) _filterBoxScroll.Visible = false;
+                Callable.From(ReflowPoolTop).CallDeferred();
+            }
+        }
     }
 
     private void ScanCouncils()
@@ -1446,5 +1513,428 @@ public partial class DeckBuilder : Control
         foreach (char c in System.IO.Path.GetInvalidFileNameChars())
             s = s.Replace(c, '_');
         return s;
+    }
+
+    // ============================================================
+    // 【卡池结构化检索 · 2026-10-17】高级筛选面板
+    //   运行期动态创建（沿用 BuildRestrictionPanel 的惯例，避免 .tscn 与字段漂移）。
+    //   布局：FilterModeBar / SearchBox（既有，保持原位）→ FilterToggleBar → FilterBox → PoolScroll。
+    //   展开时按像素把 PoolScroll 下推（而非改 .tscn 锚点），并给 PoolScroll 保底 ≥150px。
+    // ============================================================
+    private HBoxContainer _filterToggleBar;
+    private Button _filterToggleButton;
+    private ScrollContainer _filterBoxScroll;
+    private VBoxContainer _filterBox;
+    private LineEdit _fNameBox;
+    private LineEdit _fSubNameBox;
+    private LineEdit _fSubCatBox;
+    private OptionButton _fCategoryOption;
+    private OptionButton _fDomainOption;
+    private CheckBox _fUniqueCheck;
+    private readonly LineEdit[] _fAttrEdits = new LineEdit[DeckFilterModel.AttrCount];
+    private Label _fLoyaltyDisplay;
+    private Button _fAddLoyaltyButton;
+    private Button _fClearLoyaltyButton;
+    private Button _fSearchButton;
+    private ScrollContainer _poolScroll;
+    private bool _filterExpanded;
+
+    // 忠诚添加弹窗
+    private PopupPanel _loyaltyPopup;
+    private OptionButton _loyaltyTargetOption;
+    private LineEdit _loyaltyAmountEdit;
+
+    /// <summary>类别下拉：索引 → 位掩码（0 = 不限）。匹配是"按位包含"，故只需基础身份位。</summary>
+    private static readonly int[] FilterCategoryMasks = { 0, 1, 2, 4, 8, 16, 32 };
+    private static readonly string[] FilterCategoryNames = { "不限", "角色", "事务", "附属", "任务", "地区", "指示物" };
+
+    /// <summary>领域下拉：索引 → 值（-2 = 不限，-1 = 无领域，0..4 = 具体领域）。</summary>
+    private static readonly int[] FilterDomainValues = { -2, -1, 0, 1, 2, 3, 4 };
+    private static readonly string[] FilterDomainNames = { "不限", "无领域", "心灵", "神圣", "星空", "死亡", "鲜血" };
+
+    /// <summary>属性输入框标签（顺序必须与 DeckFilterModel.Attr* 常量一致）。</summary>
+    private static readonly string[] FilterAttrNames =
+        { "调查≥", "战斗≥", "势力≥", "防御≥", "先手调查≥", "先手战斗≥", "先手势力≥" };
+
+    private void BuildFilterPanel()
+    {
+        var poolPanel = GetNodeOrNull<Control>("PoolPanel");
+        if (poolPanel == null)
+        {
+            GD.PrintErr("【DeckBuilder】找不到 PoolPanel，跳过高级筛选面板构建");
+            return;
+        }
+        _poolScroll = poolPanel.GetNodeOrNull<ScrollContainer>("PoolScroll");
+
+        // ---- 折叠开关行 ----
+        _filterToggleBar = new HBoxContainer { Name = "FilterToggleBar" };
+        _filterToggleBar.AddThemeConstantOverride("separation", 8);
+        poolPanel.AddChild(_filterToggleBar);
+
+        _filterToggleButton = new Button { Text = "▼ 高级筛选（类别 / 属性 / 忠诚）", ToggleMode = true };
+        _filterToggleButton.Toggled += OnFilterToggleToggled;
+        _filterToggleBar.AddChild(_filterToggleButton);
+
+        // ---- 筛选内容（放在 ScrollContainer 里：内容过高时可滚动，保证不把卡池挤没）----
+        _filterBoxScroll = new ScrollContainer { Name = "FilterBoxScroll", Visible = false };
+        poolPanel.AddChild(_filterBoxScroll);
+
+        _filterBox = new VBoxContainer { Name = "FilterBox" };
+        _filterBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _filterBox.AddThemeConstantOverride("separation", 4);
+        _filterBoxScroll.AddChild(_filterBox);
+
+        // 第 1 行：卡名 / 副卡名
+        var row1 = MkRow();
+        row1.AddChild(MkLabel("卡名", 52));
+        _fNameBox = MkEdit("卡名包含…");
+        _fNameBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        row1.AddChild(_fNameBox);
+        row1.AddChild(MkLabel("副卡名", 48));
+        _fSubNameBox = MkEdit("暂无数据");
+        _fSubNameBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        row1.AddChild(_fSubNameBox);
+        _filterBox.AddChild(row1);
+
+        // 第 2 行：类别 / 领域 / 仅独有卡
+        var row2 = MkRow();
+        row2.AddChild(MkLabel("类别", 34));
+        _fCategoryOption = MkOption(96);
+        for (int i = 0; i < FilterCategoryNames.Length; i++) _fCategoryOption.AddItem(FilterCategoryNames[i]);
+        _fCategoryOption.Select(0);
+        row2.AddChild(_fCategoryOption);
+        row2.AddChild(MkLabel("领域", 34));
+        _fDomainOption = MkOption(96);
+        for (int i = 0; i < FilterDomainNames.Length; i++) _fDomainOption.AddItem(FilterDomainNames[i]);
+        _fDomainOption.Select(0);
+        row2.AddChild(_fDomainOption);
+        _fUniqueCheck = new CheckBox { Text = "仅独有卡" };
+        row2.AddChild(_fUniqueCheck);
+        _filterBox.AddChild(row2);
+
+        // 第 3 行：子类别
+        var row3 = MkRow();
+        row3.AddChild(MkLabel("子类别", 52));
+        _fSubCatBox = MkEdit("如 人类 / 法师");
+        _fSubCatBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        row3.AddChild(_fSubCatBox);
+        _filterBox.AddChild(row3);
+
+        // 第 4 行区：7 个属性（≥ 语义）
+        var attrGrid = new GridContainer { Columns = 2 };
+        attrGrid.AddThemeConstantOverride("h_separation", 10);
+        attrGrid.AddThemeConstantOverride("v_separation", 2);
+        for (int i = 0; i < DeckFilterModel.AttrCount; i++)
+        {
+            var cell = MkRow(4);
+            cell.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+            cell.AddChild(MkLabel(FilterAttrNames[i], 68));
+            _fAttrEdits[i] = MkNumEdit();
+            cell.AddChild(_fAttrEdits[i]);
+            attrGrid.AddChild(cell);
+        }
+        _filterBox.AddChild(attrGrid);
+
+        // 第 5 行：忠诚（显示框 + 添加 + 清空）
+        var row5 = MkRow();
+        row5.AddChild(MkLabel("忠诚", 52));
+        _fLoyaltyDisplay = new Label { Text = "（未设置）", VerticalAlignment = VerticalAlignment.Center };
+        _fLoyaltyDisplay.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _fLoyaltyDisplay.ClipText = true;
+        row5.AddChild(_fLoyaltyDisplay);
+        _fAddLoyaltyButton = new Button { Text = "添加忠诚" };
+        _fAddLoyaltyButton.Pressed += OpenLoyaltyPopup;
+        row5.AddChild(_fAddLoyaltyButton);
+        _fClearLoyaltyButton = new Button { Text = "清空" };
+        _fClearLoyaltyButton.Pressed += OnLoyaltyClear;
+        row5.AddChild(_fClearLoyaltyButton);
+        _filterBox.AddChild(row5);
+
+        // 第 6 行：搜索
+        var row6 = MkRow();
+        _fSearchButton = new Button { Text = "搜索" };
+        _fSearchButton.Pressed += OnFilterSearch;
+        row6.AddChild(_fSearchButton);
+        var hint = new Label
+        {
+            Text = "编号框实时过滤；其余条件点「搜索」生效",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        hint.AddThemeFontSizeOverride("font_size", 11);
+        hint.Modulate = new Color(0.85f, 0.85f, 0.9f);
+        row6.AddChild(hint);
+        _filterBox.AddChild(row6);
+
+        // 面板尺寸变化时重新排布
+        poolPanel.Resized += ReflowPoolTop;
+    }
+
+    /// <summary>
+    /// 幂等地确保卡池检索索引已加载（只在真正用到结构化条件时调用，编号搜索零额外成本）。
+    /// 失败不致命：_indexReady=false 时 <see cref="ApplyPoolFilter"/> 回退到按文件名子串过滤。
+    /// </summary>
+    private void EnsureIndexForStructured()
+    {
+        if (_indexTried) return;
+        _indexTried = true;
+        _indexReady = CardSearchIndex.EnsureLoaded();
+
+        // 【索引过期告警】索引条数应与实际扫到的卡池数一致；不一致说明卡表改了但没重跑生成
+        //（打包脚本每次导出前会强制重生成，这里只做运行时兜底提示，不阻断功能）。
+        if (_indexReady && CardSearchIndex.Count != _allPoolPaths.Count)
+            GD.PrintErr($"【DeckBuilder】卡池索引疑似过期：索引 {CardSearchIndex.Count} 条 ≠ 卡池 {_allPoolPaths.Count} 张；请重跑 CardIndexRunner");
+    }
+
+    /// <summary>进屏后延迟预热索引：不阻塞 _Ready，也不让"首次结构化搜索"承担 ~170ms 的反序列化。</summary>
+    private void StartIndexWarmup()
+    {
+        if (_indexTried) return;
+        var t = new Timer { WaitTime = 0.4f, OneShot = true };
+        AddChild(t);
+        t.Timeout += () =>
+        {
+            t.QueueFree();
+            EnsureIndexForStructured();
+        };
+        t.Start();
+    }
+
+    private static HBoxContainer MkRow(int sep = 6)
+    {
+        var h = new HBoxContainer();
+        h.AddThemeConstantOverride("separation", sep);
+        return h;
+    }
+
+    private static Label MkLabel(string text, int minW = 0)
+    {
+        var l = new Label { Text = text, VerticalAlignment = VerticalAlignment.Center };
+        if (minW > 0) l.CustomMinimumSize = new Vector2(minW, 0);
+        return l;
+    }
+
+    private static LineEdit MkEdit(string placeholder)
+    {
+        return new LineEdit { PlaceholderText = placeholder };
+    }
+
+    private static OptionButton MkOption(int minW)
+    {
+        var o = new OptionButton();
+        o.CustomMinimumSize = new Vector2(minW, 0);
+        return o;
+    }
+
+    /// <summary>只允许数字的输入框（**禁用 SpinBox**：其数字格式化走 NumberFormatInfo，Web 上会 abort）。</summary>
+    private static LineEdit MkNumEdit()
+    {
+        var e = new LineEdit { Alignment = HorizontalAlignment.Center };
+        e.CustomMinimumSize = new Vector2(44, 0);
+        e.TextChanged += s =>
+        {
+            string t = OnlyDigits(s);
+            if (!string.Equals(t, s, System.StringComparison.Ordinal))
+            {
+                e.Text = t;
+                e.CaretColumn = t.Length;
+            }
+        };
+        return e;
+    }
+
+    /// <summary>剔除非 '0'..'9' 字符（不用 Char.IsDigit —— 会碰 Unicode 类别表）。</summary>
+    private static string OnlyDigits(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        bool ok = true;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c < '0' || c > '9') { ok = false; break; }
+        }
+        if (ok) return s;
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c >= '0' && c <= '9') sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private void OnFilterToggleToggled(bool pressed)
+    {
+        _filterExpanded = pressed;
+        if (_filterToggleButton != null)
+            _filterToggleButton.Text = pressed ? "▲ 收起筛选" : "▼ 高级筛选（类别 / 属性 / 忠诚）";
+        if (_filterBoxScroll != null) _filterBoxScroll.Visible = pressed;
+        // 等这一帧布局完成后再量内容高度
+        Callable.From(ReflowPoolTop).CallDeferred();
+    }
+
+    /// <summary>
+    /// 按像素重排顶部区域：FilterModeBar / SearchBox 保持原锚点，FilterToggleBar 与 FilterBox 紧随其后，
+    /// PoolScroll 顶边下推（并保证可视高度 ≥ 150px，不够时让 FilterBox 内部滚动）。
+    /// </summary>
+    private void ReflowPoolTop()
+    {
+        var poolPanel = GetNodeOrNull<Control>("PoolPanel");
+        if (poolPanel == null || _filterToggleBar == null || _searchBox == null) return;
+
+        float w = poolPanel.Size.X;
+        float h = poolPanel.Size.Y;
+        if (w <= 1f || h <= 1f) return;   // 尚未完成布局
+
+        float y = _searchBox.Position.Y + _searchBox.Size.Y + 4f;
+
+        float toggleH = Mathf.Max(26f, _filterToggleBar.GetCombinedMinimumSize().Y);
+        _filterToggleBar.Position = new Vector2(6f, y);
+        _filterToggleBar.Size = new Vector2(w - 12f, toggleH);
+
+        float yBoxTop = y + toggleH + 4f;
+
+        // 给 PoolScroll 保底 150px（PoolPager 占底部 0.07）
+        float scrollTopLimit = h * 0.93f - 150f;
+        float maxBoxH = Mathf.Max(60f, scrollTopLimit - yBoxTop - 6f);
+
+        float contentH = 0f;
+        if (_filterBox != null && _filterExpanded)
+        {
+            _filterBox.Size = new Vector2(w - 12f, 0f);           // 触发按宽度重算换行/最小高
+            contentH = _filterBox.GetCombinedMinimumSize().Y;
+        }
+        float boxH = _filterExpanded ? Mathf.Min(contentH, maxBoxH) : 0f;
+
+        if (_filterBoxScroll != null)
+        {
+            _filterBoxScroll.Visible = _filterExpanded && boxH > 0.5f;
+            _filterBoxScroll.Position = new Vector2(6f, yBoxTop);
+            _filterBoxScroll.Size = new Vector2(w - 12f, boxH);
+        }
+
+        if (_poolScroll != null)
+        {
+            _poolScroll.AnchorTop = 0f;                            // 改像素驱动，顶部锚点归零
+            _poolScroll.OffsetTop = yBoxTop + boxH + 6f;
+        }
+
+        // 【G3 量化埋点】展开/收起后卡池可视高度是关键验收项（要求 ≥150px）
+        WebPerfParams.Log("deck.layout panelH=" + WebSafeText.Int((int)h)
+            + " toggleH=" + WebSafeText.Int((int)toggleH)
+            + " filterBoxH=" + WebSafeText.Int((int)boxH)
+            + " contentH=" + WebSafeText.Int((int)contentH)
+            + " poolScrollH=" + WebSafeText.Int((int)(h * 0.93f - (yBoxTop + boxH + 6f)))
+            + " expanded=" + (_filterExpanded ? "1" : "0"));
+    }
+
+    // ---------------- 忠诚条件弹窗 ----------------
+    private void OpenLoyaltyPopup()
+    {
+        if (_loyaltyPopup == null) BuildLoyaltyPopup();
+        _loyaltyTargetOption.Select(0);
+        _loyaltyAmountEdit.Text = "";
+        _loyaltyPopup.PopupCentered(new Vector2I(300, 160));
+    }
+
+    private void BuildLoyaltyPopup()
+    {
+        _loyaltyPopup = new PopupPanel { Name = "AddLoyaltyPopup" };
+        AddChild(_loyaltyPopup);
+
+        var vb = new VBoxContainer();
+        vb.AddThemeConstantOverride("separation", 8);
+        _loyaltyPopup.AddChild(vb);
+
+        vb.AddChild(new Label { Text = "添加忠诚条件（颜色 / 魔法领域）" });
+
+        _loyaltyTargetOption = new OptionButton();
+        // 前 9 项 = CardColor（索引即枚举值 0..8），后 5 项 = MagicDomain（索引-9 = 枚举值 0..4）
+        for (int i = 0; i < 9; i++)
+            _loyaltyTargetOption.AddItem(ColorCn[(CardColor)i]);
+        for (int i = 0; i < 5; i++)
+            _loyaltyTargetOption.AddItem(DomainCn[(MagicDomain)i] + "（领域）");
+        _loyaltyTargetOption.Select(0);
+        vb.AddChild(_loyaltyTargetOption);
+
+        _loyaltyAmountEdit = MkNumEdit();
+        _loyaltyAmountEdit.Alignment = HorizontalAlignment.Left;
+        _loyaltyAmountEdit.PlaceholderText = "点数（要求 ≥）";
+        vb.AddChild(_loyaltyAmountEdit);
+
+        var row = MkRow();
+        var ok = new Button { Text = "确定" };
+        ok.Pressed += OnLoyaltyConfirm;
+        var cancel = new Button { Text = "取消" };
+        cancel.Pressed += () => _loyaltyPopup.Hide();
+        row.AddChild(ok);
+        row.AddChild(cancel);
+        vb.AddChild(row);
+    }
+
+    private void OnLoyaltyConfirm()
+    {
+        int idx = _loyaltyTargetOption.Selected;
+        int amount;
+        if (!WebSafeText.TryParseInt(_loyaltyAmountEdit.Text, out amount) || amount <= 0)
+        {
+            // 非法点数：不添加，清空输入让用户重填
+            _loyaltyAmountEdit.Text = "";
+            return;
+        }
+
+        bool isColor = idx <= 8;
+        int value = isColor ? idx : idx - 9;
+        _filter.Loyalties.Add(new LoyaltyCond { IsColor = isColor, Value = value, Amount = amount });
+        RefreshLoyaltyDisplay();
+        _loyaltyPopup.Hide();
+    }
+
+    private void OnLoyaltyClear()
+    {
+        _filter.Loyalties.Clear();
+        RefreshLoyaltyDisplay();
+    }
+
+    private void RefreshLoyaltyDisplay()
+    {
+        if (_fLoyaltyDisplay == null) return;
+        if (_filter.Loyalties.Count == 0)
+        {
+            _fLoyaltyDisplay.Text = "（未设置）";
+            return;
+        }
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in _filter.Loyalties)
+        {
+            if (sb.Length > 0) sb.Append(" ; ");
+            string name = c.IsColor ? ColorCn[(CardColor)c.Value] : DomainCn[(MagicDomain)c.Value];
+            sb.Append(name).Append('≥').Append(WebSafeText.Int(c.Amount));
+        }
+        _fLoyaltyDisplay.Text = sb.ToString();
+    }
+
+    /// <summary>点「搜索」：把面板上的条件读进 _filter，然后重新过滤 + 重绘卡池。</summary>
+    private void OnFilterSearch()
+    {
+        _filter.NameQuery = _fNameBox.Text ?? "";
+        _filter.SubCardNameQuery = _fSubNameBox.Text ?? "";
+        _filter.SubCategoryQuery = _fSubCatBox.Text ?? "";
+
+        int ci = _fCategoryOption.Selected;
+        _filter.CategoryMask = (ci >= 0 && ci < FilterCategoryMasks.Length) ? FilterCategoryMasks[ci] : 0;
+        int di = _fDomainOption.Selected;
+        _filter.DomainFilter = (di >= 0 && di < FilterDomainValues.Length) ? FilterDomainValues[di] : DeckFilterModel.DomainAny;
+        _filter.UniqueOnly = _fUniqueCheck.ButtonPressed;
+
+        for (int i = 0; i < DeckFilterModel.AttrCount; i++)
+        {
+            int v;
+            bool ok = WebSafeText.TryParseInt(_fAttrEdits[i].Text, out v) && v >= 0;
+            _filter.MinAttr[i] = ok ? v : -1;
+        }
+
+        ApplyPoolFilter();
+        RefreshPoolView();
     }
 }

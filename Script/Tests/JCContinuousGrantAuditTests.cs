@@ -84,36 +84,47 @@ namespace Script.Tests
             return false;
         }
 
-        /// <summary>脚本是否真的授予了该图标（三条通道任一）。</summary>
+        /// <summary>该授予条目是否等价于"授予了图标 `icon`"——**"图标即属性"**（用户 2026-10 口径）：
+        /// 写 `Icon:黑刀` 与写 `Attribute:战斗` 是同一次写入的两面；引擎侧已在 **7c 写入收口**
+        /// （`EffectEngine.FoldIconAttributePairs`：持续/光环/重判/镜像四条施加路径统一折算）
+        /// ⇒ 声明任一侧，运行时**两条账都会成立**（`HasIcon` 为真、数值也加上）。</summary>
+        private static bool GrantYieldsIcon(Script.Data.Effects.EffectGrant g, string icon)
+        {
+            if (g == null || string.IsNullOrEmpty(g.Value)) return false;
+            if (g.Kind == "Icon") return g.Value == icon;
+            if (g.Kind != "Attribute") return false;
+            return Script.Manager.EffectEngine.AttributeToIcon(g.Value) == icon;
+        }
+
+        /// <summary>脚本是否真的授予了该图标（四条通道任一）。</summary>
         private static bool ScriptGrantsIcon(PlayerCardData t, string icon)
         {
             if (t?.EffectDataList == null) return false;
             foreach (var e in t.EffectDataList)
             {
                 if (e == null) continue;
-                // ① 持续通道：ContinuousGrants 的 Kind="Icon"
+                // ① 持续通道：ContinuousGrants（`Icon:` 直写，或 `Attribute:` 由引擎折算 ⇒ 同一件事）
                 if (e.ContinuousGrants != null)
                     foreach (var g in e.ContinuousGrants)
-                        if (g != null && g.Kind == "Icon" && g.Value == icon) return true;
-                // ② 形态通道：FormChangeSpec.Grants 的 Kind="Icon"
+                        if (GrantYieldsIcon(g, icon)) return true;
+                // ② 形态通道：FormChangeSpec.Grants（同上）
                 if (e.FormChange?.Grants != null)
                     foreach (var g in e.FormChange.Grants)
-                        if (g != null && g.Kind == "Icon" && g.Value == icon) return true;
-                // ③ 动作通道：Gain 的 Args[0]＝图标名（引擎会自动折算并写 Icon）
+                        if (GrantYieldsIcon(g, icon)) return true;
+                // ③ 动作通道：Gain 的 Args[0] ＝图标名 **或** 属性名（引擎会自动折算并写两条账）
                 if (e.Actions != null)
                     foreach (var a in e.Actions)
                         if (a != null && a.Verb == ActionVerb.Gain && a.Args != null && a.Args.Count > 0
-                            && a.Args[0] == icon) return true;
+                            && (a.Args[0] == icon
+                                || Script.Manager.EffectEngine.AttributeToIcon(a.Args[0]) == icon)) return true;
             }
             return false;
         }
 
         /// <summary>
         /// 判据本体：遍历 JC 全量卡，收集"卡文承诺了能力图标、脚本却没授予"的卡。
-        /// 期望 0 违规；当前 4 张已知违规由 `[KnownDefect]` 标记为已知缺陷（可见、不拖红主线）。
+        /// 期望 0 违规（7c 写入收口后即 0；违规会直接红，不再有已知缺陷豁免）。
         /// </summary>
-        [KnownDefect("4 张卡的持续效果只写了 Attribute、漏授 Icon（JC018/JC030/JC060/JC085）；"
-                   + "根因＝持续通道 ContinuousGrants 不做图标→属性折算。修法见《连续效果层系统改造计划》P0①②（层级计算：按万智层序 + 生效时戳，只算四种基础属性）")]
         public void TestAudit_卡文能力图标与脚本授予一致()
         {
             var violations = new List<string>();

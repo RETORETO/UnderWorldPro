@@ -81,6 +81,158 @@ namespace Script.Game.Entities
         
         public int CurrentFirstStrikeStrength { get; set; }
 
+        // ---------- 【2026-10 用户口径·层级计算】7 种属性的"先手三条"统一读法 ----------
+        // 先手属性＝**印刷先手值 ＋ 运行期授予的先手属性**（不再折进基础属性）；
+        // 对抗/UI 的加算点在 `AreaStatsCalculator.ValueOf`（层序之后），三处（结算/卡面/合计）同源。
+        /// <summary>先手调查（白眼）总值＝印刷 `FirstStrikeInvestigation` ＋ 授予的"先手调查"。</summary>
+        public int FirstStrikeInvestigationTotal
+            => (PlayerTemplate?.FirstStrikeInvestigation ?? 0) + GetAttribute("先手调查");
+        /// <summary>先手战斗（白刀）总值＝印刷 `FirstStrikeStrength` ＋ 授予的"先手战斗"。</summary>
+        public int FirstStrikeStrengthTotal
+            => (PlayerTemplate?.FirstStrikeStrength ?? 0) + GetAttribute("先手战斗");
+        /// <summary>先手势力（白星）总值＝印刷 `FirstStrikePower` ＋ 授予的"先手势力"。</summary>
+        public int FirstStrikePowerTotal
+            => (PlayerTemplate?.FirstStrikePower ?? 0) + GetAttribute("先手势力");
+
+        // ============================================================
+        // 【2026-10 用户口径·层级计算】7e 交换 / 近似交换层（JC106「黑星+白星 → 黑刀」）
+        // ------------------------------------------------------------
+        // 语义：**对"图标集合"整体改写**，且**在层序的最后施加**（层0→7a→7b→7c→7d→7e）
+        // ⇒ 改写永远看得见前面各层的全部结果（含光环在改写之后才发的图标）。
+        // 实现：本卡持有若干"改写记录"；每次**重算**（`ResetToBaseValues` 末尾 / 来源属性变动时）
+        // 先撤销上一轮输出、再按"当前＝印刷 ＋ 7c 授予"重新计数并改写到目标图标 ⇒ **幂等且顺序无关**。
+        // `HasIcon` 走**读侧过滤**（被改写的来源图标一律报告为不存在），而 `HasIconRaw` 保留账本视图
+        // 供"持续授予自愈判定"使用（否则光环会以为自己的授予丢了而反复补授）。
+        // ============================================================
+
+        private sealed class IconRewriteRecord
+        {
+            public string Key;                    // "来源图标清单|目标图标"（与时效项一致，便于到期移除）
+            public string[] SrcIcons;             // 来源图标名（读侧过滤用）
+            public string[] SrcAttrs;             // 来源属性名（计数与清零用）
+            public string DstIcon;
+            public string DstAttr;
+        }
+
+        private readonly List<IconRewriteRecord> _iconRewrites = new();
+        private readonly List<EffectGrant> _iconRewriteDeltas = new();   // 上一轮已施加上去的增量（下次重算先撤销）
+        private bool _applyingIconRewrites;
+
+        public bool HasIconRewrite => _iconRewrites.Count > 0;
+
+        /// <summary>登记一条 7e 图标改写（幂等：同 Key 不重复登记）。</summary>
+        public void AddIconRewrite(string key, string[] srcIcons, string[] srcAttrs, string dstIcon, string dstAttr)
+        {
+            if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(dstIcon) || string.IsNullOrEmpty(dstAttr)) return;
+            foreach (var r in _iconRewrites) if (r.Key == key) return;
+            _iconRewrites.Add(new IconRewriteRecord
+            {
+                Key = key,
+                SrcIcons = srcIcons ?? System.Array.Empty<string>(),
+                SrcAttrs = srcAttrs ?? System.Array.Empty<string>(),
+                DstIcon = dstIcon,
+                DstAttr = dstAttr,
+            });
+            ApplyIconRewrites();
+        }
+
+        /// <summary>移除一条 7e 图标改写（时效到期）；随后**立刻撤销其输出**（精确还原）。</summary>
+        public bool RemoveIconRewrite(string key)
+        {
+            int removed = _iconRewrites.RemoveAll(r => r.Key == key);
+            if (removed == 0) return false;
+            ApplyIconRewrites();   // 记录已清空 ⇒ 本轮只做"撤销上一轮输出"
+            return true;
+        }
+
+        /// <summary>读侧过滤判据：该图标是否被某条生效的 7e 改写覆盖（覆盖 ⇒ 报告"不存在"）。</summary>
+        public bool IsIconRewritten(string icon)
+        {
+            if (_iconRewrites.Count == 0 || string.IsNullOrEmpty(icon)) return false;
+            foreach (var r in _iconRewrites)
+                foreach (var src in r.SrcIcons)
+                    if (src == icon) return true;
+            return false;
+        }
+
+        /// <summary>账本视图（**不过滤** 7e 改写）：持续授予自愈判定用（"我的授予还在账本里"）。</summary>
+        public bool HasIconRaw(string icon) => _grantedIcons.Contains(icon);
+
+        /// <summary>该属性是否为当前生效的 7e 改写的**来源属性**（如 势力/先手势力）。
+        /// 持续授予自愈判定用它：来源属性的"净账"会被改写清零，但**条目仍在账本里** ⇒ 不算"授予丢了"，
+        /// 否则光环会反复补授（实测：白星被改写后光环每一轮都重授一次 ⇒ 战斗被多算）。</summary>
+        public bool IsRewriteSourceAttribute(string attr)
+        {
+            if (_iconRewrites.Count == 0 || string.IsNullOrEmpty(attr)) return false;
+            foreach (var r in _iconRewrites)
+                foreach (var src in r.SrcAttrs)
+                    if (src == attr) return true;
+            return false;
+        }
+
+        /// <summary>该属性的"层内计数"＝印刷值 ＋ 7c 已授予量（**不含**上一轮 7e 改写输出——调用前已撤销）。</summary>
+        private int LayerCountOf(string attr)
+        {
+            var t = PlayerTemplate;
+            int printed = attr switch
+            {
+                "调查" => t?.Investigation ?? 0,
+                "战斗" => t?.Strength ?? 0,
+                "势力" => t?.Power ?? 0,
+                "先手调查" => t?.FirstStrikeInvestigation ?? 0,
+                "先手战斗" => t?.FirstStrikeStrength ?? 0,
+                "先手势力" => t?.FirstStrikePower ?? 0,
+                "防御" => t != null && t.Defense >= 0 ? t.Defense : 0,
+                _ => 0,
+            };
+            return printed + GetAttribute(attr);
+        }
+
+        /// <summary>施加全部 7e 改写（重算收口）：先撤销上一轮输出，再按当前层内计数重新改写。</summary>
+        internal void ApplyIconRewrites()
+        {
+            if (_applyingIconRewrites) return;
+            if (_iconRewrites.Count == 0 && _iconRewriteDeltas.Count == 0) return;
+            _applyingIconRewrites = true;
+            try
+            {
+                // ① 撤销上一轮输出（幂等的前提：每次都从"干净的出处"重新计数）
+                foreach (var d in _iconRewriteDeltas) Revoke(d.Kind, d.Value, d.Amount);
+                _iconRewriteDeltas.Clear();
+                if (_iconRewrites.Count == 0) return;
+                // ② 按"当前＝印刷 ＋ 7c 授予"重新计数 → 来源清零、目标图标 ＋ 目标属性
+                foreach (var rw in _iconRewrites)
+                {
+                    int total = 0;
+                    foreach (var srcAttr in rw.SrcAttrs)
+                    {
+                        int n = LayerCountOf(srcAttr);
+                        if (n <= 0) continue;
+                        Grant("Attribute", srcAttr, -n);                       // 抹掉来源贡献（如 势力/先手势力）
+                        _iconRewriteDeltas.Add(new EffectGrant { Kind = "Attribute", Value = srcAttr, Amount = -n });
+                        total += n;
+                    }
+                    if (total <= 0) continue;
+                    Grant("Attribute", rw.DstAttr, total);                     // 换成目标属性（如 战斗）
+                    Grant("Icon", rw.DstIcon, total);                          // 目标图标也要真的在账本里（HasIcon 用）
+                    _iconRewriteDeltas.Add(new EffectGrant { Kind = "Attribute", Value = rw.DstAttr, Amount = total });
+                    _iconRewriteDeltas.Add(new EffectGrant { Kind = "Icon", Value = rw.DstIcon, Amount = total });
+                    global::Godot.GD.Print($"[图层 7e] ⇄ 图标改写：{PlayerTemplate?.CardName} 的 " +
+                                           $"[{string.Join(",", rw.SrcIcons)}]×{total} → [{rw.DstIcon}]（本回合）");
+                }
+            }
+            finally { _applyingIconRewrites = false; }
+        }
+
+        /// <summary>来源属性变动（7c 授予/撤销）时重算 7e 改写 —— 保证"改写之后再冒出来的来源图标"同样被改写。</summary>
+        private void ReapplyRewritesIfSourceChanged(string attr)
+        {
+            if (_applyingIconRewrites || _iconRewrites.Count == 0 || string.IsNullOrEmpty(attr)) return;
+            foreach (var r in _iconRewrites)
+                foreach (var src in r.SrcAttrs)
+                    if (src == attr) { ApplyIconRewrites(); return; }
+        }
+
         // ---------- 静止/禁止标记（D19-⑤） ----------
         // 与持续关键字授予(_granted*)分离：静止效果是规则约束（不能被装备结附等），常驻、不授出能力。
         private HashSet<StaticKind> _staticFlags = new HashSet<StaticKind>();
@@ -435,7 +587,9 @@ namespace Script.Game.Entities
         public HashSet<string> CurrentSubCategories { get; } = new HashSet<string>();
 
         public bool HasKeyword(string kw) => _grantedKeywords.Contains(kw);
-        public bool HasIcon(string icon) => _grantedIcons.Contains(icon);
+        /// <summary>是否具有某能力图标（**读侧过滤**：被 7e 改写的来源图标一律报告为不存在）。
+        /// 账本视图见 `HasIconRaw`（持续授予自愈判定用）。</summary>
+        public bool HasIcon(string icon) => !IsIconRewritten(icon) && _grantedIcons.Contains(icon);
         public int GetAttribute(string attr) => _grantedAttributes.TryGetValue(attr, out var v) ? v : 0;
 
         // ============================================================
@@ -541,6 +695,8 @@ namespace Script.Game.Entities
                         CurrentDefense += amount;
                         if (CurrentDefense < -1) CurrentDefense = -1;
                     }
+                    // 【2026-10·7e】来源属性变动 ⇒ 立刻重算改写（"改写之后才冒出来的来源图标"同样被改写）
+                    ReapplyRewritesIfSourceChanged(value);
                     break;
                 case "MagicDomain":
                     // JC060 光环：给被影响角色实例层追加魔法领域（如"心"=心灵领域），供其他效果/UI 识别
@@ -602,6 +758,8 @@ namespace Script.Game.Entities
                         CurrentDefense -= amount;
                         if (CurrentDefense < -1) CurrentDefense = -1;
                     }
+                    // 【2026-10·7e】来源属性变动（含撤销）⇒ 立刻重算改写
+                    ReapplyRewritesIfSourceChanged(value);
                     break;
                 case "MagicDomain":
                     // JC060 光环撤销：仅移除"运行时授予"的域（来自 _grantedDomains），模板固有域不动
@@ -776,9 +934,14 @@ namespace Script.Game.Entities
                 CurrentDefense = -1;
                 return;
             }
-            CurrentInvestigation = PlayerTemplate.GetTotalInvestigation(isFirstPlayer);
-            CurrentStrength = PlayerTemplate.GetTotalStrength(isFirstPlayer);
-            CurrentPower = PlayerTemplate.GetTotalPower(isFirstPlayer);
+            // 【2026-10 用户口径·层级计算】**7 种属性各自独立**：4 基础（调查/战斗/势力/防御）
+            // ＋ 3 先手（先手调查/先手战斗/先手势力）。
+            // **基础值里不再折入印刷的先手值**——先手属性在层序（层0→7a→7b→7c→7d→7e）**之后**
+            // 才加到"用于对抗的那条属性"上（`AreaStatsCalculator.ValueOf` 是唯一加算点，
+            // 卡面 UI 复用同一函数 ⇒ 显示与结算同口径）。
+            CurrentInvestigation = PlayerTemplate.Investigation;
+            CurrentStrength = PlayerTemplate.Strength;
+            CurrentPower = PlayerTemplate.Power;
             CurrentDefense = PlayerTemplate.Defense >= 0 ? PlayerTemplate.Defense : -1;
             // 黑眼=调查：基础调查 + 当前已授予的"调查"属性（不受先手限制，保证重算后持续效果不丢失）
             CurrentInvestigation += GetAttribute("调查");
@@ -805,6 +968,9 @@ namespace Script.Game.Entities
             // 【2026-09·JC051 用户口径】白星＝先手势力：与上面"先手调查/先手战斗"同款重建
             // （基础 FirstStrikePower + 已授予的"先手势力"），否则授予的白星在重算后丢失、卡面/投影看不到。
             CurrentPower += GetAttribute("势力");
+            // 【2026-10 用户口径·层级计算】**7e 交换/近似交换层在最后施加**（JC106：黑星+白星 → 黑刀）：
+            // 位置＝所有 7a–7d 结果都就位之后 ⇒ 改写永远看得见前面各层的全部结果（含光环刚发的图标）。
+            ApplyIconRewrites();
             // 【2026-09·JC051 卡面 UI】记录"最近一次重算时本卡控制者是否为先手玩家"：卡面按**与对抗结算
             // 同一口径**补算【先手势力】（`AreaStatsCalculator` 也是 `isFirst ? GetAttribute("先手势力") : 0`），
             // 而**不改 `CurrentPower` 的既有语义**（避免影响对抗数值与既有用例）。

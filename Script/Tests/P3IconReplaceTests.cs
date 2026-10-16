@@ -138,13 +138,20 @@ namespace Script.Tests
             var victim = OnField(game, Probe("TS_ir_both", power: 1, firstStrikePower: 2), 2, areas[0]);
             victim.Grant("Attribute", "先手势力", 1);            // 再叠一个授予的白星
             int strengthBefore = victim.CurrentStrength;
-            int expected = victim.CurrentPower + victim.GetAttribute("先手势力");
+            // 【2026-10 用户口径·7e】改写的计数＝**图标集合**（**含印刷图标**：本项目把印刷
+            // `Strength/Power/FirstStrike*` 就当能力图标读，见 `BuildMirroredIconGrants`）
+            // ⇒ 黑星 = 印刷势力 ＋ 授予势力；白星 = 印刷先手势力 ＋ 授予先手势力。
+            int expected = victim.CurrentPower + victim.FirstStrikePowerTotal;
 
             ApplyJC106(game, victim);
 
-            Assert.AreEqual(0, victim.CurrentPower, "黑星被替换");
-            Assert.AreEqual(0, victim.GetAttribute("先手势力"), "白星（先手势力，含授予）被替换");
-            Assert.AreEqual(strengthBefore + expected, victim.CurrentStrength, "换成等量的黑刀（合计 = 原有势力相关贡献）");
+            Assert.AreEqual(0, victim.CurrentPower, "黑星被替换（印刷势力 ＋ 授予势力 一起改写）");
+            Assert.AreEqual(0, victim.FirstStrikePowerTotal,
+                "白星被替换：先手势力**总值**（印刷先手势力 ＋ 授予）归零（净账为 −印刷值，故读总值）");
+            Assert.AreEqual(strengthBefore + expected, victim.CurrentStrength,
+                "换成等量的黑刀（合计 = 原有黑星 ＋ 白星的图标数）");
+            Assert.IsTrue(victim.HasIcon("黑刀"), "改写必须产出［黑刀］图标");
+            Assert.IsFalse(victim.HasIcon("黑星") || victim.HasIcon("白星"), "来源图标不再存在");
         }
 
         // ==================== ④ 无势力图标 → 只获得灵体，不做无意义替换 ====================
