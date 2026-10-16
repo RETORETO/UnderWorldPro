@@ -2154,7 +2154,11 @@ namespace Script.UI
         }
 
         /// <summary>把附属/封印卡相对宿主（CardUI 或 CouncilCardUI）对齐定位（移植单机 ArrangeAllAttachments/Seals 算法）。
-        /// seal=true 封印卡朝宿主上缘上延；false 附属朝宿主下缘下延。含横置旋转、Pivot、ZIndex 与平滑目标。</summary>
+        /// seal=true 封印卡朝宿主上缘上延；false 附属朝宿主下缘下延。含横置旋转、Pivot、ZIndex 与平滑目标。
+        /// 【2026-10-16 计划·未实施】本函数属 cat-2，须与单机 4 个实例级偏移函数
+        /// （`ArrangeAllAttachments`/`ArrangeAllSeals`/`ArrangeCouncilAttachments`/`ArrangeCouncilSeals`）
+        /// **同步简化**为宿主卡角标（`UI美化与空间重排方案.md` 决策 3），否则两端口径漂移。
+        /// cat-1（结附/封印于地区）走 `LayoutCardsEvenly` 容器平铺的路径**保持不动**。</summary>
         private void LayoutAttachmentRelative(CardUI ui, Control hostUi, bool seal, int index)
         {
             // 附属/封印自身可能横置：同步旋转与 Pivot

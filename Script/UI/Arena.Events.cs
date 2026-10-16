@@ -197,6 +197,12 @@ public partial class Arena : Control
             }
         foreach (var kv in _cardUIMap)
             kv.Value.SetSelectableHighlight(set != null && set.Contains(kv.Key));
+        // 【选卡/找卡 UI 优化·批次 1】秘社 UI 不在 `_cardUIMap`（单独在 `_councilCardUIs`）⇒ 必须单独刷一遍，
+        // 否则"以本方秘社为目标"的 11 张卡（JC009/JC012/JC025/JC033/JC034/JC039/JC053/JC068/JC082/JC115/JC117）
+        // 会"高亮却看不到"（秘社此前完全没有可选高亮接口）。
+        if (_councilCardUIs != null)
+            foreach (var kv in _councilCardUIs)
+                kv.Value?.SetSelectableHighlight(set != null && set.Contains(kv.Key));
     }
 
     // ============================================================

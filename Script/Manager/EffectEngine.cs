@@ -1787,6 +1787,10 @@ namespace Script.Manager
                     if (latentTarget.IsCovert)
                     { MarkActionIneffective("Latent", $"{latentTarget.PlayerTemplate?.CardName} 已经是暗藏者"); break; }
                     latentTarget.SetCovert(true);
+                    // 【需求2/3】翻面 = 版本号变动 ⇒ 宿主关系脱离：正→背的**附属**在装配路径已由
+                    // `AttachmentRule.EnforceOnCovertChange`（订阅 CovertChanged）消灭 → 本行对附属为空操作；
+                    // 主要作用是**退还封印**（封印卡回各自拥有者手牌），并让无装配的裸测试也得到同口径行为。
+                    ZoneManagerRef?.DetachHostRelations(latentTarget);
                     GD.Print($"[EffectEngine] 潜伏：{latentTarget.PlayerTemplate?.CardName} 翻面为暗藏者");
                     Script.Manager.UiNotificationBus.Instance?.NotifyVisualDirty();
                     break;

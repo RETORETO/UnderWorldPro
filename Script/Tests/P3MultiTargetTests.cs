@@ -1150,8 +1150,15 @@ namespace Script.Tests
             var areaCand021 = plan021.OpenAreaCandidates(new List<string>(), new List<string>());
             Assert.IsTrue(areaCand021.Contains(a1) && areaCand021.Contains(a2),
                 "**地区候选非空**（界面据此高亮地区槽位；用户实测『地区没有正常高亮』时必须先保证这里不为空）");
-            Assert.AreEqual(0, plan021.OpenAreaCandidates(new List<string>(), new List<string> { a2 }).Count,
-                "已选地区后不再重复高亮其它地区（上限 1）");
+            // 【2026-10-16 修复·用户实测 JC021"选中地区后依然提示地区0/1、无法结算"】
+            // 已选地区**必须留在候选里**（与"已选角色仍在候选里"同款纪律）：协调器用"不在候选 ⇒ 已失效 ⇒ 剔除"
+            // 清理选择，若此地返回空集，每次刷新都会把刚选中的地区删掉 ⇒ 标题回落 0/1、地区高亮熄灭、
+            // `CanConfirm` 永远不成立（JC021 无法结算）。上限 1 的语义改由**可点集合**表达（选中后不再把
+            // "另一个地区"列为新候选），而不是"从候选里删掉它自己"。
+            var areaAfterPick = plan021.OpenAreaCandidates(new List<string>(), new List<string> { a2 });
+            Assert.AreEqual(1, areaAfterPick.Count, "已选地区 ⇒ 候选里**只保留这一个**（不再另外高亮其它地区）");
+            Assert.IsTrue(areaAfterPick.Contains(a2),
+                "**已选中的地区仍在候选里**（避免被『失效剔除』误删 ⇒ 标题保持 1/1、可确认）");
             Assert.AreEqual("请选择目标角色（1/2）和目标地区（0/1）",
                 plan021.Title(new List<string> { mine1.UID }, new List<string>()),
                 "选了 1 个角色 → 角色计数变 1、**地区计数仍是 0**（用户实测『选择角色却显示地区（1/1）』的回归点）");

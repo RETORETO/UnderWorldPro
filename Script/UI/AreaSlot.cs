@@ -137,16 +137,65 @@ public partial class AreaSlot : Control
     /// <summary>设置目标高亮（机动等"选择地区槽位"触发效果的可选目标视觉提示）。</summary>
     public void SetHighlight(bool on)
     {
-        // ColorLoyaltyRequirement/调制色由场景控制；此处用自调制叠加黄色高亮，避免覆盖原配色。
-        SelfModulate = on ? new Color(1.2f, 1.2f, 0.4f) : Colors.White;
+        _candidateHighlight = on;
+        ApplyAreaHighlightVisual();
+    }
+
+    // ============================================================
+    // 【选卡/找卡 UI 优化·批次 1 / 2026-10-16 修正】地区槽位高亮的两态视觉
+    // ------------------------------------------------------------
+    // 修复"地区高亮完全不可见"：根节点是**不自绘**的纯 `Control`，而 `SelfModulate` **不传播给子节点**
+    // ⇒ 原先那句赋值实际什么都看不见（真正可见的 `Background` 是 `Player1Area/Player2Area` 下的**孙子节点**）。
+    // 现统一为两条真正可见的表达，且**两态用不同颜色**（用户口径：已选中要有"区别于原有高亮"的其它高亮）：
+    //   ① **可选**：地区卡（`AreaCardUI`）画**黄框** + 两侧玩家区 `Background` 淡黄（表达"整格地区可选"）；
+    //   ② **已选中**：地区卡画**青色粗框** + 两侧背景淡青（与黄框明显区分）。
+    // 注意：**不再用根节点 `SelfModulate`/`Modulate` 上色**——前者不传播（看不见），后者会与另一态互相覆盖。
+    // ============================================================
+    private bool _candidateHighlight;
+    private bool _chosenHighlight;
+
+    private void ApplyAreaHighlightVisual()
+    {
+        _areaCardUI?.SetSelectableHighlight(_candidateHighlight);
+        _areaCardUI?.SetChosenHighlight(_chosenHighlight);
+        SetSideBackgroundTint(_chosenHighlight
+            ? AreaChosenTint
+            : (_candidateHighlight ? AreaHighlightTint : Colors.White));
+    }
+
+    private CanvasItem _player1Bg;
+    private CanvasItem _player2Bg;
+    private bool _sideBackgroundResolved;
+    private static readonly Color AreaHighlightTint = new Color(1f, 0.95f, 0.6f);
+    private static readonly Color AreaChosenTint = new Color(0.75f, 0.95f, 1f);
+
+    private void SetSideBackgroundTint(Color c)
+    {
+        ResolveSideBackgrounds();
+        if (_player1Bg != null && GodotObject.IsInstanceValid(_player1Bg)) _player1Bg.Modulate = c;
+        if (_player2Bg != null && GodotObject.IsInstanceValid(_player2Bg)) _player2Bg.Modulate = c;
+    }
+
+    private void ResolveSideBackgrounds()
+    {
+        if (_sideBackgroundResolved) return;
+        // `_Ready` 尚未执行时 `_player1Area/_player2Area` 仍为空 ⇒ 本次跳过，下次再解析。
+        if (_player1Area == null && _player2Area == null) return;
+        _sideBackgroundResolved = true;
+        _player1Bg = _player1Area?.GetNodeOrNull<CanvasItem>("Background");
+        _player2Bg = _player2Area?.GetNodeOrNull<CanvasItem>("Background");
     }
 
     /// <summary>
-    /// 【2026-09 用户口径 JC021】**"已选中"态**：与"可选"高亮（`SetHighlight`，走 `SelfModulate` 黄色）区分开，
-    /// 这里走 `Modulate` 绿色叠加 —— 于是"已被选中的地区"仍然看得见（否则选中后它不再是候选、
+    /// 【2026-09 用户口径 JC021】**"已选中"态**：与"可选"高亮（黄框 + 淡黄）区分开，这里用
+    /// **青色粗框 + 淡青侧栏**。于是"已被选中的地区"仍然看得见（否则选中后它不再是候选、
     /// 高亮被撤掉，玩家会以为"地区没有高亮"）。
     /// </summary>
-    public void SetSelected(bool on) => Modulate = on ? new Color(0.72f, 1f, 0.72f) : Colors.White;
+    public void SetSelected(bool on)
+    {
+        _chosenHighlight = on;
+        ApplyAreaHighlightVisual();
+    }
 
     /// <summary>由 Arena 在选目标（地区槽位）激活时设置本槽位是否为可选目标。</summary>
     public bool IsTargetSelectable { get; set; }

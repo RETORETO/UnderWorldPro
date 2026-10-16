@@ -170,6 +170,10 @@ public partial class ZoneManager : Node
     private void RemoveFromAllZones(CardInstance card, CardZone targetZone)
     {
         bool leavingArea = card.CurrentZone == CardZone.AreaZone && targetZone != CardZone.AreaZone;
+        // 【需求2·判据统一】宿主连带（附属/封印）只在**版本号将变动**时脱离：
+        // 仅"争夺区→争夺区"移动不刷版本号（含跨地区机动 / 夺控换边）⇒ 不脱离；
+        // 其余移动（离场 / 进堆叠 / 形态迁移等）一律刷版本号 ⇒ 脱离。判据与 `FireMoved` 同源（`WillBumpVersionOnMove`）。
+        bool willBumpVersion = WillBumpVersionOnMove(card.CurrentZone, targetZone);
         // 【JC119】该卡离开**手牌**（打出/弃掉/移动）→ 清除"刚由封印回手"标记（候选只认"刚回手的那批"）
         if (card.CurrentZone == CardZone.Hand && targetZone != CardZone.Hand)
             card.ReturnedFromSealHostUid = null;
@@ -221,20 +225,14 @@ public partial class ZoneManager : Node
             }
         }
 
-        // D49：被封印的卡（IsSealed）离场——其封印卡（SealedCards）按规则返回拥有者手牌。
-        if (card.IsSealed && targetZone != CardZone.SealedZone)
+        // 【需求2】宿主连带脱离：以"版本号是否变动"为唯一判据。
+        // 旧实现（已删）为 `if (card.IsSealed && targetZone != CardZone.SealedZone) DetachSealedCards(card);`
+        // ——只排除"目标=封印区"、**不判离场/版本号**，导致"争夺区↔争夺区"移动也把封印退回手牌（BUG）。
+        // 现统一：附属按连带模式处置（递归）、封印卡回 OWNER 手牌，两者同一判据（用户口径"完全一致"）。
+        // 例外：目标区=封印区（宿主被移入封印区）时不退自身封印。
+        if (willBumpVersion)
         {
-            DetachSealedCards(card);
-        }
-
-        // 离开场上：附属按连带模式处置（递归），封印卡跟随宿主回拥有者手牌
-        if (leavingArea)
-        {
-            if (_detachMode == DetachMode.AreaWon)
-                DetachAttachmentsToDeckBottom(card);
-            else
-                DetachAttachmentsToGraveyard(card);
-            DetachSealedCards(card);
+            DetachHostRelations(card, includeSeals: targetZone != CardZone.SealedZone);
         }
     }
 
@@ -292,6 +290,22 @@ public partial class ZoneManager : Node
         host.SealedCards.Clear();
     }
 
+    /// <summary>【版本号变动连带·可复用】宿主关系脱离：附属按当前连带模式处置
+    /// （Normal→各自拥有者墓地 / AreaWon→各自拥有者牌库底），封印卡回各自拥有者手牌。
+    /// 供"不换区但版本号变动"的场合复用（翻面 / GM flip / 效果 Uncover 等），
+    /// 与 `RemoveFromAllZones` 的离场连带**共用同一份规则**（避免 PM 里两份实现漂移）。
+    /// <paramref name="includeSeals"/>=false 用于"目标区=封印区"的例外（宿主被移入封印区时不退自身封印）。</summary>
+    public void DetachHostRelations(CardInstance host, bool includeSeals = true)
+    {
+        if (host == null) return;
+        if (_detachMode == DetachMode.AreaWon)
+            DetachAttachmentsToDeckBottom(host);
+        else
+            DetachAttachmentsToGraveyard(host);
+        if (includeSeals)
+            DetachSealedCards(host);
+    }
+
     /// <summary>
     /// 【P3】效果驱动的**控制权变更**（JC129 操控心智"你获得目标敌方角色的控制权直到回合结束"）：
     /// 只改 `ControllerId`（`OwnerId` 不变，与内部夺控语义一致），并走同一条 `TransferOwnership` 出口
@@ -326,6 +340,12 @@ public partial class ZoneManager : Node
         if (oldController != playerId)
             EE?.ReevaluateAuras(oldController);
     }
+
+    /// <summary>【判据单一来源】该次区域移动是否刷新版本号：仅"争夺区→争夺区"不刷新
+    /// （含跨地区机动、夺控换边），其余一律刷新。必须与 <see cref="FireMoved"/> / <see cref="MoveToArea"/>
+    /// 采用的是同一判据，避免"连带脱离 / 目标丢失 / 封印回手"与版本号分叉。</summary>
+    public static bool WillBumpVersionOnMove(CardZone from, CardZone to)
+        => !(from == CardZone.AreaZone && to == CardZone.AreaZone);
 
     /// <summary>
     /// 移动统一出口：UI 刷新 + 派生数据重算 + 目标版本号失效 + Moved 总线广播。
@@ -490,7 +510,7 @@ public partial class ZoneManager : Node
         // 目标版本号策略（2026-08-11）：争夺区→争夺区的移动【不刷新版本号】，
         // 含跨地区机动与夺控换边；以其为目标的效果不因此丢失（"本地区"限制另由结算快照复检）。
         // 注意必须同时透传给 TransferOwnership，否则其内部 FireMoved 会抢先 Bump 一次。
-        bool bumpVersion = fromZone != CardZone.AreaZone;
+        bool bumpVersion = WillBumpVersionOnMove(fromZone, CardZone.AreaZone);
         RemoveFromAllZones(card, CardZone.AreaZone);
         TransferOwnership(card, playerId, bumpVersion);
         card.CurrentZone = CardZone.AreaZone;

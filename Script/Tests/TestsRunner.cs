@@ -163,6 +163,7 @@ namespace Script.Tests
                 new P4OnlineGatewayWiringTests(),      // A55：服务端"需要玩家选择"的效果全部经网关问玩家（检索/弃牌/封印/支付/数字/牺牲）+ 挂起-续算与原子锁
                 new P4OnlineActivationTests(),         // 联机激活接管：目标地区（JC117）/ 牺牲代价 / 标志代价逐卡分配（1:1 单机窗）
                 new P4RevealExtraCostTests(),          // K10 现身校验额外费用（JC081 展示减免 / 必须支付类 fail-closed）+ 联机接管
+                new P4FlipTappedSealTests(),           // 【2026-10】翻面保留横置（RevealCard/Latent/GM flip/付费现身跨堆叠）+ 封印只在版本号变动时回手 + 翻面清附属封印
                 new P5FlowOptimizationTests(),         // 流程优化：步骤中文名 / 免让过推进 / 优先权交换修复 / 秘社起手数 / 调度结算 / 卡组张数校验
                 new P5CouncilRestrictionTests(),       // 秘社构筑限制：CouncilRestriction.Describe / ValidateDeckDetailed / MSJC001 需 ≥25 张黄色牌
                 new CouncilEffectTests(),              // 秘社效果：MSJC001 按卡文落地（先手标志前提 / 独有检索 / 每局一次）＋【A57】每局上限 + 独有筛选

@@ -231,5 +231,34 @@ namespace Script.UI
             _targetHighlight = on;
             Modulate = on ? new Color(1f, 1f, 0.6f, 0.85f) : Colors.White;
         }
+
+        // ============================================================
+        // 【选卡/找卡 UI 优化·批次 1】选目标"可选"黄色高光环（与 CardUI.SetSelectableHighlight 逐字同款）
+        // ------------------------------------------------------------
+        // 秘社进 cat-1 是必需的：共 11 张卡的**打出目标就是本方秘社**
+        // （JC009/JC012/JC025/JC033/JC034/JC039/JC053/JC068/JC082/JC115/JC117），
+        // 它们此前**没有任何可命中的秘社高亮**。用独立 `_Draw` 边框，不干扰 `SetTargetHighlight`
+        // 的 Modulate（拖拽半透明高亮）。
+        // ============================================================
+        private bool _showSelectableHighlight = false;
+
+        /// <summary>选目标（触发/行动效果）可选目标黄色高光环。由 Arena 按合法集切换，选完后清除。</summary>
+        public void SetSelectableHighlight(bool on)
+        {
+            if (_showSelectableHighlight == on) return;
+            _showSelectableHighlight = on;
+            QueueRedraw();
+        }
+
+        public override void _Draw()
+        {
+            base._Draw();
+            if (_showSelectableHighlight)
+            {
+                // 外扩 2px，与 CardUI 同款（黄框 + 宽 6）
+                DrawRect(new Rect2(new Vector2(-2, -2), Size + new Vector2(4, 4)),
+                    new Color(1f, 0.85f, 0.1f), false, 6f);
+            }
+        }
     }
 }

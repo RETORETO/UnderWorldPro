@@ -134,6 +134,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     /// （"手牌行动卡拖到合法目标上＝发动"）查询优先权/费用等门禁，避免 View 侧复刻一份判据。
     /// 只读暴露，不暴露任何写入口。</summary>
     internal PlayerManager PlayerManagerRef => _playerManager;
+
+    /// <summary>【选卡/找卡 UI 优化·批次 1】是否处于"选目标交互中"（提示窗/选择窗/多选窗任一）。
+    /// 用途：`CardDragController.TryBeginDragAt` 在此期间**不起手拖拽**——否则点候选手牌会先被拖拽吞掉，
+    /// 永远选不中（用户口径：选目标时要能直接点场上的高亮卡）。</summary>
+    internal bool IsTargetSelectionActive => _triggerCoordinator?.IsTargetSelectionActive == true;
     private DeckManager _deckManager;
     private TurnManager _turnManager;
     //【MVC 修复-问题3】玩家意图统一通道：View 所有写操作经此服务表达，不再直接点名各 Manager 命令方法
@@ -471,6 +476,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 _triggerOrderWindow, _targetSelectionWindow, _triggerEntryScene,
                 _areaSlots,
                 (pos) => _cardDragController?.PickAreaCardAt(pos),
+                (pos, uids) => _cardDragController?.PickCandidateCardUidAt(pos, uids),
                 () => LockModal(ModalWindow.TriggerOrder),
                 () => UnlockModal(ModalWindow.TriggerOrder),
                 () => LockModal(ModalWindow.TargetSelection),
@@ -798,10 +804,41 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     public void PromptDiscard(int discarderId, int chooserPlayerId, System.Collections.Generic.List<CardInstance> candidates,
         System.Action<CardInstance> onPicked)
     {
+        string prompt = chooserPlayerId == discarderId
+            ? "请选择要弃掉的手牌"
+            : $"请从玩家{discarderId} 的手牌中指定一张弃掉";
+
+        // 【选卡/找卡 UI 优化·批次 1 收口 · 2026-10-16 用户实测修正】弃牌通道按候选分类二选一：
+        //  · 候选**全为 cat-1**（本例＝弃牌者**自己的手牌**，`OwnerId == chooserId`）⇒ **场上高亮 + 左键点选**
+        //    （"提示窗"通道）：高亮本人手牌、左键点中的高亮手牌即完成弃牌，**不再弹居中的列表窗**。
+        //    用户口径原文："弃手牌仍弹列表窗"是缺陷（应直接点场上高亮的手牌）。
+        //  · 含任意 cat-2（如 JC114 从**对手手牌**中指定，`OwnerId != chooserId`）⇒ 仍走原**选择窗**（列表）。
+        if (_triggerCoordinator != null
+            && CardPickChannel.Classify(candidates, chooserPlayerId) == CardPickChannelKind.FieldClick)
+        {
+            var uids = new System.Collections.Generic.List<string>();
+            if (candidates != null)
+                foreach (var c in candidates) if (c != null) uids.Add(c.UID);
+            if (uids.Count > 0)
+            {
+                GD.Print($"[Arena] 🗑 PromptDiscard：玩家{chooserPlayerId} 弃牌走『场上点选手牌』通道（候选 {uids.Count} 张，全 cat-1）");
+                // 弃牌＝**强制选一张**：不给出口（`onExtra = null` ⇒ 必选、右键不生效）；卡目标不弹居中提示窗
+                // （`hintWindow = false`）——玩家直接点高亮手牌完成选择。窗口不可用（返回 false）⇒ 回退列表窗。
+                bool opened = _triggerCoordinator.RequestActivateTargetSelection(
+                    prompt, isArea: false, uids,
+                    uid =>
+                    {
+                        var picked = string.IsNullOrEmpty(uid) ? null : _cardManager?.GetInstance(uid);
+                        if (picked != null) onPicked?.Invoke(picked);
+                    },
+                    extraLabel: null, onExtra: null, hint: null, hintWindow: false);
+                if (opened) return;
+                GD.Print("[Arena] PromptDiscard：场上点选通道不可用 → 回退列表窗");
+            }
+        }
+
         // 弃牌 = 强制版通用选卡（必须选一张，不允许取消）。窗口细节统一收口在 PromptPickCard（单一实现）。
-        PromptPickCard(chooserPlayerId,
-            chooserPlayerId == discarderId ? "请选择要弃掉的手牌" : $"请从玩家{discarderId} 的手牌中指定一张弃掉",
-            candidates, allowCancel: false,
+        PromptPickCard(chooserPlayerId, prompt, candidates, allowCancel: false,
             picked => { if (picked != null) onPicked?.Invoke(picked); });
     }
 
@@ -2783,11 +2820,13 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (modeEffect != null)
         {
             GD.Print($"[Arena] 【K16 模式分支】{sorcery.PlayerTemplate?.CardName}：进入选模式 + 取目标流程");
+            // 【2026-10-16 修复·用户实测 JC021"取消后卡没回到手牌、UI 卡在手牌一个无法拖拽的地方"】
+            // **取目标/选模式期间不动任何 UI**：卡此刻在 Model 里**仍在手牌**，View 也让它留在手牌里
+            // （不可拖拽由"选目标/决策窗期间"的既有守卫保证）——
+            //  · 取消 ⇒ 什么都没改过 ⇒ 卡照常留在手牌、可再次拖拽（此前在这里就 `hand.Remove` +
+            //    `CanDrag=false` + 重排 ⇒ 取消后该 UI 成了**没人管理的孤儿**：留在原位、既拖不动也不参与排布）；
+            //  · 确认打出 ⇒ `PlayCard` 真正移动卡，由区域同步 `SyncCardUIToZone` 统一摘出各容器列表并重挂。
             _actionService.BeginModeCardPlay(playerId, sorcery.UID);
-            hand.Remove(cardUI);
-            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
-            cardUI.CanDrag = false;
-            ArrangeAllCardsInternal();
             UpdateTurnUIInternal();
             return;
         }
@@ -2799,12 +2838,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (multiEffect != null)
         {
             GD.Print($"[Arena] 【K15 多目标】{sorcery.PlayerTemplate?.CardName}：进入逐槽取目标 + 确认面板流程");
+            // 【2026-10-16 修复·用户实测 JC021"没选目标就取消了效果 ⇒ 卡没有回到手牌，UI 卡在手牌一个
+            // 无法拖拽的地方"】同 K16 分支：**取目标期间不动 UI**（Model 里卡还在手牌）——
+            // 取消 ⇒ 无需任何还原（此前预先 `hand.Remove` + `CanDrag=false` + 重排，取消后就成了孤儿 UI）；
+            // 确认打出 ⇒ 由 `PlayCard` → `SyncCardUIToZone` 统一收尾（摘列表 + 重挂到新区域）。
             _actionService.BeginMultiTargetPlay(playerId, sorcery.UID);
-            // 成功与否由 Controller 经确认面板回调决定；此处只负责刷新手牌/堆叠显示
-            hand.Remove(cardUI);
-            if (_areaCardUIs.Contains(cardUI)) _areaCardUIs.Remove(cardUI);
-            cardUI.CanDrag = false;
-            ArrangeAllCardsInternal();
             UpdateTurnUIInternal();
             return;
         }
@@ -3011,6 +3049,15 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     /// <returns>true ＝ 已按"双击激活"处理（调用方应吞掉该事件）。</returns>
     private bool TryHandleHandActivationDoubleClick(Vector2 globalPos, bool eventSaysDoubleClick)
     {
+        // 【选卡/找卡 UI 优化·批次 1】选目标期间**不处理"手牌行动双击"**：
+        // 否则选目标时双击候选手牌会弹出激活选择窗，干扰本次选择
+        // （与 `CardDragController.TryBeginDragAt` 的守卫同源；左键此时应交给"点候选手牌＝选中它"）。
+        if (IsTargetSelectionActive)
+        {
+            _lastHandActivationClickUid = null;
+            return false;
+        }
+
         CardUI hit = null;
         // 手牌命中：倒序取最上层（右卡压左卡，与 CardDragController.PickHandCardAt 同口径）
         for (int i = _handCardUIs.Count - 1; i >= 0 && hit == null; i--)

@@ -367,7 +367,12 @@ public partial class CardManager : Node
         if (instance == null) return;
         if (!instance.IsCovert) return;   // 本就正面/非暗藏，无需现身（幂等保护，避免重复触发）
 
-        instance.ResetToBaseState();       // 复位基础属性 + IsCovert=false（见 CardInstance.ResetToBaseState）
+        // 【需求3·翻面统一清理】翻正面 = 版本号变动 ⇒ 宿主关系脱离：附属进各自拥有者墓地、
+        // 封印卡回各自拥有者手牌（与 GM `flip` 命令同口径；收敛 PM 里两份私有实现）。
+        _zoneManager?.DetachHostRelations(instance);
+        // 【需求1①】保留横置：角色横置翻面后仍横置、重置翻面后仍重置（preserveTapped:true）；
+        // 指示物 / 运行期授予 / 伤害等其余属性照常重置。
+        instance.ResetToBaseState(preserveTapped: true);
         // 【K13/P3·E】`ResetToBaseState` 会**清空运行期授予**（含光环授予：如 JC038 授予的"袭击"）——
         // 复位后必须立即按当前场上重算光环，否则"现身即丢失光环授予"（且光环登记表仍以为已授予，不会自动补回）。
         EE?.ReevaluateAuras(instance.ControllerId);

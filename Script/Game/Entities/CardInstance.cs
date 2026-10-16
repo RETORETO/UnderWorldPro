@@ -940,16 +940,21 @@ namespace Script.Game.Entities
         }
 
         // ============================================================
-        // 状态清理（进入手牌/卡组时调用）
+        // 状态清理（进入手牌/卡组时调用；翻面/现身穿 preserveTapped:true 时保留横置）
         // ============================================================
-        public void ResetToBaseState()
+        /// <param name="preserveTapped">
+        /// 【需求·翻面保留横置】true＝**保留** `IsTapped` 不清零，供"翻面 / 现身 / 效果翻面"路径使用
+        /// （角色横置翻面后仍横置、重置翻面后仍重置，正→背/背→正一致）；其余属性/指示物/运行期授予照常重置。
+        /// 默认 false＝离场（进手牌/墓地/牌库/得分/秘社等）时横置一并清零，与既有行为一致。
+        /// </param>
+        public void ResetToBaseState(bool preserveTapped = false)
         {
             // 清除伤害和创伤
             Damage = 0;
             Trauma = 0;
 
             // 清除状态
-            IsTapped = false;
+            if (!preserveTapped) IsTapped = false;   // 翻面/现身传 true 以保留横置状态
             IsSealed = false;
             IsAttached = false;
             IsSeal = false;   // 重置时清除封印卡标记

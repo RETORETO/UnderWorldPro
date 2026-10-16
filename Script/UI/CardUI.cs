@@ -105,6 +105,9 @@ namespace Script.UI
             // 【鼠标悬浮预览】鼠标进入/离开卡面 → 经 `CardPreviewBus` 请求"整张卡图"浮层。
             // 是否允许显示由视图注入的判定决定（`CovertInspectRule`：对手手牌/对手暗藏者默认不弹，
             // JC057 未横置且同地区时授权弹出）；未接管（无战场视图）→ 静默忽略。
+            // 【2026-10-16 计划·未实施】按 `UI美化与空间重排方案.md` 决策 5，手牌卡的 hover 将改为
+            // **本体上浮 + 放大**，并**抑制整卡预览浮层**（避免"上浮 + 浮层"同时发生）；
+            // 且角标/层叠列表浮层优先于整卡预览（同宿主多触发源互斥，见方案第五章）。改造前请先读该方案。
             MouseEntered += OnMouseEnteredPreview;
             MouseExited += OnMouseExitedPreview;
         }

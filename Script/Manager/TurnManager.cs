@@ -3028,8 +3028,11 @@ public partial class TurnManager : Node
                 var card = entry.SourceCard ?? (_cardManager?.GetInstance(entry.SourceCardUid));
                 if (card == null) { GD.PrintErr($"❌ [Resolve] 找不到现身源卡 {entry.SourceCardUid}"); return; }
                 string areaId = entry.TargetAreaId ?? card.ZoneDetailId ?? "";
+                // 【需求1②】回地区同样保留横置：跨堆叠现身全程保留横置状态（显式捕获/还原双保险）。
+                bool revealWasTapped = card.IsTapped;
                 // 回地区：fromZone=Stack != AreaZone → ZoneManager.MoveToArea 自动触发 EnterTrigger（D37，回地区进场为正常情况）
                 _cardManager?.MoveCardToArea(card, areaId);
+                card.SetTapped(revealWasTapped);
                 // 额外广播现身触发信号（UncoverTrigger），满足核心需求 6.3「视作角色/附属」的现身时机
                 _triggerEmitPoints?.UncoverTrigger(card, card.ControllerId, areaId);
                 GD.Print($"[Resolve] 暗藏者 {card.PlayerTemplate?.CardName} 现身结算 → 回地区 {areaId}（EnterTrigger + UncoverTrigger）");
@@ -4538,10 +4541,15 @@ public partial class TurnManager : Node
 
         // 进堆叠即翻面（Model 层同步移入堆叠区，结算回地区时 fromZone=Stack≠AreaZone 才会触发 EnterTrigger）
         string originArea = instance.ZoneDetailId ?? "";
+        // 【需求1②】付费现身要跨"离开场上 → 进堆叠区 → 回地区"整段保留横置状态：
+        // 本链路不调 `ResetToBaseState`（故天然保留横置），此处再显式捕获/还原一次作双保险
+        // （`SetTapped` 同值短路，正常路径为 no-op）。
+        bool revealWasTapped = instance.IsTapped;
         instance.SetCovert(false);   // 经 SetCovert 发 CovertChanged（规则③：翻面触发目标丢失总线扫描）
         // D-修复：必须将卡真正移入堆叠区（CurrentZone=Stack），否则结算 MoveCardToArea 时
         // fromZone==AreaZone 会跳过进场触发（EnterTrigger）。先前漏调 MoveCardToStack 导致暗藏者现身不触发进场触发。
         _cardManager?.MoveCardToStack(instance);
+        instance.SetTapped(revealWasTapped);   // 显式还原横置（需求1②，正常路径 no-op）
 
         // 入堆叠：构造 AmbushReveal 结算条目，箭头指向原本暗藏地区
         if (_stackManager != null)

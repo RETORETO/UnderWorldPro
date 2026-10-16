@@ -368,13 +368,25 @@ namespace Script.Manager
                 return res;
             }
 
-            /// <summary>"哪些地区还能点"：地区槽未填时全部地区候选。</summary>
+            /// <summary>"哪些地区还能点"
+            /// 【2026-10-16 修复·用户实测 JC021"选中地区后依然提示地区0/1、地区高亮消失、无法结算"】
+            /// **已选中的地区必须留在候选里**（与 `OpenCardCandidates` 的"已选中且仍然合法 ⇒ 仍在候选"
+            /// 同一纪律）：协调器 `RefreshMultiPick` 用"不在候选 ⇒ 已失效 ⇒ 剔除"清理选择，而
+            /// `MaxAreas == 1` 时"未填满槽的候选"天然**不含刚选中的那个** ⇒ 旧实现会在每次刷新时把玩家
+            /// 刚选的目的地删掉：标题回落到 `目标地区（0/1）`、地区高亮熄灭，且 `CanConfirm` 要求
+            /// "地区必选已满足"永远不成立 ⇒ **效果永远无法确认入堆叠**（＝"JC021 无法正确结算"）。
+            /// 未选中的其它地区仍不再重复高亮（上限 1；要换选先右键取消该地区）。
+            /// </summary>
             public List<string> OpenAreaCandidates(List<string> pickedCards, List<string> pickedAreas)
             {
                 var res = new List<string>();
                 if (AreaSlotIndex < 0) return res;
                 var choices = MapPicks(pickedCards, pickedAreas);
-                if (!choices[AreaSlotIndex].IsEmpty) return res;   // 已选地区（上限 1）⇒ 不再重复高亮
+                if (!choices[AreaSlotIndex].IsEmpty)
+                {
+                    res.Add(choices[AreaSlotIndex].Uid);   // 已选地区（上限 1）⇒ 保留在候选里，避免被"失效剔除"删掉
+                    return res;
+                }
                 var cand = CollectSlot(Effect, AreaSlotIndex, SourceController, choices, ZoneManager,
                     CardManager, PlayerManager, Source, AreaManager);
                 if (cand?.AreaUids != null) res.AddRange(cand.AreaUids);

@@ -238,5 +238,52 @@ namespace Script.UI
                 _marksLabel.Text = $"P1: {p1}  P2: {p2}";
         }
 
+        // ============================================================
+        // 【选卡/找卡 UI 优化·批次 1】选目标"可选"黄色高光环
+        // ------------------------------------------------------------
+        // 与 `CardUI.SetSelectableHighlight` / `CouncilCardUI.SetSelectableHighlight` 逐字同款。
+        // 用途：**以地区为目标**（机动类、12 张"打出目标＝地区"的卡等）时给地区卡画黄框，
+        // 让"这一格地区可选"在视觉上可见（此前 `AreaSlot.SetHighlight` 的 `SelfModulate`
+        // 画在**不自绘**的根节点上，玩家什么都看不到——本次一并修掉）。
+        // ============================================================
+        private bool _showSelectableHighlight = false;
+        /// <summary>【2026-10-16】"**已选中**"态（JC021 多选：地区已被选中）——与"可选"黄框**不同的颜色**
+        /// （青色粗框），用户口径："JC021 选中地区后地区高亮消失，我需要一个**区别于原有高亮的其他高亮**
+        /// 代表地区被选中"。两个标志可同时为真，绘制时**已选中优先**（粗青框覆盖黄框）。</summary>
+        private bool _showChosenHighlight = false;
+
+        /// <summary>地区卡"可选目标"黄色高光环（由 AreaSlot.SetHighlight 转发）。</summary>
+        public void SetSelectableHighlight(bool on)
+        {
+            if (_showSelectableHighlight == on) return;
+            _showSelectableHighlight = on;
+            QueueRedraw();
+        }
+
+        /// <summary>地区卡"已选中"青色粗框（由 AreaSlot.SetSelected 转发；与可选黄框区分）。</summary>
+        public void SetChosenHighlight(bool on)
+        {
+            if (_showChosenHighlight == on) return;
+            _showChosenHighlight = on;
+            QueueRedraw();
+        }
+
+        public override void _Draw()
+        {
+            base._Draw();
+            if (_showChosenHighlight)
+            {
+                // 已选中：**青色粗框**（宽 8、外扩 3），与"可选"黄框（宽 6、外扩 2）明显区分
+                DrawRect(new Rect2(new Vector2(-3, -3), Size + new Vector2(6, 6)),
+                    new Color(0.15f, 0.85f, 1f), false, 8f);
+            }
+            else if (_showSelectableHighlight)
+            {
+                // 外扩 2px、宽 6，与 CardUI / CouncilCardUI 同款视觉
+                DrawRect(new Rect2(new Vector2(-2, -2), Size + new Vector2(4, 4)),
+                    new Color(1f, 0.85f, 0.1f), false, 6f);
+            }
+        }
+
     }
 }

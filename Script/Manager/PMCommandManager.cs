@@ -947,8 +947,9 @@ public partial class PMCommandManager : Node
 
         // ---- 翻面伴随清理：指示物 / 附属 / 封印 ----
         ClearCounters(instance);          // 指示物直接移除
-        ClearAttachments(instance);       // 附属进入弃牌堆（接口）
-        ClearSeals(instance);             // 封印回到 OWNER 手牌（接口）
+        // 【需求2/3】附属 / 封印统一走 ZoneManager 的版本号连带规则（附属进各自拥有者墓地、封印卡回 OWNER 手牌），
+        // 与 CardManager.RevealCard 同口径（原 PM 私有 ClearAttachments/ClearSeals 已删除，避免两份实现漂移）。
+        _zoneManager?.DetachHostRelations(instance);
 
         bool toFaceUp = !wasFaceUp;
         if (toFaceUp)
@@ -986,12 +987,14 @@ public partial class PMCommandManager : Node
         bool on = parts.Length < 3 || Script.IO.WebSafeText.ToLowerAscii(parts[2]) != "off";
         // 暗藏(潜伏) = 背面朝上；解除暗藏 = 正面朝上（并恢复基础属性）
         instance.SetCovert(on);   // 走暗藏中枢（发 CovertChanged），供目标丢失版本号收口
+        // 【需求2/3】翻面 = 版本号变动 ⇒ 宿主关系脱离（附属进各自拥有者墓地、封印卡回 OWNER 手牌），
+        // 正↔背两向统一，与 GM `flip` / CardManager.RevealCard 同口径。
+        _zoneManager?.DetachHostRelations(instance);
         bool toFaceUp = !on;
         if (toFaceUp)
         {
             ClearCounters(instance);
-            ClearAttachments(instance);
-            instance.ResetToBaseState();
+            instance.ResetToBaseState(preserveTapped: true);   // 【需求1①】翻面保留横置状态
         }
         // 纯翻面（无区域移动）：显式触发 FireCovert 使目标版本号失效（D16 丢失目标新方案），
         // 复用 FireMoved 统一刷新出口保持 UI 一致。
@@ -1006,35 +1009,6 @@ public partial class PMCommandManager : Node
     private void ClearCounters(CardInstance instance)
     {
         instance.ClearCounters();
-    }
-
-    /// <summary>移除附属：宿主翻面/离场时，其结附的附属（递归）进入各自 OWNER 的弃牌堆。
-    /// 与 ZoneManager.DetachAttachmentsToGraveyard 同源规则（普通离场→进墓地）。</summary>
-    private void ClearAttachments(CardInstance instance)
-    {
-        if (instance?.AttachedCards == null || instance.AttachedCards.Count == 0) return;
-        // 复制一份遍历，避免 MoveToGraveyard 内部 RemoveFromAllZones 修改 AttachedCards 引发集合变更
-        foreach (var att in instance.AttachedCards.ToList())
-        {
-            att.AttachedTo = null;
-            _zoneManager.MoveToGraveyard(att, att.OwnerId);
-        }
-        instance.AttachedCards.Clear();
-    }
-
-    /// <summary>移除封印：宿主翻面/离场时，其封印的封印卡（按添加顺序）返回各自 OWNER 手牌。
-    /// 与 ZoneManager.DetachSealedCards 同源规则（封印回 OWNER 手牌，区别于附属进墓地）。</summary>
-    private void ClearSeals(CardInstance instance)
-    {
-        if (instance?.SealedCards == null || instance.SealedCards.Count == 0) return;
-        // 复制一份遍历，避免 MoveToHand 内部 RemoveFromAllZones 修改 SealedCards 引发集合变更
-        foreach (var seal in instance.SealedCards.ToList())
-        {
-            seal.SealedBy = null;
-            seal.IsSeal = false;                  // 清除封印卡标记
-            _zoneManager.MoveToHand(seal, seal.OwnerId);
-        }
-        instance.SealedCards.Clear();
     }
 
     // ==================== 对抗命令（调查/战斗/势力） ====================

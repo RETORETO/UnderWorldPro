@@ -34,6 +34,10 @@ namespace Script.UI.Interaction
 
         /// <summary>场上卡命中测试委托（指向 Arena.PickAreaCardAt）。</summary>
         private Func<Vector2, CardUI> _pickAreaCardAt;
+        /// <summary>【选卡/找卡 UI 优化·批次 1】**选目标专用**的候选命中委托：
+        /// 输入（全局坐标, 本次候选 UID 列表）→ 命中的 UID / null。指向 `CardDragController.PickCandidateCardUidAt`。
+        /// 与 `_pickAreaCardAt`（拖拽落点语义）分开，避免"为了选目标而扩拖拽命中范围"。</summary>
+        private Func<Vector2, IReadOnlyList<string>, string> _pickCandidateCardUidAt;
         /// <summary>模态锁（指向 Arena 的 LockModal/UnlockModal，内部已通知 Controller 维护原子锁）。</summary>
         private Action _lockTriggerOrderModal;
         private Action _unlockTriggerOrderModal;
@@ -48,6 +52,7 @@ namespace Script.UI.Interaction
             PackedScene triggerEntryScene,
             List<AreaSlot> areaSlots,
             Func<Vector2, CardUI> pickAreaCardAt,
+            Func<Vector2, IReadOnlyList<string>, string> pickCandidateCardUidAt,
             Action lockTriggerOrderModal,
             Action unlockTriggerOrderModal,
             Action lockTargetSelectionModal,
@@ -58,6 +63,7 @@ namespace Script.UI.Interaction
             _triggerEntryScene = triggerEntryScene;
             _areaSlots = areaSlots ?? new List<AreaSlot>();
             _pickAreaCardAt = pickAreaCardAt;
+            _pickCandidateCardUidAt = pickCandidateCardUidAt;
             _lockTriggerOrderModal = lockTriggerOrderModal;
             _unlockTriggerOrderModal = unlockTriggerOrderModal;
             _lockTargetSelectionModal = lockTargetSelectionModal;
@@ -691,11 +697,12 @@ namespace Script.UI.Interaction
                 // **顺序关键：先判"点在卡上"，再判地区**——地区槽的矩形**包含**渲染在其上的卡，
                 // 若先判地区，玩家"点角色选角色"会被误判成"选了地区"（用户实测 JC021：
                 // "第一个选择了角色，会显示地区（1/1）识别错误"）。
-                var multiHit = _pickAreaCardAt?.Invoke(globalPos);
-                if (multiHit?.Instance != null
-                    && (_validTargetUids.Contains(multiHit.Instance.UID) || rightClick))
+                // 【选卡/找卡 UI 优化·批次 1】命中源换成"候选 ∩ 有场上 UI"的专用命中
+                // （候选 ∪ 已选：已选中的卡要能被右键取消）。
+                var multiUid = _pickCandidateCardUidAt?.Invoke(globalPos, CurrentPickUids());
+                if (!string.IsNullOrEmpty(multiUid))
                 {
-                    MultiPickCard(multiHit.Instance.UID, rightClick);
+                    MultiPickCard(multiUid, rightClick);
                     return;
                 }
                 foreach (var slot in _areaSlots)
@@ -726,12 +733,28 @@ namespace Script.UI.Interaction
                 return;
             }
 
-            // 默认：点击合法场上卡
-            var hit = _pickAreaCardAt?.Invoke(globalPos);
-            if (hit == null || hit.Instance == null) return;
-            string uid = hit.Instance.UID;
-            if (_validTargetUids.Contains(uid))
-                _targetSelectionWindow.PickFromArena(uid);
+            // 默认：点击合法场上卡。
+            // 【选卡/找卡 UI 优化·批次 1】命中改为"在**本次候选列表**里找有场上 UI 且被点中的卡"：
+            // 候选里新增了"封印于地区 / 结附于地区的附属 / 自己手牌 / 秘社"这些此前**点不动**的形态，
+            // 命中范围与高亮范围同源（都＝候选 ∩ 有场上 UI）⇒ 不会"高亮了却点不到"。
+            var hitUid = _pickCandidateCardUidAt?.Invoke(globalPos, CurrentPickUids());
+            if (string.IsNullOrEmpty(hitUid)) return;
+            if (_validTargetUids.Contains(hitUid))
+                _targetSelectionWindow.PickFromArena(hitUid);
+        }
+
+        /// <summary>
+        /// 【选卡/找卡 UI 优化·批次 1】**本次可点候选 UID 列表**：
+        /// 单选＝合法目标集合；多选＝合法目标 **∪** 已选中（已选中的卡也要能被点/右键取消，
+        /// 否则"选中后就不是候选"会让它再也点不到）。
+        /// </summary>
+        private List<string> CurrentPickUids()
+        {
+            var list = new List<string>(_validTargetUids);
+            if (_multiPickActive)
+                foreach (var u in _multiPick.Cards)
+                    if (!list.Contains(u)) list.Add(u);
+            return list;
         }
     }
 }

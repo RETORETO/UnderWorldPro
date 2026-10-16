@@ -72,6 +72,11 @@ namespace Script.UI.Interaction
         /// <summary>尝试在全局坐标点选命中的手牌卡并开始拖拽；返回是否成功起手。</summary>
         public bool TryBeginDragAt(Vector2 globalPos)
         {
+            // 【选卡/找卡 UI 优化·批次 1】选目标期间**不允许起手拖拽**：
+            // 选目标路由（`Arena._Input` 里排在后面的分支）会处理"点候选手牌＝选中它"，
+            // 若此处先把左键吃掉，点自己的候选手牌会**先被拖拽吞掉**、永远选不中（用户实测口径）。
+            if (_arena != null && _arena.IsTargetSelectionActive) return false;
+
             // 战斗对抗窗口打开期间不抢手牌拖拽（由 ModalWindowCoordinator 处理伤害分配点击）
             if (_draggingHandCard == null && (_modalCoordinator?.ActiveStrengthWindow == null))
             {
@@ -169,17 +174,6 @@ namespace Script.UI.Interaction
                 GD.Print($"[DragController.DragEnd] 拖回手牌区，取消打出并归位: {instance.PlayerTemplate?.CardName}");
                 ClearDragTargetHighlights();
                 ReturnCardToHand(cardUI);
-                return;
-            }
-
-            // 【JC082·用户口径】"选择一项"的卡（`PlayerCardData.PlayChoice`）在**打出时**先选一项
-            // （选项＝本卡各目标类别），再选该项的结附目标 ⇒ 与常规附属"拖到目标卡上"的流程不同：
-            // 只要拖出并松开（未拖回手牌区），就交给 `BeginModeCardPlay` 走 JC063 同款"选择一项"窗口。
-            if (cardUI.Instance?.PlayerTemplate is PlayerCardData pcdChoice && pcdChoice.PlayChoice)
-            {
-                GD.Print($"[DragController.DragEnd] {pcdChoice.CardName} 声明了『选择一项』（PlayChoice）⇒ 走 JC063 同款选择流程");
-                ClearDragTargetHighlights();
-                _actionService.BeginModeCardPlay(playerId, cardUI.Instance.UID);
                 return;
             }
 
@@ -307,6 +301,23 @@ namespace Script.UI.Interaction
                              $"⇒ 一律走专用选择流程（先选模式/逐槽，再取目标）；本次落点 targetCard={targetCardUid} targetArea={targetAreaName}");
                 ClearDragTargetHighlights();
                 _arena.BeginSorceryTargetSelection(instance, cardUI, playerId, hand);
+                return;
+            }
+
+            // 【JC082·用户口径 2026-10-16 修正】"选择一项"的**附属卡**（`PlayerCardData.PlayChoice`，如 JC082 索亚之书）：
+            //  · **未落在任何目标上**（拖出后松在空白/非目标处）⇒ 走"选择一项"窗口（与 JC063 同款，最后所选的项决定结附目标）；
+            //  · **已落在合法目标上**（结附于角色＝借阅 / 结附于本方秘社＝收藏）⇒ **不拦截**，继续走下面的正常落点流程：
+            //    `PlayCard(..., targetCardUid)` 会按目标类别**反推所选项**（`TurnManager.PlayCard` 的 JC082 分支），
+            //    从而"拖到秘社（或角色）上直接付费打出并结附"。
+            // 用户口径："**打出必须拖附属卡到秘社上**"。此前这里**无条件拦截**（连拖到秘社上也弹选择窗）⇒ 正是
+            // 用户实测"附属卡直接打出并结附于秘社"的来源；现按**联机孪生入口**补齐同一守卫
+            // （`ArenaOl`：`tmpl.PlayChoice && target 为空` 才上行裸意图，否则带目标上行、由服务端反推所选项）。
+            if (instance.PlayerTemplate is PlayerCardData pcdChoice && pcdChoice.PlayChoice
+                && string.IsNullOrEmpty(targetCardUid) && string.IsNullOrEmpty(targetAreaName))
+            {
+                GD.Print($"[DragController.DragEnd] {pcdChoice.CardName} 声明了『选择一项』（PlayChoice）且未落点目标 ⇒ 走 JC063 同款选择流程");
+                ClearDragTargetHighlights();
+                _actionService.BeginModeCardPlay(playerId, instance.UID);
                 return;
             }
 
@@ -568,6 +579,86 @@ namespace Script.UI.Interaction
                 if (c != null && GodotObject.IsInstanceValid(c) && c.GetVisualGlobalRect().HasPoint(globalPos)) return c;
             }
             return null;
+        }
+
+        // ============================================================
+        // 【选卡/找卡 UI 优化·批次 1】只服务"选目标"的候选命中
+        // ------------------------------------------------------------
+        // 与 `PickAreaCardAt` 的关键区别：后者是**拖拽落点/蒙版/战斗分配**的命中语义（只扫
+        // 争夺区角色 + 附属 + 资产），**不得**扩展（会顺带改变拖拽行为）。
+        // 本方法只做一件事：**在本次候选列表里找"此刻真的有场上 UI 且被点中"的那张卡**。
+        //   · 命中范围 ＝ 候选列表 ∩ 有场上 UI（与高亮范围同源 ⇒ 不存在"高亮却点不到"）；
+        //   · 用**既有**的 `Arena.FindCardUIByUID`（已覆盖手牌/资产/计分/争夺区/地区槽含附属封印/
+        //     秘社容器含结附秘社的附属/牌库/墓地）与 `FindCouncilUIByUID`（秘社卡本身）取 UI，
+        //     **不需要新增任何 UI 集合**；
+        //   · 取 `GetVisualGlobalRect()`（旋转后的 AABB）判定，矩形随卡尺寸/上浮自动跟随。
+        // ============================================================
+
+        // 候选重叠时的取胜优先级（"视觉在上"取胜）：自己手牌 → 附属/封印 → 争夺区角色 → 资产 → 秘社
+        private const int RANK_HAND = 0;
+        private const int RANK_ATTACH_SEAL = 1;
+        private const int RANK_AREA_CARD = 2;
+        private const int RANK_ASSET = 3;
+        private const int RANK_COUNCIL = 4;
+        private const int RANK_OTHER = 5;
+
+        private static int CandidateRank(CardInstance inst)
+        {
+            if (inst == null) return RANK_OTHER;
+            switch (inst.CurrentZone)
+            {
+                case CardZone.Hand: return RANK_HAND;
+                case CardZone.AttachedZone:
+                case CardZone.SealedZone: return RANK_ATTACH_SEAL;
+                case CardZone.AreaZone: return RANK_AREA_CARD;
+                case CardZone.AssetZone: return RANK_ASSET;
+                case CardZone.CouncilZone: return RANK_COUNCIL;
+                default: return RANK_OTHER;
+            }
+        }
+
+        /// <summary>
+        /// 在**候选列表**里按全局坐标命中一张卡，返回其 UID；都不命中返回 null。
+        /// 【选卡/找卡 UI 优化·批次 1】只服务选目标，**不改** `PickAreaCardAt`。
+        /// </summary>
+        public string PickCandidateCardUidAt(Vector2 globalPos, IReadOnlyList<string> candidateUids)
+        {
+            if (_arena == null || candidateUids == null || candidateUids.Count == 0) return null;
+            string best = null;
+            int bestRank = int.MaxValue;
+            for (int i = 0; i < candidateUids.Count; i++)
+            {
+                string uid = candidateUids[i];
+                if (string.IsNullOrEmpty(uid)) continue;
+                if (!CandidateUIHasPoint(uid, globalPos, out int rank)) continue;
+                if (rank < bestRank)
+                {
+                    bestRank = rank;
+                    best = uid;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>该 UID 此刻是否有可见场上 UI 命中该点；命中时经 <paramref name="rank"/> 回传优先级。</summary>
+        private bool CandidateUIHasPoint(string uid, Vector2 pos, out int rank)
+        {
+            rank = int.MaxValue;
+            var ui = _arena.FindCardUIByUID(uid);
+            if (ui != null && GodotObject.IsInstanceValid(ui) && ui.Visible
+                && ui.GetVisualGlobalRect().HasPoint(pos))
+            {
+                rank = CandidateRank(ui.Instance);
+                return true;
+            }
+            var council = _arena.FindCouncilUIByUID(uid);
+            if (council != null && GodotObject.IsInstanceValid(council) && council.Visible
+                && council.GetVisualGlobalRect().HasPoint(pos))
+            {
+                rank = RANK_COUNCIL;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>拖拽中：对合法目标卡做半透明高亮（使用当前拖拽卡）。</summary>

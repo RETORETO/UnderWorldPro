@@ -100,8 +100,11 @@ public partial class Arena
         if (GodotObject.IsInstanceValid(_assetContainer2)) ArrangeContainerCards(_assetContainer2);
 
         // 争夺区内：角色 + 附属于本地区 + 封印于本地区，统一均匀平铺（按进入先后，右后压左前）
+        // 【2026-10-16】此为 cat-1 的落地路径，`UI美化与空间重排方案.md` 决策 3 明确"不折叠、保持不动"。
         ArrangeAreaAttachmentsAndSeals();
         // 争夺区内结附卡（附属挂在目标同容器）的偏移布局：必须在角色排布后执行
+        // 【2026-10-16】下面两个偏移调用只服务 cat-2（结附/封印于**卡或秘社**），
+        // 将随决策 3 改为宿主卡角标；cat-1 的卡已由上一行平铺处理完毕，不在其中。
         ArrangeAllAttachments();
         // 封印卡偏移布局：封印于角色时 Y 向上偏移；封印于地区时不偏移（挂地区容器）
         ArrangeAllSeals();
@@ -131,6 +134,10 @@ public partial class Arena
     /// 按 X 对齐目标卡视觉中心、Y 从目标卡视觉下缘向上露出 2/5 张起、多张依次下延；
     /// 正确处理横置卡（旋转 90° 后视觉下缘变为原右侧），目标卡 ZIndex 最高，
     /// 附属越靠后 ZIndex 越低（视觉上越远）。
+    /// 【2026-10-16 计划·未实施】按 `UI美化与空间重排方案.md` 决策 3，本函数**只服务 cat-2**
+    /// （结附于卡 / 结附于秘社）；cat-2 将改为**宿主卡角标**（角标层 380~399），届时本偏移算法相应简化。
+    /// **cat-1（结附于地区）不走本函数**（走 `ArrangeAreaAttachmentsAndSeals` 平铺），不受影响。
+    /// 另：A71（`视觉中心 = Position + PivotOffset`）在未折叠/展开态仍须成立，勿因简化而删断言。
     /// </summary>
     private void ArrangeAllAttachments()
     {
@@ -177,6 +184,7 @@ public partial class Arena
     /// 与 `ArrangeCouncilAttachments`（附属，向下）对称：封印牌 X 对齐秘社视觉中心、
     /// Y 从秘社视觉**上缘向上**露出 2/5 张起、多张依次再上延 2/5 张；ZIndex 比秘社低但高于其它卡。
     /// 必须在 `ArrangeCouncilCards`（已排好秘社 UI.Position）之后调用。
+    /// 【2026-10-16 计划·未实施】属 cat-2，将随 `ArrangeAllAttachments` 一并改为秘社卡角标（决策 3）。
     /// </summary>
     private void ArrangeCouncilSeals()
     {
@@ -218,6 +226,7 @@ public partial class Arena
     /// 差异仅在于：宿主 UI 是 CouncilCardUI（非 CardUI 子类），故用 FindCouncilUIByUID 而非 FindCardUIByUID。
     /// 偏移逻辑一致：X 对齐宿主视觉中心、Y 从宿主视觉下缘向下露 3/5 起、多张依次下延 2/5 张、ZIndex 递减。
     /// 必须在 ArrangeCouncilCards（已排好秘社 UI.Position）之后调用。
+    /// 【2026-10-16 计划·未实施】属 cat-2，将随 `ArrangeAllAttachments` 一并改为**秘社卡角标**（决策 3）。
     /// </summary>
     private void ArrangeCouncilAttachments()
     {
@@ -269,6 +278,8 @@ public partial class Arena
     /// 封印卡 ZIndex 低于目标卡（目标卡层级最高），但高于其他卡，保证封印卡压在目标上方可见。
     /// 注：封印于地区（SealedBy==null 且 ZoneDetailId 非空）的封印卡由 SyncCardUIToZone 挂到地区容器、
     /// 不参与偏移布局（同 attacharea 行为），此处不处理。
+    /// 【2026-10-16 计划·未实施】本函数处理的是 cat-2（封印于角色/秘社/附属），将改为宿主卡角标（决策 3）；
+    /// **cat-1（封印于地区）本来就不进本函数**（走地区容器平铺），故其"可见可点"契约不受影响。
     /// </summary>
     private void ArrangeAllSeals()
     {
@@ -356,15 +367,20 @@ public partial class Arena
             groups[parent].Add(card);
         }
 
-        // 改为横向均匀排布（与手牌/资产区一致）：放得下居中，放不下重叠，右卡压左卡
+        // 横向均匀排布（与手牌区一致）：放得下居中，放不下重叠，右卡压左卡
+        // 【2026-10-16】不再声称"与资产区一致"：资产区/分数区按 `UI美化与空间重排方案.md` 决策 4
+        // 将改为**层叠**（+ hover 展开），争夺区自身的平铺口径不变。
         foreach (var kv in groups)
             LayoutCardsEvenly(kv.Key, kv.Value);
     }
 
     /// <summary>
     /// 把每个争夺区内"角色 + 附属于本地区 + 封印于本地区"的所有卡按进入地区先后（index 递增、后进在右、
-    /// 右卡压左卡）合并成一个统一序列，与手牌/资产区一样的均匀平铺（LayoutCardsEvenly）。
+    /// 右卡压左卡）合并成一个统一序列，与手牌区一样的均匀平铺（LayoutCardsEvenly）。
     /// 这样地区内的角色、地区附属、地区封印三类卡视觉上对齐成一行，不再错位/重叠/不动。
+    /// 【2026-10-16】本函数是选卡方案 **cat-1 的落地保障**——"结附/封印于地区"的卡必须保持场上可见可点；
+    /// `UI美化与空间重排方案.md` 决策 3 明确"cat-1 一律不折叠"，故本函数**保持不动**，
+    /// 勿随角标改造（cat-2）一并简化。
     /// </summary>
     private void ArrangeAreaAttachmentsAndSeals()
     {
