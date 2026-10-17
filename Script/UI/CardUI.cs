@@ -607,6 +607,13 @@ namespace Script.UI
                 // 外扩 2px 避免与激活/伤害边框重叠时相互遮挡
                 DrawRect(new Rect2(new Vector2(-2, -2), Size + new Vector2(4, 4)), new Color(1f, 0.85f, 0.1f), false, 6f);
             }
+
+            // 【选卡/找卡 UI 优化·批次 2】选择窗内"已选中"高光：**绿色粗框**。
+            // 与选目标黄框语义分离（方案 8.5：不得复用 `SetSelectableHighlight` 的选目标语义）。
+            if (_showPickedHighlight)
+            {
+                DrawRect(new Rect2(new Vector2(-3, -3), Size + new Vector2(6, 6)), new Color(0.25f, 0.95f, 0.45f), false, 7f);
+            }
         }
 
         /// <summary>选目标（触发/行动效果）可选目标黄色高光边框。由协调器在弹出选目标窗口时按合法集切换，选完后清除。</summary>
@@ -617,6 +624,19 @@ namespace Script.UI
             QueueRedraw();
         }
         private bool _showSelectableHighlight = false;
+
+        /// <summary>
+        /// 【选卡/找卡 UI 优化·批次 2】选择窗内"已选中"绿色高光（`CardPickWindow.SelectByUid` 驱动）。
+        /// 与选目标黄框（<see cref="SetSelectableHighlight"/>）、激活绿框（<see cref="SetActivatableHighlight"/>）
+        /// 是三套独立标志：前者＝"可被点选"，本项＝"已经在窗内被选中、等待确认"。
+        /// </summary>
+        public void SetPickedHighlight(bool on)
+        {
+            if (_showPickedHighlight == on) return;
+            _showPickedHighlight = on;
+            QueueRedraw();
+        }
+        private bool _showPickedHighlight = false;
 
         /// <summary>可发动激活高亮边框（D9）。由 Arena 在优先权变化时根据可发动性切换。</summary>
         public void SetActivatableHighlight(bool on)

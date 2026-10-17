@@ -481,6 +481,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 () => UnlockModal(ModalWindow.TriggerOrder),
                 () => LockModal(ModalWindow.TargetSelection),
                 () => UnlockModal(ModalWindow.TargetSelection));
+
+            // 【选卡/找卡 UI 优化·批次 2】选择窗模式依赖（与 `Configure` 分开注入，保持既有装配签名稳定）：
+            // 打开窗委托＝本类的 `OpenCardPickWindow`；UID→实例＝CardManager；玩家名/地区编号＝同一份注入源。
+            _triggerCoordinator.ConfigureCardPick(
+                req => OpenCardPickWindow(req),
+                uid => _cardManager?.GetInstance(uid),
+                id => PlayerNameOf(id),
+                uid => AreaIndexOf(uid));
             _turnManager.SetTriggerView(_triggerCoordinator);
             GD.Print("  ✅ TriggerInteractionCoordinator（ITriggerView）已注入 TurnManager");
         }
@@ -793,7 +801,40 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             return;
         }
         GD.Print($"[Arena] 🎯 PromptPlayTarget：玩家{chooserPlayerId} 为「{prompt}」选目标（候选 {candidateUids?.Count ?? 0} 个，isArea={isArea}）");
-        _triggerCoordinator.RequestActivateTargetSelection(prompt, isArea, candidateUids, onPicked);
+
+        // 【选卡/找卡 UI 优化·批次 2】卡目标且候选含 cat-2（墓地 / 资产 / 牌库 / 结附·封印于卡…）
+        // ⇒ **卡面网格选择窗**（方案 3.4 表：PromptPlayTarget 同 PromptPickCard 的分流口径）。
+        // 地区目标（isArea=true）的候选是**地区 UID**、不是 CardInstance，不参与本分类，仍走地区槽高亮。
+        // ⚠ 本通道的两个调用方（`EffectEngine` 牺牲选卡 / `TurnManager` JC119 免费打出）都**必须选一个**目标，
+        //   故此处 `AllowCancel = false`；给免费打出补取消出口属方案 C4（未实施，避免取消语义泄漏到牺牲路径）。
+        if (!isArea && candidateUids != null && candidateUids.Count > 0)
+        {
+            var kind = CardPickChannel.ClassifyUids(
+                candidateUids, uid => _cardManager?.GetInstance(uid), chooserPlayerId);
+            if (kind == CardPickChannelKind.Window)
+            {
+                var cards = new System.Collections.Generic.List<CardInstance>();
+                foreach (var uid in candidateUids)
+                {
+                    var inst = _cardManager?.GetInstance(uid);
+                    if (inst != null) cards.Add(inst);
+                }
+                if (cards.Count > 0 && OpenCardPickWindow(new CardPickRequest
+                {
+                    Title = string.IsNullOrEmpty(prompt) ? "请选择目标" : prompt,
+                    Hint = "点选一张牌后按「确认」",
+                    Cards = cards,
+                    ChooserId = chooserPlayerId,
+                    AllowCancel = false,
+                    OnPicked = c => onPicked?.Invoke(c?.UID),
+                    OnCancelled = () => onPicked?.Invoke(null),
+                }) != null)
+                    return;
+            }
+        }
+
+        _triggerCoordinator.RequestActivateTargetSelection(prompt, isArea, candidateUids, onPicked,
+            chooserPlayerId: chooserPlayerId);
     }
 
     /// <summary>
@@ -831,7 +872,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         var picked = string.IsNullOrEmpty(uid) ? null : _cardManager?.GetInstance(uid);
                         if (picked != null) onPicked?.Invoke(picked);
                     },
-                    extraLabel: null, onExtra: null, hint: null, hintWindow: false);
+                    extraLabel: null, onExtra: null, hint: null, hintWindow: false,
+                    chooserPlayerId: chooserPlayerId);
                 if (opened) return;
                 GD.Print("[Arena] PromptDiscard：场上点选通道不可用 → 回退列表窗");
             }
@@ -872,6 +914,51 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【选卡/找卡 UI 优化·批次 2】打开"卡面网格选择窗"。**先 AddChild 再 Init**（同 `InspectWindow` 的坑：
+    /// `CardUI._Ready()` 的 `SetFace(false)` 会把翻好的正面盖成卡背）；并按"配对纪律"把回调包成
+    /// **先解锁、再交付**（与 `ActivationChoiceWindow` 同款，见上方 `LockChoiceWindow` 注释）。
+    /// 返回 false ⇒ 窗口不可用（无候选 / 未入树），调用方应回退旧列表窗而不是静默丢弃选择。
+    /// </summary>
+    private CardPickWindow OpenCardPickWindow(CardPickRequest req)
+    {
+        if (req == null || req.Cards == null || req.Cards.Count == 0) return null;
+        if (!IsInsideTree()) return null;
+
+        // 玩家称呼 / 地区编号的唯一来源（组件内不出现"玩家1/玩家2"字面量，见方案 5.2.1）
+        req.PlayerNameOf ??= id => PlayerNameOf(id);
+        req.AreaIndexOf ??= uid => AreaIndexOf(uid);
+
+        var win = new CardPickWindow();
+        var onPicked = req.OnPicked;
+        var onCancelled = req.OnCancelled;
+        req.OnPicked = c => { UnlockChoiceWindow(win); onPicked?.Invoke(c); };
+        req.OnCancelled = () => { UnlockChoiceWindow(win); onCancelled?.Invoke(); };
+
+        AddChild(win);      // ① 先入树
+        win.Init(req);      // ② 再 Init（建卡面/标签/按钮）
+        LockChoiceWindow(win);
+        win.PopupCentered();
+
+        GD.Print($"[Arena] 🃏 打开选择窗：「{req.Title}」候选 {req.Cards.Count} 张，" +
+                 $"chooser=玩家{req.ChooserId}，允许取消={req.AllowCancel}");
+        return win;
+    }
+
+    /// <summary>玩家 id → 显示名（选择窗区域标签的唯一玩家称呼来源；将来换真实玩家名只改 `PlayerData.Name`）。</summary>
+    private string PlayerNameOf(int id)
+    {
+        var p = _playerManager?.GetPlayer(id);
+        return string.IsNullOrEmpty(p?.Name) ? $"玩家{id}" : p.Name;
+    }
+
+    /// <summary>地区 UID → 地区编号（1-based；选择窗区域标签用）。</summary>
+    private int AreaIndexOf(string areaUid)
+    {
+        if (_areaManager == null || string.IsNullOrEmpty(areaUid)) return 0;
+        return _areaManager.GetSlotIndex(areaUid);
+    }
+
+    /// <summary>
     /// 【P2】通用选卡 UI：让 `chooserPlayerId` 从候选卡中选一张（封印取手牌 / 检索取牌 / 弃牌共用）。
     /// View 只负责"展示候选 + 收集选择"，实际动作由 Controller 经回调执行（View 不写 Model）。
     /// </summary>
@@ -885,6 +972,58 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             onPicked?.Invoke(null);
             return;
         }
+
+        // 【选卡/找卡 UI 优化·批次 2】按候选**逐卡实例**分类（方案 3.4 / 5.3）：
+        //  · 含任意 cat-2（牌库 / 墓地 / 资产 / 结附·封印于卡 / 对手手牌…）⇒ **卡面网格选择窗**；
+        //  · 全 cat-1（自己手牌 / 争夺区 / 结附·封印于地区 / 秘社…）⇒ **场上高亮 + 左键即选**（提示窗通道）。
+        // 分类只决定"呈现通道"，候选集合与合法性一字不改（View 不增不减）。
+        var kind = CardPickChannel.Classify(candidates, chooserPlayerId);
+        if (kind == CardPickChannelKind.Window)
+        {
+            var pickWin = OpenCardPickWindow(new CardPickRequest
+            {
+                Title = string.IsNullOrEmpty(prompt) ? "选择卡牌" : prompt,
+                Hint = allowCancel
+                    ? "点选一张牌后按「确认」；按「取消」放弃本次选择"
+                    : "点选一张牌后按「确认」",
+                Cards = candidates,
+                ChooserId = chooserPlayerId,
+                AllowCancel = allowCancel,
+                OnPicked = c => onPicked?.Invoke(c),
+                OnCancelled = () => onPicked?.Invoke(null),
+            });
+            if (pickWin != null) return;
+            GD.Print("[Arena] PromptPickCard：选择窗不可用 → 回退旧的按钮列表窗");
+        }
+        else if (_triggerCoordinator != null)
+        {
+            var fieldUids = new System.Collections.Generic.List<string>();
+            foreach (var c in candidates)
+                if (c != null) fieldUids.Add(c.UID);
+            if (fieldUids.Count > 0)
+            {
+                // 强制选择（弃牌等）⇒ 不弹提示窗、无出口，玩家直接点高亮卡；
+                // 可取消 ⇒ 保留提示窗承载「取消」按钮（场上右键同样可用）。
+                System.Action extra = allowCancel ? () => onPicked?.Invoke(null) : (System.Action)null;
+                bool openedField = _triggerCoordinator.RequestActivateTargetSelection(
+                    string.IsNullOrEmpty(prompt) ? "请选择目标" : prompt,
+                    isArea: false, fieldUids,
+                    uid =>
+                    {
+                        var picked = string.IsNullOrEmpty(uid) ? null : _cardManager?.GetInstance(uid);
+                        onPicked?.Invoke(picked);
+                    },
+                    extraLabel: allowCancel ? "取消" : null,
+                    onExtra: extra,
+                    hint: null,
+                    hintWindow: allowCancel,
+                    chooserPlayerId: chooserPlayerId);
+                if (openedField) return;
+                GD.Print("[Arena] PromptPickCard：场上点选通道不可用 → 回退旧的按钮列表窗");
+            }
+        }
+
+        // ---- 兜底：旧按钮列表窗（窗口场景缺失 / 协调器不可用时仍能完成选择）----
         var win = _activationChoiceWindowScene?.Instantiate<ActivationChoiceWindow>();
         if (win == null)
         {
@@ -999,6 +1138,36 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【选卡/找卡 UI 优化·批次 2·规则乙】多目标里"是否存在一个含 cat-2 的卡槽"的预判。
+    /// 逐槽用**当前选择状态**向 Controller 索取候选（`candidatesForSlot` 是只读收集器，见 `MultiTargetSlots.CollectSlot`），
+    /// 只读 `CurrentZone / IsAttached / AttachedTo / IsSeal / SealedBy / OwnerId` 等现有字段，不改变任何状态。
+    /// 预判异常/空一律按"不需要窗口"处理 ⇒ 退回既有行为，绝不阻塞选择。
+    /// </summary>
+    private static bool AnyCardSlotNeedsPickWindow(
+        Script.Data.Effects.EffectData data,
+        System.Func<int, System.Collections.Generic.List<TargetChoice>, SlotCandidates> candidatesForSlot,
+        System.Collections.Generic.List<TargetChoice> current,
+        int chooserId)
+    {
+        if (data?.TargetSlots == null || candidatesForSlot == null) return false;
+        try
+        {
+            for (int i = 0; i < data.TargetSlots.Count; i++)
+            {
+                var cand = candidatesForSlot(i, current);
+                if (cand == null || cand.IsArea) continue;   // 地区槽属 cat-1，不参与判定
+                if (CardPickChannel.Classify(cand.Cards, chooserId) == CardPickChannelKind.Window)
+                    return true;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            GD.PrintErr($"[Arena] 多目标选择窗预判异常（忽略，退回既有行为）：{ex.Message}");
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 【K15·多目标】UI：**逐槽取目标 → 确认面板 → 确认后交回 Controller**（用户 2026-09 口径）。
     ///  · 每处理一个槽都**重新**向 Controller 索取候选（`candidatesForSlot`）——地区槽先选，
     ///    卡槽候选随之排除"已在目标地区内的角色"（FAQ 禁止原地移动）；
@@ -1025,7 +1194,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         //  · JC021（"目标地区"必选 ＋"本方/敌方角色"）：`请选择目标角色（0/2）和目标地区（0/1）`，
         //    每个玩家场上的角色只能选一个，"没有地区或没有角色时不能确认"。
         // 其余形状（含区域牌堆槽，如 JC092/JC133 的墓地角色牌）仍走既有逐槽流程。
-        if (MultiTargetSlots.ClassifyShape(data) == MultiTargetSlots.MultiSlotShape.FieldMultiPick
+        // 【选卡/找卡 UI 优化·批次 2·规则乙】预判：本次多目标里任一**卡槽**含 cat-2
+        // ⇒ 所有卡槽统一走选择窗（不再"一个效果里混用场上点选与列表窗"）。
+        // 地区槽不参与判定（选择窗只承载卡面，地区不是 CardInstance），仍走地区高亮。
+        bool forceCardWindow = AnyCardSlotNeedsPickWindow(
+            data, candidatesForSlot, choices, source?.ControllerId ?? 0);
+
+        if (!forceCardWindow
+            && MultiTargetSlots.ClassifyShape(data) == MultiTargetSlots.MultiSlotShape.FieldMultiPick
             && TryPromptFieldMultiPick(source, data, candidatesForSlot, onConfirmed))
             return;
 
@@ -1044,6 +1220,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             // 而不是弹出选择框"）。候选为空 / 玩家槽 / 区域牌堆（墓地/手牌/牌库…）仍走按钮窗
             // ——那里必须保留"留空 / 取消（不打出）"出口，否则玩家会卡住（见 `ShouldPickOnField`）。
             // 选目标窗不可用（编辑器未挂场景等）→ 返回 false，就地回退按钮窗（绝不静默卡住流程）。
+            if (forceCardWindow && cand != null && !cand.IsArea
+                && AskSlotByPickWindow(index, cand, label)) return;
+
             if (MultiTargetSlots.ShouldPickOnField(cand) && AskSlotByFieldClick(index, cand, label)) return;
 
             AskSlotByListWindow(index, cand, label);
@@ -1097,6 +1276,43 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         }
 
         /// <summary>
+        /// 【选卡/找卡 UI 优化·批次 2·规则乙】单槽的**卡面网格选择窗**形态。
+        /// 出口与旧列表窗一致：可留空的槽 → `不选（留空）`；必选槽 → `取消（不打出）`。
+        /// 返回 false ＝ 该槽无卡（调用方回退既有形态）。
+        /// </summary>
+        bool AskSlotByPickWindow(int index, SlotCandidates cand, string label)
+        {
+            var cards = new System.Collections.Generic.List<CardInstance>();
+            if (cand?.Cards != null)
+                foreach (var c in cand.Cards)
+                    if (c != null) cards.Add(c);
+            if (cards.Count == 0) return false;
+
+            bool optional = cand.Optional;
+            return OpenCardPickWindow(new CardPickRequest
+            {
+                Title = $"{source?.PlayerTemplate?.CardName}：选择{label}（第 {index + 1}/{slotCount} 个目标槽）",
+                Hint = optional
+                    ? "点选一张牌后按「确认」；本槽可留空"
+                    : "点选一张牌后按「确认」",
+                Cards = cards,
+                ChooserId = source?.ControllerId ?? 0,
+                AllowCancel = true,   // 本槽必有出口（留空 / 取消不打出），与旧列表窗语义一致
+                CancelLabel = optional ? "不选（留空）" : "取消（不打出）",
+                OnPicked = c =>
+                {
+                    choices[index] = TargetChoice.Card(c.UID);
+                    AskSlot(index + 1);
+                },
+                OnCancelled = () =>
+                {
+                    if (optional) { choices[index] = TargetChoice.Empty; AskSlot(index + 1); }
+                    else onConfirmed?.Invoke(null);
+                },
+            }) != null;
+        }
+
+        /// <summary>
         /// 【2026-09·K15 多目标·场上点选】单槽的"**场上高亮 + 点击**"取目标（用户口径 A86）：
         /// 复用既有选目标通道（`TriggerInteractionCoordinator.RequestActivateTargetSelection`：
         /// 卡目标＝场上卡高亮 + 点击；地区目标＝地区槽高亮 + 点击），**不弹候选列表窗**。
@@ -1135,7 +1351,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         onConfirmed?.Invoke(null);             // 必选槽取消 → 整次不打出
                     }
                 },
-                cand.Hint);   // 【2026-10·JC092】该槽的动作提示（卡文口径；空＝中性兜底）
+                cand.Hint,   // 【2026-10·JC092】该槽的动作提示（卡文口径；空＝中性兜底）
+                chooserPlayerId: source?.ControllerId ?? 0);
         }
 
         void Confirm()
@@ -2454,7 +2671,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     else
                         _actionService.ActivateAbility(inst, ability, cardTarget, targetPlayerId, null, uid);
                     RefreshActivateHighlights();
-                });
+                },
+                // 【批次3·C3】取消出口：未选目标 ⇒ 不横置、不付费、不入堆叠（与 C2 同口径，用户 2026-10 口径）。
+                extraLabel: "取消（不发动）",
+                onExtra: () => RefreshActivateHighlights(),
+                chooserPlayerId: inst.ControllerId);
         }
 
         /// <summary>生成单条激活效果在选框中的简短描述（优先 FaqNote，回退 EffectId）。</summary>
@@ -2777,6 +2998,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         RefreshActivateHighlights();
                     }
                     : null,
+                chooserPlayerId: inst.ControllerId,
                 hintWindow: true);
         }
 
@@ -2892,7 +3114,19 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 cardUI.CanDrag = false;   // 进入堆叠后不可拖拽
                 ArrangeAllCardsInternal();
                 UpdateTurnUIInternal();
-            });
+            },
+            // 【批次3·C1】取消出口（"取消（不打出）"）：取目标期间 **Model 里卡仍在手牌**
+            // （见本方法 K16/K15 分支的 2026-10-16 修复：取目标期间不动 UI），
+            // 故取消**不做 `ReturnCardToHand`**（那会在"卡还在手牌"时重复移动），只把 View 恢复。
+            extraLabel: "取消（不打出）",
+            onExtra: () =>
+            {
+                GD.Print($"[Arena] 事务卡 {sorcery.PlayerTemplate?.CardName} 取目标取消 → 卡留在手牌");
+                ArrangeAllCardsInternal();
+                UpdateTurnUIInternal();
+                RefreshActivateHighlights();
+            },
+            chooserPlayerId: playerId);
     }
 
     /// <summary>将地区 UID 转为 1-based 地区序号（供 CombatManager 调用窗口使用）。</summary>

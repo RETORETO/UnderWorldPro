@@ -1,6 +1,7 @@
 using Godot;
 using Script.Data.Cards;
 using Script.Data.Effects;
+using Script.Game.Entities;
 using Script.UI;
 using Script.Interfaces;
 using System;
@@ -44,6 +45,99 @@ namespace Script.UI.Interaction
         /// <summary>选目标窗口模态锁（独立类型 TargetSelection，与触发排序 TriggerOrder 区分，避免 HashSet 去重冲突）。</summary>
         private Action _lockTargetSelectionModal;
         private Action _unlockTargetSelectionModal;
+
+        // ---- 【选卡/找卡 UI 优化·批次 2】选择窗（cat-2）依赖 ----
+        /// <summary>打开卡面网格选择窗（指向 `Arena.OpenCardPickWindow`；返回 null ＝ 不可用，调用方回退提示窗）。</summary>
+        private Func<CardPickRequest, CardPickWindow> _openCardPickWindow;
+        /// <summary>UID → 卡实例（分类与窗口内容都用它；指向 `CardManager.GetInstance`）。</summary>
+        private Func<string, CardInstance> _resolveCard;
+        /// <summary>玩家 id → 显示名（窗口区域标签用；指向 Arena 的注入实现）。</summary>
+        private Func<int, string> _playerNameOf;
+        /// <summary>地区 UID → 地区编号（窗口区域标签用）。</summary>
+        private Func<string, int> _areaIndexOf;
+        /// <summary>当前这次取目标是否走"选择窗模式"（含 cat-2）。</summary>
+        private bool _pickWindowMode;
+        /// <summary>当前打开的选择窗实例（场上点击 → `SelectByUid` 用）。</summary>
+        private CardPickWindow _activePickWindow;
+
+        /// <summary>
+        /// 【选卡/找卡 UI 优化·批次 2】注入"选择窗模式"的依赖（与 `Configure` 分开，
+        /// 避免改动既有装配签名影响其他调用方/测试）。
+        /// </summary>
+        public void ConfigureCardPick(
+            Func<CardPickRequest, CardPickWindow> openCardPickWindow,
+            Func<string, CardInstance> resolveCard,
+            Func<int, string> playerNameOf,
+            Func<string, int> areaIndexOf)
+        {
+            _openCardPickWindow = openCardPickWindow;
+            _resolveCard = resolveCard;
+            _playerNameOf = playerNameOf;
+            _areaIndexOf = areaIndexOf;
+        }
+
+        /// <summary>本次候选是否必须走选择窗（以 `chooserId` 为"自己"判定 cat-1/cat-2）。</summary>
+        private bool MustUsePickWindow(IEnumerable<string> uids, int chooserId)
+        {
+            if (_openCardPickWindow == null || uids == null) return false;
+            return CardPickChannel.ClassifyUids(uids, _resolveCard, chooserId) == CardPickChannelKind.Window;
+        }
+
+        /// <summary>把 UID 列表解成卡实例（保持原顺序；解析不到的跳过）。</summary>
+        private List<CardInstance> ResolveCards(IEnumerable<string> uids)
+        {
+            var list = new List<CardInstance>();
+            if (uids == null || _resolveCard == null) return list;
+            foreach (var uid in uids)
+            {
+                var inst = _resolveCard(uid);
+                if (inst != null) list.Add(inst);
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// 【批次 2·4.5】**打开"选择窗模式"的窗口**并挂好一次性回调。
+        /// · 确认 ⇒ 收尾（解锁/清高亮）后把 UID 交回调用方；
+        /// · 取消 ⇒ `AllowCancel` 为假时窗口根本不显示取消按钮，故此处只在允许时接线。
+        /// 返回 false ⇒ 窗口不可用（调用方回退提示窗，绝不静默中断）。
+        /// </summary>
+        private bool OpenPickWindowMode(string title, string hint, IEnumerable<string> uids, int chooserId,
+            bool allowCancel, string cancelLabel,
+            Action<string> onConfirmed, Action onCancelled)
+        {
+            if (_openCardPickWindow == null) return false;
+            var cards = ResolveCards(uids);
+            if (cards.Count == 0) return false;
+
+            var win = _openCardPickWindow.Invoke(new CardPickRequest
+            {
+                Title = title,
+                Hint = hint,
+                Cards = cards,
+                ChooserId = chooserId,
+                PlayerNameOf = _playerNameOf,
+                AreaIndexOf = _areaIndexOf,
+                AllowCancel = allowCancel,
+                CancelLabel = string.IsNullOrEmpty(cancelLabel) ? "取消" : cancelLabel,
+                OnPicked = inst => onConfirmed?.Invoke(inst?.UID),
+                OnCancelled = () => onCancelled?.Invoke(),
+            });
+            if (win == null) return false;
+
+            _activePickWindow = win;
+            _pickWindowMode = true;
+            return true;
+        }
+
+        /// <summary>收尾时静默关闭选择窗（不回调），避免"场上右键取消"后再交付一次 OnCancelled。</summary>
+        private void ClosePickWindowSilently()
+        {
+            if (_activePickWindow != null && GodotObject.IsInstanceValid(_activePickWindow))
+                _activePickWindow.CloseSilently();
+            _activePickWindow = null;
+            _pickWindowMode = false;
+        }
 
         /// <summary>装配：注入窗口/场景引用、地区槽位、命中测试与模态锁委托。</summary>
         public void Configure(
@@ -174,6 +268,14 @@ namespace Script.UI.Interaction
             _validAreaUids.Clear();
             _targetIsArea = trigger?.IsAreaTarget == true;
 
+            // 【选卡/找卡 UI 优化·批次 2】按"逐卡实例"分类：含 cat-2（牌库/墓地/资产/结附·封印于卡…）
+            // ⇒ **选择窗模式**（场上仍高亮，但点击只置选中、确认才提交）；全 cat-1 ⇒ 维持提示窗模式。
+            // chooser ＝ 该触发效果的控制者（`StackEffectInstance.ControllerId`），不新增接口参数
+            //（`ITriggerView.RequestTargetSelection` 被约 40 个测试桩实现，签名必须稳定）。
+            int chooserId = trigger?.ControllerId ?? 0;
+            bool pickWindow = !_targetIsArea && MustUsePickWindow(_validTargetUids, chooserId);
+            _pickWindowMode = false;   // 防御：上一次选择若异常收尾，别把"窗模式"带进本次单选
+
             // 进入选目标前先清残留高光（窗口打开瞬间即取消旧高光），避免上一次交互遗留。
             CardManager.Instance.NotifyTargetSelectionChanged(null);
 
@@ -206,8 +308,10 @@ namespace Script.UI.Interaction
                         ? "请点击一个高亮的地区。"
                         : $"请点击一个高亮的地区（{effectHint}）。")
                     : "请在场上选择合法目标卡（点击场上卡完成选择）。");
-            OpenTargetSelection(trigger.DisplayName, hint, extraLabel: null,
-                allowCancel: true, cancelLabel: "取消（不入堆叠）");
+            // 【批次2】选择窗模式下改由 `CardPickWindow` 承载（见下方向统一开启），此处不弹提示窗。
+            if (!pickWindow)
+                OpenTargetSelection(trigger.DisplayName, hint, extraLabel: null,
+                    allowCancel: true, cancelLabel: "取消（不入堆叠）");
 
             // 选目标期间禁用触发排序窗口的操作按钮。
             // 【2026-10】批量预选阶段不改禁用态：排序窗口已由自身 _batchInProgress 冻结，
@@ -233,6 +337,7 @@ namespace Script.UI.Interaction
                     slot.IsTargetSelectable = false;
                     slot.OnAreaClicked = null;
                 }
+                ClosePickWindowSilently();
                 _targetSelectionWindow.Visible = false;
                 _targetSelectionWindow.OnCancelled = null;
                 // 选目标结束，恢复按钮状态（批量预选期间不改，由 NotifyBatchFinished 统一恢复）
@@ -260,6 +365,36 @@ namespace Script.UI.Interaction
                 cb?.Invoke(null);
             };
 
+            // 【批次2】选择窗模式：开启卡面网格窗（确认＝提交；取消＝不入堆叠、留在排序窗）
+            if (pickWindow)
+            {
+                bool opened = OpenPickWindowMode(
+                    trigger?.DisplayName, hint, validTargetUids, chooserId,
+                    allowCancel: true, cancelLabel: "取消（不入堆叠）",
+                    onConfirmed: uid =>
+                    {
+                        var cb = _onTargetPicked;
+                        _onTargetPicked = null;
+                        FinishTargetSelection();
+                        cb?.Invoke(uid);
+                    },
+                    onCancelled: () =>
+                    {
+                        var cb = _onTargetPicked;
+                        _onTargetPicked = null;
+                        GD.Print($"[TriggerCoordinator] 选择窗被取消（{trigger?.DisplayName}）→ 该效果不入堆叠，保留在排序窗口");
+                        FinishTargetSelection();
+                        cb?.Invoke(null);
+                    });
+                if (!opened)
+                {
+                    // 窗口不可用 ⇒ 回退提示窗模式（绝不静默中断选择）
+                    GD.PrintErr("[TriggerCoordinator] 选择窗不可用 → 回退提示窗模式");
+                    OpenTargetSelection(trigger.DisplayName, hint, extraLabel: null,
+                        allowCancel: true, cancelLabel: "取消（不入堆叠）");
+                }
+            }
+
             if (validTargetUids.Count == 0)
                 GD.Print($"[TriggerCoordinator] 触发 {trigger.DisplayName} 无合法目标，选目标窗口不展示（已过滤）");
         }
@@ -286,7 +421,7 @@ namespace Script.UI.Interaction
         /// </summary>
         public bool RequestActivateTargetSelection(string effectName, bool isArea, List<string> validTargetUids,
             Action<string> onPicked, string extraLabel = null, Action onExtra = null, string hint = null,
-            bool hintWindow = true)
+            int chooserPlayerId = 0, bool hintWindow = true)
         {
             if (_targetSelectionWindow == null)
             {
@@ -306,12 +441,18 @@ namespace Script.UI.Interaction
             _validAreaUids.Clear();
             _targetIsArea = isArea;
 
+            // 【选卡/找卡 UI 优化·批次 2】选择窗模式判定（逐卡实例；地区目标不参与）：
+            // chooserPlayerId 由调用方传入（激活/取牌都是"某个玩家在做选择"，手牌归属据此判定）。
+            // 取不到（0）时手牌按 cat-2 安全降级（多开一个窗，但绝不会"高亮了却点不到"）。
+            bool pickWindow = !isArea && MustUsePickWindow(_validTargetUids, chooserPlayerId);
+            _pickWindowMode = false;   // 防御：同上，先归零再由 `OpenPickWindowMode` 置真
+
             CardManager.Instance.NotifyTargetSelectionChanged(null);
 
             // 【2026-10 用户口径·JC108】卡目标是否**开提示窗**：地区目标必须开（窗口承载"点哪个高亮
             // 地区"的指引）；卡目标由调用方决定（激活效果取卡目标默认 `hintWindow=true` 保持不变，
             // 显式传 false ⇒ "直接选择场上的高亮卡"，不再被居中提示窗挡住战场）。
-            bool showWindow = _targetIsArea || hintWindow;
+            bool showWindow = !pickWindow && (_targetIsArea || hintWindow);
 
             if (_targetIsArea && showWindow)
             {
@@ -362,6 +503,7 @@ namespace Script.UI.Interaction
             {
                 _unlockTargetSelectionModal?.Invoke();   // 先解锁（选目标已结束），再继续后续流程（入栈会自行 EnterAtomic）
                 _targetSelectionActive = false;
+                ClosePickWindowSilently();
                 CardManager.Instance.NotifyTargetSelectionChanged(null);
                 _validTargetUids.Clear();
                 _validAreaUids.Clear();
@@ -409,6 +551,34 @@ namespace Script.UI.Interaction
             };
             // 供"卡目标不弹窗"路径使用：窗口不可见时，场上**右键**＝取消（用户口径：手牌行动等取目标可取消）。
             _cancelActivateTargetSelection = InvokeExtraExit;
+
+            // 【批次2】选择窗模式：开卡面网格窗（确认＝提交目标；取消＝离开本槽，走调用方给的出口）
+            if (pickWindow)
+            {
+                bool opened = OpenPickWindowMode(
+                    effectName, resolvedHint, validTargetUids, chooserPlayerId,
+                    allowCancel: onExtra != null,   // 没给出口 ⇒ 必选一个目标（窗口不显示取消按钮）
+                    cancelLabel: string.IsNullOrEmpty(extraLabel) ? "取消" : extraLabel,
+                    onConfirmed: uid =>
+                    {
+                        var cb = _onTargetPicked;
+                        _onTargetPicked = null;
+                        FinishSelection();
+                        cb?.Invoke(uid);
+                    },
+                    onCancelled: () =>
+                    {
+                        _onTargetPicked = null;
+                        FinishSelection();
+                        onExtra?.Invoke();   // 取消＝离开本槽（与提示窗「取消」按钮同一出口）
+                    });
+                if (!opened)
+                {
+                    GD.PrintErr("[TriggerCoordinator] 选择窗不可用 → 回退提示窗模式");
+                    _pickWindowMode = false;
+                    OpenTargetSelection(effectName, resolvedHint, extraLabel);
+                }
+            }
 
             if (_validTargetUids.Count == 0)
                 GD.Print($"[TriggerCoordinator] 激活效果 {effectName} 无合法目标，选目标窗口不展示（已过滤）");
@@ -739,8 +909,17 @@ namespace Script.UI.Interaction
             // 命中范围与高亮范围同源（都＝候选 ∩ 有场上 UI）⇒ 不会"高亮了却点不到"。
             var hitUid = _pickCandidateCardUidAt?.Invoke(globalPos, CurrentPickUids());
             if (string.IsNullOrEmpty(hitUid)) return;
-            if (_validTargetUids.Contains(hitUid))
-                _targetSelectionWindow.PickFromArena(hitUid);
+            if (!_validTargetUids.Contains(hitUid)) return;
+
+            // 【批次2·4.5】选择窗模式：点场上高亮的卡 ＝ **把窗内对应条目置为选中**（不提交、不关窗，
+            // 仍须在选择窗点「确认」）。提示窗模式仍是"点中即提交"。
+            if (_pickWindowMode)
+            {
+                if (_activePickWindow != null && GodotObject.IsInstanceValid(_activePickWindow))
+                    _activePickWindow.SelectByUid(hitUid);
+                return;
+            }
+            _targetSelectionWindow.PickFromArena(hitUid);
         }
 
         /// <summary>
