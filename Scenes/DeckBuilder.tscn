@@ -15,9 +15,9 @@ script = ExtResource("1_db")
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
-anchor_top = 0.04
+anchor_top = 0.03
 anchor_right = 0.5
-anchor_bottom = 0.04
+anchor_bottom = 0.03
 grow_horizontal = 2
 grow_vertical = 0
 offset_left = -60.0
@@ -26,13 +26,127 @@ offset_right = 60.0
 offset_bottom = 16.0
 text = "卡组编辑"
 
+[node name="DeckPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 0
+anchor_left = 0.01
+anchor_top = 0.085
+anchor_right = 0.558
+anchor_bottom = 0.865
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 0.0
+offset_bottom = 0.0
+
+[node name="DeckBar" type="HBoxContainer" parent="DeckPanel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 40.0
+theme_override_constants/separation = 6
+
+[node name="NameEdit" type="LineEdit" parent="DeckPanel/DeckBar"]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "卡组名（保存时按此名覆盖同名卡组）"
+
+[node name="LoadBtn" type="Button" parent="DeckPanel/DeckBar"]
+custom_minimum_size = Vector2(36, 0)
+layout_mode = 2
+text = "▾"
+tooltip_text = "选择已保存的卡组"
+
+[node name="SaveButton" type="Button" parent="DeckPanel/DeckBar"]
+custom_minimum_size = Vector2(76, 0)
+layout_mode = 2
+text = "保存"
+tooltip_text = "按左侧卡组名保存（同名直接覆盖）"
+
+[node name="InfoPanel" type="HBoxContainer" parent="DeckPanel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 46.0
+offset_right = -6.0
+offset_bottom = 158.0
+clip_contents = true
+theme_override_constants/separation = 8
+
+[node name="CouncilSlot" type="HBoxContainer" parent="DeckPanel/InfoPanel"]
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="RestrictionScroll" type="ScrollContainer" parent="DeckPanel/InfoPanel"]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_scroll_mode = 3
+
+[node name="SortBar" type="HBoxContainer" parent="DeckPanel"]
+layout_mode = 1
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 162.0
+offset_right = -6.0
+offset_bottom = 196.0
+theme_override_constants/separation = 8
+
+[node name="DeckScroll" type="ScrollContainer" parent="DeckPanel"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 200.0
+offset_right = -6.0
+offset_bottom = -22.0
+grow_horizontal = 2
+grow_vertical = 2
+vertical_scroll_mode = 0
+horizontal_scroll_mode = 3
+
+[node name="DeckBoard" type="Control" parent="DeckPanel/DeckScroll"]
+layout_mode = 2
+mouse_filter = 1
+
+[node name="DeckHBar" type="HScrollBar" parent="DeckPanel"]
+layout_mode = 1
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = -20.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="DeckLoadPanel" type="PanelContainer" parent="DeckPanel"]
+visible = false
+layout_mode = 1
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 42.0
+offset_right = -6.0
+offset_bottom = 342.0
+
+[node name="DeckLoadScroll" type="ScrollContainer" parent="DeckPanel/DeckLoadPanel"]
+layout_mode = 2
+horizontal_scroll_mode = 3
+
+[node name="DeckLoadList" type="VBoxContainer" parent="DeckPanel/DeckLoadPanel/DeckLoadScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="PoolPanel" type="Panel" parent="."]
 layout_mode = 1
 anchors_preset = 0
-anchor_left = 0.02
-anchor_top = 0.12
-anchor_right = 0.48
-anchor_bottom = 0.82
+anchor_left = 0.574
+anchor_top = 0.085
+anchor_right = 0.988
+anchor_bottom = 0.865
 offset_left = 0.0
 offset_top = 0.0
 offset_right = 0.0
@@ -40,15 +154,11 @@ offset_bottom = 0.0
 
 [node name="FilterModeBar" type="HBoxContainer" parent="PoolPanel"]
 layout_mode = 1
-anchors_preset = 15
-anchor_top = 0.0
 anchor_right = 1.0
-anchor_bottom = 0.07
-grow_horizontal = 2
-grow_vertical = 2
 offset_left = 6.0
+offset_top = 6.0
 offset_right = -6.0
-offset_bottom = -4.0
+offset_bottom = 40.0
 theme_override_constants/separation = 12
 
 [node name="ModeHintLabel" type="Label" parent="PoolPanel/FilterModeBar"]
@@ -70,38 +180,40 @@ text = "秘社"
 
 [node name="SearchBox" type="LineEdit" parent="PoolPanel"]
 layout_mode = 1
-anchors_preset = 15
-anchor_top = 0.07
 anchor_right = 1.0
-anchor_bottom = 0.14
-grow_horizontal = 2
-grow_vertical = 2
 offset_left = 6.0
+offset_top = 44.0
 offset_right = -6.0
-offset_bottom = -4.0
+offset_bottom = 78.0
 placeholder_text = "输入卡号过滤，如 JC"
 
 [node name="PoolScroll" type="ScrollContainer" parent="PoolPanel"]
 layout_mode = 1
-anchors_preset = 15
-anchor_top = 0.14
 anchor_right = 1.0
-anchor_bottom = 0.93
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 84.0
+offset_right = -6.0
+offset_bottom = -46.0
 grow_horizontal = 2
 grow_vertical = 2
 
+[node name="PoolList" type="VBoxContainer" parent="PoolPanel/PoolScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
 [node name="PoolPager" type="HBoxContainer" parent="PoolPanel"]
 layout_mode = 1
-anchors_preset = 15
-anchor_top = 0.93
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
 offset_left = 6.0
+offset_top = -42.0
 offset_right = -6.0
-offset_top = 4.0
-offset_bottom = -4.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 0
 
 [node name="PrevPage" type="Button" parent="PoolPanel/PoolPager"]
 layout_mode = 2
@@ -117,75 +229,32 @@ horizontal_alignment = 1
 layout_mode = 2
 text = "下一页"
 
-[node name="PoolList" type="VBoxContainer" parent="PoolPanel/PoolScroll"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-
-[node name="DeckPanel" type="Panel" parent="."]
-layout_mode = 1
-anchors_preset = 0
-anchor_left = 0.52
-anchor_top = 0.12
-anchor_right = 0.98
-anchor_bottom = 0.82
-offset_left = 0.0
-offset_top = 0.0
-offset_right = 0.0
-offset_bottom = 0.0
-
-[node name="DeckScroll" type="ScrollContainer" parent="DeckPanel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="DeckList" type="VBoxContainer" parent="DeckPanel/DeckScroll"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-
 [node name="BottomBar" type="HBoxContainer" parent="."]
 layout_mode = 1
-anchors_preset = 9
-anchor_left = 0.02
-anchor_top = 0.86
-anchor_right = 0.98
-anchor_bottom = 0.86
+anchor_left = 0.01
+anchor_top = 0.915
+anchor_right = 0.988
+anchor_bottom = 0.915
 offset_left = 0.0
-offset_top = -19.0
+offset_top = -17.0
 offset_right = 0.0
-offset_bottom = 19.0
-
-[node name="NameEdit" type="LineEdit" parent="BottomBar"]
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "卡组名"
+offset_bottom = 17.0
+theme_override_constants/separation = 10
 
 [node name="CountLabel" type="Label" parent="BottomBar"]
 layout_mode = 2
+size_flags_horizontal = 0
 text = "0 张"
+vertical_alignment = 1
 
-[node name="SaveButton" type="Button" parent="BottomBar"]
+[node name="StatsLabel" type="Label" parent="BottomBar"]
 layout_mode = 2
-text = "保存"
+size_flags_horizontal = 3
+text = "卡组构成：—"
+vertical_alignment = 1
+clip_text = true
 
 [node name="BackButton" type="Button" parent="BottomBar"]
+custom_minimum_size = Vector2(76, 0)
 layout_mode = 2
 text = "返回"
-
-[node name="LoadOption" type="OptionButton" parent="."]
-layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.09
-anchor_right = 0.5
-anchor_bottom = 0.09
-grow_horizontal = 2
-grow_vertical = 0
-offset_left = -90.0
-offset_top = -16.0
-offset_right = 90.0
-offset_bottom = 16.0

@@ -68,8 +68,15 @@ namespace Script.UI.Online
         /// <summary>断开并释放会话（离开大厅/退出房间/回主菜单时调用）。</summary>
         public static void Disconnect()
         {
-            try { _session?.Disconnect(); } catch { /* 已断开则忽略 */ }
+            // 先置 null 再 Dispose：`ClientSession.Dispose()` 会触发 `OnDisconnected`，
+            // 而 UI 的 OnDisconnected 处理器通常又会调一次本方法 —— 提前置 null 让重入变成 no-op，
+            // 避免二次释放 / 递归。
+            var session = _session;
             _session = null;
+            if (session == null) return;
+            // 【2026-10-17】用 Dispose（而非 Disconnect）：Disconnect 只停链，
+            // 不释放客户端对局视图，会留下 9 个 ObjectDB 实例。
+            try { session.Dispose(); } catch { /* 已释放则忽略 */ }
         }
     }
 }

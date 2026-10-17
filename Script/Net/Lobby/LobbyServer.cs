@@ -768,7 +768,11 @@ namespace Script.Net.Lobby
             for (int s = 1; s <= 2; s++)
             {
                 var seat = room.Seat(s);
-                if (seat.Occupied) Host?.Notice(seat.SessionId, code, text, room.RoomId);
+                if (!seat.Occupied) continue;
+                // 【2026-10-17】与 Broadcast / CloseRoom 的在线判断对齐：
+                // 原来只判 Occupied，批量断开时会继续向已关闭的 peer 发包（原生 ERROR + 堆栈）。
+                if (!IsConnected(seat.SessionId)) continue;
+                Host?.Notice(seat.SessionId, code, text, room.RoomId);
             }
         }
 

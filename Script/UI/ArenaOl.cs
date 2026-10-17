@@ -310,6 +310,9 @@ namespace Script.UI
                 _matchClient.OnClientIntentRejected -= OnClientIntentRejected;
             }
             _matchClient = null;
+            // 【2026-10-17】丢弃尚未应用的快照：拆除后会话可能马上释放投影 Manager，
+            // 残留队列若在下一帧被 Pump 就会应用到已释放的 Manager 上。
+            _snapshotQueue.Reset();
         }
 
         /// <summary>

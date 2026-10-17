@@ -55,6 +55,15 @@ namespace Script.Net.Godot
         private readonly Dictionary<string, long> _sessionToPeer = new Dictionary<string, long>();
         private int _nextSessionSeq;
 
+        /// <summary>
+        /// 因「对端已关闭/关闭中」而**跳过**的下发次数（诊断与测试断言用）。
+        /// 【批量断开修复 · 2026-10-17】见 <see cref="SendToSession"/> 的说明。
+        /// </summary>
+        public int SkippedClosedPeerSends { get; private set; }
+
+        /// <summary>真正调用过 <c>PutPacket</c> 的次数（测试用它断言"批量断开窗口内零发送"）。</summary>
+        public int PutPacketAttempts { get; private set; }
+
         /// <summary>客户端收到的下行消息所用的会话 id 占位（客户端不需要寻址；真实会话 id 见 Hello 应答）。</summary>
         public const string SelfSessionId = "self";
 
@@ -171,14 +180,32 @@ namespace Script.Net.Godot
             }
             if (string.IsNullOrEmpty(sessionId)) return;
             if (!_sessionToPeer.TryGetValue(sessionId, out long wsPeerId)) return;   // 会话不存在：静默忽略
+
+            // 【批量断开修复 · 2026-10-17】不能只看"字典里还在"就发。
+            // Godot 的 _poll_server() 先把它这一帧发现的所有 ready_state != OPEN 的 peer 收进 to_remove，
+            // 再**逐个** emit_signal(peer_disconnected) + peers_map.erase()。
+            // 于是处理第 1 个断开时，同一帧关闭的其它 peer 仍在 peers_map / _sessionToPeer 里、但已非 OPEN；
+            // 业务层（Broadcast/NoticeRoom/PushSnapshot）据此判"在线"照发 → 原生层打
+            //   "ERROR: Condition \"ready_state != STATE_OPEN\" is true. Returning: FAILED" + C# 堆栈。
+            // 而且这条错误**拦不住**：WebSocketMultiplayerPeer 的服务端定向分支会丢弃内层返回值、无条件
+            // return OK，所以下面 err != Error.Ok 的分支对这种情况根本不会触发。只能提前跳过。
+            WebSocketPeer wsPeer = _peer?.GetPeer((int)wsPeerId);
+            if (wsPeer == null || wsPeer.GetReadyState() != WebSocketPeer.State.Open)
+            {
+                // Closing 也跳过：关闭握手中的 peer 已无法保证送达，继续发只会继续报原生错误。
+                SkippedClosedPeerSends++;
+                return;
+            }
+
+            PutPacketAttempts++;
             Peer.SetTargetPeer((int)wsPeerId);
             byte[] bytes = _utf8.GetBytes(message);
             Error err = Peer.PutPacket(bytes);
-            // 【大包修复】把"底层丢弃"变成**可见错误**：PutPacket 在出站缓冲不足时会返回非 Ok
-            // （历史上这里被忽略 → 服务端日志显示"已下发快照"、客户端却什么都没收到）。
+            // 【注释修正 · 2026-10-17】原注释说"出站缓冲不足时 PutPacket 会返回非 Ok"，与服务端定向分支的
+            // 实现不符（内层返回值被丢弃、恒返回 OK）。本分支实际只能捕捉：
+            //   ERR_INVALID_PARAMETER（target peer 不在 peers_map）与 ERR_UNCONFIGURED（传输整体未连接）。
             if (err != Error.Ok)
-                GD.PrintErr($"[GodotWebSocketTransport] 下发失败 {sessionId}（{bytes.Length} 字节）：{err}；"
-                    + $"若为 OutOfMemory 说明单包超过出站缓冲（当前上限 {WsBufferLimitBytes} 字节）。");
+                GD.PrintErr($"[GodotWebSocketTransport] 下发失败 {sessionId}（{bytes.Length} 字节）：{err}。");
         }
 
         public void SendToServer(string message)
@@ -264,9 +291,21 @@ namespace Script.Net.Godot
         /// <summary>服务端：当前已连入的会话 id 列表。</summary>
         public IReadOnlyCollection<string> ConnectedSessionIds => _sessionToPeer.Keys;
 
-        /// <summary>服务端：该会话是否仍连接着。</summary>
+        /// <summary>
+        /// 服务端：该会话是否**真的还能收包**。
+        /// 【2026-10-17 强化】不再只查字典 —— 同帧批量断开时，已关闭的 peer 会在字典里多留一会儿
+        /// （见 <see cref="SendToSession"/> 的说明），只看字典会让 Broadcast / PushSnapshot
+        /// 继续往死连接序列化并下发 103 KB 快照。
+        /// </summary>
         public bool IsSessionConnected(string sessionId)
-            => !string.IsNullOrEmpty(sessionId) && _sessionToPeer.ContainsKey(sessionId);
+        {
+            if (string.IsNullOrEmpty(sessionId)) return false;
+            if (_peer == null) return false;
+            if (!_sessionToPeer.TryGetValue(sessionId, out long id)) return false;
+            // 只在字典命中后才调 GetPeer：它对不存在的 id 会打印原生 "Peer not found"。
+            WebSocketPeer ws = _peer.GetPeer((int)id);
+            return ws != null && ws.GetReadyState() == WebSocketPeer.State.Open;
+        }
 
         public int ConnectedSessionCount => _sessionToPeer.Count;
 

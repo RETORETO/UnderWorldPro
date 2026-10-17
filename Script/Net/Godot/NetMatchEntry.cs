@@ -56,6 +56,14 @@ namespace Script.Net.Godot
         private ClientSession _botSession;
         private NetBotClient _bot;
 
+        // —— 【容量压测 · 2026-10-17】进程内批量 BOT（`--load`） ——
+        private LoadBotRunner _loadRunner;
+        private int _loadPairs;
+        private int _loadIntervalMs = 3000;
+        private int _loadDurationSeconds;
+        private string _loadDeckPath;
+        private double _loadElapsed;
+
         public override void _Ready()
         {
             var args = OS.GetCmdlineUserArgs();
@@ -89,6 +97,30 @@ namespace Script.Net.Godot
                     if (i + 3 < args.Length && !args[i + 3].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 3];
                     if (i + 4 < args.Length && !args[i + 4].StartsWith("--", System.StringComparison.Ordinal)) _botDeckPath = args[i + 4];
                 }
+                else if (args[i] == "--load")
+                {
+                    // 【容量压测 · 2026-10-17】进程内拉起 N 对 BOT（每对 = 1 host + 1 join），造 N 间并发房。
+                    //   --load <pairs> [serverIp] [port] [--load-interval <ms>] [--load-duration <sec>]
+                    // 与 `--bot` 的区别：--bot 是"一个进程一个 BOT"（冒烟用）；--load 是"一个进程 N 对"（压测用，
+                    // 避免 N×2 个 Godot 进程把被测的 CPU/内存曲线污染掉）。
+                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out var lpairs)) _loadPairs = lpairs;
+                    if (i + 2 < args.Length && !args[i + 2].StartsWith("--", System.StringComparison.Ordinal)) serverHost = args[i + 2];
+                    if (i + 3 < args.Length && int.TryParse(args[i + 3], out var lport)) port = (ushort)lport;
+                }
+                else if (args[i] == "--load-interval")
+                {
+                    // 对局内「让过」间隔（毫秒）。默认 3000；压测时可设 200~500 提高负载。
+                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out var li) && li > 0) _loadIntervalMs = li;
+                }
+                else if (args[i] == "--load-duration")
+                {
+                    // 跑满多少秒后打印终态摘要并退出（0 = 不自动退出，靠外部杀掉）。
+                    if (i + 1 < args.Length && int.TryParse(args[i + 1], out var ld) && ld > 0) _loadDurationSeconds = ld;
+                }
+                else if (args[i] == "--load-deck")
+                {
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", System.StringComparison.Ordinal)) _loadDeckPath = args[i + 1];
+                }
                 else if (args[i] == "--lobby")
                 {
                     // 【增量 B】直接进入联机大厅页（跳过主菜单）并自动连接：
@@ -120,6 +152,18 @@ namespace Script.Net.Godot
                 if (!string.IsNullOrWhiteSpace(_lobbyNick)) Script.UI.Online.OnlineClientContext.LastName = _lobbyNick;
                 GD.Print($"[NetMatchEntry] 进入联机大厅页（默认服务端 {serverHost}:{port}）");
                 GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
+                return;
+            }
+
+            // ==================== 批量压测模式（进程内 N 对 BOT） ====================
+            // 必须在 `if (!_isServer && !_isClient) return;` 之前：`--load` 既不是服务端也不是单个客户端。
+            if (_loadPairs > 0)
+            {
+                _serverHost = serverHost;
+                _port = port;
+                _loadRunner = new LoadBotRunner(serverHost, port, _loadPairs, _loadIntervalMs / 1000.0, _loadDeckPath);
+                _loadRunner.Start();
+                GD.Print($"[NetMatchEntry] 批量压测模式已启动（{_loadPairs} 对 → {serverHost}:{port}）");
                 return;
             }
 
@@ -194,6 +238,23 @@ namespace Script.Net.Godot
 
         public override void _Process(double delta)
         {
+            // 批量压测模式：驱动 N 对 BOT；到点打印终态摘要并退出（便于脚本化跑实验）
+            if (_loadRunner != null)
+            {
+                _loadRunner.Poll(delta);
+                _loadElapsed += delta;
+                if (_loadDurationSeconds > 0 && _loadElapsed >= _loadDurationSeconds)
+                {
+                    _loadRunner.DumpSummary();
+                    // 【2026-10-17】退出前先释放会话与客户端投影，否则进程退出时报 ObjectDB 泄漏
+                    //（每个会话的 ClientMatchView 会 new 9 个不入树的 Manager Node）。
+                    _loadRunner.Stop();
+                    GD.Print($"[NetMatchEntry] 压测时长已到（{_loadDurationSeconds}s），退出");
+                    GetTree().Quit(0);
+                }
+                return;
+            }
+
             // BOT 模式：只驱动 ClientSession（无战场 UI、无本地规则）
             if (_isBot)
             {
@@ -271,6 +332,28 @@ namespace Script.Net.Godot
                 // }
                 _ = delta; // 保留参数占位，避免未使用告警
             }
+        }
+
+        /// <summary>
+        /// 【2026-10-17】退出兜底：释放本节点**自己创建**的 BOT 会话与压测负载。
+        ///
+        /// 为什么需要：`--load` 到点走的是 `_loadRunner.Stop()`（正常路径），但如果进程被 Ctrl+C /
+        /// 场景切换等方式提前结束，会话与其 `ClientMatchView`（9 个不入树的 Manager Node）就没人释放，
+        /// 退出时会出现 `ObjectDB instances were leaked`。
+        ///
+        /// 纪律：只处理 `--bot` / `--load` 的私有会话；**不要**碰 `OnlineClientContext` 里的共享会话
+        /// （那是 `--lobby` / 图形客户端的，生命周期归 `OnlineClientContext` 管）。
+        /// </summary>
+        public override void _ExitTree()
+        {
+            try { _loadRunner?.Stop(); } catch { /* 退出期忽略 */ }
+            _loadRunner = null;
+
+            try { _botSession?.Dispose(); } catch { /* 退出期忽略 */ }
+            _botSession = null;
+            _bot = null;
+
+            base._ExitTree();
         }
     }
 }

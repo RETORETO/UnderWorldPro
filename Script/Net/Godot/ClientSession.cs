@@ -18,7 +18,7 @@ namespace Script.Net.Godot
     ///
     /// 纪律：本类只做"连接 + 分发"，不含任何房间规则；房间规则在服务端（`LobbyServer`，批次 3）。
     /// </summary>
-    public class ClientSession : IMatchClientView
+    public class ClientSession : IMatchClientView, IDisposable
     {
         private readonly INetTransport _transport;
         private readonly string _playerName;
@@ -29,6 +29,8 @@ namespace Script.Net.Godot
         private string _helloRequestId;
         /// <summary>断开事件是否已通知过（幂等：`Poll` 检测与显式 `Disconnect()` 只会通知一次）。</summary>
         private bool _disconnectNotified;
+        /// <summary>已释放（幂等 + 阻止释放后再懒创建对局视图）。</summary>
+        private bool _disposed;
 
         /// <summary>
         /// 对局视图（投影 + 快照应用 + 决策请求分发）。**懒创建**：首次收到对局消息时建立，
@@ -37,14 +39,20 @@ namespace Script.Net.Godot
         /// </summary>
         private ClientMatchView _match;
 
-        /// <summary>客户端对局视图（懒创建；未进入对局前为 null）。</summary>
+        /// <summary>
+        /// 客户端对局视图（懒创建；未进入对局前为 null）。
+        /// 【2026-10-17】**`Dispose()` 之后恒返回 null**：否则释放后再被访问会重新 lazy 创建一个新视图，
+        /// 又泄漏 9 个 Node（正是要修的问题）。所有调用方必须按可空处理。
+        /// </summary>
         public ClientMatchView MatchView
         {
             get
             {
+                if (_disposed) return null;
                 if (_match == null)
                 {
-                    _match = new ClientMatchView(new NetClientCardManager(), MySeat);
+                    // ownsCardManager: true —— 这个 NetClientCardManager 由本会话创建，Dispose 时一并释放。
+                    _match = new ClientMatchView(new NetClientCardManager(), MySeat, ownsCardManager: true);
                     _match.BindSender((kind, args) => SendMatchIntent(kind, args), result => SendChoiceResult(result));
                     GD.Print($"[ClientSession] 已建立客户端对局视图（座位 {MySeat}）");
                 }
@@ -152,6 +160,7 @@ namespace Script.Net.Godot
         /// <summary>每帧驱动（握手完成会自动发送 Hello）。</summary>
         public void Poll()
         {
+            if (_disposed) return;
             _transport.Poll();
 
             // 【H3】断链检测：客户端侧的 ENet 在"连不上/服务端退出/被踢断"时只会把状态置为 Disconnected（传输层
@@ -176,6 +185,7 @@ namespace Script.Net.Godot
         /// <summary>上行一个大厅/房间请求（自动补 `RequestId`）。</summary>
         public string Send(LobbyRequest req)
         {
+            if (_disposed) return null;
             if (req == null) return null;
             if (string.IsNullOrEmpty(req.RequestId)) req.RequestId = $"c{++_requestSeq}";
             _transport.SendToServer(NetEnvelope.Wrap(NetEnvelope.Types.LobbyRequest, LobbySerializer.Serialize(req)));
@@ -188,6 +198,7 @@ namespace Script.Net.Godot
         /// </summary>
         public string SendMatchIntent(PlayerIntent.Kind kind, params string[] args)
         {
+            if (_disposed) return null;
             var intent = PlayerIntent.Create(MySeat, kind, args);
             _transport.SendToServer(NetEnvelope.Wrap(NetEnvelope.Types.Intent, IntentSerializer.SerializeIntent(intent)));
             return intent.IntentId;
@@ -196,14 +207,56 @@ namespace Script.Net.Godot
         /// <summary>上行一条决策回包（对局通道，对应服务端挂起的 `ChoiceRequest`）。</summary>
         public void SendChoiceResult(ChoiceResult result)
         {
+            if (_disposed) return;
             if (result == null) return;
             _transport.SendToServer(NetEnvelope.Wrap(NetEnvelope.Types.ChoiceResult, ChoiceSerializer.SerializeResult(result)));
         }
 
         public void Disconnect()
         {
-            _transport.Stop();
+            if (_disposed) return;
+            StopAndNotify();
+        }
+
+        /// <summary>停链 + 通知（`Disconnect` 与 `Dispose` 共用）。</summary>
+        private void StopAndNotify()
+        {
+            try { _transport.Stop(); } catch { /* 已停止则忽略 */ }
             NotifyDisconnected();
+        }
+
+        /// <summary>
+        /// 释放会话：停链 → 通知 UI → 退订传输回调 → 释放客户端对局视图（9 个 Node）。
+        ///
+        /// 【2026-10-17】原 `Disconnect()` 只停链、不释放 `_match` → 每个会话泄漏 9 个 ObjectDB 实例
+        /// （压测 `--load 8` 的 16 会话 = 144，即退出时那条 leak 警告的来源）。
+        ///
+        /// 顺序说明：
+        ///  1) **先置 `_disposed`**：`NotifyDisconnected` 可能让 UI 回调 `OnlineClientContext.Disconnect()`，
+        ///     提前置位可让重入变成 no-op，避免二次释放；
+        ///  2) 先 `StopAndNotify` 再释放视图：UI 在 `OnDisconnected` 里仍可读会话级数据（`CurrentRoom` 等，不碰 Manager）；
+        ///  3) 释放后 `_match = null` —— getter 有 `_disposed` 保护，不会再重建。
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            StopAndNotify();
+
+            // 退订传输回调（`OnSessionMessage` 是单槽 setter，置 null 不会误删别人的订阅）。
+            try { _transport.OnSessionMessage(null); } catch { /* 忽略 */ }
+
+            try { _match?.Dispose(); } catch { /* 忽略 */ }
+            _match = null;
+
+            OnConnected = null;
+            OnDisconnected = null;
+            OnLobbyResponse = null;
+            OnRoomState = null;
+            OnRoomList = null;
+            OnNotice = null;
+            OnMatchEnvelope = null;
         }
 
         /// <summary>通知"已断开"（幂等；`Poll` 的链路检测与显式 `Disconnect()` 共用）。</summary>
@@ -219,7 +272,7 @@ namespace Script.Net.Godot
 
         private void OnMessage(string _, string message)
         {
-            if (string.IsNullOrEmpty(message)) return;
+            if (_disposed || string.IsNullOrEmpty(message)) return;
 
             // 对局通道（快照/决策请求/意图回执）：交给 ClientMatchView 做投影与分发（与单场路径同一实现），
             // 同时保留 OnMatchEnvelope 透传（既有订阅者/冒烟工具用）。
@@ -231,7 +284,7 @@ namespace Script.Net.Godot
             {
                 // 对局消息到达时座位已由 RoomState 确定；此处同步一次，保证决策请求的定向校验正确
                 if (_match != null) _match.SetLocalSeat(MySeat);
-                MatchView.HandleMessage(message);
+                MatchView?.HandleMessage(message);
                 if (message.StartsWith(SnapshotSerializer.SnapPrefix, StringComparison.Ordinal))
                     OnMatchEnvelope?.Invoke("snap", message.Substring(SnapshotSerializer.SnapPrefix.Length));
                 return;
@@ -281,7 +334,7 @@ namespace Script.Net.Godot
                 case NetEnvelope.Types.IntentResult:
                 case NetEnvelope.Types.ChoiceRequest:
                     // 已在上面按"对局通道"提前处理（交 ClientMatchView）；此分支不应到达，保留以防未来新增类型漏接线
-                    MatchView.HandleMessage(message);
+                    MatchView?.HandleMessage(message);
                     OnMatchEnvelope?.Invoke(type, payload);
                     break;
                 default:
@@ -292,33 +345,37 @@ namespace Script.Net.Godot
 
         // ==================== IMatchClientView（委托给 ClientMatchView；供 ArenaOl 挂载） ====================
 
+        // 【2026-10-17】以下全部走 `MatchView?.`：`Dispose()` 之后 getter 恒为 null，
+        // 这些成员必须能容忍 null（否则断线收尾时 UI 的最后一帧读取会 NRE）。
         int IMatchClientView.LocalSeat => MySeat;
-        GameSnapshot IMatchClientView.LastSnapshot => MatchView.LastSnapshot;
-        ZoneManager IMatchClientView.ClientZoneManager => MatchView.ClientZoneManager;
-        CardManager IMatchClientView.ClientCardManager => MatchView.ClientCardManager;
-        PlayerManager IMatchClientView.ClientPlayerManager => MatchView.ClientPlayerManager;
-        TurnManager IMatchClientView.ClientTurnManager => MatchView.ClientTurnManager;
-        StackManager IMatchClientView.ClientStackManager => MatchView.ClientStackManager;
-        WorldDeckManager IMatchClientView.ClientWorldDeckManager => MatchView.ClientWorldDeckManager;
-        AreaManager IMatchClientView.ClientAreaManager => MatchView.ClientAreaManager;
-        DeckManager IMatchClientView.ClientDeckManager => MatchView.ClientDeckManager;
-        IReadOnlyList<CostModSnap> IMatchClientView.ClientCostMods => MatchView.ClientCostMods;
-        IReadOnlyList<StackEntrySnap> IMatchClientView.ClientStackSnapshot => MatchView.ClientStackSnapshot;
-        IReadOnlyList<Script.Game.Entities.CardInstance> IMatchClientView.ClientInvestigationCards => MatchView.ClientInvestigationCards;
+        GameSnapshot IMatchClientView.LastSnapshot => MatchView?.LastSnapshot;
+        ZoneManager IMatchClientView.ClientZoneManager => MatchView?.ClientZoneManager;
+        CardManager IMatchClientView.ClientCardManager => MatchView?.ClientCardManager;
+        PlayerManager IMatchClientView.ClientPlayerManager => MatchView?.ClientPlayerManager;
+        TurnManager IMatchClientView.ClientTurnManager => MatchView?.ClientTurnManager;
+        StackManager IMatchClientView.ClientStackManager => MatchView?.ClientStackManager;
+        WorldDeckManager IMatchClientView.ClientWorldDeckManager => MatchView?.ClientWorldDeckManager;
+        AreaManager IMatchClientView.ClientAreaManager => MatchView?.ClientAreaManager;
+        DeckManager IMatchClientView.ClientDeckManager => MatchView?.ClientDeckManager;
+        IReadOnlyList<CostModSnap> IMatchClientView.ClientCostMods => MatchView?.ClientCostMods;
+        IReadOnlyList<StackEntrySnap> IMatchClientView.ClientStackSnapshot => MatchView?.ClientStackSnapshot;
+        IReadOnlyList<Script.Game.Entities.CardInstance> IMatchClientView.ClientInvestigationCards => MatchView?.ClientInvestigationCards;
+        // 事件订阅同样必须空安全：`add` 里若直接访问 `MatchView` 属性，Dispose 后（getter 返回 null）
+        // 会立刻 NRE；而在 `_disposed` 之前访问又会触发懒创建。故先取局部再判空。
         event Action<GameSnapshot> IMatchClientView.OnClientSnapshot
         {
-            add => MatchView.OnClientSnapshot += value;
-            remove => MatchView.OnClientSnapshot -= value;
+            add { var v = MatchView; if (v != null) v.OnClientSnapshot += value; }
+            remove { var v = MatchView; if (v != null) v.OnClientSnapshot -= value; }
         }
         event Action<ChoiceRequest> IMatchClientView.OnClientChoiceRequest
         {
-            add => MatchView.OnClientChoiceRequest += value;
-            remove => MatchView.OnClientChoiceRequest -= value;
+            add { var v = MatchView; if (v != null) v.OnClientChoiceRequest += value; }
+            remove { var v = MatchView; if (v != null) v.OnClientChoiceRequest -= value; }
         }
         event Action<IntentResult> IMatchClientView.OnClientIntentRejected
         {
-            add => MatchView.OnClientIntentRejected += value;
-            remove => MatchView.OnClientIntentRejected -= value;
+            add { var v = MatchView; if (v != null) v.OnClientIntentRejected += value; }
+            remove { var v = MatchView; if (v != null) v.OnClientIntentRejected -= value; }
         }
 
         /// <summary>上行意图（接口签名带 seat 以兼容旧单场路径；本会话以自己的座位为准，忽略该参数）。</summary>
