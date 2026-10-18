@@ -20,7 +20,7 @@
 | **P3a** 角标折叠 | ✅ 已完成 | 新增 `CardBadges.Apply()`；4 个实例级偏移函数改为"成员 `Visible=false` + 宿主角标"；**cat-1（结附/封印于地区）不折叠**，仍走 `ArrangeAreaAttachmentsAndSeals` 平铺 |
 | **P3b** 角标 hover 展开 | ✅ 已完成 | 新增 `CardBadgePeek` + `Arena.BadgePeek.cs`；**封印/附属分家**（各自独立悬浮区，一次只列一种，面板有标题）；**双击成员＝发动激活能力**（复用既有双击链路，补回 JC020 这类被折叠附属的唯一入口）；单击成员只调 `CardPickWindow.SelectByUid`（置选中、不提交）；无选择窗时纯浏览 |
 | **P4** 资产/分数层叠 | ✅ 已完成 | 新增 `CardLayoutHelper.LayoutStacked()`（露边 36px，放不下自动压缩）；单机 + 联机双侧接入 |
-| **P4** 对手手牌紧凑 | ⏸ 待拍板 | 单机是同屏热座，压成"一张牌背 + 数字"会**直接废掉热座可玩性** ⇒ 需用户确认是否只改联机端 |
+| **P4** 对手手牌紧凑 | ✅ 已完成（**仅联机端**） | 用户 2026-10-18 拍板「只改联机端」（单机同屏热座必须保持正面逐张可见）。`ArenaOl.ArrangeChildren` 对"整排都是隐藏牌背"的对手手牌改调 `CardLayoutHelper.LayoutCompactBacks()`：全部牌背叠在一处、只露一张 + `CardCountBadge` 的「×N」；鼠标停在手牌带内则改用 `LayoutStacked`（每张露 36px）便于数张数，收起/展开由 `_Process` 每帧矩形轮询（不依赖 `mouse_entered/exited` 的父子冒泡语义） |
 | **P5** 手牌 hover 上浮 | ✅ 已完成 | `CardUI` 叠加 `HoverOffset()`（+28px / 1.18x），移动节点而非 shader/pivot ⇒ `GetVisualGlobalRect()` 自动一致；手牌上下文**抑制整卡预览** |
 | **P6** 回归 | ✅ 已完成 | `dotnet build` 0 警告 0 错误；全量 headless **159 套件 0 失败**（`logs/p6_final_tests.log` 末行 `>>> 全部逻辑正确性测试通过`）；文档已更新（`制作指南/UI层级规范.md` 角标实施订正） |
 
@@ -136,6 +136,14 @@
 - **层叠态候选/选中呈现**：按方案决策 4 末条二选一（位移+抬层 或 角标指示），**不得复用 `SetSelectableHighlight` 黄框**。
 - **风险（低）**：已核实单机与联机**都没有"点击某张资产"的交互**（付费是"支付X（横置1张资产）"按钮式，`Arena.cs:797`；
   联机只在刷新时 `SetTapped`），所以层叠不破坏付费链路。仍建议保留"露边条可点 = 展开"以防后续加交互。
+- **实施结果（2026-10-18）·对手手牌紧凑只做联机端**：
+  - `CardLayoutHelper.LayoutCompactBacks()`：`step = 0`，把牌背全叠在容器中央（`LayoutStacked` 的 `step = 0` 特例，单独成函数以免误用）；
+  - `CardCountBadge`（新文件，与 `CardBadges` 刻意分离）：代表牌背右上角「×N」，`MouseFilter=Ignore` 只显示不抢 hover；
+  - `ArenaOl.ArrangeChildren` 分支条件写死为"**整排都是 `Instance == null` 的隐藏牌背**"——
+    若服务端把某张对手手牌明置（`IsHidden=false` 且有模板），说明那是玩家有权看见的信息，必须回退常规平铺；
+  - 展开/收起用 `ArenaOl._Process` 每帧对 `HandContainer` 做矩形命中判定，**不用 `mouse_entered/exited`**：
+    Godot 各版本对"进入子卡时父容器是否收到 exit"语义不一致，用事件会在玩家挪到牌背上时把整排塌回去；
+  - 牌背占位置 `CardUI.SuppressHoverLift = true`，避免 P5 上浮动画与展开动画抢同一位置抖动（本方手牌不受影响）。
 
 ### P5 ｜手牌 hover 上浮（依赖 P2 手牌区高度）
 

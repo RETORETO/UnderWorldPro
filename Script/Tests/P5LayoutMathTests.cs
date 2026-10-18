@@ -107,6 +107,53 @@ namespace Script.Tests
         }
 
         /// <summary>
+        /// 【P4·决策 7·2026-10-18】锁定**联机对手手牌紧凑**的几何：
+        ///  - 紧凑态：所有牌背**叠在同一位置**且整体居中（外面只看到"一张牌背"，数量交给「×N」角标）；
+        ///  - hover 展开：改用 `LayoutStacked`，每张露 36px 且不溢出容器（玩家据此数清张数）。
+        /// 为什么值得单测：紧凑是"看起来只有一张"的唯一保证 —— 只要 Position 有位移就会露边，
+        /// 立刻破功成"一排重叠的牌"；而展开若溢出容器会压到同排的分数/资产区。
+        /// </summary>
+        public void TestLayout_对手手牌紧凑叠一处且展开露边36()
+        {
+            var tree = Engine.GetMainLoop() as SceneTree;
+            Assert.IsNotNull(tree, "测试运行于 Godot 场景树内");
+
+            float w = CardLayoutHelper.CARD_WIDTH;
+
+            var container = new Control { Size = new Vector2(960, 240) };   // 联机 HandContainer 实测宽 960
+            tree.Root.AddChild(container);
+
+            var cards = new System.Collections.Generic.List<Control>();
+            for (int i = 0; i < 7; i++)
+            {
+                var c = new Control { Size = new Vector2(w, CardLayoutHelper.CARD_HEIGHT) };
+                container.AddChild(c);
+                cards.Add(c);
+            }
+
+            // ---- ① 紧凑：全部同一位置 ----
+            CardLayoutHelper.LayoutCompactBacks(container, cards);
+            for (int i = 1; i < cards.Count; i++)
+            {
+                Assert.AreEqual(cards[0].Position, cards[i].Position,
+                    $"紧凑态第 {i} 张必须与第 0 张完全重合（否则会露出边、看起来不像「一张牌背」）");
+            }
+            Assert.AreEqual((960f - w) / 2f, cards[0].Position.X,
+                "紧凑牌背在容器内水平居中");
+
+            // ---- ② 展开：每张露 36px，且不溢出 ----
+            CardLayoutHelper.LayoutStacked(container, cards, 36f);
+            Assert.AreEqual(36f, cards[1].Position.X - cards[0].Position.X,
+                "展开态露边＝36px（与资产/分数区层叠同口径）");
+            float rightEdge = cards[6].Position.X + w;
+            Assert.IsTrue(rightEdge <= container.Size.X + 0.5f,
+                $"展开后末卡右缘 {rightEdge} 不得溢出容器宽 {container.Size.X}");
+
+            foreach (var c in cards) c.QueueFree();
+            container.QueueFree();
+        }
+
+        /// <summary>
         /// 【2026-10·卡平滑归位】锁定"**旋转 Control 的 GlobalPosition 含枢轴项**"：
         /// 旋转后的 transform origin = Position + pivot − R·pivot（scale=1），90° 时多出 **(120,20)**。
         ///

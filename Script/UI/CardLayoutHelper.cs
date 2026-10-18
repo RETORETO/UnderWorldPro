@@ -78,6 +78,35 @@ namespace Script.UI
             }
         }
 
+        /// <summary>
+        /// 【P4·决策 7·2026-10-18】对手手牌紧凑：把整把**牌背叠在容器中央的同一位置**（只露最上面一张）。
+        ///
+        /// 与 `LayoutStacked` 的唯一差别是 `step = 0`：紧凑态要的就是"一张牌背"的外观，
+        /// 张数由 `CardCountBadge` 的「×N」角标交代；hover 展开时改调 `LayoutStacked(edge)`，
+        /// 让每张露 36px 边，玩家能一眼数清张数（复用决策 4 的层叠机制）。
+        ///
+        /// **只给联机对手手牌用**：单机是同屏热座，对手手牌本来就正面可视，
+        /// 压成一张牌背会直接废掉热座可玩性（用户 2026-10-18 明确口径：「只改联机端」）。
+        /// </summary>
+        public static void LayoutCompactBacks(Control container, System.Collections.Generic.List<Control> cards)
+        {
+            if (container == null || cards == null || cards.Count == 0) return;
+
+            var valid = new System.Collections.Generic.List<Control>();
+            foreach (var c in cards)
+                if (c != null && GodotObject.IsInstanceValid(c)) valid.Add(c);
+            if (valid.Count == 0) return;
+
+            float containerWidth = container.Size.X;
+            if (containerWidth <= 0) containerWidth = 400f;
+
+            Vector2 cardSize = SizeOf(valid[0]);
+            float startX = Mathf.Max(0f, (containerWidth - cardSize.X) / 2f);
+
+            for (int i = 0; i < valid.Count; i++)
+                PlaceCardInContainer(container, valid[i], startX, i);
+        }
+
         private static void MarkStacked(Control card)
         {
             if (card is CardUI cui) cui.StackedMode = true;

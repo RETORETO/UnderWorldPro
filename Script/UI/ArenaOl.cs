@@ -211,6 +211,13 @@ namespace Script.UI
         private Control _localHand;      // 本地玩家手牌容器（拖拽来源）
         private int _localHandOwner;     // 本地玩家号（与 _localPlayerId 一致，拖拽时校验）
 
+        // ==================== 对手手牌紧凑（P4·决策 7·2026-10-18） ====================
+        // 只改**联机端**（用户口径：「对手手牌紧凑 → 只改联机端」）：
+        // 单机是同屏热座，对手手牌本来就正面可视，压成牌背会直接废掉热座可玩性。
+        // 折叠：一张牌背 + 「×N」；hover 整排：改用 LayoutStacked（每张露 36px 边）数清张数。
+        private bool _opponentHandExpanded;
+        private const float OpponentHandEdge = 36f;
+
         /// <summary>
         /// 争夺区（AreaZone 桶）实际渲染出的角色卡 UI，按容器登记。
         /// 【2026-10 修复】作为"争夺区统一平铺序列"的角色侧来源，替代原先
@@ -3538,6 +3545,7 @@ namespace Script.UI
         public override void _Process(double delta)
         {
             PumpSnapshotQueue(delta);
+            UpdateOpponentHandHover();     // 【P4·决策 7】对手手牌紧凑 ↔ hover 展开
             UpdateStackArrowEndpoints();   // 堆叠箭头每帧跟随（端点实时更新）
             UpdateHandDragTargetHighlights();   // 拖拽手牌期间的合法目标高亮（对齐单机）
 
@@ -3990,6 +3998,9 @@ namespace Script.UI
                     hiddenUi.Setup(null);
                     hiddenUi.SetFace(false);
                     hiddenUi.CanDrag = false;
+                    // 【P4·决策 7】牌背占位的 hover 语义是"整排展开数张数"（ArenaOl 接管），
+                    // 不参与 P5 的手牌上浮放大（否则两套动画抢同一位置会抖）。
+                    hiddenUi.SuppressHoverLift = true;
                     _cardUIMap[inst.UID] = hiddenUi;
                     continue;
                 }
@@ -4036,7 +4047,83 @@ namespace Script.UI
             var cards = new List<Control>();
             foreach (var child in container.GetChildren())
                 if (child is CardUI c && GodotObject.IsInstanceValid(c)) cards.Add(c);
+
+            // 【P4·决策 7】联机对手手牌：一张牌背 + 「×N」（hover 整排展开成层叠）。
+            // 只在"整排都是隐藏牌背"时生效：若服务端把某张对手手牌明置（IsHidden=false，有模板），
+            // 说明那是玩家有权看见的信息，必须走常规平铺，不能被压到牌背底下。
+            if (IsOpponentHandCtr(container) && AreAllHiddenBacks(cards))
+            {
+                ArrangeOpponentHandBacks(container, cards);
+                return;
+            }
+
             CardLayoutHelper.LayoutCardsEvenly(container, cards);
+        }
+
+        // ==================== 对手手牌紧凑（P4·决策 7） ====================
+
+        /// <summary>容器是否是**对手**手牌容器（本方手牌走常规平铺）。</summary>
+        private bool IsOpponentHandCtr(Control container)
+        {
+            if (container == null) return false;
+            if (!ReferenceEquals(container, _p1Hand) && !ReferenceEquals(container, _p2Hand)) return false;
+            var mine = HandCtr(_localPlayerId);
+            return mine != null && !ReferenceEquals(container, mine);
+        }
+
+        /// <summary>整排是否都是"无实例的牌背占位"（`RebuildInto` 的 IsHidden 分支产物）。</summary>
+        private static bool AreAllHiddenBacks(List<Control> cards)
+        {
+            if (cards == null || cards.Count == 0) return false;
+            foreach (var c in cards)
+            {
+                if (!(c is CardUI cui) || cui.Instance != null) return false;
+            }
+            return true;
+        }
+
+        private void ArrangeOpponentHandBacks(Control container, List<Control> cards)
+        {
+            if (cards.Count == 0) return;
+
+            if (_opponentHandExpanded && cards.Count > 1)
+                CardLayoutHelper.LayoutStacked(container, cards, OpponentHandEdge);   // 展开：每张露 36px
+            else
+                CardLayoutHelper.LayoutCompactBacks(container, cards);                // 紧凑：全叠在一处
+
+            // `PlaceCardInContainer` 会强制 `Visible = true`（P3a 恢复可见），
+            // 所以"只露一张"必须在排版**之后**设；展开态则全部恢复可见。
+            for (int i = 1; i < cards.Count; i++)
+                cards[i].Visible = _opponentHandExpanded;
+
+            // 数量角标只挂代表牌背（第一张），其余清掉（防止重建/换态时残留）
+            CardCountBadge.Apply(cards[0], cards.Count);
+            for (int i = 1; i < cards.Count; i++)
+                CardCountBadge.Clear(cards[i]);
+        }
+
+        /// <summary>
+        /// 每帧判定对手手牌是否 hover 展开（紧凑 ↔ 层叠）。
+        ///
+        /// **为什么用"每帧矩形轮询"而不是 `mouse_entered/exited`**：
+        ///  · Godot 各版本对 `mouse_entered/exited` 是否向父节点冒泡不一致 —— 若"进入子卡"时父容器收到
+        ///    `exit`，用事件驱动会在玩家挪到牌背上的一瞬间把整排塌回去；
+        ///  · 而且从子卡直接移出容器时，父容器可能**根本收不到** `exit`，状态会卡在"已展开"。
+        /// 矩形轮询与事件语义完全解耦：鼠标在带内就展开、离开就收起，快照重建也不会打断展开态
+        /// （`_opponentHandExpanded` 只在状态翻转时才重排，不是每帧排版）。
+        /// </summary>
+        private void UpdateOpponentHandHover()
+        {
+            if (!IsVisibleInTree()) return;
+
+            var opp = _localPlayerId == 1 ? _p2Hand : _p1Hand;   // 视角归一：对手恒在另一侧
+            if (opp == null || !GodotObject.IsInstanceValid(opp)) return;
+            if (opp.GetChildCount() == 0) return;                // 对手没手牌 ⇒ 无需展开/收起
+
+            bool inside = opp.GetGlobalRect().HasPoint(GetGlobalMousePosition());
+            if (_opponentHandExpanded == inside) return;
+            _opponentHandExpanded = inside;
+            ArrangeChildren(opp);
         }
 
         /// <summary>

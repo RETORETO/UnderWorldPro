@@ -126,6 +126,15 @@ namespace Script.UI
 
         /// <summary>【P4】本卡当前处于"层叠"排布（资产区/分数区）：悬停时抬高层级即可看全卡面。</summary>
         public bool StackedMode { get; set; }
+
+        /// <summary>
+        /// 【P4·决策 7】抑制手牌 hover 上浮：**联机对手手牌**的牌背占位用。
+        /// 那些占位的父容器同样叫 `HandContainer`（会被 `IsHandContext` 判成手牌），
+        /// 而紧凑态只露一张牌背、hover 时会整排展开（`CardLayoutHelper.LayoutStacked`），
+        /// 若再叠一层"放大 1.18＋上浮 28px"就变成两套动画抢同一个位置 ⇒ 牌背在展开过程中抖动。
+        /// 单机/联机**本方**手牌不受影响（该属性只在 `ArenaOl.RebuildInto` 的隐藏占位分支里置 true）。
+        /// </summary>
+        public bool SuppressHoverLift { get; set; }
         private int _stackSavedZ;
         private bool _stackZSaved;
 
@@ -173,7 +182,10 @@ namespace Script.UI
         {
             if (IsHandContext)
             {
-                _hoverTarget = 1;   // 手牌：上浮放大，**不**弹整卡预览
+                // 手牌：上浮放大，**不**弹整卡预览。
+                // 联机对手手牌的牌背占位（SuppressHoverLift）不参与上浮 —— 它的 hover 语义是
+                // "整排展开数张数"（由 ArenaOl 接管），两套动画同时抢位置会抖。
+                if (!SuppressHoverLift) _hoverTarget = 1;
                 return;
             }
             if (StackedMode)
