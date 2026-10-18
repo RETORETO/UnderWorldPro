@@ -40,6 +40,16 @@ public partial class AreaSlot : Control
     public Control Player1Area => _player1Area;
     public Control Player2Area => _player2Area;
 
+    /// <summary>
+    /// 【P1·视角归一·2026-10-19】座位是否镜像（本地座位 = 2）。
+    ///
+    /// 联机镜像视图下，座位 1 的卡画在 `Player2Area`（上）、座位 2 的卡画在 `Player1Area`（下），
+    /// 而 `PlayerXArea` 里的 `StatsLabel`（调查/战斗/势力）与地区卡的「势力标记」文案是**按半边固定**的
+    /// ⇒ 不跟着换就会把"自己的数字"显示在对手那半边（玩家 2 视角独有）。
+    /// 单机 `Arena` 恒为 false（本地恒为座位 1，画面不镜像）。
+    /// </summary>
+    public bool MirrorSeats { get; set; }
+
     /// <summary>注入统计所需的逻辑层依赖。必须在 Setup 之前调用。</summary>
     public void SetStatsDependencies(ZoneManager zoneManager, PlayerManager playerManager)
     {
@@ -255,6 +265,14 @@ public partial class AreaSlot : Control
 
     public void UpdateMarks(int p1, int p2)
     {
+        // 【P1】镜像视图下 Player1Area = 本方、Player2Area = 对手 ⇒ 值与文案一起换（避免"P1: 3 P2: 1"里 P1 其实是自己）
+        if (MirrorSeats)
+        {
+            _player1Marks = p2;
+            _player2Marks = p1;
+            if (_areaCardUI != null) _areaCardUI.UpdateMarks(p2, p1, localFirst: true);
+            return;
+        }
         _player1Marks = p1;
         _player2Marks = p2;
         if (_areaCardUI != null)
@@ -361,8 +379,17 @@ public partial class AreaSlot : Control
         var p1 = AreaStatsCalculator.GetAreaStats(_zoneManager, _playerManager, _areaUID, 1);
         var p2 = AreaStatsCalculator.GetAreaStats(_zoneManager, _playerManager, _areaUID, 2);
 
-        ApplyStats(_player1StatsLabel, p1);
-        ApplyStats(_player2StatsLabel, p2);
+        // 【P1】镜像视图（本地=座位2）：Player1Area 里画的是座位2 的卡 ⇒ 数字也必须取座位2 的
+        if (MirrorSeats)
+        {
+            ApplyStats(_player1StatsLabel, p2);
+            ApplyStats(_player2StatsLabel, p1);
+        }
+        else
+        {
+            ApplyStats(_player1StatsLabel, p1);
+            ApplyStats(_player2StatsLabel, p2);
+        }
     }
 
     private static void ApplyStats(Label label, (int inv, int bat, int pow) s)

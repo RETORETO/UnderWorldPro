@@ -15,7 +15,7 @@
 | 选卡找卡 UI 批次 1/2/3 | ✅ 已完成 | `8bb48b6` / `caa8c23` / `2b5d6ab` |
 | 选卡方案 **C4** | ⛔ 按用户要求暂缓 | 需改 `IGameUIHooks` + `TurnManager` |
 | **P0** 尺寸收口 | ✅ 已完成 | `CardLayoutHelper.CARD_WIDTH/HEIGHT = 140/196` 为唯一真源（`Arena.Layout.cs`、`CardUI.cs` 改为别名；`.tscn` 手改）。**秘社卡例外**：`CardLayoutHelper.SizeOf()` 对 `CouncilCardUI` 仍返回 100×140；牌堆/墓地缩略图（`DeckZone`/`GraveyardZone`/`OnlineDeckZone`）保持 100×140 且 `CustomMinimumSize` 同设（只设 `Size` 会被钳回） |
-| **P1** 联机视角归一 | ✅ 已完成 | `ArenaOl.cs` 收口为 `ViewMirrored/ViewCtr/HandCtr/AssetCtr/ScoreCtr/CouncilCtr/DeckZoneOf/GraveZoneOf/PlayerAreaNode/SeatName`；**身份判断（`SendIntentAs`/`ControllerId`/`IsLocalPlayer`）不镜像** |
+| **P1** 联机视角归一 | ✅ 已完成（2026-10-19 补漏） | `ArenaOl.cs` 收口为 `ViewMirrored/ViewCtr/HandCtr/AssetCtr/ScoreCtr/CouncilCtr/DeckZoneOf/GraveZoneOf/PlayerAreaNode/SeatName`；**身份判断（`SendIntentAs`/`ControllerId`/`IsLocalPlayer`）不镜像**。补漏：① 对手手牌 hover 展开原先直取面板（`_localPlayerId==1 ? _p2Hand : _p1Hand`），镜像后取到的是**本方**手牌 ⇒ 玩家 2 视角对手牌背永不展开，改走 `HandCtr(对手座位)`；② `AreaSlot` 新增 `MirrorSeats`，地区「调查/战斗/势力」统计与势力标记文案随镜像换半边（否则自己的数字显示在对手那半边）；③ 新增 `OnlineViewMirrorTests` 源码契约防回归 |
 | **P2** 争夺区重排 | ✅ 已完成 | 槽 480×540（`AreaSlot.tscn` + `AreaSlot.cs` 兜底值 + `ArrangeAreas`）；`Player1Area` 250→290、`CenterArea` 580→540、`HandContainer` 250→290、`ScoreZone` 随之下移，`StackPanel` 同步 |
 | **P3a** 角标折叠 | ✅ 已完成 | 新增 `CardBadges.Apply()`；4 个实例级偏移函数改为"成员 `Visible=false` + 宿主角标"；**cat-1（结附/封印于地区）不折叠**，仍走 `ArrangeAreaAttachmentsAndSeals` 平铺 |
 | **P3b** 角标 hover 展开 | ✅ 已完成 | 新增 `CardBadgePeek` + `Arena.BadgePeek.cs`；**封印/附属分家**（各自独立悬浮区，一次只列一种，面板有标题）；**双击成员＝发动激活能力**（复用既有双击链路，补回 JC020 这类被折叠附属的唯一入口）；单击成员只调 `CardPickWindow.SelectByUid`（置选中、不提交）；无选择窗时纯浏览 |

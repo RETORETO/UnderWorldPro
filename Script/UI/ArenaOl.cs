@@ -3913,6 +3913,9 @@ namespace Script.UI
                 // AreaStatsCalculator 只依赖这两个 Manager，且客户端 PlayerManager 已注入投影 ZoneManager
                 // 并已由快照设置先手（SetFirstPlayer），故统计与单机同源同值。
                 slot.SetStatsDependencies(_matchClient?.ClientZoneManager, _matchClient?.ClientPlayerManager);
+                // 【P1】镜像视图：地区"调查/战斗/势力"统计与势力标记文案跟着座位换半边（必须在 Setup 之前设，
+                // Setup 末尾会 RefreshStatsLabels 一次）
+                slot.MirrorSeats = ViewMirrored;
                 slot.Setup(inst, i + 1, false, _areaCardUIScene);
                 _areaSlots.Add(slot);
             }
@@ -4116,7 +4119,10 @@ namespace Script.UI
         {
             if (!IsVisibleInTree()) return;
 
-            var opp = _localPlayerId == 1 ? _p2Hand : _p1Hand;   // 视角归一：对手恒在另一侧
+            // 【P1】对手座位恒为另一侧：座位号 → 界面容器必须走 HandCtr 的镜像映射。
+            // 直接按"本地=1 取 P2 面板、本地=2 取 P1 面板"写会踩坑：镜像后本地座位 2 自己的手牌就画在
+            // `_p1Hand` 上 ⇒ 取到的是**本方**手牌，玩家 2 视角下对手那排永远不展开（2026-10-19 用户实测）。
+            var opp = HandCtr(_localPlayerId == 1 ? 2 : 1);
             if (opp == null || !GodotObject.IsInstanceValid(opp)) return;
             if (opp.GetChildCount() == 0) return;                // 对手没手牌 ⇒ 无需展开/收起
 

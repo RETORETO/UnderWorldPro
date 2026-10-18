@@ -232,10 +232,15 @@ namespace Script.UI
             if (_backface == null) GD.PrintErr("[AreaCardUI] ❌ _backface 未绑定");
             if (_background == null) GD.PrintErr("[AreaCardUI] ❌ _background 未绑定");
         }
-        public void UpdateMarks(int p1, int p2)
+        /// <summary>
+        /// 地区卡右下角的"势力标记"计数。
+        /// <paramref name="localFirst"/> = true 时（联机镜像视图：本地座位 2）文案改用「本方/对手」，
+        /// 否则仍是「P1/P2」——因为此时 P1 是**对手**，继续标 P1 会指错人。
+        /// </summary>
+        public void UpdateMarks(int p1, int p2, bool localFirst = false)
         {
-            if (_marksLabel != null)
-                _marksLabel.Text = $"P1: {p1}  P2: {p2}";
+            if (_marksLabel == null) return;
+            _marksLabel.Text = localFirst ? $"本方 {p1} / 对手 {p2}" : $"P1: {p1}  P2: {p2}";
         }
 
         // ============================================================
