@@ -98,21 +98,21 @@ grow_vertical = 0
 [node name="ScoreZone" type="Panel" parent="Player1Area" unique_id=473622576]
 layout_mode = 0
 offset_left = 1250.0
-offset_top = 190.0
-offset_right = 1390.0
+offset_top = 94.0
+offset_right = 1446.0
 offset_bottom = 290.0
 
 [node name="ScoreLabel" type="Label" parent="Player1Area/ScoreZone" unique_id=336436700]
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
-offset_left = 140.0
-offset_right = 180.0
+offset_left = 196.0
+offset_right = 236.0
 offset_bottom = 40.0
 
 [node name="CardContainer" type="Control" parent="Player1Area/ScoreZone" unique_id=16017608]
 anchors_preset = 0
-offset_right = 140.0
-offset_bottom = 100.0
+offset_right = 196.0
+offset_bottom = 196.0
 
 [node name="HandContainer" type="Control" parent="Player1Area" unique_id=284468618]
 anchors_preset = 0
@@ -223,21 +223,21 @@ offset_bottom = 250.0
 [node name="ScoreZone" type="Panel" parent="Player2Area" unique_id=1594959310]
 layout_mode = 0
 offset_left = 1250.0
-offset_right = 1390.0
-offset_bottom = 100.0
+offset_right = 1446.0
+offset_bottom = 196.0
 
 [node name="ScoreLabel" type="Label" parent="Player2Area/ScoreZone" unique_id=950149439]
 z_index = 860
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
-offset_left = 140.0
-offset_right = 180.0
+offset_left = 196.0
+offset_right = 236.0
 offset_bottom = 40.0
 
 [node name="CardContainer" type="Control" parent="Player2Area/ScoreZone" unique_id=1588912882]
 anchors_preset = 0
-offset_right = 140.0
-offset_bottom = 100.0
+offset_right = 196.0
+offset_bottom = 196.0
 
 [node name="HandContainer" type="Control" parent="Player2Area" unique_id=1106344150]
 anchors_preset = 0

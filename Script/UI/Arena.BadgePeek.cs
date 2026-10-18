@@ -24,14 +24,20 @@ public partial class Arena
     private CardBadgePeek _badgePeek;
     /// <summary>最近一次打开的选择窗（`CardPickWindow`），供展开面板"只置选中"用。</summary>
     private CardPickWindow _activePickWindow;
-    /// <summary>收起延迟令牌：鼠标在角标↔面板间移动时不闪断。</summary>
-    private int _badgePeekHideToken;
+    /// <summary>鼠标连续离开"角标 + 面板"的时长（秒）；超过阈值才收起，避免角标↔面板间移动时闪断。</summary>
+    private double _badgePeekMiss;
+
+    // ---- 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表 ----
+    private Control _pilePeekHost;      // 当前弹出列表的那一块（资产容器 / 墓地）
+    private bool _pilePeekInside;       // 鼠标是否已在某一块里（用于"只在进入时重建面板"）
 
     /// <summary>把角标悬浮接到本视图（在 `_Ready` 里调用一次）。</summary>
     private void InitBadgePeek()
     {
         CardBadges.OnBadgeHover = ShowBadgePeek;
-        CardBadges.OnBadgeHoverEnd = (host, kind) => ScheduleHideBadgePeek();
+        // 离开角标不再"立刻排收起"：收起统一由 `TickBadgePeek` 按矩形轮询判定，
+        // 否则鼠标从面板移向空白处时（角标早已 exit）没有任何触发，面板会一直挂着。
+        CardBadges.OnBadgeHoverEnd = (host, kind) => _badgePeekMiss = 0.0;
     }
 
     private void DetachBadgePeek()
@@ -66,16 +72,20 @@ public partial class Arena
         }
         if (members.Count == 0) return;
 
-        _badgePeekHideToken++;                       // 取消待执行的收起
+        _badgePeekMiss = 0.0;                        // 新面板从"鼠标在内"开始计时
         CardPreviewBus.Overlay?.HidePreview();       // 同一时刻只留一个浮层（展开面板优先）
 
-        if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
-        {
-            _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
-            AddChild(_badgePeek);
-        }
+        EnsureBadgePeek();
         string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡";
         _badgePeek.ShowNear(host, title, members, OnBadgeMemberPicked, OnBadgeMemberActivated);
+    }
+
+    /// <summary>展开面板是"场上的唯一浮层"⇒ 角标与堆叠区共用同一个实例。</summary>
+    private void EnsureBadgePeek()
+    {
+        if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)) return;
+        _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+        AddChild(_badgePeek);
     }
 
     private void OnBadgeMemberPicked(string uid)
@@ -104,19 +114,156 @@ public partial class Arena
         _onAttachmentDoubleClickedForward?.Invoke(ui);
     }
 
-    /// <summary>延迟收起：鼠标离开角标后再等一小会儿；若期间又进入角标/面板则取消。</summary>
-    private void ScheduleHideBadgePeek()
+    /// <summary>
+    /// 收起判定：**每帧按矩形轮询**，不依赖 hover 事件。
+    ///
+    /// 为什么不能只靠 `mouse_exited`：面板是浮层，鼠标常走的路径是「角标 → 面板 → 空白处」，
+    /// 而角标的 exit 早在第一步就发完了；从面板移出时没有任何一方会收到通知 ⇒ 面板会一直挂在那里。
+    /// 轮询同时覆盖"面板 → 另一张卡"（整卡预览弹出）等路径，保证同一时刻只留一个浮层。
+    /// </summary>
+    private void TickBadgePeek(double delta)
     {
-        if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible) return;
-        int token = ++_badgePeekHideToken;
-        var timer = GetTree()?.CreateTimer(0.25);
-        if (timer == null) { _badgePeek.HideNow(); return; }
-        timer.Timeout += () =>
+        if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible)
         {
-            if (token != _badgePeekHideToken) return;
-            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek)) return;
-            if (_badgePeek.ContainsGlobalPoint(GetGlobalMousePosition())) return;   // 鼠标还在面板上
+            _badgePeekMiss = 0.0;
+            return;
+        }
+
+        Vector2 mouse = GetGlobalMousePosition();
+        bool inside = _badgePeek.ContainsGlobalPoint(mouse);
+        if (!inside && _badgePeek.Host != null && GodotObject.IsInstanceValid(_badgePeek.Host))
+            inside = _badgePeek.Host.GetGlobalRect().Grow(8f).HasPoint(mouse);
+        if (!inside) inside = IsMouseInsidePileHost(mouse);   // 墓地卡以 5px 递增铺开，会超出面板矩形
+
+        if (inside)
+        {
+            _badgePeekMiss = 0.0;
+            return;
+        }
+
+        _badgePeekMiss += delta;
+        if (_badgePeekMiss >= 0.25)
+        {
             _badgePeek.HideNow();
-        };
+            _badgePeekMiss = 0.0;
+        }
+    }
+
+    // ============================================================
+    // 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表
+    //
+    // 用户口径：「资产区和墓地区也可以支持折叠 + hover 展示卡」。
+    //  · 资产区：`ArrangeContainerCards(..., pile: true)` 叠成一摞 + 「×N」，悬停整块区弹列表；
+    //  · 墓地区：本就是缩略堆，视觉不动，悬停弹列表即可（张数多时按视口宽度截断并提示总数）。
+    // 面板复用角标那一个实例（场上同一时刻只允许一个浮层），单击仍走"选择窗置选中（不提交）"。
+    // ============================================================
+
+    /// <summary>每帧判定"鼠标是否落在某个可悬停的堆叠区"；进入瞬间弹列表，离开交给 `TickBadgePeek` 收起。</summary>
+    private void TickPilePeek(double delta)
+    {
+        Vector2 mouse = GetGlobalMousePosition();
+
+        // 鼠标已经在面板上 ⇒ 保持现状（否则从容器移向面板时会被判成"离开"而重建）
+        if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)
+            && _badgePeek.Visible && _badgePeek.ContainsGlobalPoint(mouse))
+        {
+            _pilePeekInside = true;
+            return;
+        }
+
+        Control host = null;
+        string title = null;
+        List<CardInstance> members = null;
+
+        if (TryAssetPile(mouse, out host, out members)) title = "资产";
+        else if (TryGravePile(mouse, out host, out members)) title = "墓地";
+
+        if (host == null)
+        {
+            _pilePeekInside = false;
+            _pilePeekHost = null;
+            return;
+        }
+
+        // 同一块上不重复重建（每帧重建会产生大量临时节点）
+        if (_pilePeekInside && ReferenceEquals(host, _pilePeekHost)) return;
+
+        _pilePeekInside = true;
+        _pilePeekHost = host;
+        CardPreviewBus.Overlay?.HidePreview();
+        EnsureBadgePeek();
+        _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, _ => { });
+        _badgePeekMiss = 0.0;
+        GD.Print($"[Arena] 堆叠区悬停展开：{title} {members.Count} 张");
+    }
+
+    private bool TryAssetPile(Vector2 mouse, out Control host, out List<CardInstance> members)
+    {
+        host = null; members = null;
+        foreach (var ctr in new Control[] { _assetContainer1, _assetContainer2 })
+        {
+            if (ctr == null || !GodotObject.IsInstanceValid(ctr)) continue;
+            if (!ctr.GetGlobalRect().HasPoint(mouse)) continue;
+            var list = CollectCardInstances(ctr);
+            if (list.Count < 2) continue;
+            host = ctr; members = list;
+            return true;
+        }
+        return false;
+    }
+
+    private bool TryGravePile(Vector2 mouse, out Control host, out List<CardInstance> members)
+    {
+        host = null; members = null;
+        foreach (var zone in new Control[] { _graveyardZone, _graveyardZone2 })
+        {
+            if (zone == null || !GodotObject.IsInstanceValid(zone)) continue;
+            var list = CollectCardInstances(zone);
+            if (list.Count < 2) continue;              // 一张卡本来就看得到，不必弹
+            bool inside = zone.GetGlobalRect().Grow(8f).HasPoint(mouse);
+            if (!inside)
+            {
+                foreach (Node ch in zone.GetChildren())
+                {
+                    if (ch is not CardUI c || !GodotObject.IsInstanceValid(c)) continue;
+                    if (c.GetGlobalRect().HasPoint(mouse)) { inside = true; break; }
+                }
+            }
+            if (!inside) continue;
+            host = zone; members = list;
+            return true;
+        }
+        return false;
+    }
+
+    private static List<CardInstance> CollectCardInstances(Control container)
+    {
+        var list = new List<CardInstance>();
+        foreach (Node ch in container.GetChildren())
+            if (ch is CardUI c && GodotObject.IsInstanceValid(c) && c.Instance != null) list.Add(c.Instance);
+        return list;
+    }
+
+    /// <summary>鼠标是否还在当前堆叠区内（含铺开的子卡矩形；墓地卡会超出面板）。</summary>
+    private bool IsMouseInsidePileHost(Vector2 mouse)
+    {
+        var host = _pilePeekHost;
+        if (host == null || !GodotObject.IsInstanceValid(host)) return false;
+        if (host.GetGlobalRect().Grow(8f).HasPoint(mouse)) return true;
+        foreach (Node ch in host.GetChildren())
+            if (ch is CardUI c && GodotObject.IsInstanceValid(c) && c.GetGlobalRect().HasPoint(mouse))
+                return true;
+        return false;
+    }
+
+    /// <summary>列表里单击：有选择窗 ⇒ 只置选中（不提交）；没有 ⇒ 纯浏览。</summary>
+    private void OnPileMemberPicked(string uid)
+    {
+        if (string.IsNullOrEmpty(uid)) return;
+        if (_activePickWindow != null && GodotObject.IsInstanceValid(_activePickWindow))
+        {
+            _activePickWindow.SelectByUid(uid);
+            GD.Print($"[Arena] 堆叠区列表点选 {uid}（置选中，不提交）");
+        }
     }
 }

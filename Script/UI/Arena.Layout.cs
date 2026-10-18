@@ -98,8 +98,8 @@ public partial class Arena
         if (GodotObject.IsInstanceValid(_graveyardZone2)) _graveyardZone2.ArrangeCards();
         if (GodotObject.IsInstanceValid(_scoreContainer1)) ArrangeContainerCards(_scoreContainer1);
         if (GodotObject.IsInstanceValid(_scoreContainer2)) ArrangeContainerCards(_scoreContainer2);
-        if (GodotObject.IsInstanceValid(_assetContainer1)) ArrangeContainerCards(_assetContainer1);
-        if (GodotObject.IsInstanceValid(_assetContainer2)) ArrangeContainerCards(_assetContainer2);
+        if (GodotObject.IsInstanceValid(_assetContainer1)) ArrangeContainerCards(_assetContainer1, pile: true);
+        if (GodotObject.IsInstanceValid(_assetContainer2)) ArrangeContainerCards(_assetContainer2, pile: true);
 
         // 争夺区内：角色 + 附属于本地区 + 封印于本地区，统一均匀平铺（按进入先后，右后压左前）
         // 【2026-10-16】此为 cat-1 的落地路径，`UI美化与空间重排方案.md` 决策 3 明确"不折叠、保持不动"。
@@ -247,17 +247,34 @@ public partial class Arena
         ArrangeCouncilCards(_councilContainer2);
     }
 
-    private void ArrangeContainerCards(Control container)
+    /// <summary>
+    /// 资产区 / 分数区排布。
+    ///  · <paramref name="pile"/> = true（资产区）：整摞叠成一张 + 右上角「×N」，悬停整块区弹出卡列表；
+    ///  · false（分数区）：层叠每张露 36px（决策 4 原文口径）。
+    /// </summary>
+    private void ArrangeContainerCards(Control container, bool pile = false)
     {
         if (container == null) return;
         var cards = new System.Collections.Generic.List<CardUI>();
         foreach (var child in container.GetChildren())
-            if (child is CardUI c) cards.Add(c);
+            if (child is CardUI c && GodotObject.IsInstanceValid(c)) cards.Add(c);
 
-        // 【P4】资产区 / 分数区改**层叠**（每张露 36px，右卡压左卡）；悬停某张时 CardUI 会抬高层级看全卡面。
         var list = new System.Collections.Generic.List<Control>();
         foreach (var c in cards) list.Add(c);
+
+        if (pile)
+        {
+            // 【2026-10-19 用户口径】资产区折叠成一摞：只露最上面一张，张数交给「×N」角标。
+            CardLayoutHelper.LayoutPile(container, list);
+            for (int i = 0; i < cards.Count - 1; i++) CardCountBadge.Clear(cards[i]);   // 旧的代表卡要摘掉角标
+            if (cards.Count > 1) CardCountBadge.Apply(cards[cards.Count - 1], cards.Count);
+            else if (cards.Count == 1) CardCountBadge.Clear(cards[0]);
+            return;
+        }
+
+        // 【P4】分数区：层叠（每张露 36px，右卡压左卡）；悬停某张时 CardUI 会抬高层级看全卡面。
         CardLayoutHelper.LayoutStacked(container, list);
+        foreach (var c in cards) CardCountBadge.Clear(c);
     }
 
     private void ArrangeHandCards(Control container, List<CardUI> cards)

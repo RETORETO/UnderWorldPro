@@ -22,7 +22,25 @@
 | **P4** 资产/分数层叠 | ✅ 已完成 | 新增 `CardLayoutHelper.LayoutStacked()`（露边 36px，放不下自动压缩）；单机 + 联机双侧接入 |
 | **P4** 对手手牌紧凑 | ✅ 已完成（**仅联机端**） | 用户 2026-10-18 拍板「只改联机端」（单机同屏热座必须保持正面逐张可见）。`ArenaOl.ArrangeChildren` 对"整排都是隐藏牌背"的对手手牌改调 `CardLayoutHelper.LayoutCompactBacks()`：全部牌背叠在一处、只露一张 + `CardCountBadge` 的「×N」；鼠标停在手牌带内则改用 `LayoutStacked`（每张露 36px）便于数张数，收起/展开由 `_Process` 每帧矩形轮询（不依赖 `mouse_entered/exited` 的父子冒泡语义） |
 | **P5** 手牌 hover 上浮 | ✅ 已完成 | `CardUI` 叠加 `HoverOffset()`（+28px / 1.18x），移动节点而非 shader/pivot ⇒ `GetVisualGlobalRect()` 自动一致；手牌上下文**抑制整卡预览** |
-| **P6** 回归 | ✅ 已完成 | `dotnet build` 0 警告 0 错误；全量 headless **159 套件 0 失败**（`logs/p6_final_tests.log` 末行 `>>> 全部逻辑正确性测试通过`）；文档已更新（`制作指南/UI层级规范.md` 角标实施订正） |
+| **P6** 回归 | ✅ 已完成 | `dotnet build` 0 警告 0 错误；全量 headless **162 套件 0 失败**（`logs/ui_pile_pick_tests.log` 末行 `>>> 全部逻辑正确性测试通过`）；文档已更新（`制作指南/UI层级规范.md` 角标实施订正） |
+
+### 收尾批次（2026-10-19）· 用户口径落实
+
+> 用户口径：① 地区卡可以加宽；② 资产**不**纳入场上点选；③ 联机卡选窗可做；④ 资产区与墓地区也支持折叠 + hover 展示卡。
+
+| 项 | 状态 | 落地要点 |
+|---|---|---|
+| 角标面板「粘住」修复 | ✅ | 原来只在"离开角标"时排收起，鼠标从面板移到空白处没有任何触发 ⇒ 面板永久挂着。两视图改为 `TickBadgePeek` **每帧矩形轮询**（与对手手牌同一课） |
+| 展开面板张数上限 | ✅ | 原写死 6 张（第 7 张起看不到、也无法双击发动）⇒ 改为**按视口宽度算**（`MaxCards=14` 封顶），超出显示「…（共 N 张）」 |
+| 地区卡加宽 | ✅ | `AreaCardUI.CARD_WIDTH/HEIGHT = 196×140`（保持 1.4:1 卡图比例）；`AreaSlot` 改用该常量（6.6 语义分离），槽内上下各 200 仍容纳 196 高角色卡；世界牌库缩略仍 140×100（需先压 `CustomMinimumSize`） |
+| 分数区几何 | ✅ | 卡面 196 高而容器仍 100 ⇒ 本方分数卡下半 96px 掉出屏幕。两场景：`CardContainer 196×196`、`Player1Area/ScoreZone` 上移到 94..290、`Player2Area/ScoreZone` 加高到 196；`ScoreLabel` 右移到 196（避开加宽后的卡） |
+| 资产区折叠 | ✅ | `CardLayoutHelper.LayoutPile`（叠成一摞）+ `CardCountBadge`「×N」；悬停整块资产区弹卡列表。分数区**保持**每张露 36px（决策 4 原文） |
+| 墓地区悬停展卡 | ✅ | 视觉不动（仍是 5px 递增缩略堆），悬停弹卡列表；命中判定覆盖铺开的子卡矩形（会超出面板） |
+| 联机选卡窗 | ✅ | `SelectZoneCard` / `SelectHandCard` / `SelectDeckCard` → `OpenOnlineCardPickWindow`（真卡面 + 所在区域标签 + 确认/取消），候选由 `OptionCardRefs` 经 `RebuildFromRef` 重建；隐藏占位自动只画卡背；回包仍是 `ChoiceResult.SelectedUid`，**协议零改动**；缺卡面引用时退回通用按钮面板 |
+| 注释/命名清理 | ✅ | `CardUI.cs`、`CardHoverPreview.cs` 的"计划·未实施"改为实施结论；`AreaSlot` 尺寸改用 `AreaCardUI` 常量 |
+
+> 明确不做（本批口径）：资产卡**不**纳入"场上点选"候选 ⇒ 决策 4 的"层叠态候选/选中呈现"暂不需要
+> （将来若纳入，再按方案二选一补）。
 
 ### 开工前的核查快照（保留作对照）
 

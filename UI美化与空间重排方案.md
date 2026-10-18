@@ -118,6 +118,10 @@
 
 > ⚠️ **取目标语义（已定）**：资产属**无条件 cat-2** ⇒ 取目标一律走 `CardPickWindow`，**不做"原地悬浮直接选中"**。层叠后的 **hover 展开面板可点**，出口＝`CardPickWindow.SelectByUid`（等效点选择窗内该卡，**不直接提交**）；**未展开（仅露边条）时不可点**。分数区同理。见第八章。
 
+> **实施订正（2026-10-19 用户口径）**：资产区从"每张露 36px"改为**折叠成一摞 +「×N」+ 悬停弹卡列表**
+> （`CardLayoutHelper.LayoutPile` + `CardCountBadge` + `CardBadgePeek`）；**分数区保持每张露 36px**。
+> 另：资产卡**不**纳入"场上点选"候选 ⇒ 本节"层叠态候选/选中高亮"暂不需要实现（将来纳入时再按二选一补）。
+
 ### 决策 5：手牌 hover 上浮
 
 - 复用 `CardUI` 已有 `MouseEntered/Exited`（`CardUI.cs:105-114`，现经 `CardPreviewBus.RequestHover/EndHover` 弹整卡预览浮层）。
@@ -222,18 +226,21 @@ d:/UWPro/
 
 ### 6.5 待规划期确认的参数
 
-- 卡牌目标尺寸（建议 140×196，可调）
-- 手牌 hover 上浮量 / 放大倍率（须与 `Player1Area` 高度上限反算，见决策 5）
-- 层叠露边宽度（建议 36px）
-- 地区卡（AreaCardUI）新尺寸
-- 角标尺寸与字号
+- 卡牌目标尺寸（建议 140×196，可调）✅ 已定 140×196
+- 手牌 hover 上浮量 / 放大倍率（须与 `Player1Area` 高度上限反算，见决策 5）✅ 已定 +28px / 1.18x
+- 层叠露边宽度（建议 36px）✅ 已定 36px（资产区于 2026-10-19 改为折叠，不再用露边）
+- 地区卡（AreaCardUI）新尺寸 ✅ 已定 **196×140**（保持卡图 1.4:1；槽内上下各留 200 容纳 196 高角色卡）
+- 角标尺寸与字号 ✅ 已定 28×18 / 12px（`CardBadges`）
 
 ### 6.6 `AreaSlot` 内部尺寸语义澄清（易错点）
 
-`AreaSlot.cs:111-112` 的 `cardWidth=140, cardHeight=100` 指的是**地区卡（AreaCardUI）横条尺寸**，与**玩家卡 100×140** 是**两套不同语义**。收口时**不得**混用同一常量，建议命名区分：
+`AreaSlot` 里那块横条是**地区卡（AreaCardUI）**，与**玩家卡（竖卡）**是**两套不同语义**，收口时**不得**混用同一常量。
 
-- `CardLayoutHelper.CARD_WIDTH/HEIGHT`（玩家卡；副本在 `Arena.Layout.cs:22-23`、`CardUI.cs:518-520`、`Scenes/UI/CardUI.tscn:7` 三处）
-- `AreaSlot` 内的 `AREA_CARD_WIDTH/HEIGHT`（地区卡）
+> **实施结果（2026-10-19）**：已按此口径落地——
+>  · `CardLayoutHelper.CARD_WIDTH/HEIGHT = 140×196`（玩家卡，唯一真源；`Arena.Layout.cs`、`CardUI.cs` 为别名）
+>  · `AreaCardUI.CARD_WIDTH/HEIGHT = 196×140`（地区卡，横向 1.4:1；`AreaSlot` 直接引用）
+>  · `CouncilCardUI.CARD_WIDTH/HEIGHT = 100×140`（秘社卡）
+>  · `CardLayoutHelper.SizeOf(card)` 按类型分派，禁止把地区卡按玩家卡尺寸排版。
 
 ### 6.7 待决：`aspect=ignore → keep`
 

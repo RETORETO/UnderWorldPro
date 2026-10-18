@@ -116,12 +116,14 @@ public partial class AreaSlot : Control
 
         // 与 Scenes/UI/AreaSlot.tscn 保持一致:
         // Player2Area 在上、CardContainer(AreaCardUI) 在中间居中、Player1Area 在下
-        // 【P2·2026-10-18】槽位 400×580 → 480×540：3 张 140 宽角色卡 + 2×8 间距 = 436 ≤ 480（不再重叠）；
-        // 纵向 540 = 220 + 100(地区卡) + 220，上下两侧各 220 恰好容纳 196 高的角色卡。
+        // 【P2·2026-10-18】槽位 400×580 → 480×540：3 张 140 宽角色卡 + 2×8 间距 = 436 ≤ 480（不再重叠）。
+        // 【2026-10-19】地区卡 140×100 → 196×140（保持 1.4:1 卡图比例，见 `AreaCardUI.CARD_WIDTH/HEIGHT`）；
+        // 纵向 540 = 200 + 140(地区卡) + 200，上下两侧各 200 仍容纳 196 高的角色卡。
+        // ⚠️ 地区卡尺寸与玩家卡**不同源**（横向卡 vs 竖卡），故用 `AreaCardUI` 的常量，不得混用 `CardLayoutHelper`。
         float totalW = Size.X > 0 ? Size.X : 480;
         float totalH = Size.Y > 0 ? Size.Y : 540;
-        const float cardWidth = 140;
-        const float cardHeight = 100;
+        const float cardWidth = AreaCardUI.CARD_WIDTH;
+        const float cardHeight = AreaCardUI.CARD_HEIGHT;
         float sideH = (totalH - cardHeight) / 2;
 
         _player2Area.Size = new Vector2(totalW, sideH);

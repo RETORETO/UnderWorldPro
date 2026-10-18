@@ -28,9 +28,14 @@ namespace Script.UI
         /// 排版函数一律用它，禁止直接写 CARD_WIDTH/CARD_HEIGHT —— 否则秘社卡会被撑大。
         /// </summary>
         public static Vector2 SizeOf(Control card)
-            => card is CouncilCardUI
-                ? new Vector2(CouncilCardUI.CARD_WIDTH, CouncilCardUI.CARD_HEIGHT)
-                : new Vector2(CARD_WIDTH, CARD_HEIGHT);
+        {
+            // 三类卡尺寸**不同源**，不能一刀切：
+            //  · 玩家卡/秘社卡 → `CardLayoutHelper` / `CouncilCardUI`（竖卡）
+            //  · 地区卡 → `AreaCardUI`（横向卡，1.4:1，与玩家卡完全不同的比例）
+            if (card is CouncilCardUI) return new Vector2(CouncilCardUI.CARD_WIDTH, CouncilCardUI.CARD_HEIGHT);
+            if (card is AreaCardUI) return new Vector2(AreaCardUI.CARD_WIDTH, AreaCardUI.CARD_HEIGHT);
+            return new Vector2(CARD_WIDTH, CARD_HEIGHT);
+        }
 
         /// <summary>
         /// 【P4·2026-10-18】层叠平铺：资产区 / 分数区专用。每张只露 <paramref name="edge"/> 像素宽，
@@ -89,6 +94,16 @@ namespace Script.UI
         /// 压成一张牌背会直接废掉热座可玩性（用户 2026-10-18 明确口径：「只改联机端」）。
         /// </summary>
         public static void LayoutCompactBacks(Control container, System.Collections.Generic.List<Control> cards)
+            => LayoutPile(container, cards);
+
+        /// <summary>
+        /// 【2026-10-19】把一组卡**叠成一摞**（全部落在容器中央的同一位置，只露最上面一张）。
+        ///
+        /// 与 `LayoutCompactBacks` 是同一份实现（后者保留为"对手手牌"的语义别名，避免既有调用点/测试改动）；
+        /// 现在**资产区**也用它（用户口径：「资产区也可以支持折叠 + hover 展示卡」）——
+        /// 张数由 `CardCountBadge` 的「×N」交代，悬停整块资产区弹出卡列表（`CardBadgePeek`）。
+        /// </summary>
+        public static void LayoutPile(Control container, System.Collections.Generic.List<Control> cards)
         {
             if (container == null || cards == null || cards.Count == 0) return;
 

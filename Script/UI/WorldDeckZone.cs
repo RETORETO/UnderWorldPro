@@ -47,6 +47,9 @@ public partial class WorldDeckZone : Control
             var cardUI = _areaCardUIScene.Instantiate<AreaCardUI>();
             _cardContainer.AddChild(cardUI);
             cardUI.SetFace(false);
+            // 世界牌库仍是 140×100 缩略（不进争夺区），必须**先**压掉场景最小尺寸再设 Size，
+            // 否则 `.tscn` 里的 196×140 会把缩小请求钳回去（地区卡真身已加宽，缩略图不跟）。
+            cardUI.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             cardUI.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             cardUI.Position = new Vector2(i * 0.5f, i * 0.5f);
             cardUI.MouseFilter = MouseFilterEnum.Ignore; // 让事件穿透

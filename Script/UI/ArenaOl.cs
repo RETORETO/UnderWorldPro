@@ -395,12 +395,18 @@ namespace Script.UI
         /// 联机没有 `CardPickWindow`，"置选中"不适用 ⇒ 单击为纯浏览。
         /// </summary>
         private CardBadgePeek _badgePeek;
-        private int _badgePeekHideToken;
+        /// <summary>鼠标连续离开"角标 + 面板"的时长（秒）；超过阈值才收起。</summary>
+        private double _badgePeekMiss;
+
+        // ---- 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表 ----
+        private Control _pilePeekHost;
+        private bool _pilePeekInside;
 
         private void InitBadgePeek()
         {
             CardBadges.OnBadgeHover = ShowBadgePeek;
-            CardBadges.OnBadgeHoverEnd = (host, kind) => ScheduleHideBadgePeek();
+            // 收起统一由 `TickBadgePeek` 按矩形轮询判定（见方法注释：面板→空白处没有任何 hover 事件可依）
+            CardBadges.OnBadgeHoverEnd = (host, kind) => _badgePeekMiss = 0.0;
         }
 
         private void DetachBadgePeek()
@@ -432,7 +438,7 @@ namespace Script.UI
             }
             if (members.Count == 0) return;
 
-            _badgePeekHideToken++;
+            _badgePeekMiss = 0.0;
             CardPreviewBus.Overlay?.HidePreview();
 
             if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
@@ -453,19 +459,151 @@ namespace Script.UI
             OnAttachmentDoubleClicked(ui);
         }
 
-        private void ScheduleHideBadgePeek()
+        /// <summary>
+        /// 收起判定：每帧矩形轮询（与单机 `Arena.TickBadgePeek` 同口径）。
+        ///
+        /// 不能只靠 `mouse_exited`：鼠标常规路径是「角标 → 面板 → 空白处」，角标 exit 发生在第一步，
+        /// 从面板移出时没有任何节点会收到通知 ⇒ 面板永久挂着。轮询同时保证"面板 vs 整卡预览"互斥。
+        /// </summary>
+        private void TickBadgePeek(double delta)
         {
-            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible) return;
-            int token = ++_badgePeekHideToken;
-            var timer = GetTree()?.CreateTimer(0.25);
-            if (timer == null) { _badgePeek.HideNow(); return; }
-            timer.Timeout += () =>
+            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible)
             {
-                if (token != _badgePeekHideToken) return;
-                if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek)) return;
-                if (_badgePeek.ContainsGlobalPoint(GetGlobalMousePosition())) return;
+                _badgePeekMiss = 0.0;
+                return;
+            }
+
+            Vector2 mouse = GetGlobalMousePosition();
+            bool inside = _badgePeek.ContainsGlobalPoint(mouse);
+            if (!inside && _badgePeek.Host != null && GodotObject.IsInstanceValid(_badgePeek.Host))
+                inside = _badgePeek.Host.GetGlobalRect().Grow(8f).HasPoint(mouse);
+            if (!inside) inside = IsMouseInsidePileHost(mouse);   // 墓地卡以 5px 递增铺开，会超出面板矩形
+
+            if (inside) { _badgePeekMiss = 0.0; return; }
+
+            _badgePeekMiss += delta;
+            if (_badgePeekMiss >= 0.25)
+            {
                 _badgePeek.HideNow();
-            };
+                _badgePeekMiss = 0.0;
+            }
+        }
+
+        // ============================================================
+        // 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表（与单机 Arena 同口径）
+        //  · 资产区：`RebuildAssetsInto` 叠成一摞 + 「×N」，悬停整块区弹列表；
+        //  · 墓地区：缩略堆视觉不动，悬停弹列表；
+        //  · 单击成员：若联机选卡窗正开着 ⇒ `SelectByUid`（只置选中、不提交），否则纯浏览。
+        // ============================================================
+
+        private void TickPilePeek(double delta)
+        {
+            Vector2 mouse = GetGlobalMousePosition();
+
+            if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)
+                && _badgePeek.Visible && _badgePeek.ContainsGlobalPoint(mouse))
+            {
+                _pilePeekInside = true;
+                return;
+            }
+
+            Control host = null;
+            string title = null;
+            List<CardInstance> members = null;
+
+            if (TryAssetPile(mouse, out host, out members)) title = "资产";
+            else if (TryGravePile(mouse, out host, out members)) title = "墓地";
+
+            if (host == null)
+            {
+                _pilePeekInside = false;
+                _pilePeekHost = null;
+                return;
+            }
+
+            if (_pilePeekInside && ReferenceEquals(host, _pilePeekHost)) return;
+
+            _pilePeekInside = true;
+            _pilePeekHost = host;
+            CardPreviewBus.Overlay?.HidePreview();
+
+            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
+            {
+                _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+                AddChild(_badgePeek);
+            }
+            _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, _ => { });
+            _badgePeekMiss = 0.0;
+            GD.Print($"[ArenaOl] 堆叠区悬停展开：{title} {members.Count} 张");
+        }
+
+        private bool TryAssetPile(Vector2 mouse, out Control host, out List<CardInstance> members)
+        {
+            host = null; members = null;
+            foreach (var ctr in new Control[] { AssetCtr(1), AssetCtr(2) })   // 【P1】视角归一
+            {
+                if (ctr == null || !GodotObject.IsInstanceValid(ctr)) continue;
+                if (!ctr.GetGlobalRect().HasPoint(mouse)) continue;
+                var list = CollectCardInstances(ctr);
+                if (list.Count < 2) continue;
+                host = ctr; members = list;
+                return true;
+            }
+            return false;
+        }
+
+        private bool TryGravePile(Vector2 mouse, out Control host, out List<CardInstance> members)
+        {
+            host = null; members = null;
+            foreach (var zone in new Control[] { GraveZoneOf(1), GraveZoneOf(2) })   // 【P1】视角归一
+            {
+                if (zone == null || !GodotObject.IsInstanceValid(zone)) continue;
+                var list = CollectCardInstances(zone);
+                if (list.Count < 2) continue;
+                bool inside = zone.GetGlobalRect().Grow(8f).HasPoint(mouse);
+                if (!inside)
+                {
+                    foreach (Node ch in zone.GetChildren())
+                    {
+                        if (ch is not CardUI c || !GodotObject.IsInstanceValid(c)) continue;
+                        if (c.GetGlobalRect().HasPoint(mouse)) { inside = true; break; }
+                    }
+                }
+                if (!inside) continue;
+                host = zone; members = list;
+                return true;
+            }
+            return false;
+        }
+
+        private static List<CardInstance> CollectCardInstances(Control container)
+        {
+            var list = new List<CardInstance>();
+            foreach (Node ch in container.GetChildren())
+                if (ch is CardUI c && GodotObject.IsInstanceValid(c) && c.Instance != null) list.Add(c.Instance);
+            return list;
+        }
+
+        private bool IsMouseInsidePileHost(Vector2 mouse)
+        {
+            var host = _pilePeekHost;
+            if (host == null || !GodotObject.IsInstanceValid(host)) return false;
+            if (host.GetGlobalRect().Grow(8f).HasPoint(mouse)) return true;
+            foreach (Node ch in host.GetChildren())
+                if (ch is CardUI c && GodotObject.IsInstanceValid(c) && c.GetGlobalRect().HasPoint(mouse))
+                    return true;
+            return false;
+        }
+
+        /// <summary>列表单击：有联机选卡窗 ⇒ 只置选中（不提交）；否则纯浏览（联机对手的区还可看但不可改）。</summary>
+        private void OnPileMemberPicked(string uid)
+        {
+            if (string.IsNullOrEmpty(uid)) return;
+            if (_onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow))
+            {
+                _onlinePickWindow.SelectByUid(uid);
+                GD.Print($"[ArenaOl] 堆叠区列表点选 {uid}（置选中，不提交）");
+            }
         }
 
         /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
@@ -636,6 +774,8 @@ namespace Script.UI
         private InvestigationWindow _onlineInvestigationWindow;
         /// <summary>【2026-09·JC062/JC057】联机检视结果窗（与单机 `Arena.PromptInspectCards` 同款）。</summary>
         private InspectWindow _onlineInspectWindow;
+        /// <summary>【2026-10-19·选卡方案 5.4】联机"从区域选一张牌"的卡面选择窗（与单机同款）。</summary>
+        private CardPickWindow _onlinePickWindow;
         private bool _onlineCombatWindowOpen;
 
         /// <summary>
@@ -689,6 +829,13 @@ namespace Script.UI
                     // 【2026-09·JC062/JC057 用户口径】检视结果：与单机 1:1 同款 `InspectWindow`
                     // （整批卡面列在一个窗、只有一个『确认』）；请求未带卡面引用时退回通用面板（卡名列示）。
                     return OpenOnlineInspectWindow(req);
+                case Script.Net.ChoiceRequest.Kind.SelectZoneCard:
+                case Script.Net.ChoiceRequest.Kind.SelectHandCard:
+                case Script.Net.ChoiceRequest.Kind.SelectDeckCard:
+                    // 【2026-10-19·选卡方案 5.4】**从区域选一张牌**（墓地/手牌/牌库）：
+                    // 与单机 1:1 同款 `CardPickWindow`（真卡面 + 所在区域标签 + 确认/取消），
+                    // 取代通用决策面板的一列按钮；未带卡面引用时退回通用面板。
+                    return OpenOnlineCardPickWindow(req);
                 default:
                     return false;
             }
@@ -1041,6 +1188,119 @@ namespace Script.UI
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
             GD.Print($"[ArenaOl] 检视窗口已打开（{cards.Count} 张，只有一个确认按钮）");
             return true;
+        }
+
+        /// <summary>
+        /// 【2026-10-19·选卡方案 5.4】**联机选卡窗**：把"从区域选一张牌"（墓地 / 手牌 / 牌库）渲染成
+        /// 与单机 1:1 的 `CardPickWindow`（真卡面 + 所在区域标签 + 确认/取消），取代通用决策面板的一列按钮。
+        ///
+        /// 三条边界（照方案 5.4 的口径）：
+        ///  ① **只做展示与收集**：候选集合与顺序**完全**来自服务端（`OptionUids`），客户端不增不减；
+        ///  ② **信息隔离**：隐藏占位引用（对手手牌/牌库）由 `RebuildFromRef` 建成 `IsHidden` 实例 ⇒
+        ///     窗内 `SetFace(!IsHidden)` 自动只画卡背，不泄露身份；
+        ///  ③ **协议零改动**：回包仍是 `ChoiceResult`（`SelectedUid` / `Cancelled`）。
+        /// 请求未携带可展示的卡面引用时返回 false，调用方退回通用面板（不静默丢选择）。
+        /// </summary>
+        private bool OpenOnlineCardPickWindow(Script.Net.ChoiceRequest req)
+        {
+            var mgr = _matchClient?.ClientCardManager;
+            if (req == null || mgr == null) return false;
+
+            // uid → 展示引用（服务端约定 refs 与 OptionUids 同序；这里按 uid 取，防顺序漂移）
+            var byUid = new Dictionary<string, Script.Net.ZoneCardRef>();
+            if (req.OptionCardRefs != null)
+                foreach (var r in req.OptionCardRefs)
+                    if (r != null && !string.IsNullOrEmpty(r.Uid)) byUid[r.Uid] = r;
+
+            var cards = new List<CardInstance>();
+            if (req.OptionUids != null && req.OptionUids.Count > 0)
+            {
+                foreach (var uid in req.OptionUids)
+                {
+                    if (string.IsNullOrEmpty(uid)) continue;
+                    if (!byUid.TryGetValue(uid, out var r)) continue;
+                    var inst = mgr.RebuildFromRef(r);
+                    if (inst != null) cards.Add(inst);
+                }
+            }
+            else if (req.OptionCardRefs != null)
+            {
+                foreach (var r in req.OptionCardRefs)
+                {
+                    var inst = r == null ? null : mgr.RebuildFromRef(r);
+                    if (inst != null) cards.Add(inst);
+                }
+            }
+
+            if (cards.Count == 0)
+            {
+                GD.PrintErr("[ArenaOl] 选卡窗：请求未携带可展示的卡（缺 OptionCardRefs），退回通用决策面板");
+                return false;
+            }
+
+            // 低延迟同一帧连发两个请求时，旧窗还没被释放 ⇒ 先关掉，避免两个窗叠着（同通用面板的"每次新实例"教训）
+            if (_onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow))
+            {
+                _onlinePickWindow.QueueFree();
+                _onlinePickWindow = null;
+            }
+
+            bool allowCancel = !req.ForceChoice;
+            int chooserId = req.PlayerId > 0 ? req.PlayerId : _localPlayerId;
+            var pickReq = new CardPickRequest
+            {
+                Title = string.IsNullOrEmpty(req.Prompt) ? "选择一张牌" : req.Prompt,
+                Cards = cards,
+                ChooserId = chooserId,
+                PlayerNameOf = SeatName,                 // 视角归一：本方/对手的称呼与服务端座位无关
+                AreaIndexOf = AreaIndexInView,
+                AllowCancel = allowCancel,
+                CancelLabel = "取消",
+                OnPicked = inst =>
+                {
+                    _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                    {
+                        RequestId = req.RequestId,
+                        SelectedUid = inst?.UID ?? string.Empty,
+                    });
+                    _onlinePickWindow = null;
+                    _activationSelectionBusy = false;
+                    GD.Print($"[ArenaOl] 选卡窗回包：{inst?.PlayerTemplate?.CardName ?? inst?.UID}");
+                },
+                OnCancelled = () =>
+                {
+                    _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                    {
+                        RequestId = req.RequestId,
+                        Cancelled = true,
+                    });
+                    _onlinePickWindow = null;
+                    _activationSelectionBusy = false;
+                    GD.Print("[ArenaOl] 选卡窗取消（Cancelled=true）");
+                },
+            };
+
+            var win = new CardPickWindow();
+            // **先入树、再 Init**（`CardUI._Ready()` 的 `SetFace(false)` 会盖掉 Init 里翻好的正面）
+            AddChild(win);
+            win.Init(pickReq);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
+            win.Popup();
+
+            _onlinePickWindow = win;
+            _activationSelectionBusy = true;   // 决策期间延后快照应用，避免重建把窗口内容洗掉
+            GD.Print($"[ArenaOl] 选卡窗已打开：「{pickReq.Title}」候选 {cards.Count} 张，允许取消={allowCancel}");
+            return true;
+        }
+
+        /// <summary>地区 UID → 地区编号（1-based；与 `_areaSlots` 创建顺序一致，两视角相同，不做镜像）。</summary>
+        private int AreaIndexInView(string areaUid)
+        {
+            if (string.IsNullOrEmpty(areaUid) || _areaSlots == null) return 0;
+            for (int i = 0; i < _areaSlots.Count; i++)
+                if (_areaSlots[i] != null && _areaSlots[i].AreaUID == areaUid) return i + 1;
+            return 0;
         }
 
         /// <summary>先手破平：复用单机 TieBreakWindow（确认→Cancelled=false；取消→Cancelled=true）。</summary>
@@ -2010,7 +2270,15 @@ namespace Script.UI
                 RegisterOnlineCardUI(inst, ui);
                 cards.Add(ui);
             }
-            CardLayoutHelper.LayoutStacked(container, cards);   // 【P4】资产/分数区改层叠
+            // 【2026-10-19 用户口径】资产区**折叠成一摞**：只露最上面一张 + 「×N」角标；
+            // 悬停整块资产区由 `TickPilePeek` 弹卡列表（与单机 Arena 同口径）。
+            CardLayoutHelper.LayoutPile(container, cards);
+            for (int i = 0; i < cards.Count - 1; i++)
+                if (cards[i] is CardUI prev) CardCountBadge.Clear(prev);
+            if (cards.Count > 1 && cards[cards.Count - 1] is CardUI topUi)
+                CardCountBadge.Apply(topUi, cards.Count);
+            else if (cards.Count == 1 && cards[0] is CardUI onlyUi)
+                CardCountBadge.Clear(onlyUi);
         }
 
         /// <summary>
@@ -2383,13 +2651,15 @@ namespace Script.UI
             }
         }
 
-        /// <summary>收集容器内所有 CardUI（供均匀排版）。</summary>
+        /// <summary>收集容器内所有可排版的卡面（玩家卡 + 地区卡）。
+        /// 分数区会同时出现两者（赢得的地区卡按 `AreaCardUI` 渲染），漏掉地区卡会让它们停在 (0,0) 互相盖住。</summary>
         private System.Collections.Generic.List<Control> GatherCardUIs(Control container)
         {
             var list = new System.Collections.Generic.List<Control>();
             if (container == null) return list;
             foreach (Node child in container.GetChildren())
-                if (child is CardUI c && GodotObject.IsInstanceValid(c)) list.Add(c);
+                if ((child is CardUI || child is AreaCardUI) && GodotObject.IsInstanceValid(child))
+                    list.Add((Control)child);
             return list;
         }
 
@@ -3546,6 +3816,8 @@ namespace Script.UI
         {
             PumpSnapshotQueue(delta);
             UpdateOpponentHandHover();     // 【P4·决策 7】对手手牌紧凑 ↔ hover 展开
+            TickBadgePeek(delta);          // 【P3b】角标展开面板收起（每帧矩形轮询）
+            TickPilePeek(delta);           // 【2026-10-19】资产/墓地：悬停弹卡列表
             UpdateStackArrowEndpoints();   // 堆叠箭头每帧跟随（端点实时更新）
             UpdateHandDragTargetHighlights();   // 拖拽手牌期间的合法目标高亮（对齐单机）
 

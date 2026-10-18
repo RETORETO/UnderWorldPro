@@ -4,11 +4,11 @@
 [ext_resource type="Texture2D" uid="uid://dcxk8tcrn4tkn" path="res://Cards/Image/AreaCardBack.jpg" id="1_gujox"]
 
 [node name="AreaCardUI" type="Control" unique_id=828673890 node_paths=PackedStringArray("_cardImage", "_nameLabel", "_powerLabel", "_scoreLabel", "_marksLabel", "_frontface", "_backface", "_background")]
-custom_minimum_size = Vector2(140, 100)
+custom_minimum_size = Vector2(196, 140)
 layout_mode = 3
 anchors_preset = 0
-offset_right = 140.0
-offset_bottom = 100.0
+offset_right = 196.0
+offset_bottom = 140.0
 size_flags_horizontal = 3
 size_flags_vertical = 4
 script = ExtResource("1_ftlpj")
@@ -24,8 +24,8 @@ _background = NodePath("Background")
 [node name="Background" type="TextureRect" parent="." unique_id=402635777]
 texture_filter = 4
 texture_repeat = 2
-custom_minimum_size = Vector2(140, 100)
-custom_maximum_size = Vector2(140, 100)
+custom_minimum_size = Vector2(196, 140)
+custom_maximum_size = Vector2(196, 140)
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -53,17 +53,17 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -70.0
-offset_top = -50.0
-offset_right = 70.0
-offset_bottom = 50.0
+offset_left = -98.0
+offset_top = -70.0
+offset_right = 98.0
+offset_bottom = 70.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
 [node name="NameLabel" type="Label" parent="AreaCardDisplay" unique_id=2081329553]
 layout_mode = 1
-offset_right = 40.0
+offset_right = 56.0
 offset_bottom = 23.0
 
 [node name="PowerLabel" type="Label" parent="AreaCardDisplay" unique_id=272983568]
@@ -71,7 +71,7 @@ layout_mode = 1
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -40.0
+offset_left = -56.0
 offset_bottom = 23.0
 grow_horizontal = 0
 
@@ -81,7 +81,7 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_top = -36.0
-offset_right = 57.0
+offset_right = 80.0
 grow_vertical = 0
 
 [node name="MarksLabel" type="Label" parent="AreaCardDisplay" unique_id=1195941223]
@@ -91,7 +91,7 @@ anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -40.0
+offset_left = -56.0
 offset_top = -23.0
 grow_horizontal = 0
 grow_vertical = 0

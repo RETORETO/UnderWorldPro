@@ -5,6 +5,11 @@ namespace Script.UI
 {
     public partial class AreaCardUI : Control
     {
+        // ---------- 尺寸（唯一真源） ----------
+        /// <summary>地区卡尺寸：地区卡图是 560×400（1.4:1）的**横向**卡，故与玩家卡（140×196 竖卡）不同源。
+        /// 196×140 恰好保持 1.4:1，且争夺区槽 480×540 里上下各留 200 高，正好容纳 196 高的角色卡。</summary>
+        public const float CARD_WIDTH = 196f;
+        public const float CARD_HEIGHT = 140f;
         // ---------- 导出的子节点引用（对应 AreaCardUI 场景结构） ----------
         [Export] private TextureRect _cardImage;          // CardImage
         [Export] private Label _nameLabel;                // NameLabel

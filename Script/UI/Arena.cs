@@ -1824,6 +1824,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
 
     public override void _Process(double delta)
     {
+        // 【P3b】角标展开面板的收起判定（每帧矩形轮询，见 Arena.BadgePeek.TickBadgePeek）
+        TickBadgePeek(delta);
+        // 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表
+        TickPilePeek(delta);
+
         // 拖拽手牌时实时高亮合法目标卡（黄色蒙版：仅标识"打出附属卡可结附目标"）
         // 基础行动蒙版（建立资产/派遣暗藏）拖拽期间不显示该高亮，避免场上角色卡被错误打上黄色蒙版
         // 【MVC 修复 M-08】拖拽状态与高亮逻辑已迁移至 CardDragController，此处经控制器转发。

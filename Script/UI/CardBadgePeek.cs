@@ -27,7 +27,8 @@ namespace Script.UI
     public partial class CardBadgePeek : Control
     {
         private const float CardScale = 0.55f;      // 展开态每张卡的缩放（约 77×108）
-        private const int MaxCards = 6;
+        /// <summary>无论视口多宽，一次最多列这么多张（再多就读不出是哪个了，宁可按视口宽度截断）。</summary>
+        private const int MaxCards = 14;
         private const float Gap = 6f;
         private const float Pad = 6f;
 
@@ -38,6 +39,10 @@ namespace Script.UI
         private Action<string> _onPick;
         private Action<CardUI> _onActivate;
         private bool _mouseInside;
+        private Control _host;
+
+        /// <summary>当前面板依附的宿主卡（视图做"鼠标是否还在宿主上"判定用）。</summary>
+        public Control Host => _host;
 
         public override void _Ready()
         {
@@ -77,9 +82,10 @@ namespace Script.UI
             => Visible && GetGlobalRect().Grow(4f).HasPoint(globalPos);
 
         /// <summary>
-        /// 展开：在 host 旁边列出 members（超出 6 张只列前 6 张并加「…」提示）。
+        /// 展开：在 host 旁边列出 members。
+        /// 一次能列多少张**按视口宽度算**（不再写死 6 张）：张数超出可视宽度才截断，并提示总张数。
         /// </summary>
-        /// <param name="title">标题（"封印卡" / "附属卡"），一次只列一种来源。</param>
+        /// <param name="title">标题（"封印卡" / "附属卡" / "资产" / "墓地"），一次只列一种来源。</param>
         /// <param name="onPick">单击：置选中（不提交）。</param>
         /// <param name="onActivate">双击：发动激活能力（由调用方走既有双击链路）。</param>
         public void ShowNear(Control host, string title, IReadOnlyList<CardInstance> members,
@@ -87,6 +93,7 @@ namespace Script.UI
         {
             if (host == null || !GodotObject.IsInstanceValid(host) || members == null || members.Count == 0) return;
 
+            _host = host;
             _onPick = onPick;
             _onActivate = onActivate;
             _title.Text = title ?? string.Empty;
@@ -99,9 +106,12 @@ namespace Script.UI
             }
 
             var scene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
-            int shown = Math.Min(members.Count, MaxCards);
             float cardW = CardLayoutHelper.CARD_WIDTH * CardScale;
             float cardH = CardLayoutHelper.CARD_HEIGHT * CardScale;
+            // 张数按视口宽度算（视口越宽列越多），再受 MaxCards 封顶；超出部分用尾部提示交代总数。
+            float viewportW = GetViewportRect().Size.X;
+            int fit = Mathf.Max(1, (int)((viewportW - 24f + Gap) / (cardW + Gap)));
+            int shown = Math.Min(members.Count, Math.Min(fit, MaxCards));
 
             for (int i = 0; i < shown; i++)
             {
@@ -136,7 +146,12 @@ namespace Script.UI
             }
 
             if (members.Count > shown)
-                _row.AddChild(new Label { Text = "…", VerticalAlignment = VerticalAlignment.Center });
+                _row.AddChild(new Label
+                {
+                    Text = $"…（共 {members.Count} 张）",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MouseFilter = MouseFilterEnum.Ignore,
+                });
 
             // 先量尺寸再定位：标题 + 卡列的合并最小尺寸此时已可用
             Vector2 content = _column.GetCombinedMinimumSize();
