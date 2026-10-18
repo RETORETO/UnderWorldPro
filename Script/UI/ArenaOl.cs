@@ -56,6 +56,56 @@ namespace Script.UI
         private Label _assetLabel1, _assetLabel2;             // 费用池标签（费用/颜色忠诚/领域忠诚，对标单机）
         private Control _scoreContainer1, _scoreContainer2;   // 分数区（P1/P2）
         private Control _councilContainer1, _councilContainer2; // 秘社区（P1/P2）
+
+        // ==================== 视角归一化（P1·2026-10-18） ====================
+        // 目标：**自己永远在下方**（场景里的 Player1Area 一侧），对手在上方（Player2Area 一侧）。
+        //
+        // 做法：座位 → 界面控件 的映射只在本区块定义一次，所有"把某座位的牌摆到哪"的地方
+        //      一律走 ViewCtr / AreaHalf / DeckZoneOf / GraveZoneOf / AssetCtr / ScoreCtr / CouncilCtr。
+        //       本地座位=2 时整体**镜像**（座位1 用 P2 那一侧的控件，座位2 用 P1 那一侧的控件）。
+        //
+        // 【红线】身份判断不参与归一：`SendIntentAs(_localPlayerId, ...)`、
+        //        `inst.ControllerId == _localPlayerId`、`IsLocalPlayer(p)`、服务端投影查询
+        //        一律使用**真实座位号**，绝不能用镜像后的槽位号（否则意图会以对手身份上行）。
+        private bool ViewMirrored => _localPlayerId == 2;
+
+        /// <summary>座位 → 界面控件。seat 只接受 1/2（其它值返回 null，由调用方兜底）。</summary>
+        private Control ViewCtr(int seat, Control seat1Ctr, Control seat2Ctr)
+        {
+            if (seat == 1) return ViewMirrored ? seat2Ctr : seat1Ctr;
+            if (seat == 2) return ViewMirrored ? seat1Ctr : seat2Ctr;
+            return null;
+        }
+
+        /// <summary>某个争夺区槽位里，某座位该用的半边容器（P1Area=下半 / P2Area=上半，镜像后互换）。</summary>
+        private Control AreaHalf(AreaSlot slot, int seat)
+            => slot == null ? null : ViewCtr(seat, slot.Player1Area, slot.Player2Area);
+
+        private Control HandCtr(int seat) => ViewCtr(seat, _p1Hand, _p2Hand);
+        private Control AssetCtr(int seat) => ViewCtr(seat, _assetContainer1, _assetContainer2);
+        /// <summary>某座位对应的玩家区面板节点（场景里按"上/下"命名，镜像后需换名查）。</summary>
+        private Control PlayerAreaNode(int seat)
+        {
+            bool useP1 = (seat == 1) ^ ViewMirrored;
+            return GetNodeOrNull<Control>(useP1 ? "Player1Area" : "Player2Area");
+        }
+        private Label AssetLabelCtr(int seat)
+            => seat == 1 ? (ViewMirrored ? _assetLabel2 : _assetLabel1)
+                         : (ViewMirrored ? _assetLabel1 : _assetLabel2);
+        private Control ScoreCtr(int seat) => ViewCtr(seat, _scoreContainer1, _scoreContainer2);
+        private Control CouncilCtr(int seat) => ViewCtr(seat, _councilContainer1, _councilContainer2);
+        private OnlineDeckZone DeckZoneOf(int seat)
+            => seat == 1 ? (ViewMirrored ? _p2DeckZone : _p1DeckZone)
+                         : (ViewMirrored ? _p1DeckZone : _p2DeckZone);
+        private GraveyardZone GraveZoneOf(int seat)
+            => seat == 1 ? (ViewMirrored ? _p2GraveZone : _p1GraveZone)
+                         : (ViewMirrored ? _p1GraveZone : _p2GraveZone);
+        private Label ScoreLabelOf(int seat)
+            => seat == 1 ? (ViewMirrored ? _p2ScoreLabel : _p1ScoreLabel)
+                         : (ViewMirrored ? _p1ScoreLabel : _p2ScoreLabel);
+
+        /// <summary>界面用称呼：本方 / 对手（用于分数、费用池等标签文案）。</summary>
+        private string SeatName(int seat) => seat == _localPlayerId ? "本方" : "对手";
         private Control _stackContainer;      // 堆叠区容器
         private Label _resultLabel;           // 游戏结束结算文字（由服务端权威结果驱动）
         /// <summary>是否已展示本局结果（避免后续快照刷新把结算文字刷掉）。</summary>
@@ -232,6 +282,9 @@ namespace Script.UI
             CardPreviewBus.Attach(card => Script.Manager.CovertInspectRule.CanViewerSeeCardFace(
                 card, _localPlayerId, _matchClient?.ClientCardManager), _hoverPreview, viewerPlayerId: _localPlayerId);
 
+            // 【P3b】角标悬浮展开（联机侧纯浏览：无 CardPickWindow，点成员只收起）
+            InitBadgePeek();
+
             var passBtn = GetNodeOrNull<Button>("ActionPanel/PassButton");
             if (passBtn != null) passBtn.Pressed += () => DoPass(_localPlayerId);
             var endTurnBtn = GetNodeOrNull<Button>("ActionPanel/EndTurnButton");
@@ -322,8 +375,67 @@ namespace Script.UI
         public override void _ExitTree()
         {
             CardPreviewBus.Detach(_hoverPreview);   // 【鼠标悬浮预览】反注册（避免悬挂引用）
+            DetachBadgePeek();
             DetachLauncher();
             base._ExitTree();
+        }
+
+        /// <summary>【P3b】角标悬浮展开：联机侧纯浏览（联机没有 CardPickWindow，"置选中"不适用）。</summary>
+        private CardBadgePeek _badgePeek;
+        private int _badgePeekHideToken;
+
+        private void InitBadgePeek()
+        {
+            CardBadges.OnBadgeHover = ShowBadgePeek;
+            CardBadges.OnBadgeHoverEnd = _ => ScheduleHideBadgePeek();
+        }
+
+        private void DetachBadgePeek()
+        {
+            if (CardBadges.OnBadgeHover == (System.Action<Control>)ShowBadgePeek) CardBadges.OnBadgeHover = null;
+            CardBadges.OnBadgeHoverEnd = null;
+            if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)) _badgePeek.HideNow();
+        }
+
+        private void ShowBadgePeek(Control host)
+        {
+            if (host == null || !GodotObject.IsInstanceValid(host)) return;
+            var inst = host is CardUI c ? c.Instance : (host as CouncilCardUI)?.Instance;
+            if (inst == null) return;
+
+            var members = new System.Collections.Generic.List<CardInstance>();
+            if (inst.AttachedCards != null)
+                foreach (var m in inst.AttachedCards)
+                    if (m != null) members.Add(m);
+            if (inst.SealedCards != null)
+                foreach (var s in inst.SealedCards)
+                    if (s != null && ReferenceEquals(s.SealedBy, inst)) members.Add(s);
+            if (members.Count == 0) return;
+
+            _badgePeekHideToken++;
+            CardPreviewBus.Overlay?.HidePreview();
+
+            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
+            {
+                _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+                AddChild(_badgePeek);
+            }
+            _badgePeek.ShowNear(host, members, _ => _badgePeek?.HideNow());
+        }
+
+        private void ScheduleHideBadgePeek()
+        {
+            if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible) return;
+            int token = ++_badgePeekHideToken;
+            var timer = GetTree()?.CreateTimer(0.25);
+            if (timer == null) { _badgePeek.HideNow(); return; }
+            timer.Timeout += () =>
+            {
+                if (token != _badgePeekHideToken) return;
+                if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek)) return;
+                if (_badgePeek.ContainsGlobalPoint(GetGlobalMousePosition())) return;
+                _badgePeek.HideNow();
+            };
         }
 
         /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
@@ -455,7 +567,7 @@ namespace Script.UI
             if (selected == null || selected.Count == 0) return;
 
             // 仅当这些卡属于本地玩家手牌时才做本地回显（服务端不会让对手弃本方手牌）
-            var localHand = _localPlayerId == 1 ? _p1Hand : _p2Hand;
+            var localHand = HandCtr(_localPlayerId);   // 视角归一：本方手牌恒在下方
             if (localHand == null) return;
 
             int echoed = 0;
@@ -1572,8 +1684,9 @@ namespace Script.UI
             if (zone != null)
             {
                 // 手牌/墓地/资产区：ZoneManager 投影区域桶（玩家卡，PlayerTemplate != null）
-                RebuildInto(_p1Hand, zone.GetZoneCards(CardZone.Hand, 1));
-                RebuildInto(_p2Hand, zone.GetZoneCards(CardZone.Hand, 2));
+                // 【P1】座位→容器走视角归一：本方恒在下方
+                RebuildInto(HandCtr(1), zone.GetZoneCards(CardZone.Hand, 1));
+                RebuildInto(HandCtr(2), zone.GetZoneCards(CardZone.Hand, 2));
                 RebuildGraveyards(zone.GetZoneCards(CardZone.Graveyard, 1), zone.GetZoneCards(CardZone.Graveyard, 2));
                 RebuildAssets(zone.GetZoneCards(CardZone.AssetZone, 1), zone.GetZoneCards(CardZone.AssetZone, 2));
             }
@@ -1606,10 +1719,17 @@ namespace Script.UI
             }
 
             // 分数显示：只显示胜利分数（费用池已移到 PlayerXArea/AssetContainer/AssetLabel）
-            if (_p1ScoreLabel != null && snap.Players.Count > 0)
-                _p1ScoreLabel.Text = $"P1 分数 {snap.Players[0].ScoreTotal}";
-            if (_p2ScoreLabel != null && snap.Players.Count > 1)
-                _p2ScoreLabel.Text = $"P2 分数 {snap.Players[1].ScoreTotal}";
+            // 【P1】视角归一：标签跟着"它所在的界面槽位"走，文案用 本方/对手（座位号已随镜像翻转，直接标 P1/P2 会误导）
+            if (snap.Players.Count > 0)
+            {
+                var l1 = ScoreLabelOf(1);
+                if (l1 != null) l1.Text = $"{SeatName(1)} 分数 {snap.Players[0].ScoreTotal}";
+            }
+            if (snap.Players.Count > 1)
+            {
+                var l2 = ScoreLabelOf(2);
+                if (l2 != null) l2.Text = $"{SeatName(2)} 分数 {snap.Players[1].ScoreTotal}";
+            }
 
             // 费用池（对标单机 Arena.RefreshAssetLabels）：费用：可用/总 + 颜色忠诚 + 领域忠诚
             RefreshOnlineAssetLabels(snap);
@@ -1681,8 +1801,9 @@ namespace Script.UI
             var pm = _matchClient?.ClientPlayerManager;
             if (zone == null || pm == null) return;
 
-            RefreshOneOnlineAssetLabel(_assetLabel1, 1, snap, zone, pm);
-            RefreshOneOnlineAssetLabel(_assetLabel2, 2, snap, zone, pm);
+            // 【P1】视角归一：标签跟着"它所在的界面槽位"走
+            RefreshOneOnlineAssetLabel(AssetLabelCtr(1), 1, snap, zone, pm);
+            RefreshOneOnlineAssetLabel(AssetLabelCtr(2), 2, snap, zone, pm);
         }
 
         private void RefreshOneOnlineAssetLabel(Label label, int playerId, GameSnapshot snap,
@@ -1789,8 +1910,9 @@ namespace Script.UI
             // DeckZone.Initialize 只清内部列表不清已有子节点，快照全量重建前先清掉旧卡 UI，避免跨快照堆积
             ClearDeckChildren(_p1DeckZone);
             ClearDeckChildren(_p2DeckZone);
-            _p1DeckZone?.Initialize(d1, _cardUIScene, 1);
-            _p2DeckZone?.Initialize(d2, _cardUIScene, 2);
+            // 【P1】座位→牌库组件走视角归一：本方牌堆恒在下方
+            DeckZoneOf(1)?.Initialize(d1, _cardUIScene, 1);
+            DeckZoneOf(2)?.Initialize(d2, _cardUIScene, 2);
         }
 
         /// <summary>清空 DeckZone 节点下的旧 CardUI 子节点（保留 CountLabel/CardContainer 等静态子节点）。</summary>
@@ -1807,8 +1929,8 @@ namespace Script.UI
             // 先 Clear() 释放上一快照的旧卡节点，再 Initialize 设场景引用，最后逐张 AddCard
             if (_p1GraveZone != null) { _p1GraveZone.Clear(); _p1GraveZone.Initialize(_cardUIScene); }
             if (_p2GraveZone != null) { _p2GraveZone.Clear(); _p2GraveZone.Initialize(_cardUIScene); }
-            RebuildGraveyardInto(_p1GraveZone, grave1);
-            RebuildGraveyardInto(_p2GraveZone, grave2);
+            RebuildGraveyardInto(GraveZoneOf(1), grave1);   // 【P1】视角归一
+            RebuildGraveyardInto(GraveZoneOf(2), grave2);
         }
 
         private void RebuildGraveyardInto(GraveyardZone graveZone, System.Collections.Generic.List<CardInstance> instances)
@@ -1827,8 +1949,8 @@ namespace Script.UI
         /// 建立资产后，卡进 AssetZone 桶，由这里渲染，避免"手牌减了但资产区空"。</summary>
         private void RebuildAssets(System.Collections.Generic.List<CardInstance> asset1, System.Collections.Generic.List<CardInstance> asset2)
         {
-            RebuildAssetsInto(_assetContainer1, asset1);
-            RebuildAssetsInto(_assetContainer2, asset2);
+            RebuildAssetsInto(AssetCtr(1), asset1);   // 【P1】视角归一
+            RebuildAssetsInto(AssetCtr(2), asset2);
         }
 
         private void RebuildAssetsInto(Control container, System.Collections.Generic.List<CardInstance> instances)
@@ -1858,7 +1980,7 @@ namespace Script.UI
                 RegisterOnlineCardUI(inst, ui);
                 cards.Add(ui);
             }
-            CardLayoutHelper.LayoutCardsEvenly(container, cards);
+            CardLayoutHelper.LayoutStacked(container, cards);   // 【P4】资产/分数区改层叠
         }
 
         /// <summary>
@@ -1890,7 +2012,7 @@ namespace Script.UI
                 if (string.IsNullOrEmpty(inst.ZoneDetailId)) continue;
                 var slot = _areaSlots.Find(s => s != null && s.AreaUID == inst.ZoneDetailId);
                 if (slot == null) continue;
-                var container = inst.ControllerId == 1 ? slot.Player1Area : slot.Player2Area;
+                var container = AreaHalf(slot, inst.ControllerId == 1 ? 1 : 2);   // 【P1】视角归一
                 if (container == null) continue;
 
                 var ui = _cardUIScene.Instantiate<CardUI>();
@@ -1948,7 +2070,7 @@ namespace Script.UI
 
             for (int p = 1; p <= 2; p++)
             {
-                var container = p == 1 ? _councilContainer1 : _councilContainer2;
+                var container = CouncilCtr(p);   // 【P1】视角归一
                 if (container == null) continue;
                 foreach (Node child in container.GetChildren())
                     if (child is CouncilCardUI ccu)
@@ -2059,7 +2181,7 @@ namespace Script.UI
                 {
                     // —— 附属于地区 / 封印于地区：挂到对应 AreaSlot 争夺区容器，随后统一平铺 ——
                     var slot = _areaSlots.Find(s => s != null && s.AreaUID == inst.ZoneDetailId);
-                    var hostContainer = inst.ControllerId == 1 ? slot?.Player1Area : slot?.Player2Area;
+                    var hostContainer = AreaHalf(slot, inst.ControllerId == 1 ? 1 : 2);   // 【P1】视角归一
                     if (hostContainer == null) continue;
 
                     var ui = _cardUIScene.Instantiate<CardUI>();
@@ -2156,45 +2278,31 @@ namespace Script.UI
             return result;
         }
 
-        /// <summary>把附属/封印卡相对宿主（CardUI 或 CouncilCardUI）对齐定位（移植单机 ArrangeAllAttachments/Seals 算法）。
-        /// seal=true 封印卡朝宿主上缘上延；false 附属朝宿主下缘下延。含横置旋转、Pivot、ZIndex 与平滑目标。
-        /// 【2026-10-16 计划·未实施】本函数属 cat-2，须与单机 4 个实例级偏移函数
-        /// （`ArrangeAllAttachments`/`ArrangeAllSeals`/`ArrangeCouncilAttachments`/`ArrangeCouncilSeals`）
-        /// **同步简化**为宿主卡角标（`UI美化与空间重排方案.md` 决策 3），否则两端口径漂移。
-        /// cat-1（结附/封印于地区）走 `LayoutCardsEvenly` 容器平铺的路径**保持不动**。</summary>
+        /// <summary>
+        /// 【P3a·2026-10-18 已实施】cat-2（结附/封印于卡或秘社）改为**宿主卡角标**，与单机
+        /// `Arena.CollapseInstanceRelationsToBadges` 同口径：成员卡 UI 一律 `Visible=false`（仍留在原容器，
+        /// 供选择窗与 P3b 展开取用），只在宿主右下角显示「附×N / 封×N」。
+        /// cat-1（结附/封印于地区）走 `CardLayoutHelper.LayoutAreaRow` 容器平铺，**不受影响**。
+        /// 保留本方法名以兼容既有调用点（逐张调用 ⇒ 每次幂等重算宿主角标）。
+        /// </summary>
         private void LayoutAttachmentRelative(CardUI ui, Control hostUi, bool seal, int index)
         {
-            // 附属/封印自身可能横置：同步旋转与 Pivot
-            ui.PivotOffset = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT) / 2f;
-            ui.RotationDegrees = ui.IsTapped ? 90f : 0f;
+            if (ui != null && GodotObject.IsInstanceValid(ui)) ui.Visible = false;
+            RefreshHostBadge(hostUi);
+        }
 
-            // 宿主真实视觉中心与上/下缘（本地坐标，兼容宿主横置旋转）
-            // 【2026-09 修复】原用 `PivotOffset.Rotated(角度)` 估算视觉中心 ⇒ 宿主横置时误差 (120,20)、
-            // 附属被摆到宿主左上方；Godot 旋转**绕 PivotOffset**，旋转后视觉中心仍是 `Position + PivotOffset`（单机同修）。
-            bool hostTapped = hostUi is CardUI hc ? hc.IsTapped : hostUi is CouncilCardUI cc && cc.IsTapped;
-            float centerX = hostUi.Position.X + hostUi.PivotOffset.X;
-            float centerY = hostUi.Position.Y + hostUi.PivotOffset.Y;
-            float visHalfH = hostTapped ? CardLayoutHelper.CARD_WIDTH / 2f : CardLayoutHelper.CARD_HEIGHT / 2f;
-
-            float topLeftX = centerX - CardLayoutHelper.CARD_WIDTH / 2f;
-            float topLeftY;
-            if (seal)
-            {
-                float topY = centerY - visHalfH;
-                topLeftY = topY - CardLayoutHelper.CARD_HEIGHT + (index + 1) * (CardLayoutHelper.CARD_HEIGHT * 0.4f);
-            }
-            else
-            {
-                float bottomY = centerY + visHalfH;
-                topLeftY = bottomY - CardLayoutHelper.CARD_HEIGHT + (index + 1) * (CardLayoutHelper.CARD_HEIGHT * 0.4f);
-            }
-
-            ui.Position = new Vector2(topLeftX, topLeftY);
-            ui.TargetPosition = ui.GlobalPosition;
-            // 宿主层最高，附属/封印依次递减（越后越远）。
-            // 【对齐单机】单机附属 `targetUI.ZIndex-(i+1)`、封印 `hostUI.ZIndex-1-i`，两者都是"减 1 起步"；
-            // 原联机 `-(seal?1:0)-index` 使附属第一张与宿主同层（叠在宿主之上），改为统一减 1 起步。
-            ui.ZIndex = hostUi.ZIndex - 1 - index;
+        /// <summary>按宿主实例重算「附×N / 封×N」角标（幂等；宿主已释放则忽略）。</summary>
+        private static void RefreshHostBadge(Control hostUi)
+        {
+            if (hostUi == null || !GodotObject.IsInstanceValid(hostUi)) return;
+            CardInstance inst = hostUi is CardUI c ? c.Instance : (hostUi as CouncilCardUI)?.Instance;
+            if (inst == null) return;
+            int attached = inst.AttachedCards?.Count ?? 0;
+            int sealedCount = 0;
+            if (inst.SealedCards != null)
+                foreach (var s in inst.SealedCards)
+                    if (s != null && ReferenceEquals(s.SealedBy, inst)) sealedCount++;
+            CardBadges.Apply(hostUi, attached, sealedCount);
         }
 
         /// <summary>重建分数区（ScoreZone）：渲染赢取地区/计分卡，并从快照刷新双方胜利分数。</summary>
@@ -2205,7 +2313,7 @@ namespace Script.UI
 
             for (int p = 1; p <= 2; p++)
             {
-                var container = p == 1 ? _scoreContainer1 : _scoreContainer2;
+                var container = ScoreCtr(p);   // 【P1】视角归一
                 if (container == null) continue;
                 foreach (Node child in container.GetChildren())
                     if (child is CardUI || child is AreaCardUI)
@@ -2236,7 +2344,7 @@ namespace Script.UI
                         ui.MouseFilter = MouseFilterEnum.Ignore;
                     }
                 }
-                CardLayoutHelper.LayoutCardsEvenly(container, GatherCardUIs(container));
+                CardLayoutHelper.LayoutStacked(container, GatherCardUIs(container));   // 【P4】资产/分数区改层叠
             }
         }
 
@@ -2393,7 +2501,8 @@ namespace Script.UI
                     if (slot == null || !GodotObject.IsInstanceValid(slot)) return null;
                     return slot.GlobalPosition + slot.GetRect().Size / 2f;
                 case StackTargetRef.RefKind.Player:
-                    var pArea = GetNodeOrNull<Control>(target.PlayerId == 1 ? "Player1Area" : "Player2Area");
+                    // 【P1】视角归一：玩家目标箭头指向"该座位在界面上实际所在的那一侧"
+                    var pArea = PlayerAreaNode(target.PlayerId);
                     if (pArea != null) return pArea.GlobalPosition + pArea.GetRect().Size / 2f;
                     return null;
                 default:
@@ -3068,7 +3177,7 @@ namespace Script.UI
 
             // 找到"本地玩家正在拖拽的手牌卡"
             CardUI dragging = null;
-            var localHand = _localPlayerId == 1 ? _p1Hand : _p2Hand;
+            var localHand = HandCtr(_localPlayerId);   // 视角归一：本方手牌恒在下方
             if (localHand != null)
             {
                 foreach (var kv in _cardUIMap)
@@ -3129,7 +3238,7 @@ namespace Script.UI
             }
 
             // 本方秘社为合法目标时高亮（对齐单机 SetCouncilHighlight）
-            var ownCouncilUi = (_localPlayerId == 1 ? _councilContainer1 : _councilContainer2) != null
+            var ownCouncilUi = CouncilCtr(_localPlayerId) != null
                 ? FindOwnCouncilUi()
                 : null;
             if (ownCouncilUi?.Instance != null)
@@ -3782,8 +3891,9 @@ namespace Script.UI
             if (containerWidth <= 0) containerWidth = 1920;
 
             int count = _areaSlots.Count;
-            const float slotWidth = 400f;
-            const float slotHeight = 580f;
+            // 【P2】与单机 Arena.Layout.ArrangeAreas 同口径：480×540（3 张 140 宽卡不重叠）
+            const float slotWidth = 480f;
+            const float slotHeight = 540f;
             const float spacing = 30f;
 
             float startX, step;
@@ -3815,8 +3925,7 @@ namespace Script.UI
                 // 【2026-10·对齐单机 Arena.Layout.ArrangeAreas】单机在写完 Size 后还做两件事：
                 //  ① anchors 归零 —— 防止场景里残留的 anchor 让 Size/Position 被布局系统二次修正；
                 //  ② UpdateLayout() —— 按槽位当前 Size 重算 Player1Area/CardContainer/Player2Area 的
-                //     Size 与 Position。当前 tscn 默认恰好是 400x580 所以数值等价，但一旦槽位尺寸变化
-                //     （如未来窄屏压缩）不重算就会让子容器与视觉错位。
+                //     Size 与 Position。槽位尺寸一变（P2: 400×580 → 480×540），不重算子容器就会与视觉错位。
                 slot.Position = new Vector2(startX + i * step, 0);
                 slot.Size = new Vector2(slotWidth, slotHeight);
                 slot.AnchorLeft = 0; slot.AnchorRight = 0;
@@ -3839,7 +3948,8 @@ namespace Script.UI
                     oc.QueueFree();
                 }
 
-            bool isLocalHand = (container == _p1Hand && _localPlayerId == 1) || (container == _p2Hand && _localPlayerId == 2);
+            // 【P1】视角归一：本方手牌容器恒在下方，故用映射判断"这是本地手牌"
+            bool isLocalHand = container == HandCtr(_localPlayerId);
             if (isLocalHand) { _localHand = container; _localHandOwner = _localPlayerId; }
             foreach (var inst in instances)
             {
@@ -4065,7 +4175,7 @@ namespace Script.UI
             if (_maskMode == MaskMode.EstablishAsset)
             {
                 // 对齐单机 HandleMaskDrop：建立资产需落到「己方资产区」或「任一争夺区」，否则取消（不发意图）
-                var ownAsset = _localPlayerId == 1 ? _assetContainer1 : _assetContainer2;
+                var ownAsset = AssetCtr(_localPlayerId);   // 【P1】视角归一
                 bool droppedOnAsset = ownAsset != null && GodotObject.IsInstanceValid(ownAsset)
                                       && ownAsset.GetGlobalRect().HasPoint(dropPos);
                 bool droppedOnArea = !string.IsNullOrEmpty(FindTargetAreaUidAt(dropPos));
@@ -4119,7 +4229,7 @@ namespace Script.UI
             // 秘社（CouncilCardUI 不在 _cardUIMap）：命中本方秘社区且为合法目标时才取（对齐单机）
             if (string.IsNullOrEmpty(targetCardUid) && clientCardMgr != null)
             {
-                var councilContainer = _localPlayerId == 1 ? _councilContainer1 : _councilContainer2;
+                var councilContainer = CouncilCtr(_localPlayerId);   // 【P1】视角归一
                 if (councilContainer != null && GodotObject.IsInstanceValid(councilContainer)
                     && councilContainer.GetGlobalRect().HasPoint(dropPos))
                 {
@@ -4239,7 +4349,7 @@ namespace Script.UI
             foreach (var slot in _areaSlots)
             {
                 if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
-                var ownArea = _localPlayerId == 1 ? slot.Player1Area : slot.Player2Area;
+                var ownArea = AreaHalf(slot, _localPlayerId);   // 【P1】视角归一
                 if (ownArea != null && ownArea.GetGlobalRect().HasPoint(globalPos))
                     return slot.AreaUID;
             }

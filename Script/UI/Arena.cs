@@ -398,6 +398,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         AddChild(_hoverPreview);
         CardPreviewBus.Attach(card => CovertInspectRule.CanViewerSeeCardFace(card, 1, _cardManager),
             _hoverPreview, viewerPlayerId: 1);
+
+        // 【P3b】角标悬浮展开（只读浮层，不写 Model、不提交选择）
+        InitBadgePeek();
         if (_targetSelectionWindow == null && _targetSelectionScene != null)
         {
             _targetSelectionWindow = _targetSelectionScene.Instantiate<TargetSelectionWindow>();
@@ -941,6 +944,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         req.AreaIndexOf ??= uid => AreaIndexOf(uid);
 
         var win = new CardPickWindow();
+        // 【P3b】记录当前选择窗：角标展开面板点成员时只在这里"置选中"
+        _activePickWindow = win;
+        win.TreeExiting += () => { if (ReferenceEquals(_activePickWindow, win)) _activePickWindow = null; };
         var onPicked = req.OnPicked;
         var onCancelled = req.OnCancelled;
         req.OnPicked = c => { UnlockChoiceWindow(win); onPicked?.Invoke(c); };
@@ -1628,6 +1634,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         UnsubscribeFromManagerEvents();
         // 【鼠标悬浮预览】反注册总线（避免旧 Arena 的浮层引用残留到下一局/联机视图）
         CardPreviewBus.Detach(_hoverPreview);
+        DetachBadgePeek();
         base._ExitTree();
     }
 

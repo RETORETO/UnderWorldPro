@@ -19,8 +19,10 @@ public partial class Arena
     // ============================================================
     // 常量
     // ============================================================
-    private const float CARD_WIDTH = 100;
-    private const float CARD_HEIGHT = 140;
+    // 卡牌尺寸【收口】：唯一真源在 CardLayoutHelper，此处只是本 partial 的别名，
+    // 禁止再写死数字（改值只改 CardLayoutHelper）。
+    private const float CARD_WIDTH = CardLayoutHelper.CARD_WIDTH;
+    private const float CARD_HEIGHT = CardLayoutHelper.CARD_HEIGHT;
     private const float HAND_SPACING = 20;
 
     // 场上/手牌/资产卡 ZIndex 基准：高于争夺区背景槽位(AreaSlot)，避免被背景遮挡
@@ -111,223 +113,135 @@ public partial class Arena
     }
 
     /// <summary>
-    /// 【2026-09 修复·用户实测"附属 UI 部分情况下显示在宿主卡上方"】
-    /// 取宿主 UI 在**其容器本地坐标**下的**真实视觉中心**与**视觉半高**（兼容宿主横置）。
+    /// 【P3a·2026-10-18 已实施】cat-2「结附于卡」折叠为宿主角标。
     ///
-    /// 原实现用 `Position + PivotOffset.Rotated(角度)` 估算视觉中心 —— **错**：Godot 的旋转是**绕 PivotOffset**
-    /// 进行的，旋转后视觉中心**仍在** `Position + PivotOffset`（实测 `GetGlobalTransform()` 四角 AABB：
-    /// `Position=(0,0)` / `PivotOffset=(50,70)` / `RotationDegrees=90` → 视觉中心 **(50,70)**，
-    /// 而 `PivotOffset.Rotated(90°)` 给出 (-70,50)，误差 **(120,20)**）。
-    /// 于是**宿主一旦横置**，附属/封印就被摆到宿主的左上方（未横置时公式恰好等价，故表现为"部分情况"）。
-    /// 视觉半高：横置卡视觉高＝卡宽 ⇒ `CARD_WIDTH/2`（这一点原实现是对的）。
-    /// </summary>
-    private static void HostVisualCenter(Control hostUi, bool hostTapped,
-        out float centerX, out float centerY, out float visHalfH)
-    {
-        centerX = hostUi.Position.X + hostUi.PivotOffset.X;
-        centerY = hostUi.Position.Y + hostUi.PivotOffset.Y;
-        visHalfH = hostTapped ? CARD_WIDTH / 2f : CARD_HEIGHT / 2f;
-    }
-
-    /// <summary>
-    /// 重排所有结附关系：对每个带有附属的目标卡，将其附属 UI（挂在同一 PlayerXArea 容器内）
-    /// 按 X 对齐目标卡视觉中心、Y 从目标卡视觉下缘向上露出 2/5 张起、多张依次下延；
-    /// 正确处理横置卡（旋转 90° 后视觉下缘变为原右侧），目标卡 ZIndex 最高，
-    /// 附属越靠后 ZIndex 越低（视觉上越远）。
-    /// 【2026-10-16 计划·未实施】按 `UI美化与空间重排方案.md` 决策 3，本函数**只服务 cat-2**
-    /// （结附于卡 / 结附于秘社）；cat-2 将改为**宿主卡角标**（角标层 380~399），届时本偏移算法相应简化。
-    /// **cat-1（结附于地区）不走本函数**（走 `ArrangeAreaAttachmentsAndSeals` 平铺），不受影响。
-    /// 另：A71（`视觉中心 = Position + PivotOffset`）在未折叠/展开态仍须成立，勿因简化而删断言。
+    /// 旧实现（本函数原名）把每张附属按 `Y = 宿主下缘 − 卡高 + i×0.4×卡高` 逐张向下偏移铺开，
+    /// 3 张就要吃掉 2×78 的纵向空间，且与争夺区角色互相压叠 ⇒ 决策 3 改为**宿主卡角标**。
+    /// 现在附属/封印 UI 一律 `Visible=false`（仍留在原容器、仍能用 `FindCardUIByUID` 找到，
+    /// 供 P3b hover 展开与 cat-2 选择窗使用），只由 `CardBadges` 在宿主右下角显示「附×N / 封×N」。
+    ///
+    /// **cat-1（结附/封印于地区）不走这里**：`AttachedTo==null / SealedBy==null` 的卡不进任何卡的
+    /// `AttachedCards/SealedCards`，仍由 `ArrangeAreaAttachmentsAndSeals` 在地区容器内平铺，
+    /// 保持"场上可见可点"（选卡方案契约）。
+    ///
+    /// A71（`视觉中心 = Position + PivotOffset`）在折叠态不再用于附属定位，但宿主卡本身仍走
+    /// `PlaceCardInContainer`，该关系保持不变。
     /// </summary>
     private void ArrangeAllAttachments()
     {
-        foreach (var targetUI in _areaCardUIs)
-        {
-            if (targetUI == null || !GodotObject.IsInstanceValid(targetUI)) continue;
-            var targetInst = targetUI?.Instance;
-            if (targetInst == null || targetInst.AttachedCards == null || targetInst.AttachedCards.Count == 0)
-                continue;
-
-            var host = targetUI.GetParent() as Control;
-            if (host == null) continue;
-
-            // 目标卡真实视觉中心与视觉下缘（本地坐标，兼容横置；见 HostVisualCenter 注释）
-            HostVisualCenter(targetUI, targetUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
-            float bottomY = centerY + visHalfH;
-
-            for (int i = 0; i < targetInst.AttachedCards.Count; i++)
-            {
-                var attInst = targetInst.AttachedCards[i];
-                var attUI = FindCardUIByUID(attInst.UID);
-                if (attUI == null || attUI.GetParent() != host) continue;
-
-                // 附属自身可能横置：同步旋转与 Pivot（附属不走 PlaceCardInContainer，需在此显式维护）
-                // 注意：布局上统一按未横置占位计算，使横置附属仍竖直堆叠在目标下方，
-                // 仅卡牌本身旋转 90°，避免视觉尺寸变化导致附属飞到目标右侧。
-                attUI.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-                attUI.RotationDegrees = attUI.IsTapped ? 90f : 0f;
-
-                // X 对齐目标视觉中心；Y 从目标视觉下缘向上压住 3/5（露出 2/5=56px）起依次下延 2/5 张
-                float attTopLeftX = centerX - CARD_WIDTH / 2f;
-                float attTopLeftY = bottomY - CARD_HEIGHT + (i + 1) * (CARD_HEIGHT * 0.4f);
-                attUI.Position = new Vector2(attTopLeftX, attTopLeftY);
-                // 同步平滑目标（避免 _Process 把附属拉回旧位置）
-                attUI.TargetPosition = attUI.GlobalPosition;
-                // 目标卡 ZIndex 最高，附属依次递减（越后越靠下越远）
-                attUI.ZIndex = targetUI.ZIndex - (i + 1);
-            }
-        }
+        CollapseInstanceRelationsToBadges();
     }
 
     /// <summary>
-    /// 【秘社批次】重排**封印在秘社上**的牌（MSJC010 貘组 / MSJC016 颂亡者）。
-    /// 与 `ArrangeCouncilAttachments`（附属，向下）对称：封印牌 X 对齐秘社视觉中心、
-    /// Y 从秘社视觉**上缘向上**露出 2/5 张起、多张依次再上延 2/5 张；ZIndex 比秘社低但高于其它卡。
-    /// 必须在 `ArrangeCouncilCards`（已排好秘社 UI.Position）之后调用。
-    /// 【2026-10-16 计划·未实施】属 cat-2，将随 `ArrangeAllAttachments` 一并改为秘社卡角标（决策 3）。
+    /// 【P3a】把"结附/封印于卡"与"结附/封印于秘社"的成员全部折叠：
+    /// 逐个宿主统计数量 → 隐藏成员卡 UI → 宿主角标显示数量。幂等，可在任意排版路径反复调用。
+    /// 递归处理"附属上还有附属/封印"（如形态角色），深度上限 4 仅作防御。
+    /// </summary>
+    private void CollapseInstanceRelationsToBadges()
+    {
+        if (_areaCardUIs != null)
+        {
+            foreach (var hostUI in _areaCardUIs)
+            {
+                if (hostUI == null || !GodotObject.IsInstanceValid(hostUI)) continue;
+                var hostInst = hostUI.Instance;
+                if (hostInst == null) continue;
+                CollapseOneHost(hostUI, hostInst, 0);
+            }
+        }
+
+        for (int playerId = 1; playerId <= 2; playerId++)
+        {
+            var councilInst = GetCouncilInstance(playerId);
+            if (councilInst == null) continue;
+            var councilUI = FindCouncilUIByUID(councilInst.UID);
+            if (councilUI == null || !GodotObject.IsInstanceValid(councilUI)) continue;
+            CollapseOneHost(councilUI, councilInst, 0);
+        }
+    }
+
+    /// <summary>折叠单个宿主：统计(附/封) → 隐藏成员 → 刷新角标；返回折叠成员数。</summary>
+    private int CollapseOneHost(Control hostUi, CardInstance hostInst, int depth)
+    {
+        int attached = 0, sealedCount = 0;
+
+        if (hostInst.AttachedCards != null)
+            foreach (var m in hostInst.AttachedCards)
+            {
+                var ui = m == null ? null : FindCardUIByUID(m.UID);
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                attached++;
+                CollapseMember(ui, m, depth);
+            }
+
+        if (hostInst.SealedCards != null)
+            foreach (var m in hostInst.SealedCards)
+            {
+                if (m == null || !ReferenceEquals(m.SealedBy, hostInst)) continue;   // 只算"封印于本卡"
+                var ui = FindCardUIByUID(m.UID);
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                sealedCount++;
+                CollapseMember(ui, m, depth);
+            }
+
+        CardBadges.Apply(hostUi, attached, sealedCount);
+
+        return attached + sealedCount;
+    }
+
+    /// <summary>隐藏一张成员卡 UI，并递归折叠"它自己身上的附属/封印"。</summary>
+    private void CollapseMember(CardUI ui, CardInstance inst, int depth)
+    {
+        ui.Visible = false;
+        if (inst == null || depth >= 4) return;
+
+        if (inst.AttachedCards != null)
+            foreach (var m in inst.AttachedCards)
+            {
+                var c = m == null ? null : FindCardUIByUID(m.UID);
+                if (c != null && GodotObject.IsInstanceValid(c)) CollapseMember(c, m, depth + 1);
+            }
+        if (inst.SealedCards != null)
+            foreach (var m in inst.SealedCards)
+            {
+                if (m == null || !ReferenceEquals(m.SealedBy, inst)) continue;
+                var c = FindCardUIByUID(m.UID);
+                if (c != null && GodotObject.IsInstanceValid(c)) CollapseMember(c, m, depth + 1);
+            }
+    }
+
+    /// <summary>
+    /// 【P3a 已并入折叠】封印在秘社上的牌改为秘社卡角标（见 `CollapseInstanceRelationsToBadges`）。
     /// </summary>
     private void ArrangeCouncilSeals()
     {
-        for (int playerId = 1; playerId <= 2; playerId++)
-        {
-            var councilInst = GetCouncilInstance(playerId);
-            if (councilInst?.SealedCards == null || councilInst.SealedCards.Count == 0) continue;
-            var councilUI = FindCouncilUIByUID(councilInst.UID);
-            if (councilUI == null || !GodotObject.IsInstanceValid(councilUI)) continue;
-            var host = councilUI.GetParent() as Control;
-            if (host == null) continue;
-
-            // 秘社真实视觉中心（兼容横置，见 HostVisualCenter）
-            HostVisualCenter(councilUI, councilUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
-            float topY = centerY - visHalfH;
-
-            int i = 0;
-            foreach (var sealInst in councilInst.SealedCards)
-            {
-                // 只处理"封印于本秘社"的封印牌（SealedBy 指向秘社），与 ArrangeAllSeals 同款护栏。
-                if (sealInst == null || !ReferenceEquals(sealInst.SealedBy, councilInst)) continue;
-                var sealUI = FindCardUIByUID(sealInst.UID);
-                if (sealUI == null || sealUI.GetParent() != host) continue;
-
-                sealUI.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-                sealUI.RotationDegrees = sealUI.IsTapped ? 90f : 0f;
-                float sealTopLeftX = centerX - CARD_WIDTH / 2f;
-                float sealTopLeftY = topY - CARD_HEIGHT + (i + 1) * (CARD_HEIGHT * 0.4f);
-                sealUI.Position = new Vector2(sealTopLeftX, sealTopLeftY);
-                sealUI.TargetPosition = sealUI.GlobalPosition;
-                sealUI.ZIndex = councilUI.ZIndex - 1 - i;
-                i++;
-            }
-        }
+        CollapseInstanceRelationsToBadges();
     }
 
     /// <summary>
-    /// 重排结附于秘社的附属 UI：与 ArrangeAllAttachments（结附于角色的附属）完全对称实现。
-    /// 差异仅在于：宿主 UI 是 CouncilCardUI（非 CardUI 子类），故用 FindCouncilUIByUID 而非 FindCardUIByUID。
-    /// 偏移逻辑一致：X 对齐宿主视觉中心、Y 从宿主视觉下缘向下露 3/5 起、多张依次下延 2/5 张、ZIndex 递减。
-    /// 必须在 ArrangeCouncilCards（已排好秘社 UI.Position）之后调用。
-    /// 【2026-10-16 计划·未实施】属 cat-2，将随 `ArrangeAllAttachments` 一并改为**秘社卡角标**（决策 3）。
+    /// 【P3a 已并入折叠】结附于秘社的附属改为秘社卡角标（见 `CollapseInstanceRelationsToBadges`）。
+    /// 保留本方法名是因为 `ArrangeAllSeals` 仍在调用；方法体只做一次幂等折叠，不再逐张偏移定位。
     /// </summary>
     private void ArrangeCouncilAttachments()
     {
-        for (int playerId = 1; playerId <= 2; playerId++)
-        {
-            var councilInst = GetCouncilInstance(playerId);
-            if (councilInst == null || councilInst.AttachedCards == null || councilInst.AttachedCards.Count == 0)
-                continue;
-            var councilUI = FindCouncilUIByUID(councilInst.UID);
-            if (councilUI == null || !GodotObject.IsInstanceValid(councilUI))
-                continue;
-            var host = councilUI.GetParent() as Control;
-            if (host == null)
-                continue;
-
-            // 与 ArrangeAllAttachments 完全对称：用宿主真实视觉中心（兼容横置，见 HostVisualCenter）
-            HostVisualCenter(councilUI, councilUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
-            float bottomY = centerY + visHalfH;
-
-            for (int i = 0; i < councilInst.AttachedCards.Count; i++)
-            {
-                var attInst = councilInst.AttachedCards[i];
-                var attUI = FindCardUIByUID(attInst.UID);
-                if (attUI == null)
-                    continue;
-                if (attUI.GetParent() != host)
-                    continue;
-
-                // 附属自身可能横置：同步旋转与 Pivot（与角色附属完全一致）
-                attUI.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-                attUI.RotationDegrees = attUI.IsTapped ? 90f : 0f;
-
-                // X 对齐宿主视觉中心；Y 从宿主视觉下缘向上压住 3/5（露出 2/5=56px）起依次下延 2/5 张
-                float attTopLeftX = centerX - CARD_WIDTH / 2f;
-                float attTopLeftY = bottomY - CARD_HEIGHT + (i + 1) * (CARD_HEIGHT * 0.4f);
-                attUI.Position = new Vector2(attTopLeftX, attTopLeftY);
-                // 同步平滑目标（避免 _Process 把附属拉回旧位置）
-                attUI.TargetPosition = attUI.GlobalPosition;
-                // 宿主卡 ZIndex 最高，附属依次递减（越后越靠下越远）
-                attUI.ZIndex = councilUI.ZIndex - (i + 1);
-            }
-        }
+        CollapseInstanceRelationsToBadges();
     }
 
     /// <summary>
-    /// 重排所有封印关系：对每个被封印的宿主卡（SealedCards 非空，且封印卡 SealedBy 指向宿主，
-    /// 即"封印于角色"），将其封印卡 UI（挂在同一 PlayerXArea 容器内）按 X 对齐目标视觉中心、
-    /// Y 从目标视觉【上缘】向上露出 2/5 张起、多张依次上延；与附属（向下）对称。
-    /// 封印卡 ZIndex 低于目标卡（目标卡层级最高），但高于其他卡，保证封印卡压在目标上方可见。
-    /// 注：封印于地区（SealedBy==null 且 ZoneDetailId 非空）的封印卡由 SyncCardUIToZone 挂到地区容器、
-    /// 不参与偏移布局（同 attacharea 行为），此处不处理。
-    /// 【2026-10-16 计划·未实施】本函数处理的是 cat-2（封印于角色/秘社/附属），将改为宿主卡角标（决策 3）；
-    /// **cat-1（封印于地区）本来就不进本函数**（走地区容器平铺），故其"可见可点"契约不受影响。
+    /// 【P3a·2026-10-18 已实施】cat-2「封印于卡 / 封印于秘社」折叠为宿主角标（原逐张向上偏移布局作废）。
+    /// 本函数同时负责秘社区的**排版收尾**（秘社卡本身仍要摆位）：
+    ///  1. 折叠附属/封印 + 刷新角标（幂等）；
+    ///  2. `ArrangeCouncilCards` 摆好秘社卡（角标作为其子节点自动跟随）。
+    /// **cat-1（封印于地区）不进这里**（`SealedBy==null`），仍由 `ArrangeAreaAttachmentsAndSeals` 平铺。
     /// </summary>
     private void ArrangeAllSeals()
     {
-        foreach (var hostUI in _areaCardUIs)
-        {
-            if (hostUI == null || !GodotObject.IsInstanceValid(hostUI)) continue;
-            var hostInst = hostUI?.Instance;
-            if (hostInst == null || hostInst.SealedCards == null || hostInst.SealedCards.Count == 0)
-                continue;
-
-            var container = hostUI.GetParent() as Control;
-            if (container == null) continue;
-
-            // 宿主真实视觉中心与视觉上缘（兼容横置，见 HostVisualCenter）
-            HostVisualCenter(hostUI, hostUI.IsTapped, out float centerX, out float centerY, out float visHalfH);
-            float topY = centerY - visHalfH;   // 目标视觉上缘（向上偏移基准）
-
-            // 仅处理"封印于角色"的封印卡（SealedBy == hostInst）
-            var sealsOnRole = hostInst.SealedCards.Where(s => s.SealedBy == hostInst).ToList();
-            for (int i = 0; i < sealsOnRole.Count; i++)
-            {
-                var sealInst = sealsOnRole[i];
-                var sealUI = FindCardUIByUID(sealInst.UID);
-                if (sealUI == null || sealUI.GetParent() != container) continue;
-
-                // 封印卡自身可能横置：同步旋转与 Pivot（与附属一致）
-                sealUI.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
-                sealUI.RotationDegrees = sealUI.IsTapped ? 90f : 0f;
-
-                // X 对齐目标视觉中心；Y 从目标视觉上缘向上露出 2/5 张（与附属向下露出 2/5 对称），
-                // 多张依次再上移 2/5 张（i*0.4），避免整张卡飞到宿主上方过远。
-                float sealTopLeftX = centerX - CARD_WIDTH / 2f;
-                float sealTopLeftY = topY - CARD_HEIGHT + (i + 1) * (CARD_HEIGHT * 0.4f);
-                sealUI.Position = new Vector2(sealTopLeftX, sealTopLeftY);
-                sealUI.TargetPosition = sealUI.GlobalPosition;
-                sealUI.ZIndex = hostUI.ZIndex - 1 - i;   // 目标层最高，封印卡在其上（层低于目标）
-            }
-        }
+        CollapseInstanceRelationsToBadges();
 
         // 议会（秘社）卡排版：按 Instance.IsTapped 旋转（支持横置）。
         // 每个 CouncilContainer 通常仅 1 张秘社卡，居中放置。
         ArrangeCouncilCards(_councilContainer1);
         ArrangeCouncilCards(_councilContainer2);
-        // 结附于秘社的附属：须在秘社排版（Position 已就绪）之后排布，否则坐标错乱偏移远处。
-        ArrangeCouncilAttachments();
-        // 【秘社批次】封印在秘社上的牌（MSJC010/016 的"封印在貘组/颂亡者上"）：_areaCardUIs 不含秘社，
-        // 故 ArrangeAllSeals 覆盖不到，必须与"结附于秘社"同款单独排布，否则会与附属叠在同一位置。
-        ArrangeCouncilSeals();
     }
 
     private void ArrangeContainerCards(Control container)
@@ -336,7 +250,11 @@ public partial class Arena
         var cards = new System.Collections.Generic.List<CardUI>();
         foreach (var child in container.GetChildren())
             if (child is CardUI c) cards.Add(c);
-        LayoutCardsEvenly(container, cards);
+
+        // 【P4】资产区 / 分数区改**层叠**（每张露 36px，右卡压左卡）；悬停某张时 CardUI 会抬高层级看全卡面。
+        var list = new System.Collections.Generic.List<Control>();
+        foreach (var c in cards) list.Add(c);
+        CardLayoutHelper.LayoutStacked(container, list);
     }
 
     private void ArrangeHandCards(Control container, List<CardUI> cards)
@@ -434,9 +352,11 @@ public partial class Arena
         if (containerWidth <= 0) containerWidth = 1920;
 
         int count = _areaSlots.Count;
-        // 与 AreaSlot.tscn 设计尺寸一致(400x580),避免 slot 被压扁导致内部 Player1/2Area 比例错位
-        const float slotWidth = 400f;
-        const float slotHeight = 580f;
+        // 与 AreaSlot.tscn 设计尺寸一致(480x540),避免 slot 被压扁导致内部 Player1/2Area 比例错位。
+        // 【P2·2026-10-18】400×580 → 480×540：3 张 140 宽卡并排需 436 ⇒ 480 才放得下；
+        // 3×480+2×30 = 1500，居中 startX=210，避开左下世界牌库(x 50–190)。
+        const float slotWidth = 480f;
+        const float slotHeight = 540f;
         const float spacing = 30f;
 
         float startX;
@@ -1150,12 +1070,17 @@ public partial class Arena
 
     private void PlaceCardInContainer(Control container, Control card, float visualX, int z)
     {
-        // 横置模型：逻辑 Size 保持 100x140 不变，整体旋转 90°。
-        // 因此视觉尺寸为：横置 140x100，竖置 100x140。
+        // 横置模型：逻辑 Size 不变，整体旋转 90°。
+        // 因此视觉尺寸为：横置 (卡高, 卡宽)，竖置 (卡宽, 卡高)。
+        // 【P0】尺寸按卡种取：玩家卡 = CardLayoutHelper（140×196），秘社卡 = CouncilCardUI（100×140）。
+        // 两者必须分开，否则秘社卡会被撑成 140×196（两者曾在"同一个 100×140"时天然一致）。
+        bool isCouncil = card is CouncilCardUI;
+        float cardW = isCouncil ? CouncilCardUI.CARD_WIDTH : CARD_WIDTH;
+        float cardH = isCouncil ? CouncilCardUI.CARD_HEIGHT : CARD_HEIGHT;
         // 横置状态统一从 UI 属性读取：玩家卡用 CardUI.IsTapped，秘社卡用 CouncilCardUI.IsTapped（两者已实现对称）。
         bool isTapped = (card as CardUI)?.IsTapped ?? ((card as CouncilCardUI)?.IsTapped ?? false);
-        float visW = isTapped ? CARD_HEIGHT : CARD_WIDTH;
-        float visH = isTapped ? CARD_WIDTH : CARD_HEIGHT;
+        float visW = isTapped ? cardH : cardW;
+        float visH = isTapped ? cardW : cardH;
 
         // 视觉框中心（相对于容器）
         float visCenterX = visualX + visW / 2f;
@@ -1163,19 +1088,24 @@ public partial class Arena
             ? container.Size.Y / 2f
             : visH / 2f;
 
-        // 逻辑尺寸固定 100x140，PivotOffset = (50,70)。
+        // 逻辑尺寸固定为卡种尺寸，PivotOffset = 尺寸/2。
         // 【2026-09 修复】逻辑左上角 = 视觉中心 - PivotOffset（**不旋转**）：Godot 的旋转绕 PivotOffset 进行，
         // 旋转后视觉中心仍在 `Position + PivotOffset`（实测见 `HostVisualCenter` 注释）——
         // 原写法减 `PivotOffset.Rotated(角度)` 会让**横置卡**的视觉中心偏 (120,20)，即整张卡向**右下**跑。
-        Vector2 pivot = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
+        Vector2 pivot = new Vector2(cardW, cardH) / 2f;
         Vector2 localPos = new Vector2(visCenterX, visCenterY) - pivot;
 
         card.AnchorLeft = 0; card.AnchorRight = 0;
         card.AnchorTop = 0; card.AnchorBottom = 0;
         card.Scale = Vector2.One;
+        // 【P3a】曾被折叠成角标的卡（附属于卡/秘社）重新摆到场上时必须恢复可见，
+        // 否则"解除结附/被解放"后会留在容器里但永远看不见。
+        card.Visible = true;
+        // 【P4】默认非层叠；资产/分数区排布在调用后由 LayoutStacked 再置回 true
+        if (card is CardUI cuiStack) cuiStack.StackedMode = false;
         // 先调最小尺寸，再调 Size，防止被旧的最小尺寸限制
-        card.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
-        card.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
+        card.CustomMinimumSize = new Vector2(cardW, cardH);
+        card.Size = new Vector2(cardW, cardH);
         card.PivotOffset = pivot;
         card.RotationDegrees = isTapped ? 90f : 0f;
         card.Position = localPos;
@@ -1200,8 +1130,8 @@ public partial class Arena
                 // 保证 PlaceCardInContainer 读到的 card.IsTapped 与实例一致（完全对称）。
                 bool tapped = cui.Instance != null && cui.Instance.IsTapped;
                 cui.SetTapped(tapped);
-                // 横置时视觉宽 140、竖置 100；按容器宽度居中，避免容器过窄导致横置卡溢出右侧。
-                float visW = tapped ? 140f : 100f;
+                // 横置时视觉宽＝卡高、竖置＝卡宽（秘社卡 100×140，与玩家卡 140×196 区分开）
+                float visW = tapped ? CouncilCardUI.CARD_HEIGHT : CouncilCardUI.CARD_WIDTH;
                 float centerX = (container.Size.X - visW) / 2f;
                 PlaceCardInContainer(container, cui, centerX, i);  // 多张时轻微错位避免完全重叠
                 i++;

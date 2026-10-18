@@ -51,9 +51,10 @@ namespace Script.UI
         }
         [Export] public float ReturnSpeed = 0.15f;
 
-        // 卡牌基础尺寸（与 Arena 的 CARD_WIDTH/CARD_HEIGHT 对应）
-        private const float CARD_WIDTH = 100f;
-        private const float CARD_HEIGHT = 140f;
+        // 卡牌基础尺寸。秘社卡是**独立卡种**（非 CardUI 子类），P0 只放大了玩家卡，
+        // 秘社卡保持 100×140；但常量必须公开，供 Arena.PlaceCardInContainer 区分两种卡尺寸。
+        public const float CARD_WIDTH = 100f;
+        public const float CARD_HEIGHT = 140f;
 
         // ---------- 生命周期 ----------
         public override void _Ready()

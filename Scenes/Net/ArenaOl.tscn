@@ -20,7 +20,7 @@ layout_mode = 1
 anchors_preset = 0
 offset_top = 250.0
 offset_right = 1920.0
-offset_bottom = 830.0
+offset_bottom = 790.0
 mouse_filter = 2
 
 [node name="ResultLabel" type="Label" parent="CenterArea" unique_id=2099100002]
@@ -81,22 +81,22 @@ mouse_filter = 2
 metadata/_edit_lock_ = true
 
 [node name="Player1Area" type="Panel" parent="." unique_id=1544941562]
-custom_minimum_size = Vector2(1920, 250)
-custom_maximum_size = Vector2(1920, 250)
+custom_minimum_size = Vector2(1920, 290)
+custom_maximum_size = Vector2(1920, 290)
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_top = -250.0
+offset_top = -290.0
 offset_right = 1400.0
 grow_vertical = 0
 
 [node name="ScoreZone" type="Panel" parent="Player1Area" unique_id=473622576]
 layout_mode = 0
 offset_left = 1250.0
-offset_top = 150.0
+offset_top = 190.0
 offset_right = 1390.0
-offset_bottom = 250.0
+offset_bottom = 290.0
 
 [node name="ScoreLabel" type="Label" parent="Player1Area/ScoreZone" unique_id=336436700]
 custom_minimum_size = Vector2(40, 40)
@@ -107,26 +107,26 @@ offset_bottom = 40.0
 
 [node name="CardContainer" type="Control" parent="Player1Area/ScoreZone" unique_id=16017608]
 anchors_preset = 0
-offset_right = 40.0
-offset_bottom = 40.0
+offset_right = 140.0
+offset_bottom = 100.0
 
 [node name="HandContainer" type="Control" parent="Player1Area" unique_id=284468618]
 anchors_preset = 0
 offset_left = 240.0
 offset_right = 1200.0
-offset_bottom = 250.0
+offset_bottom = 290.0
 
 [node name="AssetContainer" type="Control" parent="Player1Area" unique_id=813767860]
 anchors_preset = 0
 offset_left = 1500.0
 offset_right = 1900.0
-offset_bottom = 140.0
+offset_bottom = 210.0
 
 [node name="AssetLabel" type="Label" parent="Player1Area/AssetContainer" unique_id=1599476929]
 layout_mode = 0
-offset_top = 140.0
+offset_top = 210.0
 offset_right = 40.0
-offset_bottom = 163.0
+offset_bottom = 233.0
 
 [node name="CouncilContainer" type="Control" parent="Player1Area" unique_id=1054534558]
 anchors_preset = 0
@@ -196,17 +196,17 @@ grow_vertical = 2
 [node name="EstablishAssetButton" type="Button" parent="Player1Area" unique_id=1044465788]
 layout_mode = 1
 offset_left = 240.0
-offset_top = 200.0
+offset_top = 247.0
 offset_right = 320.0
-offset_bottom = 231.0
+offset_bottom = 278.0
 text = "建立资产"
 
 [node name="DeployCovertButton" type="Button" parent="Player1Area" unique_id=1788407709]
 layout_mode = 1
 offset_left = 350.0
-offset_top = 200.0
+offset_top = 247.0
 offset_right = 430.0
-offset_bottom = 231.0
+offset_bottom = 278.0
 text = "派遣暗藏"
 
 [node name="Player2Area" type="Panel" parent="." unique_id=419227783]
@@ -232,8 +232,8 @@ offset_bottom = 40.0
 
 [node name="CardContainer" type="Control" parent="Player2Area/ScoreZone" unique_id=1588912882]
 anchors_preset = 0
-offset_right = 40.0
-offset_bottom = 40.0
+offset_right = 140.0
+offset_bottom = 100.0
 
 [node name="HandContainer" type="Control" parent="Player2Area" unique_id=1106344150]
 anchors_preset = 0
@@ -245,13 +245,13 @@ offset_bottom = 240.0
 anchors_preset = 0
 offset_left = 1500.0
 offset_right = 1900.0
-offset_bottom = 140.0
+offset_bottom = 210.0
 
 [node name="AssetLabel" type="Label" parent="Player2Area/AssetContainer" unique_id=2036160825]
 layout_mode = 0
-offset_top = 140.0
+offset_top = 210.0
 offset_right = 40.0
-offset_bottom = 163.0
+offset_bottom = 233.0
 
 [node name="CouncilContainer" type="Control" parent="Player2Area" unique_id=1001878460]
 anchors_preset = 0
@@ -380,7 +380,7 @@ layout_mode = 0
 offset_left = 20.0
 offset_top = 250.0
 offset_right = 220.0
-offset_bottom = 830.0
+offset_bottom = 790.0
 
 [node name="StackHeader" type="Label" parent="StackPanel" unique_id=200001001]
 layout_mode = 1

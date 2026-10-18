@@ -112,9 +112,90 @@ namespace Script.UI
             MouseExited += OnMouseExitedPreview;
         }
 
-        private void OnMouseEnteredPreview() => CardPreviewBus.RequestHover(this);
+        // ============================================================
+        // 【P5·2026-10-18】手牌 hover 本体上浮 + 放大
+        //  - 只对"手牌容器里的卡"生效（父节点名为 HandContainer），其余场景（场上/堆叠/资产/
+        //    选择窗/检视窗）行为逐字不变。
+        //  - 上浮通过**移动节点**实现（不是 shader/pivot 伪装）⇒ `GetVisualGlobalRect()` 仍是
+        //    真实视觉框，选卡方案的手牌命中自动正确。
+        //  - 缩放以**底边为基准**向上长，并叠加上浮量，避免卡片压到下方按钮。
+        //  - 手牌 hover 时**抑制整卡预览浮层**（同宿主多触发源互斥，见方案第五章）。
+        // ============================================================
+        public const float HoverLiftPx = 28f;
+        public const float HoverScaleMax = 1.18f;
 
-        private void OnMouseExitedPreview() => CardPreviewBus.EndHover(this);
+        /// <summary>【P4】本卡当前处于"层叠"排布（资产区/分数区）：悬停时抬高层级即可看全卡面。</summary>
+        public bool StackedMode { get; set; }
+        private int _stackSavedZ;
+        private bool _stackZSaved;
+
+        private float _hoverT;              // 0 → 1 的悬停进度
+        private int _hoverTarget;
+        private int _hoverSavedZ;
+        private bool _hoverZSaved;
+        private bool _hoverScaleApplied;
+
+        /// <summary>是否处于手牌上下文（父容器名 HandContainer，单机/联机两侧同名）。</summary>
+        private bool IsHandContext => GetParent() is Control p && p.Name == "HandContainer";
+
+        /// <summary>当前悬停附加偏移（全局坐标，含缩放补偿）。</summary>
+        private Vector2 HoverOffset()
+        {
+            if (_hoverT <= 0.001f) return Vector2.Zero;
+            float s = 1f + (HoverScaleMax - 1f) * _hoverT;
+            // 底边固定：中心上移 h(s−1)/2；再叠加上浮量 28px
+            return new Vector2(0f, -(CARD_HEIGHT * (s - 1f) / 2f) - HoverLiftPx * _hoverT);
+        }
+
+        private void UpdateHoverVisual(float delta)
+        {
+            _hoverT = Mathf.MoveToward(_hoverT, _hoverTarget, delta * 8f);
+
+            // 只在真正发生悬停时才碰 Scale / ZIndex：选择窗、角标展开面板等外部代码会给卡面设
+            // 缩放（0.55/0.61）与层级，若这里无条件写 Scale=One 会把它们每帧抹掉。
+            if (_hoverT > 0.001f)
+            {
+                float s = 1f + (HoverScaleMax - 1f) * _hoverT;
+                Scale = new Vector2(s, s);
+                _hoverScaleApplied = true;
+                if (!_hoverZSaved) { _hoverSavedZ = ZIndex; _hoverZSaved = true; }
+                ZIndex = Layers.CardBase + 40;   // 上浮的牌压住同排其它手牌
+            }
+            else if (_hoverScaleApplied)
+            {
+                Scale = Vector2.One;
+                if (_hoverZSaved) { ZIndex = _hoverSavedZ; _hoverZSaved = false; }
+                _hoverScaleApplied = false;
+            }
+        }
+
+        private void OnMouseEnteredPreview()
+        {
+            if (IsHandContext)
+            {
+                _hoverTarget = 1;   // 手牌：上浮放大，**不**弹整卡预览
+                return;
+            }
+            if (StackedMode)
+            {
+                // 【P4】层叠态（资产区/分数区）：抬高本卡层级 ⇒ 整张卡面自动露出来（右卡不再压住它）。
+                if (!_stackZSaved) { _stackSavedZ = ZIndex; _stackZSaved = true; }
+                ZIndex = Layers.CardBase + 45;
+                return;
+            }
+            CardPreviewBus.RequestHover(this);
+        }
+
+        private void OnMouseExitedPreview()
+        {
+            _hoverTarget = 0;
+            if (_stackZSaved)
+            {
+                ZIndex = _stackSavedZ;
+                _stackZSaved = false;
+            }
+            CardPreviewBus.EndHover(this);
+        }
 
         public override void _Process(double delta)
         {
@@ -123,14 +204,18 @@ namespace Script.UI
             {
                 // 拖拽中：直接跟随鼠标（不平滑，保证跟手）
                 GlobalPosition = GetGlobalMousePosition() - _dragOffset;
+                return;
             }
+
+            UpdateHoverVisual((float)delta);
+
+            // 悬停偏移直接并入平滑目标：不污染 `_targetPosition`（排版写的是"静止位"），
+            // 松开后自然回落到静止位。
+            Vector2 goal = _targetPosition + HoverOffset();
+            if (GlobalPosition.DistanceTo(goal) > 0.5f)
+                GlobalPosition = GlobalPosition.Lerp(goal, ReturnSpeed);
             else
-            {
-                if (GlobalPosition.DistanceTo(_targetPosition) > 0.5f)
-                    GlobalPosition = GlobalPosition.Lerp(_targetPosition, ReturnSpeed);
-                else
-                    GlobalPosition = _targetPosition;
-            }
+                GlobalPosition = goal;
         }
 
         /// <summary>冻结平滑移动（调查窗口内临时卡使用，避免被 _Process 拉回）。</summary>
@@ -518,9 +603,9 @@ namespace Script.UI
             Modulate = on ? new Color(1f, 1f, 0.6f, 0.85f) : Colors.White;
         }
 
-        // 卡牌基础尺寸（与 Arena 的 CARD_WIDTH/CARD_HEIGHT 对应）
-        private const float CARD_WIDTH = 100f;
-        private const float CARD_HEIGHT = 140f;
+        // 卡牌基础尺寸：唯一真源在 CardLayoutHelper（禁止在此写死数字）
+        private const float CARD_WIDTH = CardLayoutHelper.CARD_WIDTH;
+        private const float CARD_HEIGHT = CardLayoutHelper.CARD_HEIGHT;
 
         // ============================================================
         // 蒙版（可拖拽态提示）：ColorRect 作为 CardUI 子节点，默认隐藏

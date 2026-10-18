@@ -106,8 +106,10 @@ public partial class AreaSlot : Control
 
         // 与 Scenes/UI/AreaSlot.tscn 保持一致:
         // Player2Area 在上、CardContainer(AreaCardUI) 在中间居中、Player1Area 在下
-        float totalW = Size.X > 0 ? Size.X : 400;
-        float totalH = Size.Y > 0 ? Size.Y : 580;
+        // 【P2·2026-10-18】槽位 400×580 → 480×540：3 张 140 宽角色卡 + 2×8 间距 = 436 ≤ 480（不再重叠）；
+        // 纵向 540 = 220 + 100(地区卡) + 220，上下两侧各 220 恰好容纳 196 高的角色卡。
+        float totalW = Size.X > 0 ? Size.X : 480;
+        float totalH = Size.Y > 0 ? Size.Y : 540;
         const float cardWidth = 140;
         const float cardHeight = 100;
         float sideH = (totalH - cardHeight) / 2;

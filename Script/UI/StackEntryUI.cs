@@ -53,6 +53,47 @@ namespace Script.UI
         }
 
         /// <summary>
+        /// 把一张真卡 UI 挂进本条目并归一化它的视觉/交互状态（**幂等**，已挂在本节点时只做归一化）。
+        ///
+        /// 之所以独立成公开方法：卡进入 `CardZone.Stack` 之后，除了 `RefreshStackUI` 这一次挂载，
+        /// 还可能被**其它同步路径**把手里的 CardUI 抢挂回区域容器（实测：`ZoneManager.MoveToStack`
+        /// 里 `TransferOwnership` 会以**旧区域（Hand）**先 `FireMoved` 一次，此时 `CurrentZone`
+        /// 还没改成 Stack，`Arena.SyncCardUIToZone` 走手牌分支 `container.AddChild` ⇒ 刚挂进堆叠的
+        /// 卡又被搬回手牌容器，堆叠区只剩空白槽）。`Arena` 侧发现"逻辑在 Stack 但 UI 不在本条目"
+        /// 时调本方法自愈，不必重跑整个 `Setup`。
+        /// </summary>
+        public void AttachCard(CardUI cardUI)
+        {
+            if (cardUI == null || !GodotObject.IsInstanceValid(cardUI)) return;
+
+            if (cardUI.GetParent() != this)
+                cardUI.GetParent()?.RemoveChild(cardUI);
+            if (cardUI.GetParent() != this)
+                AddChild(cardUI);
+
+            // 清理从手牌/拖拽带来的残留变换状态（对齐 Arena.PlaceCardInContainer 的复位套路）：
+            // 否则残留的缩放/旋转/轴心/ZIndex 会导致卡在堆叠区内显示错乱（变形、偏移、盖在最上层）。
+            cardUI.AnchorLeft = 0; cardUI.AnchorRight = 0;
+            cardUI.AnchorTop = 0; cardUI.AnchorBottom = 0;
+            cardUI.Scale = Vector2.One;
+            cardUI.Visible = true;   // 【P3a】曾被折叠成角标的卡进堆叠时必须恢复可见
+            cardUI.PivotOffset = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT) / 2f;
+            cardUI.RotationDegrees = 0;        // 堆叠内一律立置，不保留横置旋转
+            cardUI.ZIndex = 0;                  // 清掉拖拽/手牌排版遗留的 ZIndex（手牌基准 300+）
+            cardUI.CustomMinimumSize = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT);
+            cardUI.Size = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT);
+            cardUI.SetFace(true);
+            cardUI.CanDrag = false;        // 堆叠中的卡不参与拖拽（ArrangeHandCards 会无脑设 true，故必须复位）
+            // 冻结平滑移动：卡进入 StackEntryUI 后由 _Process 每帧锁定全局位置，
+            // 若保留平滑逻辑会基于旧 _targetPosition（手牌/拖拽时坐标）把它拉回原地，导致乱飞。
+            // 结算移出堆叠时由 SyncCardUIToZone 解冻。
+            cardUI.FreezeSmoothMove = true;
+            // 停用卡自身 _Process：位置完全由本节点 _Process 每帧锁定，避免双重控制冲突。
+            cardUI.ProcessMode = ProcessModeEnum.Disabled;
+            _cardUI = cardUI;              // 后续 GetGlobalCenter / _Process 用真卡定位
+        }
+
+        /// <summary>
         /// 用数据模型初始化显示。卡片型实例化 CardUI 并显示卡面；效果型显示半透明遮罩 + 角标 + 文本。
         /// reuseCardUI：卡片型复用的真卡 UI（入堆叠时手牌里的那张），传入后挂到本节点显示。
         /// 由于 tscn 不再内嵌 CardUI 子节点，不存在同名冲突，直接 AddChild 即可。
@@ -70,28 +111,7 @@ namespace Script.UI
                 {
                     // 复用真卡：从原父移除并挂到本节点。
                     // tscn 内已无内嵌 CardUI 子节点，无需重命名，无同名冲突风险。
-                    var oldParent = reuseCardUI.GetParent();
-                    oldParent?.RemoveChild(reuseCardUI);
-                    AddChild(reuseCardUI);
-                    // 清理从手牌/拖拽带来的残留变换状态（对齐 Arena.PlaceCardInContainer 的复位套路）：
-                    // 否则残留的缩放/旋转/轴心/ZIndex 会导致卡在堆叠区内显示错乱（变形、偏移、盖在最上层）。
-                    reuseCardUI.AnchorLeft = 0; reuseCardUI.AnchorRight = 0;
-                    reuseCardUI.AnchorTop = 0; reuseCardUI.AnchorBottom = 0;
-                    reuseCardUI.Scale = Vector2.One;
-                    reuseCardUI.PivotOffset = new Vector2(100, 140) / 2f;
-                    reuseCardUI.RotationDegrees = 0;        // 堆叠内一律立置，不保留横置旋转
-                    reuseCardUI.ZIndex = 0;                  // 清掉拖拽遗留的 ZIndex=1000
-                    reuseCardUI.CustomMinimumSize = new Vector2(100, 140);
-                    reuseCardUI.Size = new Vector2(100, 140);
-                    reuseCardUI.SetFace(true);
-                    reuseCardUI.CanDrag = false;        // 堆叠中的卡不参与拖拽
-                    // 冻结平滑移动：卡进入 StackEntryUI 后由 _Process 每帧锁定全局位置，
-                    // 若保留平滑逻辑会基于旧 _targetPosition（手牌/拖拽时坐标）把它拉回原地，导致乱飞。
-                    // 结算移出堆叠时由 SyncCardUIToZone 解冻。
-                    reuseCardUI.FreezeSmoothMove = true;
-                    // 停用卡自身 _Process：位置完全由本节点 _Process 每帧锁定，避免双重控制冲突。
-                    reuseCardUI.ProcessMode = ProcessModeEnum.Disabled;
-                    _cardUI = reuseCardUI;              // 后续 GetGlobalCenter / _Process 用真卡定位
+                    AttachCard(reuseCardUI);
                 }
                 else
                 {
@@ -101,8 +121,8 @@ namespace Script.UI
                     AddChild(newCard);
                     newCard.AnchorLeft = 0; newCard.AnchorRight = 0;
                     newCard.AnchorTop = 0; newCard.AnchorBottom = 0;
-                    newCard.CustomMinimumSize = new Vector2(100, 140);
-                    newCard.Size = new Vector2(100, 140);
+                    newCard.CustomMinimumSize = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT);
+                    newCard.Size = new Vector2(CardLayoutHelper.CARD_WIDTH, CardLayoutHelper.CARD_HEIGHT);
                     newCard.Setup(entry.SourceCard);
                     newCard.SetFace(true);
                     newCard.CanDrag = false;

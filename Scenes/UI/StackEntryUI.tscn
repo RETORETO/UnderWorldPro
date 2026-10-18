@@ -3,11 +3,11 @@
 [ext_resource type="Script" uid="uid://btig1e12qdo0t" path="res://Script/UI/StackEntryUI.cs" id="1_stack"]
 
 [node name="StackEntryUI" type="Control" unique_id=200000001]
-custom_minimum_size = Vector2(110, 150)
+custom_minimum_size = Vector2(150, 206)
 layout_mode = 2
 anchors_preset = 0
-offset_right = 110.0
-offset_bottom = 150.0
+offset_right = 150.0
+offset_bottom = 206.0
 script = ExtResource("1_stack")
 TriggerCardArt = NodePath("TriggerCardArt")
 
@@ -35,17 +35,25 @@ modulate = Color(1, 1, 1, 0.7)
 
 [node name="EffectBadge" type="Label" parent="EffectPanel" unique_id=200000004]
 layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
 offset_left = 4.0
 offset_top = 2.0
-offset_right = 106.0
+offset_right = -4.0
 offset_bottom = 22.0
+grow_horizontal = 2
 text = "效果发动"
 
 [node name="EffectText" type="Label" parent="EffectPanel" unique_id=200000005]
 layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
 offset_left = 4.0
 offset_top = 26.0
-offset_right = 106.0
-offset_bottom = 146.0
+offset_right = -4.0
+offset_bottom = -4.0
+grow_horizontal = 2
+grow_vertical = 2
 autowrap_mode = 2
 text = "效果描述"

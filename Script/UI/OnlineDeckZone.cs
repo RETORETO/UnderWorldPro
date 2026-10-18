@@ -20,6 +20,8 @@ namespace Script.UI
         private readonly List<CardUI> _backs = new List<CardUI>();
         private PackedScene _cardUIScene;
 
+        // 【P0】联机牌库/地区牌堆同样是缩略牌堆（面板 100×140），刻意小于战场卡 140×196；
+        // CustomMinimumSize 与 Size 必须同设，否则被 CardUI 的 140×196 最小尺寸钳回。
         private const float CARD_WIDTH = 100f;
         private const float CARD_HEIGHT = 140f;
         private const float PILE_OFFSET = 2f;      // 堆叠错位（视觉上像一叠牌）
@@ -52,6 +54,7 @@ namespace Script.UI
                 ui.FreezeSmoothMove = true;  // 位置由本组件固定，禁用平滑归位
                 ui.ProcessMode = ProcessModeEnum.Disabled;
                 ui.AnchorLeft = 0; ui.AnchorRight = 0; ui.AnchorTop = 0; ui.AnchorBottom = 0;
+                ui.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
                 ui.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
                 ui.Position = new Vector2(i * PILE_OFFSET, i * PILE_OFFSET);   // 轻微错位叠放（右下，与单机 DeckZone/GraveyardZone 统一）
                 ui.ZIndex = i;

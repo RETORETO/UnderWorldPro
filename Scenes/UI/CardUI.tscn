@@ -4,11 +4,11 @@
 [ext_resource type="Texture2D" uid="uid://dgcrvcko2s5tf" path="res://Cards/Image/CardBack.jpg" id="2_7cml5"]
 
 [node name="CardUI" type="Control" unique_id=828673890 node_paths=PackedStringArray("_costLabel", "_cardImage", "_investigationLabel", "_subCategoriesLabel", "_magicDomainsLabel", "_instanceIdLabel", "_categoryLabel", "_combatLabel", "_powerLabel", "_defenseLabel", "_selectionHighlight", "_frontface", "_backface", "_damageAllocationLabel")]
-custom_minimum_size = Vector2(100, 140)
+custom_minimum_size = Vector2(140, 196)
 layout_mode = 3
 anchors_preset = 0
-offset_right = 100.0
-offset_bottom = 140.0
+offset_right = 140.0
+offset_bottom = 196.0
 script = ExtResource("1_7cml5")
 _costLabel = NodePath("CostLabel")
 _cardImage = NodePath("CardImage")

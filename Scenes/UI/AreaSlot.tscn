@@ -8,8 +8,8 @@
 [node name="AreaSlot" type="Control" unique_id=1030230027]
 layout_mode = 3
 anchors_preset = 0
-offset_right = 400.0
-offset_bottom = 580.0
+offset_right = 480.0
+offset_bottom = 540.0
 script = ExtResource("1_xb57g")
 
 [node name="Background" type="TextureRect" parent="." unique_id=1411792667]
@@ -29,9 +29,9 @@ expand_mode = 3
 [node name="Player1Area" type="Control" parent="." unique_id=826300804]
 layout_mode = 1
 anchors_preset = 0
-offset_top = 340.0
-offset_right = 400.0
-offset_bottom = 580.0
+offset_top = 320.0
+offset_right = 480.0
+offset_bottom = 540.0
 
 [node name="Background" type="TextureRect" parent="Player1Area" unique_id=1584058739]
 texture_filter = 4
@@ -57,8 +57,8 @@ horizontal_alignment = 1
 [node name="Player2Area" type="Control" parent="." unique_id=2090889631]
 layout_mode = 1
 anchors_preset = 0
-offset_right = 400.0
-offset_bottom = 240.0
+offset_right = 480.0
+offset_bottom = 220.0
 
 [node name="Background" type="TextureRect" parent="Player2Area" unique_id=723445261]
 texture_filter = 4

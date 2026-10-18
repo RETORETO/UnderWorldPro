@@ -57,8 +57,8 @@ namespace Script.UI
             hint.HorizontalAlignment = HorizontalAlignment.Center;
             vb.AddChild(hint);
 
-            // 卡面区：横向排列；张数多时用滚动容器（卡面真实尺寸＝100×140，见 `CardUI._Ready`）
-            const int cardW = 100, cardH = 140, gap = 8;
+            // 卡面区：横向排列；张数多时用滚动容器（卡面真实尺寸＝CardLayoutHelper 常量，见 `CardUI._Ready`）
+            int cardW = (int)CardLayoutHelper.CARD_WIDTH, cardH = (int)CardLayoutHelper.CARD_HEIGHT, gap = 8;
             int n = System.Math.Max(1, _cards.Count);
             int rowW = n * cardW + (n - 1) * gap;
             var scroll = new ScrollContainer

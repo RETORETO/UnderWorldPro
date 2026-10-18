@@ -12,6 +12,8 @@ public partial class GraveyardZone : Control
 
     private List<CardUI> _graveyardCards = new List<CardUI>();
 
+    // 【P0】墓地是"缩略牌堆"：面板只有 100×140，卡面按面板尺寸缩放（刻意小于战场卡 140×196），
+    // 故这里不引用 CardLayoutHelper；CustomMinimumSize 必须与 Size 同设，否则被 140×196 的最小尺寸钳回。
     private const float CARD_WIDTH = 100;
     private const float CARD_HEIGHT = 140;
 
@@ -64,6 +66,7 @@ public partial class GraveyardZone : Control
             card.AnchorRight = 0;
             card.AnchorTop = 0;
             card.AnchorBottom = 0;
+            card.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             card.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             card.Scale = Vector2.One;
             card.RotationDegrees = 0f;   // 墓地卡强制立置，清除可能残留的横置旋转

@@ -11,15 +11,81 @@ namespace Script.UI
     /// </summary>
     public static class CardLayoutHelper
     {
-        // ============ 常量（与 Arena.Layout.cs 一致，保持视觉统一） ============
-        public const float CARD_WIDTH = 100;
-        public const float CARD_HEIGHT = 140;
+        // ============ 常量【唯一真源】 ============
+        // 全工程玩家卡尺寸只认这里：Arena.Layout.cs / CardUI.cs / StackEntryUI / DeckZone /
+        // GraveyardZone / OnlineDeckZone 一律引用本常量，禁止再写 100/140 字面量。
+        // 【P0·2026-10-18】100×140 → 140×196（14:10 → 10:14 比例不变，整体放大 40%）。
+        public const float CARD_WIDTH = 140;
+        public const float CARD_HEIGHT = 196;
         public const float HAND_SPACING = 20;
         // 场上/手牌/资产卡 ZIndex 基准：高于争夺区背景槽位(AreaSlot)，避免被背景遮挡。
         // 【2026-10】层号统一收口到 Script.UI.Layers，此处保留别名仅供既有调用点使用。
         public const int ZINDEX_CARD_BASE = Layers.CardBase;
 
-        /// <summary>读取卡的横置状态（兼容 CardUI 与 CouncilCardUI）。</summary>
+        /// <summary>
+        /// 取某张卡 UI 的**逻辑尺寸**。玩家卡走本类常量（P0 起 140×196），
+        /// 秘社卡（`CouncilCardUI`，独立卡种、非 CardUI 子类）仍是 100×140。
+        /// 排版函数一律用它，禁止直接写 CARD_WIDTH/CARD_HEIGHT —— 否则秘社卡会被撑大。
+        /// </summary>
+        public static Vector2 SizeOf(Control card)
+            => card is CouncilCardUI
+                ? new Vector2(CouncilCardUI.CARD_WIDTH, CouncilCardUI.CARD_HEIGHT)
+                : new Vector2(CARD_WIDTH, CARD_HEIGHT);
+
+        /// <summary>
+        /// 【P4·2026-10-18】层叠平铺：资产区 / 分数区专用。每张只露 <paramref name="edge"/> 像素宽，
+        /// 右卡压左卡（ZIndex 递增）；张数多到露边也放不下时**压缩露边**，绝不溢出容器。
+        ///
+        /// 为什么不再用 `LayoutCardsEvenly`：14 张资产按"并排 + 重叠"排会互相压到只剩一条缝且整体左偏，
+        /// 玩家也读不出"有几张"；层叠让每张都能看见 36px 的边，数量一目了然（决策 4）。
+        /// 悬停某张时由 `CardUI` 抬高其 ZIndex 即可看全卡面（不需要额外的浮层）。
+        /// </summary>
+        public static void LayoutStacked(Control container, System.Collections.Generic.List<Control> cards,
+            float edge = 36f)
+        {
+            if (container == null || cards == null || cards.Count == 0) return;
+
+            var valid = new System.Collections.Generic.List<Control>();
+            foreach (var c in cards)
+                if (c != null && GodotObject.IsInstanceValid(c)) valid.Add(c);
+            if (valid.Count == 0) return;
+
+            float containerWidth = container.Size.X;
+            if (containerWidth <= 0) containerWidth = 400f;
+
+            int n = valid.Count;
+            Vector2 cardSize = SizeOf(valid[0]);
+            float cardW = IsTapped(valid[0]) ? cardSize.Y : cardSize.X;
+
+            if (n == 1)
+            {
+                PlaceCardInContainer(container, valid[0], (containerWidth - cardW) / 2f, 0);
+                MarkStacked(valid[0]);
+                return;
+            }
+
+            float usable = containerWidth - cardW;
+            float step = usable > 0f ? Mathf.Min(edge, usable / (n - 1f)) : 0f;
+            if (step < 0f) step = 0f;
+
+            float total = cardW + step * (n - 1);
+            float startX = Mathf.Max(0f, (containerWidth - total) / 2f);
+
+            for (int i = 0; i < n; i++)
+            {
+                PlaceCardInContainer(container, valid[i], startX + i * step, i);
+                MarkStacked(valid[i]);
+            }
+        }
+
+        private static void MarkStacked(Control card)
+        {
+            if (card is CardUI cui) cui.StackedMode = true;
+        }
+
+        /// <summary>
+        /// 读取卡的横置状态（兼容 CardUI 与 CouncilCardUI）。
+        /// </summary>
         public static bool IsTapped(Control card)
             => card is CardUI cui ? cui.IsTapped
              : card is CouncilCardUI cci ? cci.IsTapped
@@ -27,7 +93,7 @@ namespace Script.UI
 
         /// <summary>
         /// 在容器内均匀平铺一组卡（放得下居中，放不下压缩间距允许重叠，右卡压左卡）。
-        /// 横置卡视觉宽=原高(140)，竖置=原宽(100)，保证视觉一致。
+        /// 横置卡视觉宽=原高(CARD_HEIGHT)，竖置=原宽(CARD_WIDTH)，保证视觉一致。
         /// </summary>
         public static void LayoutCardsEvenly(Control container, System.Collections.Generic.List<Control> cards)
         {
@@ -36,10 +102,13 @@ namespace Script.UI
             float containerWidth = container.Size.X;
             if (containerWidth <= 0) containerWidth = 1152;
 
-            // 每张卡的视觉宽度（横置旋转后宽=原高=140, 竖=100）
+            // 每张卡的视觉宽度（横置旋转后宽=卡高，竖置=卡宽；按卡种取尺寸）
             var visW = new float[cards.Count];
             for (int i = 0; i < cards.Count; i++)
-                visW[i] = IsTapped(cards[i]) ? CARD_HEIGHT : CARD_WIDTH;
+            {
+                var s = SizeOf(cards[i]);
+                visW[i] = IsTapped(cards[i]) ? s.Y : s.X;
+            }
 
             int n = cards.Count;
             if (n == 1)
@@ -108,13 +177,15 @@ namespace Script.UI
 
         /// <summary>
         /// 单张卡放入容器：设置锚点/尺寸/枢轴/横置旋转/位置/ZIndex。
-        /// 横置模型：逻辑 Size 保持 100x140，整体旋转 90°（视觉 140x100）。
+        /// 横置模型：逻辑 Size 不变，整体旋转 90°（视觉 (卡高, 卡宽)）。
         /// </summary>
         public static void PlaceCardInContainer(Control container, Control card, float visualX, int z)
         {
+            Vector2 cardSize = SizeOf(card);
+            float cardW = cardSize.X, cardH = cardSize.Y;
             bool isTapped = IsTapped(card);
-            float visW = isTapped ? CARD_HEIGHT : CARD_WIDTH;
-            float visH = isTapped ? CARD_WIDTH : CARD_HEIGHT;
+            float visW = isTapped ? cardH : cardW;
+            float visH = isTapped ? cardW : cardH;
 
             // 视觉框中心（相对于容器）
             float visCenterX = visualX + visW / 2f;
@@ -122,19 +193,23 @@ namespace Script.UI
                 ? container.Size.Y / 2f
                 : visH / 2f;
 
-            // 逻辑尺寸固定 100x140，PivotOffset = (50,70)。
+            // 逻辑尺寸＝卡种尺寸，PivotOffset = 尺寸/2。
             // 【2026-09 修复】逻辑左上角 = 视觉中心 - PivotOffset（**不旋转**）：Godot 的旋转绕 PivotOffset 进行，
             // 旋转后视觉中心仍在 `Position + PivotOffset`（实测：Position=(0,0)/pivot=(50,70)/90° → 视觉中心 (50,70)，
             // 而 `pivot.Rotated(90°)` = (-70,50) ⇒ 原写法让**横置卡**整体偏移 (120,20)）。
-            Vector2 pivot = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
+            Vector2 pivot = cardSize / 2f;
             Vector2 localPos = new Vector2(visCenterX, visCenterY) - pivot;
 
             card.AnchorLeft = 0; card.AnchorRight = 0;
             card.AnchorTop = 0; card.AnchorBottom = 0;
             card.Scale = Vector2.One;
+            // 【P3a】折叠成角标的卡重新摆到场上时必须恢复可见（联机同一套规则）
+            card.Visible = true;
+            // 【P4】默认非层叠；LayoutStacked 会在放置后再置回 true
+            if (card is CardUI cuiStack) cuiStack.StackedMode = false;
             // 先调最小尺寸，再调 Size，防止被旧的最小尺寸限制
-            card.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
-            card.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
+            card.CustomMinimumSize = cardSize;
+            card.Size = cardSize;
             card.PivotOffset = pivot;
             card.RotationDegrees = isTapped ? 90f : 0f;
             card.Position = localPos;

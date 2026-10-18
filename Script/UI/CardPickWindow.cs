@@ -91,12 +91,14 @@ namespace Script.UI
             vb.AddChild(hintRow);
 
             // ---- 卡面网格（多行网格；卡面按 CardScale 缩放，避免被容器横向拉伸）----
-            // 【2026-10 用户实测】旧实现把 CardUI 直接放进 VBox（列宽 136 > 卡宽 100）⇒ 容器把卡面
+            // 【2026-10 用户实测】旧实现把 CardUI 直接放进 VBox（列宽 > 卡宽）⇒ 容器把卡面
             // **横向拉伸到列宽**（卡图变形、看着"偏大"），且每列下方的区域标签被挤出可视区（显示不全）。
             // 现改为：外层 Control 定尺寸 + CardUI 按 CardScale 缩放（PivotOffset 归零 ⇒ 缩放后仍与左上角对齐），
             // 卡片用 GridContainer 排成网格，整体放进可横竖滚动的 ScrollContainer，窗口尺寸按屏幕钳制。
-            const float cardBaseW = 100f, cardBaseH = 140f;
-            const float cardScale = 0.86f;   // 略小于战场卡面，观感接近悬浮预览框
+            // 【P0】卡面基准尺寸改从 CardLayoutHelper 取（140×196）；缩放比随之重算，
+            // 保证**屏幕上的实际显示尺寸不变**（140×196 基准下 0.61 ≈ 旧 100×140 基准下的 0.86）。
+            float cardBaseW = CardLayoutHelper.CARD_WIDTH, cardBaseH = CardLayoutHelper.CARD_HEIGHT;
+            const float cardScale = 0.61f;   // 略小于战场卡面，观感接近悬浮预览框
             const int labelH = 44, gapX = 10, gapY = 10, colPad = 10, maxCols = 6;
             float dispW = cardBaseW * cardScale;
             float dispH = cardBaseH * cardScale;
@@ -155,7 +157,7 @@ namespace Script.UI
                     ui.CanDrag = false;           // 选择窗只展示，不可拖动
                     ui.FreezeSmoothMove = true;   // 位置由容器统一排布
                     slot.AddChild(ui);            // 先入树（`_Ready` 会写 PivotOffset/SetFace(false)）
-                    ui.PivotOffset = Vector2.Zero;      // 缩放锚点归零：否则 0.86 缩放会把卡面推离左上角
+                    ui.PivotOffset = Vector2.Zero;      // 缩放锚点归零：否则缩放会把卡面推离左上角
                     ui.Scale = new Vector2(cardScale, cardScale);
                     ui.Position = Vector2.Zero;
                     ui.Setup(inst);               // 再 Setup（否则 _Ready 的 SetFace(false) 盖成卡背）
@@ -263,6 +265,9 @@ namespace Script.UI
             Select(ui.Instance.UID);
             ui.AcceptEvent();   // 左键被本窗消费，避免继续冒泡给容器/滚动条
         }
+
+        /// <summary>该 uid 是否属于本次候选（供 P3b 角标展开面板判断"点了有没有用"）。</summary>
+        public bool HasCard(string uid) => !string.IsNullOrEmpty(uid) && _cardUis.ContainsKey(uid);
 
         /// <summary>
         /// 【跨方案接口】把指定 uid 置为选中（**只置选中，不提交、不关窗**）。

@@ -17,7 +17,8 @@ public partial class DeckZone : Control
     private int _playerId = 1;
     public int Count => _deckCards.Count;
     // ---------- 常量 ----------
-    // 与手牌卡一致(100x140),避免牌库内容物比手牌还大、且超出面板(面板本身仅 100x140)
+    // 【P0】牌库是"缩略牌堆"：面板本身只有 100×140，卡面按面板尺寸缩放显示（刻意小于战场卡 140×196），
+    // 故这里**不引用** CardLayoutHelper，避免整堆卡面撑破面板。
     private const float CARD_WIDTH = 100;
     private const float CARD_HEIGHT = 140;
 
@@ -209,6 +210,7 @@ public partial class DeckZone : Control
             card.AnchorRight = 0;
             card.AnchorTop = 0;
             card.AnchorBottom = 0;
+            card.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);   // 必须与 Size 同设：CardUI._Ready 的最小尺寸是 140×196，只设 Size 会被钳回去
             card.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             card.RotationDegrees = 0f;   // 牌库卡强制立置，清除可能残留的横置旋转
             card.PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
