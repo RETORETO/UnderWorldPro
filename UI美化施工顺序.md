@@ -22,7 +22,7 @@
 | **P4** 资产/分数层叠 | ✅ 已完成 | 新增 `CardLayoutHelper.LayoutStacked()`（露边 36px，放不下自动压缩）；单机 + 联机双侧接入 |
 | **P4** 对手手牌紧凑 | ✅ 已完成（**仅联机端**） | 用户 2026-10-18 拍板「只改联机端」（单机同屏热座必须保持正面逐张可见）。`ArenaOl.ArrangeChildren` 对"整排都是隐藏牌背"的对手手牌改调 `CardLayoutHelper.LayoutCompactBacks()`：全部牌背叠在一处、只露一张 + `CardCountBadge` 的「×N」；鼠标停在手牌带内则改用 `LayoutStacked`（每张露 36px）便于数张数，收起/展开由 `_Process` 每帧矩形轮询（不依赖 `mouse_entered/exited` 的父子冒泡语义） |
 | **P5** 手牌 hover 上浮 | ✅ 已完成 | `CardUI` 叠加 `HoverOffset()`（+28px / 1.18x），移动节点而非 shader/pivot ⇒ `GetVisualGlobalRect()` 自动一致；手牌上下文**抑制整卡预览** |
-| **P6** 回归 | ✅ 已完成 | `dotnet build` 0 警告 0 错误；全量 headless **162 套件 0 失败**（`logs/ui_pile_pick_tests.log` 末行 `>>> 全部逻辑正确性测试通过`）；文档已更新（`制作指南/UI层级规范.md` 角标实施订正） |
+| **P6** 回归 | ✅ 已完成 | `dotnet build` 0 警告 0 错误；全量 headless **162 套件 0 失败**（`logs/badge_click_tests.log` 末行 `>>> 全部逻辑正确性测试通过`）；文档已更新（`制作指南/UI层级规范.md` 角标实施订正） |
 
 ### 收尾批次（2026-10-19）· 用户口径落实
 
@@ -41,6 +41,32 @@
 
 > 明确不做（本批口径）：资产卡**不**纳入"场上点选"候选 ⇒ 决策 4 的"层叠态候选/选中呈现"暂不需要
 > （将来若纳入，再按方案二选一补）。
+
+### 修复批次（2026-10-19 夜）· 角标展开面板"点不动"
+
+> 用户反馈：「JC020 效果还是无法激活 → hover 展开附属卡后，点击附属卡展示窗口，窗口直接关闭无法激活效果；
+> 此外需要支持 hover 区域显示横置卡」。
+
+**三处叠加才导致"点一下就关、效果永远发不动"**（缺任何一处都复现）：
+
+| # | 根因 | 修法 |
+|---|---|---|
+| ① | 面板里的卡是**真 `CardUI`**，`MouseEntered` 会向 `CardPreviewBus` 申请**整卡预览**——预览与面板同层(830) 却后建 ⇒ 盖住面板；鼠标落点随之变成"在预览上"，面板 0.25s 后被判成"鼠标离开"自动收起 | 面板改为**命中槽收鼠标**：`slot`（`MouseFilter=Stop`）挂 `GuiInput`，内层 `CardUI` 压成 `MouseFilter=Ignore` **只作画**（顺带干掉它自己那条无人订阅的 `AttachmentDoubleClicked`） |
+| ② | 联机端把**单击**出口写成了"收起面板"（`ShowNear(..., _ => HideNow(), ...)`），而双击的第一次按下就是一次单击 ⇒ 第二次按下时面板已不在，`DoubleClick` 永远等不到 | 单击出口改为 `OnPileMemberPicked`（有选卡窗就只置选中、否则纯浏览），**单击绝不关面板**；并在标题写明「附属卡（双击发动能力）」补上可发现性 |
+| ③ | 两视图 `_Input` **先于** Control `_GuiInput` 执行，命中场上"可发动卡/手牌"时 `AcceptEvent()` 把左键整条吞掉 ⇒ 面板里的卡收不到任何鼠标事件 | `Arena._Input` / `ArenaOl._Input` 开头加守卫：落点在**可见面板内**时直接 `return` 放行给 GUI（只放行"按下"，且拖拽进行中不介入，避免漏掉 `EndDrag`） |
+
+配套：
+- **双击判定加自持时间窗**（`CardBadgePeek.DoubleClickMs = 420ms`，同一张卡两次按下）——与
+  `Arena.TryHandleHandActivationDoubleClick` 同口径，`DoubleClick` 标记被吞掉时仍可判定；双击后立刻清记账防"第三次点击又被算成双击"，`HideNow()` 也清（防"离开→立刻回来点同一张"被误判成双击）。
+- **展开面板照实显示横置卡**：`IsTapped` ⇒ 旋转 90°、槽位换成 `(卡高, 卡宽)`、`Position=(cardH, 0)`
+  （pivot=0 时变换为 `R·S·p + Position`，不右移会跑到槽外）。玩家靠它判断"本回合还能不能横置自身"——
+  JC020 效果A 的代价正是横置自身，画成正立会直接把选择带偏。
+- 单击留日志（`角标展开面板单击 / 浮层列表单击`）：下次"点了没反应"能立刻区分"事件没进面板"与"进了但没有可选对象"。
+- 新增 `BadgePeekTests` 5 条契约（面板内卡面只作画 / 单击不关面板 / 双击时间窗 / 全局输入放行 / 横置显示），
+  该套件现 **8 条**。
+
+**回归**：`dotnet build` 0 警告 0 错误；全量 headless **162 套件 0 失败**（`logs/badge_click_tests.log`，
+`BadgePeekTests` 8/0、`UiPilePickTests` 3/0，末行 `>>> 全部逻辑正确性测试通过`）。
 
 ### 开工前的核查快照（保留作对照）
 

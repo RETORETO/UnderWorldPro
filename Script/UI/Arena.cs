@@ -3493,6 +3493,19 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             if (_cardDragController.IsDragging)
             {
                 _cardDragController.EndDrag();
+        // 【2026-10-19 修复·JC020】角标/堆叠展开面板是浮层，但它盖在场上卡之上，而本方法
+        // **先于** Control `_GuiInput` 执行：只要落点上有"可发动卡/手牌"，下面的分支就会
+        // `AcceptEvent()` 把这一下左键整条吞掉 ⇒ 面板里的卡永远收不到单击/双击
+        // （用户实测："hover 展开附属卡后点那张卡，窗口直接关、JC020 效果发不动"）。
+        // 故落点在**可见的展开面板内**时，全局输入一律不接管，把事件留给 GUI 分发。
+        // 只放行"按下"，且拖拽进行中不介入——否则在面板上方松手会漏掉 EndDrag，卡会粘在拖拽态。
+        if (@event is InputEventMouseButton peekMb && peekMb.Pressed
+            && peekMb.ButtonIndex == MouseButton.Left
+            && !_cardDragController.IsDragging && !_cardDragController.IsActivating
+            && _badgePeek != null && GodotObject.IsInstanceValid(_badgePeek) && _badgePeek.Visible
+            && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
+            return;
+
                 AcceptEvent();
                 return;
             }

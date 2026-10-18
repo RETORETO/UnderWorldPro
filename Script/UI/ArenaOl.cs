@@ -446,8 +446,13 @@ namespace Script.UI
                 _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
                 AddChild(_badgePeek);
             }
-            string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡";
-            _badgePeek.ShowNear(host, title, members, _ => _badgePeek?.HideNow(), OnBadgeMemberActivated);
+            // 标题写明"双击发动能力"（折叠后看不到卡面、也没有其它提示，只能靠猜；封印卡通常无可发动能力，不加这句）
+            string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡（双击发动能力）";
+            // 【2026-10-19 修复·JC020】单击出口**绝不能是"收起面板"**：双击的第一次按下就是一次单击，
+            // 旧写法（把 onPick 接到 HideNow）会在第一次按下时就把面板关掉 ⇒ 第二次按下（`DoubleClick`）
+            // 落在空白处，激活永远发不动（用户实测原话："点击附属卡展示窗口，窗口直接变关"）。
+            // 现与资产/墓地列表同口径：有联机选卡窗就只置选中，没有就纯浏览（面板保持打开）。
+            _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, OnBadgeMemberActivated);
         }
 
         /// <summary>展开面板里双击成员 ⇒ 走既有联机双击链路（上行激活意图，服务端校验）。</summary>
@@ -595,15 +600,21 @@ namespace Script.UI
             return false;
         }
 
-        /// <summary>列表单击：有联机选卡窗 ⇒ 只置选中（不提交）；否则纯浏览（联机对手的区还可看但不可改）。</summary>
+        /// <summary>
+        /// 浮层列表单击（角标展开面板 / 资产区 / 墓地区共用）：有联机选卡窗 ⇒ 只置选中（不提交）；
+        /// 否则纯浏览（联机对手的区还可看但不可改）。**单击不会关闭面板**——双击要靠它留住第二次按下。
+        /// </summary>
         private void OnPileMemberPicked(string uid)
         {
             if (string.IsNullOrEmpty(uid)) return;
             if (_onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow))
             {
                 _onlinePickWindow.SelectByUid(uid);
-                GD.Print($"[ArenaOl] 堆叠区列表点选 {uid}（置选中，不提交）");
+                GD.Print($"[ArenaOl] 浮层列表点选 {uid}（置选中，不提交）");
+                return;
             }
+            // 没有选卡窗＝纯浏览，**不收起面板**（双击的第一次按下就是这次单击）。留日志便于排查。
+            GD.Print($"[ArenaOl] 浮层列表单击 {uid}（纯浏览；双击＝发动激活能力）");
         }
 
         /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
@@ -2880,6 +2891,16 @@ namespace Script.UI
         /// <summary>反引号 ` 切换 PM 命令输入框可见性（与单机 Arena 的按键一致，Key 96）。</summary>
         public override void _Input(InputEvent @event)
         {
+            // 【2026-10-19 修复·JC020（与单机 Arena._Input 同款）】展开面板盖在场上卡之上，而本方法
+            // 先于 Control `_GuiInput` 执行：落点命中"可发动卡/选目标区域"时会 `AcceptEvent()` 吞掉左键
+            // ⇒ 面板里的卡收不到单击/双击。落点在可见面板内时一律放行给 GUI。
+            // 只放行"按下"，且激活拖拽中不介入（否则在面板上方松手会漏掉 EndOnlineActivateDrag）。
+            if (@event is InputEventMouseButton peekMb && peekMb.Pressed
+                && peekMb.ButtonIndex == MouseButton.Left && _activateDragSource == null
+                && _badgePeek != null && GodotObject.IsInstanceValid(_badgePeek) && _badgePeek.Visible
+                && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
+                return;
+
             // 战斗对抗窗口：点击场上卡分配伤害（左键 +1 / 右键 -1），与单机 Arena._Input 的路由一致
             if (_onlineStrengthWindow != null && GodotObject.IsInstanceValid(_onlineStrengthWindow)
                 && @event is InputEventMouseButton strMb && strMb.Pressed

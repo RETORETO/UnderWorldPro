@@ -76,7 +76,9 @@ public partial class Arena
         CardPreviewBus.Overlay?.HidePreview();       // 同一时刻只留一个浮层（展开面板优先）
 
         EnsureBadgePeek();
-        string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡";
+        // 标题直接写明"双击发动能力"：折叠成角标后玩家看不到卡面、也没有任何提示，
+        // 此前只能靠猜（用户实测"点了没反应"）。封印卡通常没有激活能力，不加这句避免误导。
+        string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡（双击发动能力）";
         _badgePeek.ShowNear(host, title, members, OnBadgeMemberPicked, OnBadgeMemberActivated);
     }
 
@@ -96,7 +98,11 @@ public partial class Arena
         {
             _activePickWindow.SelectByUid(uid);
             GD.Print($"[Arena] 角标展开面板点选 {uid}（置选中，不提交）");
+            return;
         }
+        // 没有选择窗＝纯浏览，**不收起面板**（双击的第一次按下就是这次单击）。
+        // 留一条日志：下次"点了没反应"能立刻区分是"单击到了但没东西可选"还是"事件压根没进面板"。
+        GD.Print($"[Arena] 角标展开面板单击 {uid}（纯浏览；双击＝发动激活能力）");
     }
 
     /// <summary>

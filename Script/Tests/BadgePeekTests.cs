@@ -77,5 +77,79 @@ namespace Script.Tests
             Assert.IsTrue(ol.Contains("OnAttachmentDoubleClicked(ui)"),
                 "联机：双击必须走上行激活意图的既有链路（服务端权威校验）");
         }
+
+        // ============================================================
+        // 【2026-10-19】"hover 展开附属卡后点那张卡，窗口直接关、JC020 发不动" 的回归契约。
+        //
+        // 事故是三处叠加，缺任何一处的锁，问题都会复发：
+        //  ① 面板里的卡是真 `CardUI`，`MouseEntered` 会申请**整卡预览**（同层 830、后建 ⇒ 盖住面板），
+        //     鼠标落点变成"在预览上" ⇒ 面板被判成"鼠标离开"自动收起；
+        //  ② 联机端把**单击**出口写成了"收起面板"，而双击的第一次按下就是单击 ⇒ 第二次按下没面板可点；
+        //  ③ 两个视图的 `_Input` 先于 `_GuiInput`，命中场上卡时 `AcceptEvent()` 把左键整条吞掉。
+        // ============================================================
+
+        /// <summary>① 面板内卡面只作画、不抢鼠标：输入必须由命中槽转交（否则整卡预览会盖住面板）。</summary>
+        public void TestBadge_面板内卡面只作画不抢鼠标()
+        {
+            string peek = Read("Script/UI/CardBadgePeek.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(peek), "必须能读到 CardBadgePeek.cs");
+
+            Assert.IsTrue(peek.Contains("slot.GuiInput += ev => HandleMemberInput"),
+                "点击/双击必须由**命中槽**转发（CardUI 自己收会连带触发整卡预览浮层，把面板盖住）");
+            Assert.IsTrue(peek.Contains("ui.MouseFilter = MouseFilterEnum.Ignore"),
+                "内层 CardUI 必须压成 Ignore（只作画）：否则 MouseEntered 会弹出整卡预览与面板抢同一层");
+            Assert.IsTrue(peek.Contains("MouseFilter = MouseFilterEnum.Stop"),
+                "命中槽必须是 Stop（Pass/Ignore 都收不到 GuiInput）");
+        }
+
+        /// <summary>② 单击**绝不关闭**面板：双击的第一次按下就是单击，关了就没有第二次。</summary>
+        public void TestBadge_单击不关闭展开面板()
+        {
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(ol.Contains("_ => _badgePeek?.HideNow()"),
+                "联机：禁止把单击出口写成『收起面板』——双击的第一次按下会被它吃掉（用户实测根因）");
+            Assert.IsTrue(ol.Contains("ShowNear(host, title, members, OnPileMemberPicked, OnBadgeMemberActivated)"),
+                "联机：单击出口必须是『置选中/纯浏览』，不能收起面板");
+
+            string arena = Read("Script/UI/Arena.BadgePeek.cs");
+            Assert.IsTrue(arena.Contains("_badgePeek.ShowNear(host, title, members, OnBadgeMemberPicked, OnBadgeMemberActivated)"),
+                "单机：单击出口必须保持『只置选中、不提交』，且不收起面板");
+        }
+
+        /// <summary>③ 双击判定要自带时间窗（`_Input` 吞掉第一次按下时，事件上的 DoubleClick 拿不到）。</summary>
+        public void TestBadge_双击判定自带时间窗()
+        {
+            string peek = Read("Script/UI/CardBadgePeek.cs");
+            Assert.IsTrue(peek.Contains("DoubleClickMs"),
+                "必须自持双击时间窗常量（事件标记可能被全局输入吞掉）");
+            Assert.IsTrue(peek.Contains("mb.DoubleClick || sameCard"),
+                "双击＝事件标记 **或** 同一张卡在时间窗内的第二次按下");
+            Assert.IsTrue(peek.Contains("_lastClickUid = isDoubleClick ? null : uid"),
+                "双击后必须清记账，避免把第三次点击又算成一次双击");
+        }
+
+        /// <summary>④ 视图全局输入必须对『面板内落点』放行（`_Input` 先于 `_GuiInput` 且会 AcceptEvent）。</summary>
+        public void TestBadge_全局输入放行面板内落点()
+        {
+            foreach (var path in new[] { "Script/UI/Arena.cs", "Script/UI/ArenaOl.cs" })
+            {
+                string src = Read(path);
+                Assert.IsFalse(string.IsNullOrEmpty(src), $"必须能读到 {path}");
+                Assert.IsTrue(src.Contains("_badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition)"),
+                    $"{path}：落点在可见展开面板内时，全局输入必须 return 放行给 GUI");
+            }
+        }
+
+        /// <summary>⑤ 展开面板必须**照实表现横置**（旋转 90° + 槽位换成 (卡高, 卡宽)）。</summary>
+        public void TestBadge_展开面板显示横置卡()
+        {
+            string peek = Read("Script/UI/CardBadgePeek.cs");
+            Assert.IsTrue(peek.Contains("bool tapped = inst.IsTapped"),
+                "面板必须读卡的横置状态");
+            Assert.IsTrue(peek.Contains("float slotW = tapped ? cardH : cardW"),
+                "横置卡的槽位必须是 (卡高, 卡宽)（视觉包围盒换成横的）");
+            Assert.IsTrue(peek.Contains("ui.SetTapped(true)") && peek.Contains("ui.RotationDegrees = 90f"),
+                "横置卡必须真的旋转 90°（玩家靠它判断本回合还能不能横置自身，如 JC020 的代价）");
+        }
     }
 }
