@@ -421,6 +421,60 @@ namespace Script.Tests
             Assert.AreEqual(0, victim.Damage, "灵体生效 ⇒ 伤害被防止（不落地）");
         }
 
+        /// <summary>
+        /// 【用户 2026-10 实测】**同一张卡被 JC106 改写多次，战斗不得累加**——"势力 → 战斗"是
+        /// **把图标集合整体改写**（7e），与**施加次数无关**（幂等）。
+        /// 曾经的现象：每对同一目标再用一次 JC106，战斗就多 1（当时是"增量记账 + 每次按当前值再换一次"）。
+        /// </summary>
+        public void TestB4_8C_JC106重复使用同一目标_战斗不累加()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            var target = OnField(game, Load("JC108_qiaozhipazuozhimengren"), 1, area);   // 印刷势力 2
+            int strength0 = target.CurrentStrength;                                       // 0
+
+            ApplyJC106(game, target);
+            int afterFirst = target.CurrentStrength;
+            Assert.AreEqual(strength0 + 2, afterFirst, "首次改写：印刷 2 个［黑星］ ⇒ 2 个［黑刀］（战斗 +2）");
+            Assert.AreEqual(0, target.CurrentPower, "首次改写后不再提供势力");
+
+            ApplyJC106(game, target);   // 第二次
+            ApplyJC106(game, target);   // 第三次
+            Assert.AreEqual(afterFirst, target.CurrentStrength, "重复使用**不改变**战斗（改写幂等、不累加）");
+            Assert.AreEqual(0, target.CurrentPower, "势力仍为 0（不得被后续改写『还回来』）");
+            Assert.IsTrue(target.HasIcon("黑刀"), "［黑刀］仍在");
+            Assert.IsFalse(target.HasIcon("黑星"), "［黑星］仍不在");
+        }
+
+        /// <summary>
+        /// 【用户 2026-10 实测·**同控制者 ＋ P1 先手**】JC105（光环发［白星］）＋ JC108（印刷势力 2）同场、
+        /// 对 JC108 使用 JC106 —— 期望 **调查 2 / 战斗 3 / 势力 0**（＝印刷 2 个［黑星］＋ 光环 1 个［白星］）。
+        /// 同时覆盖**重复施放**：第二次施放后仍应保持 3（既不多算、也不少算）。
+        /// 若实战只到 战斗 2 ⇒ 说明光环的［白星］没进改写 —— 看日志 `[图层 7e] … ×N`：N=3 为正常，N=2 为缺白星。
+        /// </summary>
+        public void TestB4_8D_同控制者先手_JC105光环与JC106改写_应为3战斗()
+        {
+            var game = NewGame();
+            string area = FirstArea(game);
+            OnField(game, Load("JC105_emenglingzhu"), 1, area);
+            var jc108 = OnField(game, Load("JC108_qiaozhipazuozhimengren"), 1, area);
+
+            ApplyJC106(game, jc108);
+            Assert.IsTrue(jc108.HasKeyword("灵体"), "JC106 已授予【灵体】");
+            Assert.AreEqual(3, jc108.CurrentStrength,
+                "同控制者 ⇒ 光环发的［白星］也算：印刷 2 个［黑星］ ＋ 1 个［白星］ ＝ 3 个［黑刀］");
+            Assert.AreEqual(0, jc108.CurrentPower, "势力：2 个［黑星］被整体改写 ⇒ 0");
+            Assert.AreEqual(0, jc108.GetAttribute("先手势力"), "白星（先手势力）被改写 ⇒ 0");
+            Assert.IsFalse(jc108.HasIcon("白星"), "不再有［白星］");
+            Assert.IsTrue(jc108.HasIcon("黑刀"), "改写产出［黑刀］");
+            Assert.AreEqual(2, AreaStatsCalculator.ValueOf(jc108, CombatManager.CombatType.Investigation, game.PlayerManager),
+                "调查不受影响（先手：印刷先手调查 2）");
+
+            ApplyJC106(game, jc108);   // 重复施放：保持 3
+            Assert.AreEqual(3, jc108.CurrentStrength, "重复施放后仍为 3（幂等，不累加）");
+            Assert.AreEqual(0, jc108.CurrentPower, "重复施放后势力仍为 0");
+        }
+
         // ==================== ⑤ JC108：双击激活 + 选择目标（含自身） ====================
 
         /// <summary>

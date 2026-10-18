@@ -1,4 +1,4 @@
-using Script.Data.Cards;
+﻿using Script.Data.Cards;
 using Script.Data.Effects;
 using Script.Enums;
 using System;
@@ -115,7 +115,12 @@ namespace Script.Game.Entities
         }
 
         private readonly List<IconRewriteRecord> _iconRewrites = new();
-        private readonly List<EffectGrant> _iconRewriteDeltas = new();   // 上一轮已施加上去的增量（下次重算先撤销）
+        // 【2026-10·7e 叠加层】改写**不写进授予账本**，只在这两份"叠加层"里表达：
+        //  · `_rewriteAttrDelta`：属性增量（如 势力 −2、战斗 +3），由 `GetAttribute` 叠加；
+        //  · `_rewriteAddedIcons`：改写**产出**的图标（黑刀），由 `HasIcon` 叠加。
+        // 每次重算**从零重建** ⇒ 天然幂等，也绝不会把光环/其它来源的授予"抵消掉"。
+        private readonly System.Collections.Generic.Dictionary<string, int> _rewriteAttrDelta = new();
+        private readonly System.Collections.Generic.HashSet<string> _rewriteAddedIcons = new();
         private bool _applyingIconRewrites;
 
         public bool HasIconRewrite => _iconRewrites.Count > 0;
@@ -133,7 +138,8 @@ namespace Script.Game.Entities
                 DstIcon = dstIcon,
                 DstAttr = dstAttr,
             });
-            ApplyIconRewrites();
+            ApplyIconRewrites();        // 重建叠加层
+            RebuildAttributeFields();   // 派生字段（Current*）同步 ⇒ 卡面/合计立刻可见
         }
 
         /// <summary>移除一条 7e 图标改写（时效到期）；随后**立刻撤销其输出**（精确还原）。</summary>
@@ -141,7 +147,8 @@ namespace Script.Game.Entities
         {
             int removed = _iconRewrites.RemoveAll(r => r.Key == key);
             if (removed == 0) return false;
-            ApplyIconRewrites();   // 记录已清空 ⇒ 本轮只做"撤销上一轮输出"
+            ApplyIconRewrites();        // 叠加层从零重建（该记录已不在 ⇒ 自然还原）
+            RebuildAttributeFields();   // 派生字段同步
             return true;
         }
 
@@ -185,22 +192,22 @@ namespace Script.Game.Entities
                 "防御" => t != null && t.Defense >= 0 ? t.Defense : 0,
                 _ => 0,
             };
-            return printed + GetAttribute(attr);
+            return printed + GetAttributeRaw(attr);   // 层内计数＝印刷 ＋ 7c 账本（**不含** 7e 叠加层）
         }
 
-        /// <summary>施加全部 7e 改写（重算收口）：先撤销上一轮输出，再按当前层内计数重新改写。</summary>
+        /// <summary>【2026-10·7e】**从零重建**改写叠加层（幂等）：按"印刷 ＋ 7c 账本"数出各来源图标的数量，
+        /// 记进叠加层——来源属性记为负增量、目标属性记为正增量、目标图标记进"改写产出图标"集合。
+        /// 叠加层**不碰授予账本** ⇒ 光环/其它来源的授予永远完好（可随时重新计数）。</summary>
         internal void ApplyIconRewrites()
         {
             if (_applyingIconRewrites) return;
-            if (_iconRewrites.Count == 0 && _iconRewriteDeltas.Count == 0) return;
+            if (_iconRewrites.Count == 0 && _rewriteAttrDelta.Count == 0 && _rewriteAddedIcons.Count == 0) return;
             _applyingIconRewrites = true;
             try
             {
-                // ① 撤销上一轮输出（幂等的前提：每次都从"干净的出处"重新计数）
-                foreach (var d in _iconRewriteDeltas) Revoke(d.Kind, d.Value, d.Amount);
-                _iconRewriteDeltas.Clear();
+                _rewriteAttrDelta.Clear();
+                _rewriteAddedIcons.Clear();
                 if (_iconRewrites.Count == 0) return;
-                // ② 按"当前＝印刷 ＋ 7c 授予"重新计数 → 来源清零、目标图标 ＋ 目标属性
                 foreach (var rw in _iconRewrites)
                 {
                     int total = 0;
@@ -208,29 +215,33 @@ namespace Script.Game.Entities
                     {
                         int n = LayerCountOf(srcAttr);
                         if (n <= 0) continue;
-                        Grant("Attribute", srcAttr, -n);                       // 抹掉来源贡献（如 势力/先手势力）
-                        _iconRewriteDeltas.Add(new EffectGrant { Kind = "Attribute", Value = srcAttr, Amount = -n });
+                        _rewriteAttrDelta[srcAttr] = DeltaOf(srcAttr) - n;
                         total += n;
                     }
                     if (total <= 0) continue;
-                    Grant("Attribute", rw.DstAttr, total);                     // 换成目标属性（如 战斗）
-                    Grant("Icon", rw.DstIcon, total);                          // 目标图标也要真的在账本里（HasIcon 用）
-                    _iconRewriteDeltas.Add(new EffectGrant { Kind = "Attribute", Value = rw.DstAttr, Amount = total });
-                    _iconRewriteDeltas.Add(new EffectGrant { Kind = "Icon", Value = rw.DstIcon, Amount = total });
+                    _rewriteAttrDelta[rw.DstAttr] = DeltaOf(rw.DstAttr) + total;
+                    _rewriteAddedIcons.Add(rw.DstIcon);
                     global::Godot.GD.Print($"[图层 7e] ⇄ 图标改写：{PlayerTemplate?.CardName} 的 " +
-                                           $"[{string.Join(",", rw.SrcIcons)}]×{total} → [{rw.DstIcon}]（本回合）");
+                                           $"[{string.Join(",", rw.SrcIcons)}]×{total} → [{rw.DstIcon}]（本回合）" +
+                                           $" ⇒ 战斗={EffectiveAfterRewrite("战斗")} 势力={EffectiveAfterRewrite("势力")}" +
+                                           $" 先手势力={EffectiveAfterRewrite("先手势力")}");
                 }
             }
             finally { _applyingIconRewrites = false; }
         }
 
-        /// <summary>来源属性变动（7c 授予/撤销）时重算 7e 改写 —— 保证"改写之后再冒出来的来源图标"同样被改写。</summary>
+        private int DeltaOf(string attr) => _rewriteAttrDelta.TryGetValue(attr, out var d) ? d : 0;
+
+        /// <summary>诊断用：叠加层重建后的某属性有效值（账本 ＋ 叠加层）。</summary>
+        private int EffectiveAfterRewrite(string attr) => GetAttributeRaw(attr) + DeltaOf(attr);
+        /// <summary>来源属性变动（7c 授予/撤销）时重算 7e 改写 —— 保证"改写之后再冒出来的来源图标"同样被改写；
+        /// 重算后**顺带重建派生字段**（`Current*`），使卡面/合计立刻读到新值。</summary>
         private void ReapplyRewritesIfSourceChanged(string attr)
         {
             if (_applyingIconRewrites || _iconRewrites.Count == 0 || string.IsNullOrEmpty(attr)) return;
             foreach (var r in _iconRewrites)
                 foreach (var src in r.SrcAttrs)
-                    if (src == attr) { ApplyIconRewrites(); return; }
+                    if (src == attr) { RebuildAttributeFields(); return; }
         }
 
         // ---------- 静止/禁止标记（D19-⑤） ----------
@@ -589,8 +600,16 @@ namespace Script.Game.Entities
         public bool HasKeyword(string kw) => _grantedKeywords.Contains(kw);
         /// <summary>是否具有某能力图标（**读侧过滤**：被 7e 改写的来源图标一律报告为不存在）。
         /// 账本视图见 `HasIconRaw`（持续授予自愈判定用）。</summary>
-        public bool HasIcon(string icon) => !IsIconRewritten(icon) && _grantedIcons.Contains(icon);
-        public int GetAttribute(string attr) => _grantedAttributes.TryGetValue(attr, out var v) ? v : 0;
+        public bool HasIcon(string icon)
+            => !IsIconRewritten(icon) && (_grantedIcons.Contains(icon) || _rewriteAddedIcons.Contains(icon));
+        /// <summary>**账本视图**（不含 7e 改写叠加层）：自愈判定 / 改写计数用（"授予条目还在不在"）。</summary>
+        public int GetAttributeRaw(string attr) => _grantedAttributes.TryGetValue(attr, out var v) ? v : 0;
+
+        /// <summary>属性**有效值** ＝ 7c 账本 ＋ 7e 改写叠加层（JC106 把 势力/先手势力 改投 战斗）。
+        /// 叠加层**不写进账本**——否则"来源清零"会与光环的授予互相抵消到 0、下次重算就再也还原不回来
+        /// （实测：第二次施放 JC106 时白星计数变成 0 ⇒ 战斗从 3 掉回 2）。</summary>
+        public int GetAttribute(string attr)
+            => GetAttributeRaw(attr) + (_rewriteAttrDelta.TryGetValue(attr, out var d) ? d : 0);
 
         // ============================================================
         // 【2026-09 用户口径·通用红线】"效果只在场上（正面）提供"
@@ -923,9 +942,18 @@ namespace Script.Game.Entities
         public void ResetToBaseValues(bool isFirstPlayer)
         {
             if (PlayerTemplate == null) return;
+            RebuildAttributeFields();
+            RebuildDomains();
+        }
+
+        /// <summary>按"7c 账本 ＋ 7e 叠加层"重建全部属性字段（`Current*`）；清零形态（JC028）保持全 0。</summary>
+        internal void RebuildAttributeFields()
+        {
+            if (PlayerTemplate == null) return;
             // 【P3·K4】形态声明"不具有能力图标和防御力"（JC028「鲜血」）→ 复位也保持清零
             if (_zeroPrintedStatistics)
             {
+                ApplyIconRewrites();
                 CurrentInvestigation = 0;
                 CurrentStrength = 0;
                 CurrentPower = 0;
@@ -934,6 +962,9 @@ namespace Script.Game.Entities
                 CurrentDefense = -1;
                 return;
             }
+            // 【2026-10·7e】**先**从零重建改写叠加层（只依赖"印刷 ＋ 7c 账本"，不碰账本），
+            // 再让下面的字段从 `GetAttribute`（＝账本 ＋ 叠加层）取值 ⇒ 改写结果自然进入卡面与合计。
+            ApplyIconRewrites();
             // 【2026-10 用户口径·层级计算】**7 种属性各自独立**：4 基础（调查/战斗/势力/防御）
             // ＋ 3 先手（先手调查/先手战斗/先手势力）。
             // **基础值里不再折入印刷的先手值**——先手属性在层序（层0→7a→7b→7c→7d→7e）**之后**
@@ -968,16 +999,11 @@ namespace Script.Game.Entities
             // 【2026-09·JC051 用户口径】白星＝先手势力：与上面"先手调查/先手战斗"同款重建
             // （基础 FirstStrikePower + 已授予的"先手势力"），否则授予的白星在重算后丢失、卡面/投影看不到。
             CurrentPower += GetAttribute("势力");
-            // 【2026-10 用户口径·层级计算】**7e 交换/近似交换层在最后施加**（JC106：黑星+白星 → 黑刀）：
-            // 位置＝所有 7a–7d 结果都就位之后 ⇒ 改写永远看得见前面各层的全部结果（含光环刚发的图标）。
-            ApplyIconRewrites();
+
             // 【2026-09·JC051 卡面 UI】记录"最近一次重算时本卡控制者是否为先手玩家"：卡面按**与对抗结算
             // 同一口径**补算【先手势力】（`AreaStatsCalculator` 也是 `isFirst ? GetAttribute("先手势力") : 0`），
             // 而**不改 `CurrentPower` 的既有语义**（避免影响对抗数值与既有用例）。
-            // 实例魔法领域：模板固有（过滤-1哨兵）+ 运行时授予（_grantedDomains，JC060 光环等）两部分。
-            // 对称 JC001 白眼机制：重算时从"模板固有 + 授予集合"直接重建，不依赖反推，避免每回合先手重算冲刷光环授予的域。
-            // 【P3·K20】领域抑制期间（"失去所有魔法领域图标"）→ `RebuildDomains` 会跳过重填（否则重算会把图标复活）。
-            RebuildDomains();
+            // 实例魔法领域的重建由 `ResetToBaseValues` 末尾的 `RebuildDomains()` 负责（对称 JC001 白眼机制）。
         }
 
         /// <summary>

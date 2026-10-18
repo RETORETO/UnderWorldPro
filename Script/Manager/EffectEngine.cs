@@ -1,4 +1,4 @@
-using Godot;
+﻿using Godot;
 using Godot.Collections;
 using Script.Data.Cards;
 using Script.Data.Effects;
@@ -8238,13 +8238,11 @@ namespace Script.Manager
                 case "Icon": return t.HasIconRaw(g.Value);
                 case "Attribute":
                 {
-                    // 【2026-10·7e】来源属性被图标改写清零（如 先手势力 ← JC106「白星→黑刀」）：
-                    // **条目仍在账本里**（只是净账被 7e 改写）⇒ 视为"已授予"，否则光环会反复补授
-                    // （实测：每轮自愈都重授一次白星 ⇒ 被改写后战斗被多算）。
-                    if (t.IsRewriteSourceAttribute(g.Value)) return true;
+                    // 【2026-10·7e】读**账本视图**（`GetAttributeRaw`）：7e 改写只是叠加层、**不改账本**
+                    // ⇒ 光环/其它来源的授予永远在账本里 ⇒ 自愈不会误判"丢了"而反复补授。
                     // 【P3】**符号感知**：负值授予（如 JC089「获得-1防御」）在属性表里记成负计数，
                     // 若仍按 `> 0` 判定"已授予"，自愈路径每次重算都会再授一次 → 防御被反复扣减。
-                    int cur = t.GetAttribute(g.Value);
+                    int cur = t.GetAttributeRaw(g.Value);
                     return g.Amount < 0 ? cur < 0 : cur > 0;
                 }
                 case "SubCategory": return t.HasSubCategory(g.Value);
