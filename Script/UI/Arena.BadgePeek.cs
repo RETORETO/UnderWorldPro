@@ -1,4 +1,5 @@
 using Godot;
+using Script.Enums;
 using Script.Game.Entities;
 using Script.UI;
 using System.Collections.Generic;
@@ -156,10 +157,11 @@ public partial class Arena
     }
 
     // ============================================================
-    // 【2026-10-19】资产区（折叠成一摞）/ 墓地区：悬停弹卡列表
+    // 【2026-10-19】资产区 / 墓地区：悬停弹卡列表
     //
-    // 用户口径：「资产区和墓地区也可以支持折叠 + hover 展示卡」。
-    //  · 资产区：`ArrangeContainerCards(..., pile: true)` 叠成一摞 + 「×N」，悬停整块区弹列表；
+    // 用户口径（同日二次修订）：「资产区的折叠UI回退，但是也要支持hover显示所有资产卡」。
+    //  · 资产区：**层叠平铺**（`CardLayoutHelper.LayoutStacked`，每张露 36px，不再叠成一摞 + ×N）；
+    //    悬停整块区仍弹卡列表——层叠态下卡片互相压着，靠列表才能一次看全所有卡面。
     //  · 墓地区：本就是缩略堆，视觉不动，悬停弹列表即可（张数多时按视口宽度截断并提示总数）。
     // 面板复用角标那一个实例（场上同一时刻只允许一个浮层），单击仍走"选择窗置选中（不提交）"。
     // ============================================================
@@ -198,7 +200,11 @@ public partial class Arena
         _pilePeekHost = host;
         CardPreviewBus.Overlay?.HidePreview();
         EnsureBadgePeek();
-        _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, _ => { });
+        // 【2026-10-19 修复·JC085】资产/墓地列表的**双击出口**同样不能是空实现：
+        // 墓地里的「墓地行动」卡（`PlayableFromGraveyard`）双击要走 `OnGraveyardPlayRequested`
+        // （弹选地区→从墓地正面打出），其它（资产区的角色激活等）走 `OnAttachmentDoubleClicked`。
+        // 旧写法 `_ => { }` 让 JC085 这类在折叠 UI 里彻底发不动（用户实测：墓地卡点不动）。
+        _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, OnPileMemberActivated);
         _badgePeekMiss = 0.0;
         GD.Print($"[Arena] 堆叠区悬停展开：{title} {members.Count} 张");
     }
@@ -271,5 +277,30 @@ public partial class Arena
             _activePickWindow.SelectByUid(uid);
             GD.Print($"[Arena] 堆叠区列表点选 {uid}（置选中，不提交）");
         }
+    }
+
+    /// <summary>
+    /// 列表里双击 ⇒ 按卡所处区域分派到正确的激活链路（与"场上双击那张卡"**同一出口**）：
+    ///  · 墓地 + `PlayableFromGraveyard`（JC085 等「墓地行动」）→ `OnGraveyardPlayRequested`
+    ///    （弹选地区 → 从墓地正面打出）；
+    ///  · 其余（资产区角色激活、争夺区角色激活等）→ `OnBadgeMemberActivated`
+    ///    （走 `_onAttachmentDoubleClickedForward`，能力枚举/门禁/取目标全由 Controller 把关）。
+    /// 面板先收起，避免浮层压住随后弹出的选择窗。
+    /// </summary>
+    private void OnPileMemberActivated(CardUI ui)
+    {
+        if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) return;
+        var inst = ui.Instance;
+        _badgePeek?.HideNow();
+
+        if (inst.CurrentZone == CardZone.Graveyard && inst.PlayerTemplate?.PlayableFromGraveyard == true)
+        {
+            GD.Print($"[Arena] 堆叠区列表双击（墓地行动）：{inst.PlayerTemplate.CardName}（{inst.UID}）");
+            _onGraveyardPlayRequestedForward?.Invoke(ui);
+            return;
+        }
+
+        GD.Print($"[Arena] 堆叠区列表双击激活：{inst.PlayerTemplate?.CardName}（{inst.UID}）");
+        _onAttachmentDoubleClickedForward?.Invoke(ui);
     }
 }

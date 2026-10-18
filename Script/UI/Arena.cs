@@ -153,6 +153,21 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private Dictionary<StackEntry, StackEntryUI> _stackEntryUIMap = new Dictionary<StackEntry, StackEntryUI>();
     private Dictionary<StackEntry, List<StackArrow>> _stackArrows = new Dictionary<StackEntry, List<StackArrow>>();
 
+    /// <summary>
+    /// 【2026-10 卡面兜底容器】暂存"暂时没有合法落点"的 CardUI，确保它**始终有父节点**。
+    ///
+    /// 背景：角色/附属的卡本体现在会进 `CardZone.Stack`（由 `StackEntryUI` 托管），结算时再移出。
+    /// 而 `StackManager.ResolveTop` 是"先 OnStackChanged（刷新 UI ⇒ 条目 QueueFree）再结算"，
+    /// 所以卡面必须在那之前从条目里摘出来，否则会随条目一起被销毁（实测 `IsInstanceValid=false`）。
+    /// 同理，`SyncCardUIToZone` 的"找不到 slot / 找不到宿主 UI"分支原先只打日志，
+    /// 卡面被 `RemoveChild` 后就成了**孤儿节点**（`parent=null`）：属性 `Visible=true` 但永远不渲染，
+    /// 玩家看到的是"卡凭空消失"，后续任何同步也再拿不到它。
+    ///
+    /// 本容器**自身不可见**（`Visible=false`）：子节点继承不可见，视觉上等价于"暂不显示"；
+    /// 一旦被移到手牌/地区/墓地等正常容器，就自动恢复显示，不需要逐卡改 `Visible`。
+    /// </summary>
+    private Control _orphanCardHolder;
+
     // 触发排序 / 选目标窗口（最新需求：触发效果入堆叠系统 UI 骨架）
     private PackedScene _triggerOrderScene;
     private PackedScene _targetSelectionScene;
@@ -315,6 +330,17 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         // ---- 1.5 获取堆叠区节点 ----
         _stackContainer = GetNode<Control>("StackPanel/StackContainer");
         _arrowLayer = GetNode<Control>("ArrowLayer");
+
+        // ---- 1.55 卡面兜底容器（见字段注释）----
+        // 必须挂在本 Arena 节点下（不是画布上层），且自身不可见，避免兜底卡面在屏幕上露出。
+        _orphanCardHolder = new Control
+        {
+            Name = "OrphanCardHolder",
+            Visible = false,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        AddChild(_orphanCardHolder);
+        _orphanCardHolder.SetAnchorsPreset(LayoutPreset.FullRect);
         // 箭头层抬高：地区槽位/手牌等会设置正 ZIndex，ArrowLayer 必须高于它们才能不被遮挡；
         // 具体层号由 Script.UI.Layers 统一分配（压住所有卡与附属，但低于卡面悬浮预览与命令框）。
         _arrowLayer.ZIndex = Layers.Arrows;
@@ -675,6 +701,17 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         {
             if (!current.Contains(kv.Key))
             {
+                // 【2026-10·卡面兜底】先把"复用的真卡 UI"从条目里摘出来再 QueueFree。
+                // `StackManager.ResolveTop` 是「先 OnStackChanged（走到这里）→ 再 ResolveEntry」，
+                // 结算里的 `SyncCardUIToZone` 还要靠这张 CardUI 落位；它是条目的子节点，
+                // 不先摘就会被条目一起销毁（实测结算后 `IsInstanceValid=false`，卡面凭空消失）。
+                // 只摘复用真卡：`SourceCardUid` 对应的正式 CardUI 正是它本体；
+                // 自建副本（无复用卡时 `Setup` 内部 Instantiate）没有逻辑卡对应，随条目销毁是正确的。
+                var shown = kv.Value.ShownCard;
+                bool reusedRealCard = shown != null
+                                      && !string.IsNullOrEmpty(kv.Key.SourceCardUid)
+                                      && FindCardUIByUID(kv.Key.SourceCardUid) == shown;
+                if (reusedRealCard) ParkOrphanCardUI(shown, "堆叠条目出栈，等待结算落位");
                 kv.Value.QueueFree();
                 toRemove.Add(kv.Key);
             }
@@ -700,15 +737,13 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 // 否则 Setup 内访问 _effectPanel 等字段时仍为 null 导致 NullReferenceException。
                 _stackContainer.AddChild(inst);
                 // 卡片型复用真卡 UI：从手牌/资产区取对应 CardUI（入堆叠时已脱离手牌容器）。
-                // 【2026-10 修复·事务卡堆叠条目不可见】事务（EventToGraveyard）**入堆叠即置入弃牌堆**：
-                // `TurnManager` 在 Push 之后立刻 `MoveCardToGraveyard` ⇒ 若此处复用了那张真卡，
-                // `SyncCardUIToZone` 会把它从 StackEntryUI 摘走挂进墓地容器，条目退化成
-                // 110×150 的空白槽（`IsCard` 隐藏了文字面板）——玩家观感＝"效果根本没进堆叠"，
-                // 于是不知道该点让过，堆叠永远不结算（实测 JC049 深渊细语）。
-                // 事务卡一律用**自建卡面副本**，让"牌在堆叠里等响应"始终可见。
-                bool sourceWillLeaveStack = entry.Kind == ResolveKind.EventToGraveyard;
+                // 【2026-10 口径变更】事务卡（EventToGraveyard）现在**入堆叠时卡本体就在堆叠区**
+                // （`TurnManager` 调 `MoveCardToStackForPlay`，不再立刻入墓）：
+                // `SyncCardUIToZone` 对 `CardZone.Stack` 早退，不会把这张真卡从 StackEntryUI 摘走，
+                // `JCEnginePathContractTests` 锁定的"堆叠里能看到牌面"因此自然成立。
+                // （此前"入堆叠即入墓"时期才需要给事务卡自建卡面副本，该特判已随口径变更移除。）
                 CardUI reuse = null;
-                if (entry.IsCard && !sourceWillLeaveStack && !string.IsNullOrEmpty(entry.SourceCardUid))
+                if (entry.IsCard && !string.IsNullOrEmpty(entry.SourceCardUid))
                     reuse = FindCardUIByUID(entry.SourceCardUid);
                 inst.Setup(entry, reuse);
                 // 自建卡面（事务卡）要注入统计依赖，否则卡面势力等数值退化
@@ -3458,6 +3493,19 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private ulong _lastHandActivationClickMs;
 
     public override void _Input(InputEvent @event)    {
+        // 【2026-10-19 修复·JC020】角标/堆叠展开面板是浮层，但它盖在场上卡之上，而本方法
+        // **先于** Control `_GuiInput` 执行：只要落点上有"可发动卡/手牌"，下面的分支就会
+        // `AcceptEvent()` 把这一下左键整条吞掉 ⇒ 面板里的卡永远收不到单击/双击
+        // （用户实测："hover 展开附属卡后点那张卡，窗口直接关、JC020 效果发不动"）。
+        // 故落点在**可见的展开面板内**时，全局输入一律不接管，把事件留给 GUI 分发。
+        // 只放行"按下"，且拖拽进行中不介入——否则在面板上方松手会漏掉 EndDrag，卡会粘在拖拽态。
+        if (@event is InputEventMouseButton peekMb && peekMb.Pressed
+            && peekMb.ButtonIndex == MouseButton.Left
+            && !_cardDragController.IsDragging && !_cardDragController.IsActivating
+            && _badgePeek != null && GodotObject.IsInstanceValid(_badgePeek) && _badgePeek.Visible
+            && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
+            return;
+
         // ---- 手牌拖拽（全局输入驱动，绕开 Godot 命中分发失效问题）----
         // 【MVC 修复 M-08】拖拽起手/放手路由已收归 CardDragController，此处仅转发。
         if (@event is InputEventMouseButton dragDown && dragDown.Pressed && dragDown.ButtonIndex == MouseButton.Left)
@@ -3493,19 +3541,6 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             if (_cardDragController.IsDragging)
             {
                 _cardDragController.EndDrag();
-        // 【2026-10-19 修复·JC020】角标/堆叠展开面板是浮层，但它盖在场上卡之上，而本方法
-        // **先于** Control `_GuiInput` 执行：只要落点上有"可发动卡/手牌"，下面的分支就会
-        // `AcceptEvent()` 把这一下左键整条吞掉 ⇒ 面板里的卡永远收不到单击/双击
-        // （用户实测："hover 展开附属卡后点那张卡，窗口直接关、JC020 效果发不动"）。
-        // 故落点在**可见的展开面板内**时，全局输入一律不接管，把事件留给 GUI 分发。
-        // 只放行"按下"，且拖拽进行中不介入——否则在面板上方松手会漏掉 EndDrag，卡会粘在拖拽态。
-        if (@event is InputEventMouseButton peekMb && peekMb.Pressed
-            && peekMb.ButtonIndex == MouseButton.Left
-            && !_cardDragController.IsDragging && !_cardDragController.IsActivating
-            && _badgePeek != null && GodotObject.IsInstanceValid(_badgePeek) && _badgePeek.Visible
-            && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
-            return;
-
                 AcceptEvent();
                 return;
             }

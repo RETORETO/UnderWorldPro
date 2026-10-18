@@ -57,7 +57,9 @@ public partial class GraveyardZone : Control
         if (_graveyardCards.Count == 0) return;
 
         Vector2 basePos = _cardContainer.GlobalPosition;
-        float spread = 5f;
+        // 【2026-10-19 用户口径】墓地错位**与牌库一致**：原写死 5px/张，几十张会斜出面板；
+        // 现与 `DeckZone` 同源（`CardLayoutHelper.PileStep(count, 0.25f, 10f)`），张数多时自动压缩。
+        float spread = CardLayoutHelper.PileStep(_graveyardCards.Count, 0.25f, 10f);
         for (int i = 0; i < _graveyardCards.Count; i++)
         {
             var card = _graveyardCards[i];

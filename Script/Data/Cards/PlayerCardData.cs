@@ -216,12 +216,16 @@ namespace Script.Data.Cards
         // ⑭ 目标副名为"圣甲虫产业"的本方附属 : 两条规则 AND 于同一 rule：
         //        TargetRule{ Kind=Attachment, Restrictions=[Friendly, SubCardName], Param="圣甲虫产业" }
         // ⑮ （扩展位）目标名为某卡的附属 : TargetRule{ Kind=Attachment, Restrictions=[CardName], Param="卡名" }
-        // ⑯ 目标非人类且印刷费用≥3的敌方角色（JC015 驱魔人）: 一条规则 AND 三个限制，
-        //    NotStaticSubCategory 与 CostAtLeast 共用 rule.Param，按 '|' 分段（第0段=子类别，第1段=费用门槛）：
+        // ⑯ （组合精筛示例）敌方 + 非人类 + 印刷费用≥3：一条规则 AND 三个限制，
+        //    NotCurrentSubCategory 与 CostAtLeast 共用 rule.Param，按 '|' 分段（第0段=子类别，第1段=费用门槛）：
         //        TargetRule{ Kind=Character,
-        //                    Restrictions=[Enemy, NotStaticSubCategory, CostAtLeast],
-        //                    Param="人类|3" }   // NotStaticSubCategory→"人类"；CostAtLeast→"3"
-        //    （注：JC015 自身 SubCategories=["人类","僧侣"]，但来源是牺牲者非目标，不影响；目标须为非人类敌方且费用≥3）
+        //                    Restrictions=[Enemy, NotCurrentSubCategory, CostAtLeast],
+        //                    Param="人类|3" }   // NotCurrentSubCategory→"人类"；CostAtLeast→"3"
+        //    ⚑ [2026-10-18] 本字段**只承载「打出目标」**（附属选宿主 / 事务选目标卡）。
+        //      角色/附属的**激活目标**精筛请写在 `EffectData.Target.Restrictions/Param`（JC015 驱魔人即此形态）——
+        //      两处判定同源 `TargetValidity.CheckRestrictions`，功能完全等价，但给角色卡配 TargetRules 会让
+        //      `GetRequiresTarget()` 判为 true（角色卡被误判"打出需选目标"）⇒ JC119 免费打出链路会卡在
+        //      "无任何合法目标 → 留在手牌"。
         //
         // 注：Friendly/Enemy 的"本方"以打出者/激活者 ControllerId 为准（见 MatchesRule 取 sourceController）。
         [Export]

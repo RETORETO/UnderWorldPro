@@ -636,7 +636,32 @@ public partial class TurnManager : Node
     /// <summary>注入堆叠管理器（由 GameInitializer 调用），用于打出卡入栈与响应窗口结算</summary>
     public void SetStackManager(StackManager stackManager)
     {
+        // 重复注入时保持订阅幂等（对局重置会复用同一 Manager 实例）
+        if (_stackManager != null) _stackManager.OnDiscardEntry -= OnStackEntryDiscarded;
         _stackManager = stackManager;
+        if (_stackManager != null) _stackManager.OnDiscardEntry += OnStackEntryDiscarded;
+    }
+
+    /// <summary>
+    /// 堆叠被整体丢弃（游戏结束 / 对局重置）时，把**仍未结算的卡片型条目**里的卡送进墓地。
+    ///
+    /// 【为什么必须做】2026-10 起三类卡的卡本体在响应窗口期间就在 `CardZone.Stack`
+    /// （`PlayCard` → `MoveCardToStackForPlay`）。若只清空条目列表，卡会永远停在 Stack：
+    ///  · 界面上条目一删卡面就没了（既不在手牌也不在场上），逻辑层却仍算它"在堆叠"；
+    ///  · `ToSnapshot` 仍把它导出为 Stack 区卡，联机投影会重建出"无条目的幽灵卡"；
+    ///  · 对局重置复用 Manager 时 `CardManager.Reset` 把 UID 归 1 ⇒ 旧实例与新卡撞号。
+    /// 语义：未结算就被丢弃 ＝ 该卡被弃置（与"游戏结束丢弃未结算堆叠"一致）。
+    /// </summary>
+    private void OnStackEntryDiscarded(StackEntry entry)
+    {
+        if (entry == null || !entry.IsCard) return;   // 效果型条目没有卡本体
+        var card = entry.SourceCard ?? _cardManager?.GetInstance(entry.SourceCardUid);
+        if (card == null) return;
+        if (card.CurrentZone != CardZone.Stack) return;   // 已被结算/效果移走 → 不重复移动
+        // 对局重置期 `CardManager.Reset` 已清实例表：此时不要用旧实例去驱动区域移动
+        if (_cardManager != null && _cardManager.GetInstance(card.UID) != card) return;
+        GD.Print($"[TurnManager] 堆叠丢弃：{card.PlayerTemplate?.CardName}({card.UID}) 未结算 → 置入墓地");
+        _cardManager?.MoveCardToGraveyard(card);
     }
 
     /// <summary>注入地区管理器（由 GameInitializer 调用），用于赢取地区检查与结算</summary>
@@ -2869,18 +2894,32 @@ public partial class TurnManager : Node
             {
                 var card = entry.SourceCard ?? (_cardManager?.GetInstance(entry.SourceCardUid));
                 if (card == null) return;
-                // 【2026-09 用户口径】事务卡已在**入堆叠时**置入弃牌堆 ⇒ 此处只在尚未入墓时补一次（幂等，
-                // 避免重复移动/重复广播"弃置"）。兼容旧路径（如直接构造 StackEntry 的测试/兜底分支）。
-                if (card.CurrentZone != CardZone.Graveyard)
+                // 【2026-10 用户口径·顺序】**先结算效果，再把事务卡从堆叠区置入墓地**。
+                // 旧顺序是"先入墓、再结算"：效果执行时本卡已在墓地 ⇒
+                // 任何"从墓地取牌"类效果（`TargetKind.Graveyard` / 候选过滤 `"墓地"`）都会
+                // 把**本卡自己**列为合法候选（例：一张"将墓地一张牌加入手牌"的事务卡，能把自己拿回手牌）。
+                // 现改为结算期间卡仍在堆叠区（响应窗口期本就在 Stack），结算完再落墓地 ⇒ 不会自指。
+                // 语义对齐：事务卡"在堆叠上结算"——效果生效时它还没进墓地，正是规则期望的时点。
+                //
+                // 保证：**不论效果是否命中目标、是否抛异常，最后一定进墓地**（try/finally）；
+                // 幂等：效果内部若已把本卡移走（如 D16 目标丢失分支 `EffectEngine.ResolveSorceryFrom`
+                // 直接 `MoveCardToGraveyard`），下面的守卫会跳过，避免重复移动/重复广播/版本号多 bump。
+                try
                 {
-                    GD.Print($"[Resolve] 事务卡 {card.PlayerTemplate?.CardName} 结算 → 置入墓地（补：入堆叠时未移动）");
-                    _cardManager?.MoveCardToGraveyard(card);
+                    // 新效果系统桥接（P0）：执行事务卡 F 组 EffectData（打出即结算）
+                    // 【K2】把"打出时选定的目标地区"一并透传：群体动作（MassMode.AllInArea）据此确定作用地区
+                    // 【K15】把"逐槽选定的卡目标（有序）"一并透传：多目标效果据此逐目标执行动作
+                    EE.ResolveSorcery(card, entry.TargetCardUid, entry.TargetVersionId, entry.TargetAreaId ?? "",
+                        entry.TargetCardUids, entry.ModeIndex);
                 }
-                // 新效果系统桥接（P0）：执行事务卡 F 组 EffectData（打出即结算）
-                // 【K2】把"打出时选定的目标地区"一并透传：群体动作（MassMode.AllInArea）据此确定作用地区
-                // 【K15】把"逐槽选定的卡目标（有序）"一并透传：多目标效果据此逐目标执行动作
-                EE.ResolveSorcery(card, entry.TargetCardUid, entry.TargetVersionId, entry.TargetAreaId ?? "",
-                    entry.TargetCardUids, entry.ModeIndex);
+                finally
+                {
+                    if (card.CurrentZone != CardZone.Graveyard)
+                    {
+                        GD.Print($"[Resolve] 事务卡 {card.PlayerTemplate?.CardName} 效果结算完毕 → 置入墓地");
+                        _cardManager?.MoveCardToGraveyard(card);
+                    }
+                }
                 break;
             }
             case ResolveKind.Attachment:
@@ -4347,15 +4386,19 @@ public partial class TurnManager : Node
 
             _stackManager.Push(entry);
 
-            // 【2026-09 用户口径 JC062/JC063】事务卡**进入堆叠时**就置入弃牌堆（不再等到结算）：
-            // 用户实测："JC063/JC062 打出后效果加入堆叠就应该置入弃牌堆，现在打出后结算前还在手牌，
-            // **可以再次打出**"。原先"入墓"发生在结算分支（`ResolveKind.EventToGraveyard`），
-            // 从入堆叠到结算之间事务卡仍留在手牌 ⇒ 界面上还能再拖一次（联机尤其明显：快照仍把它画在手牌里）。
-            // 修法＝入堆叠后立即 `MoveCardToGraveyard`；结算分支对"已在墓地"的卡不再重复移动（幂等）。
-            if (entry.Kind == ResolveKind.EventToGraveyard && instance.CurrentZone != CardZone.Graveyard)
+            // 【2026-10 用户口径】三类卡的卡本体**都真正进入堆叠区**（不再只有"复制的效果 UI"进栈）。
+            // 语义对齐：角色/附属/事务打出后，在响应窗口期间"这张卡本身就在堆叠上"，
+            // 结算时才按 Kind 落位——PlayToArea → 争夺区、Attachment → 结附、EventToGraveyard → 墓地。
+            // 旧行为只有事务卡调本方法（角色/附属的卡本体一直留在手牌，堆叠里只有效果条目 + 复用卡面），
+            // 与"卡在堆叠上等待结算"的规则语义不符（用户口径）。
+            // 保真：`MoveCardToStackForPlay` 复刻了原"离手"路径的三项副作用
+            // （UnregisterContinuous / 归属归一 / ResetToBaseState）。
+            // 防重复打出仍成立：`PlayCard` 来源门禁只放行手牌（或墓地行动），卡在 Stack 时天然打不出。
+            // 幂等：已在 Stack（暗藏者现身等）不重复移动，避免重复 BumpVersion / 重复广播。
+            if (instance.CurrentZone != CardZone.Stack)
             {
-                _cardManager?.MoveCardToGraveyard(instance);
-                GD.Print($"[TurnManager] 事务 {tmpl.CardName} 入堆叠 → 立即置入弃牌堆（不再留手牌，防重复打出）");
+                _cardManager?.MoveCardToStackForPlay(instance);
+                GD.Print($"[TurnManager] {tmpl.CardName} 入堆叠 → 卡本体置入堆叠区（Kind={entry.Kind}，响应窗口期间留栈）");
             }
         }
         else

@@ -201,7 +201,9 @@ public partial class DeckZone : Control
             MoveChild(_deckCards[i], 0);
 
         Vector2 basePos = _cardContainer.GlobalPosition;
-        float spread = 0.5f;
+        // 【2026-10-19 用户口径】牌叠错位**收小**：原 0.5px/张，40 张就会斜出 20px。
+        // 现按「基准 0.25px/张 + 总错位封顶 10px」算，张数多时自动压缩，整叠始终留在面板内。
+        float spread = CardLayoutHelper.PileStep(_deckCards.Count, 0.25f, 10f);
         for (int i = 0; i < _deckCards.Count; i++)
         {
             var card = _deckCards[i];

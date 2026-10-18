@@ -24,7 +24,8 @@ namespace Script.UI
         // CustomMinimumSize 与 Size 必须同设，否则被 CardUI 的 140×196 最小尺寸钳回。
         private const float CARD_WIDTH = 100f;
         private const float CARD_HEIGHT = 140f;
-        private const float PILE_OFFSET = 2f;      // 堆叠错位（视觉上像一叠牌）
+        private const float PILE_OFFSET = 0.5f;    // 堆叠错位基准（视觉上像一叠牌）
+        private const float PILE_MAX_SHIFT = 10f;  // 总错位封顶：张数再多也不让整叠斜出面板
 
         public int Count => _backs.Count;
 
@@ -44,6 +45,9 @@ namespace Script.UI
             if (_cardUIScene == null) { UpdateCount(); return; }
 
             var container = _cardContainer ?? this;
+            // 【2026-10-19 用户口径】牌叠错位**收小**：原 2px/张，40 张就斜出 80px（面板仅 100×140）。
+            // 现按「0.5px/张 + 总错位封顶 10px」，张数多时步长自动压缩，整叠始终留在面板内。
+            float step = CardLayoutHelper.PileStep(count, PILE_OFFSET, PILE_MAX_SHIFT);
             for (int i = 0; i < count; i++)
             {
                 var ui = _cardUIScene.Instantiate<CardUI>();
@@ -56,7 +60,7 @@ namespace Script.UI
                 ui.AnchorLeft = 0; ui.AnchorRight = 0; ui.AnchorTop = 0; ui.AnchorBottom = 0;
                 ui.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
                 ui.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
-                ui.Position = new Vector2(i * PILE_OFFSET, i * PILE_OFFSET);   // 轻微错位叠放（右下，与单机 DeckZone/GraveyardZone 统一）
+                ui.Position = new Vector2(i * step, i * step);   // 轻微错位叠放（右下，与单机 DeckZone 统一）
                 ui.ZIndex = i;
                 _backs.Add(ui);
             }

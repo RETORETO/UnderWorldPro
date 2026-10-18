@@ -1044,16 +1044,17 @@ namespace Script.Tests
             for (int i = 0; i < 200 && game.PlayerActionService.IsPlayFlowPending(card.UID); i++)
                 System.Threading.Thread.Sleep(10);
             Assert.IsFalse(game.PlayerActionService.IsPlayFlowPending(card.UID), "流程结束后解除登记");
-            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "**事务卡入堆叠时即进弃牌堆**（不再留手牌）");
+            Assert.AreEqual(CardZone.Stack, card.CurrentZone, "**事务卡入堆叠时留在堆叠区**（不再立刻进弃牌堆）");
             Assert.AreEqual(1, game.StackManager.Entries.Count, "已入堆叠");
             Assert.AreEqual(a2, game.StackManager.Entries[0].TargetAreaId, "地区槽＝所选目标地区");
         }
 
         /// <summary>
-        /// 【2026-09 用户口径】事务卡**进入堆叠时就置入弃牌堆**（不再等结算）：打出后立刻检查
-        /// ——卡已在墓地、手牌里没有它、**且不能再次打出**（用户实测："打出后结算前还在手牌，可以再次打出"）。
+        /// 【2026-10 用户口径】事务卡**进入堆叠时留在堆叠区**（响应窗口期间卡本体在栈里等待结算，
+        /// 结算时才进弃牌堆）：打出后立刻检查——卡在 Stack、手牌里没有它、**且不能再次打出**。
+        /// （2026-09 曾在"入堆叠即入墓"口径下断言 Graveyard，现已随口径变更调整。）
         /// </summary>
-        public void TestK15_事务卡入堆叠即进弃牌堆且不可重复打出()
+        public void TestK15_事务卡入堆叠留在堆叠区且不可重复打出()
         {
             var game = NewGame();
             var areas = Areas(game);
@@ -1073,12 +1074,12 @@ namespace Script.Tests
 
             // 尚未结算（堆叠仍在）
             Assert.AreEqual(1, game.StackManager.Entries.Count, "前置：已入堆叠、尚未结算");
-            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "**入堆叠即进弃牌堆**（不等结算）");
+            Assert.AreEqual(CardZone.Stack, card.CurrentZone, "**入堆叠留在堆叠区**（等结算才入墓）");
             Assert.IsFalse(game.TurnManager.GetHandOf(1).Contains(card), "手牌里已没有这张卡");
             Assert.IsFalse(game.TurnManager.PlayCard(1, card.UID, null, null, choices), "**不能再次打出同一张卡**");
 
             ResolveStackOnce(game);
-            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "结算后仍在弃牌堆（结算分支幂等，不重复移动）");
+            Assert.AreEqual(CardZone.Graveyard, card.CurrentZone, "结算后进入弃牌堆（结算分支负责入墓）");
             Assert.AreEqual(a2, mine.ZoneDetailId, "结算正常：角色被移动到目标地区");
         }
 

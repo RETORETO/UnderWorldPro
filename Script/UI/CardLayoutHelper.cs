@@ -84,14 +84,15 @@ namespace Script.UI
         }
 
         /// <summary>
-        /// 【P4·决策 7·2026-10-18】对手手牌紧凑：把整把**牌背叠在容器中央的同一位置**（只露最上面一张）。
+        /// 【P4·决策 7·2026-10-18】**对手手牌紧凑**的几何别名 —— 现无调用点，保留语义。
         ///
         /// 与 `LayoutStacked` 的唯一差别是 `step = 0`：紧凑态要的就是"一张牌背"的外观，
-        /// 张数由 `CardCountBadge` 的「×N」角标交代；hover 展开时改调 `LayoutStacked(edge)`，
-        /// 让每张露 36px 边，玩家能一眼数清张数（复用决策 4 的层叠机制）。
+        /// 张数由 `CardCountBadge` 的「×N」角标交代。
         ///
-        /// **只给联机对手手牌用**：单机是同屏热座，对手手牌本来就正面可视，
-        /// 压成一张牌背会直接废掉热座可玩性（用户 2026-10-18 明确口径：「只改联机端」）。
+        /// **2026-10-19 已回退使用**：用户口径「对手手牌区域的折叠效果不好，对手手牌的折叠UI回退」——
+        /// `ArenaOl.ArrangeChildren` 已恢复 `LayoutCardsEvenly`（逐张牌背平铺）。
+        /// 本函数与 `LayoutPile` 仍被 `P5LayoutMathTests` 锁定几何（防止将来复用时改坏），
+        /// 但**不要**在没有明确口径的情况下重新接回对手手牌。
         /// </summary>
         public static void LayoutCompactBacks(Control container, System.Collections.Generic.List<Control> cards)
             => LayoutPile(container, cards);
@@ -99,9 +100,11 @@ namespace Script.UI
         /// <summary>
         /// 【2026-10-19】把一组卡**叠成一摞**（全部落在容器中央的同一位置，只露最上面一张）。
         ///
-        /// 与 `LayoutCompactBacks` 是同一份实现（后者保留为"对手手牌"的语义别名，避免既有调用点/测试改动）；
-        /// 现在**资产区**也用它（用户口径：「资产区也可以支持折叠 + hover 展示卡」）——
-        /// 张数由 `CardCountBadge` 的「×N」交代，悬停整块资产区弹出卡列表（`CardBadgePeek`）。
+        /// 与 `LayoutCompactBacks` 是同一份实现（后者保留为"对手手牌"的语义别名）。
+        /// **当前无调用点**：资产区曾用它（「折叠成一摞 + ×N」），2026-10-19 按用户口径
+        /// 「资产区的折叠UI回退」改回 `LayoutStacked`（每张露 36px 边、能点到具体某张）。
+        /// 保留本函数：`P5LayoutMathTests` 用它锁定"同一位置/居中"的几何契约，
+        /// 将来做"真·牌堆"（如墓地/牌库的紧凑展示）时可直接复用。
         /// </summary>
         public static void LayoutPile(Control container, System.Collections.Generic.List<Control> cards)
         {
@@ -120,6 +123,20 @@ namespace Script.UI
 
             for (int i = 0; i < valid.Count; i++)
                 PlaceCardInContainer(container, valid[i], startX, i);
+        }
+
+        /// <summary>
+        /// 【2026-10-19】牌堆缩略的**错位步长**：保证 `(count-1) * step ≤ maxTotal`。
+        ///
+        /// 牌库/世界牌库用"每张向右下挪一点点"来表现"这是一叠牌"。步长写死时张数一多，
+        /// 整叠会斜出面板（联机牌库 2px/张 × 约 40 张 = 80px，远超 100×140 的面板）。
+        /// 这里统一封顶：**张数越多步长越小**，张数少时仍保留可辨识的错位。
+        /// </summary>
+        public static float PileStep(int count, float step, float maxTotal)
+        {
+            if (count <= 1) return 0f;
+            float capped = Mathf.Min(step, maxTotal / (count - 1f));
+            return capped < 0f ? 0f : capped;
         }
 
         private static void MarkStacked(Control card)

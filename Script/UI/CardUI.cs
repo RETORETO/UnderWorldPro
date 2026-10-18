@@ -127,11 +127,10 @@ namespace Script.UI
         public bool StackedMode { get; set; }
 
         /// <summary>
-        /// 【P4·决策 7】抑制手牌 hover 上浮：**联机对手手牌**的牌背占位用。
-        /// 那些占位的父容器同样叫 `HandContainer`（会被 `IsHandContext` 判成手牌），
-        /// 而紧凑态只露一张牌背、hover 时会整排展开（`CardLayoutHelper.LayoutStacked`），
-        /// 若再叠一层"放大 1.18＋上浮 28px"就变成两套动画抢同一个位置 ⇒ 牌背在展开过程中抖动。
-        /// 单机/联机**本方**手牌不受影响（该属性只在 `ArenaOl.RebuildInto` 的隐藏占位分支里置 true）。
+        /// 【P4·决策 7 · 2026-10-19 已无使用者】抑制手牌 hover 上浮：原为**联机对手手牌**的牌背占位用
+        /// （紧凑态只露一张牌背、hover 整排展开时与"放大 1.18＋上浮 28px"抢同一位置会抖）。
+        /// 用户口径「对手手牌折叠 UI 回退」后，对手手牌恢复常规平铺、不再有展开动画，
+        /// 也就不需要抑制上浮 ⇒ `ArenaOl.RebuildInto` 不再置 true。属性保留为将来"只想静态叠放"的开关。
         /// </summary>
         public bool SuppressHoverLift { get; set; }
         private int _stackSavedZ;

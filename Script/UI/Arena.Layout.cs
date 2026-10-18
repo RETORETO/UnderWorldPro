@@ -98,8 +98,8 @@ public partial class Arena
         if (GodotObject.IsInstanceValid(_graveyardZone2)) _graveyardZone2.ArrangeCards();
         if (GodotObject.IsInstanceValid(_scoreContainer1)) ArrangeContainerCards(_scoreContainer1);
         if (GodotObject.IsInstanceValid(_scoreContainer2)) ArrangeContainerCards(_scoreContainer2);
-        if (GodotObject.IsInstanceValid(_assetContainer1)) ArrangeContainerCards(_assetContainer1, pile: true);
-        if (GodotObject.IsInstanceValid(_assetContainer2)) ArrangeContainerCards(_assetContainer2, pile: true);
+        if (GodotObject.IsInstanceValid(_assetContainer1)) ArrangeContainerCards(_assetContainer1);
+        if (GodotObject.IsInstanceValid(_assetContainer2)) ArrangeContainerCards(_assetContainer2);
 
         // 争夺区内：角色 + 附属于本地区 + 封印于本地区，统一均匀平铺（按进入先后，右后压左前）
         // 【2026-10-16】此为 cat-1 的落地路径，`UI美化与空间重排方案.md` 决策 3 明确"不折叠、保持不动"。
@@ -248,11 +248,14 @@ public partial class Arena
     }
 
     /// <summary>
-    /// 资产区 / 分数区排布。
-    ///  · <paramref name="pile"/> = true（资产区）：整摞叠成一张 + 右上角「×N」，悬停整块区弹出卡列表；
-    ///  · false（分数区）：层叠每张露 36px（决策 4 原文口径）。
+    /// 资产区 / 分数区排布：两者都走**层叠平铺**（每张露 36px、右卡压左卡），悬停某张时
+    /// `CardUI` 抬高层级即可看全卡面；资产区另有悬停整块区弹卡列表（`Arena.BadgePeek` 的 `TickPilePeek`）。
+    ///
+    /// 【2026-10-19 回退】原 `pile: true`（叠成一摞 + 「×N」角标）已按用户口径撤销：
+    /// 「资产区的折叠UI回退，但是也要支持hover显示所有资产卡」——
+    /// 一摞只剩最上面一张，读不出有几张、也没法直接点到具体某张。
     /// </summary>
-    private void ArrangeContainerCards(Control container, bool pile = false)
+    private void ArrangeContainerCards(Control container)
     {
         if (container == null) return;
         var cards = new System.Collections.Generic.List<CardUI>();
@@ -262,19 +265,9 @@ public partial class Arena
         var list = new System.Collections.Generic.List<Control>();
         foreach (var c in cards) list.Add(c);
 
-        if (pile)
-        {
-            // 【2026-10-19 用户口径】资产区折叠成一摞：只露最上面一张，张数交给「×N」角标。
-            CardLayoutHelper.LayoutPile(container, list);
-            for (int i = 0; i < cards.Count - 1; i++) CardCountBadge.Clear(cards[i]);   // 旧的代表卡要摘掉角标
-            if (cards.Count > 1) CardCountBadge.Apply(cards[cards.Count - 1], cards.Count);
-            else if (cards.Count == 1) CardCountBadge.Clear(cards[0]);
-            return;
-        }
-
-        // 【P4】分数区：层叠（每张露 36px，右卡压左卡）；悬停某张时 CardUI 会抬高层级看全卡面。
+        // 【P4·决策 4】层叠：每张露 36px，张数多到露边放不下时自动压缩露边，绝不溢出容器。
         CardLayoutHelper.LayoutStacked(container, list);
-        foreach (var c in cards) CardCountBadge.Clear(c);
+        foreach (var c in cards) CardCountBadge.Clear(c);   // 层叠态不再挂「×N」（角标会压在卡面上）
     }
 
     private void ArrangeHandCards(Control container, List<CardUI> cards)
@@ -435,6 +428,95 @@ public partial class Arena
     }
 
     /// <summary>
+    /// 把一张 CardUI 从所有"按区域布局"的列表/容器记录中摘出（**只动记录，不动节点父级**）。
+    /// 供 `SyncCardUIToZone` 的两处复用：① 正常换区前的"清除旧归属"；② 卡进入 `CardZone.Stack` 时
+    /// （堆叠 UI 由 `StackEntryUI` 独占，若仍留在手牌列表里，`ArrangeAllCards` 会把它当手牌继续排版）。
+    /// **不得**在此执行 `RemoveChild`：堆叠卡的物理父级由 `StackEntryUI` 管理。
+    /// </summary>
+    private void DetachCardUIFromZoneLayout(CardUI cardUI)
+    {
+        if (cardUI == null || !GodotObject.IsInstanceValid(cardUI)) return;
+        _handCardUIs.Remove(cardUI);
+        _handCardUIs2.Remove(cardUI);
+        _areaCardUIs.Remove(cardUI);
+        _areaAttachSealUIs.Remove(cardUI);
+        _deckZone?.RemoveCardUI(cardUI);
+        _deckZone2?.RemoveCardUI(cardUI);
+        _graveyardZone?.RemoveCardUI(cardUI);
+        _graveyardZone2?.RemoveCardUI(cardUI);
+    }
+
+    /// <summary>
+    /// 【2026-10·卡面兜底】把 CardUI 停放到不可见的 `_orphanCardHolder`，保证它**始终有父节点**。
+    ///
+    /// 需要它的两类时机（都是"卡面暂时没有合法落点"）：
+    ///  ① 堆叠条目出栈：`StackManager.ResolveTop` 先 `OnStackChanged`（→ `RefreshStackUI` → 条目 `QueueFree`）
+    ///     **再**结算，而复用的真卡 UI 是条目的子节点——不先摘出来就会随条目一起销毁（实测 `valid=false`）；
+    ///  ② `SyncCardUIToZone` 走到"找不到争夺区 slot / 找不到宿主 UI"：原实现只打日志，
+    ///    卡面此时已被 `RemoveChild`，于是变成 `parent=null` 的孤儿节点——属性 `Visible=true` 但永不渲染，
+    ///    玩家看到"卡凭空消失"，且后续同步再也拿不到它。
+    ///
+    /// 容器自身 `Visible=false`：暂存期间视觉上不出现（与"没有合法落点"语义一致），
+    /// 一旦被挂进正常容器就自动恢复显示（不需要逐卡改 Visible）。
+    /// </summary>
+    private void ParkOrphanCardUI(CardUI cardUI, string reason)
+    {
+        if (cardUI == null || !GodotObject.IsInstanceValid(cardUI)) return;
+        if (_orphanCardHolder == null || !GodotObject.IsInstanceValid(_orphanCardHolder)) return;
+        if (cardUI.GetParent() == _orphanCardHolder) return;
+        cardUI.GetParent()?.RemoveChild(cardUI);
+        _orphanCardHolder.AddChild(cardUI);
+        // 归一化：清掉堆叠期/拖拽期残留，避免它带着"冻结 + 不可拖"状态再也动不了
+        cardUI.FreezeSmoothMove = false;
+        cardUI.ProcessMode = ProcessModeEnum.Inherit;
+        cardUI.CanDrag = false;
+        cardUI.SetMask(null);
+        GD.PrintErr($"[Arena.Sync] ⚠ 卡面暂无合法落点（{reason}）→ 停放到兜底容器（不可见）：{cardUI.Name}");
+    }
+
+    /// <summary>
+    /// 【抢挂自愈】逻辑区域已是 `CardZone.Stack` 时，确保这张卡的 CardUI 挂在对应 `StackEntryUI` 下。
+    /// 调用时机见 `SyncCardUIToZone` 的 Stack 分支注释（`TransferOwnership` 的旧区域 `FireMoved`
+    /// 会把卡 UI 抢挂回手牌容器）。幂等：已经挂在条目内时只做状态归一化。
+    /// </summary>
+    private void ReattachCardUIToStackEntry(CardInstance card, CardUI cardUI)
+    {
+        if (card == null || cardUI == null || !GodotObject.IsInstanceValid(cardUI)) return;
+        if (_stackEntryUIMap == null) return;
+        foreach (var kv in _stackEntryUIMap)
+        {
+            var entry = kv.Key;
+            var entryUI = kv.Value;
+            if (entry == null || entryUI == null || !GodotObject.IsInstanceValid(entryUI)) continue;
+            if (!string.Equals(entry.SourceCardUid, card.UID, StringComparison.Ordinal)) continue;
+            if (cardUI.GetParent() == entryUI) return;   // 已在正确位置，无需动手
+            // 换父节点可能撞上"节点正在增删子节点"的帧（例如在信号回调里被调用）：延迟一帧重试一次。
+            if (entryUI.IsInsideTree() && entryUI.IsNodeReady())
+            {
+                entryUI.AttachCard(cardUI);
+                GD.Print($"[Arena.Sync] 堆叠卡 UI 抢挂自愈：{card.PlayerTemplate?.CardName} 重新挂回堆叠条目");
+            }
+            else
+            {
+                string uid = card.UID;
+                Callable.From(() => ResyncStackCardUI(uid)).CallDeferred();
+            }
+            return;
+        }
+    }
+
+    /// <summary>【抢挂自愈·延迟重放】见 <see cref="ReattachCardUIToStackEntry"/>。</summary>
+    private void ResyncStackCardUI(string uid)
+    {
+        if (string.IsNullOrEmpty(uid)) return;
+        if (!GodotObject.IsInstanceValid(this) || !IsInsideTree()) return;
+        var inst = _cardManager?.GetInstance(uid);
+        if (inst == null || inst.CurrentZone != CardZone.Stack) return;
+        if (!_cardUIMap.TryGetValue(uid, out var ui) || ui == null) return;
+        ReattachCardUIToStackEntry(inst, ui);
+    }
+
+    /// <summary>
     /// 根据卡牌的逻辑区域，把对应 CardUI 重新挂载到正确的 UI 容器。
     /// 这样通过 ZoneManager 的移动（如 PM 的 move 命令、出牌、死亡等）都能自动驱动视觉归位。
     /// </summary>
@@ -510,9 +592,23 @@ public partial class Arena
         // "无条件解冻 + GetParent()?.RemoveChild + 按区域重挂" 会破坏挂载，
         // 导致卡被摘出堆叠并被 _targetPosition 拉回旧坐标，满屏乱飞。
         // （此前把内嵌独立 CardUI 改为复用真卡的结构调整后，此分支缺失是乱飞根因。）
+        //
+        // 【2026-10·复用真卡后新增两件事，缺一不可】
+        // ① 摘出区域布局列表：卡进 Stack 后本方法此前只是 `return`，于是 CardUI 仍留在
+        //    `_handCardUIs/_handCardUIs2` 等列表里，`ArrangeAllCards → ArrangeHandCards` 会继续把它
+        //    当手牌排版（`CanDrag=true`、`ZIndex=302`），与 StackEntryUI 每帧锁位互相打架。
+        // ② 抢挂自愈（**兜底**，根因已在 `ZoneManager.MoveToStack` 修掉）：历史上 `MoveToStack`
+        //    内部 `TransferOwnership` 会以**旧区域（Hand）**先 `FireMoved` 一次（因为赋值 CurrentZone
+        //    在其之后），本方法走手牌分支 `container.AddChild` 把刚挂进堆叠的卡搬回手牌容器 ⇒ 堆叠区
+        //    只剩空白槽（本方打本方牌不触发，OwnerId≠ControllerId 时触发，如墓地行动/夺控场景）。
+        //    现在 `MoveToStack` 先落区域再变更归属，事件带的就是 Stack；此处仍保留"逻辑在 Stack 但
+        //    UI 不在条目内 ⇒ 挂回"，用于覆盖条目延迟建 UI / 其它路径把卡 UI 摘走的意外情况。
         if (card.CurrentZone == CardZone.Stack)
+        {
+            DetachCardUIFromZoneLayout(cardUI);
+            ReattachCardUIToStackEntry(card, cardUI);
             return;
-
+        }
         // 离开手牌（进入任意其他区域）即清除蒙版显示；手牌分支末尾会按当前蒙版重应用。
         // 规则：卡片只有在手牌时才显示这两个蒙版。
         cardUI.SetMask(null);
@@ -529,14 +625,7 @@ public partial class Arena
         //    此处 UI 不再驱动数据层移动，仅做纯 UI 同步。
 
         // 1. 清除旧归属（Arena 列表 + Zone 组件内部列表）
-        _handCardUIs.Remove(cardUI);
-        _handCardUIs2.Remove(cardUI);
-        _areaCardUIs.Remove(cardUI);
-        _areaAttachSealUIs.Remove(cardUI);
-        _deckZone?.RemoveCardUI(cardUI);
-        _deckZone2?.RemoveCardUI(cardUI);
-        _graveyardZone?.RemoveCardUI(cardUI);
-        _graveyardZone2?.RemoveCardUI(cardUI);
+        DetachCardUIFromZoneLayout(cardUI);
 
         // 2. 脱离物理父节点（后续 AddChild 会重新挂载）
         cardUI.GetParent()?.RemoveChild(cardUI);
@@ -720,6 +809,12 @@ public partial class Arena
                 GD.Print($"[Arena.Sync] 未处理区域的可视化: {card.CurrentZone}");
                 break;
         }
+
+        // 【2026-10·统一兜底】任何分支都没能把卡面挂进节点树（找不到争夺区 slot / 宿主 UI 不存在 /
+        // 容器未就绪 / 未处理的区域）⇒ 停放，**禁止留下 `parent=null` 的孤儿节点**。
+        // 典型触发：角色卡"地区为空"（免费打出缺陷）结算时 `ZoneDetailId=''` ⇒ 无 slot。
+        if (card.CurrentZone != CardZone.Stack && cardUI.GetParent() == null)
+            ParkOrphanCardUI(cardUI, $"区域 {card.CurrentZone} / detail='{card.ZoneDetailId}' 无可用容器");
 
         // 【MVC 薄绑定层】数据移动后必须刷新的派生 UI 统一收敛到 SyncDerivedUI，
         // 不在多处手动散弹调用，避免漏刷/重复刷（问题 4）。

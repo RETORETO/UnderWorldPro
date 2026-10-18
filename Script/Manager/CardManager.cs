@@ -354,6 +354,20 @@ public partial class CardManager : Node
         => _zoneManager?.MoveToStack(instance, instance.ControllerId);
 
     /// <summary>
+    /// 【事务卡打出】把卡本体移入**堆叠区**（响应窗口期间留栈，结算时才入墓）。
+    /// 刻意复刻 `MoveCardToGraveyard` 的三项副作用，保证除"所在区域"外行为与旧路径一致：
+    ///   1) `EE.UnregisterContinuous`（离场还原持续效果）；
+    ///   2) 归属归一（`MoveToGraveyard` 传的是 `OwnerId`，此处同样用 `OwnerId`）；
+    ///   3) `ResetToBaseState`（清伤害/横置/封印标记/动态授予/额外费用支付态）。
+    /// </summary>
+    public void MoveCardToStackForPlay(CardInstance instance)
+    {
+        if (instance == null) return;
+        EE?.UnregisterContinuous(instance);
+        _zoneManager?.MoveToStack(instance, instance.OwnerId, resetToBaseState: true);
+    }
+
+    /// <summary>
     /// 暗藏者"现身"（Reveal，背面→正面揭示）：规范化行为封装。
     /// 不移动地区（卡仍在原争夺区），但按规则需触发进场类效果：
     ///   1) 复位为基础状态并解除暗藏（IsCovert=false，与正常打出一致）；

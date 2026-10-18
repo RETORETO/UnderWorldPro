@@ -49,11 +49,35 @@ public partial class StackManager : Node
     public bool IsEmpty => _stack.Count == 0;
 
     /// <summary>
+    /// 卸载未结算条目时的归位回调（逐条调用，先于清空）。
+    ///
+    /// 【为什么需要】2026-10 起角色/附属/事务卡的**卡本体在响应窗口期间就位于 `CardZone.Stack`**
+    /// （`TurnManager.PlayCard` → `MoveCardToStackForPlay`）。若 `ClearAll` 只清空条目列表，
+    /// 那些卡的 `CurrentZone` 会永远停在 `Stack`：界面上条目一删卡面即消失（既不在手牌也不在场上），
+    /// 逻辑层却仍把它算作"在堆叠"。对局重置复用 Manager 时更糟——`CardManager.Reset` 把 UID 归 1，
+    /// 旧实例与新卡**撞号**（`GetInstance` 返回新卡、区域桶里躺着旧卡）。
+    /// 由 `TurnManager` 订阅并把卡片型条目的卡送入墓地（未结算＝被丢弃）。
+    /// </summary>
+    public System.Action<StackEntry> OnDiscardEntry;
+
+    /// <summary>
     /// 清空所有未结算堆叠效果（游戏结束即时结算时调用，不经过堆叠）。
     /// 同时重置熔断序列计数（一个完整序列结束），并广播 OnStackChanged 让 UI 刷新。
+    /// **先逐条通知归位再清空**：卡片型条目的卡本体仍在 Stack 区，必须由订阅方带走。
     /// </summary>
     public void ClearAll()
     {
+        if (OnDiscardEntry != null && _stack.Count > 0)
+        {
+            // 快照遍历：归位回调会移动卡（可能再触发堆叠事件），直接遍历 _stack 有被改动的风险
+            var snapshot = new List<StackEntry>(_stack);
+            foreach (var entry in snapshot)
+            {
+                if (entry == null) continue;
+                try { OnDiscardEntry(entry); }
+                catch (System.Exception ex) { GD.PrintErr($"[Stack] 丢弃条目归位异常（忽略）：{ex.Message}"); }
+            }
+        }
         _stack.Clear();
         _sequenceCount = 0;
         OnStackChanged?.Invoke();

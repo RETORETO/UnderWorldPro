@@ -21,15 +21,17 @@ namespace Script.Tests
             return f.GetAsText();
         }
 
-        /// <summary>① 对手手牌容器必须经 `HandCtr` 的镜像映射取，不能按面板名直取。</summary>
+        /// <summary>① 手牌容器必须经 `HandCtr(seat)` 的镜像映射取，不能按面板名直取。</summary>
         public void TestMirror_对手手牌走镜像映射()
         {
             string src = Read("Script/UI/ArenaOl.cs");
             Assert.IsFalse(string.IsNullOrEmpty(src), "必须能读到 ArenaOl.cs");
 
-            Assert.IsTrue(src.Contains("HandCtr(_localPlayerId == 1 ? 2 : 1)"),
-                "对手手牌容器必须用 HandCtr(对手座位)：镜像后本地座位 2 的手牌画在 _p1Hand 上，" +
-                "直取 _p1Hand 会拿到自己的手牌（玩家 2 视角下对手手牌永不展开）");
+            // 【2026-10-19 更新】对手手牌折叠已按用户口径回退，故不再有"对手手牌特判"调用点；
+            // 但"座位→手牌容器"的镜像映射仍是硬约束：手牌容器一律经 `HandCtr(seat)`（= ViewCtr 镜像映射），
+            // 禁止按 `_localPlayerId == 1 ? _p2Hand : _p1Hand` 直取面板名（镜像后本地座位 2 的手牌画在 _p1Hand 上）。
+            Assert.IsTrue(src.Contains("Control HandCtr(int seat) => ViewCtr(seat, _p1Hand, _p2Hand)"),
+                "手牌容器必须经 HandCtr(seat) 的镜像映射取（对手手牌折叠回退后仍须走统一映射，不直取面板名）");
 
             Assert.IsFalse(src.Contains("_localPlayerId == 1 ? _p2Hand : _p1Hand"),
                 "**禁止** `_localPlayerId == 1 ? _p2Hand : _p1Hand` 这种直取面板的写法（镜像视图下语义反了）");

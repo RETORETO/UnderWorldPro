@@ -13,7 +13,8 @@ namespace Script.Data.Effects
     ///       - 加载卡模板时调 EnsureEffects，按 UID 查表构建效果填入模板。
     ///
     /// Builder 直接修改传入的 PlayerCardData（设置 TargetRules / EffectDataList 等），
-    /// 因此既能承载效果列表，也能承载 JC012/JC015/JC035/JC068 等在构造函数里写的 TargetRules 声明。
+    /// 因此既能承载效果列表，也能承载 JC012/JC035/JC068 等**打出目标**的 TargetRules 声明
+    /// （注：JC015 已于 2026-10-18 移除 TargetRules —— 它的精筛属于激活目标，写在 EffectData.Target）。
     /// </summary>
     public static class CardEffectFactory
     {

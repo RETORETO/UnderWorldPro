@@ -211,12 +211,14 @@ namespace Script.UI
         private Control _localHand;      // 本地玩家手牌容器（拖拽来源）
         private int _localHandOwner;     // 本地玩家号（与 _localPlayerId 一致，拖拽时校验）
 
-        // ==================== 对手手牌紧凑（P4·决策 7·2026-10-18） ====================
-        // 只改**联机端**（用户口径：「对手手牌紧凑 → 只改联机端」）：
-        // 单机是同屏热座，对手手牌本来就正面可视，压成牌背会直接废掉热座可玩性。
-        // 折叠：一张牌背 + 「×N」；hover 整排：改用 LayoutStacked（每张露 36px 边）数清张数。
-        private bool _opponentHandExpanded;
-        private const float OpponentHandEdge = 36f;
+        // 【2026-10-19 回退】对手手牌**恢复常规平铺**（逐张牌背并排）。
+        // 用户口径：「对手手牌区域的折叠效果不好，对手手牌的折叠UI回退」——
+        // P4 决策 7 的「一张牌背 + ×N 角标 + hover 展开」在实战里读不出手牌量，故整段移除：
+        //  · 不再压成一摞（`LayoutPile` / `LayoutCompactBacks`），也不再挂 `CardCountBadge` 数量角标；
+        //  · 不再有"展开/收起"状态位与每帧矩形轮询（`ArrangeChildren` 直接均匀平铺）。
+        // 牌背占位也随之恢复 `SuppressHoverLift=false`，重新走 P5 的手牌上浮。
+        // `CardLayoutHelper.LayoutPile` / `LayoutCompactBacks` 两个几何函数**保留**（有单测锁定、
+        // 且将来仍可能要"叠一摞"的语义），只是当前无调用点。
 
         /// <summary>
         /// 争夺区（AreaZone 桶）实际渲染出的角色卡 UI，按容器登记。
@@ -537,7 +539,10 @@ namespace Script.UI
                 _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
                 AddChild(_badgePeek);
             }
-            _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, _ => { });
+            // 【2026-10-19 修复·JC085】资产/墓地列表的**双击出口**不能是空实现：
+            // 墓地「墓地行动」卡（`PlayableFromGraveyard`）双击走 `OnGraveyardPlayRequested`（上行打出意图，
+            // 服务端校验），其它走 `OnAttachmentDoubleClicked`（上行激活意图）。旧 `_ => { }` 让 JC085 发不动。
+            _badgePeek.ShowNear(host, title, members, OnPileMemberPicked, OnPileMemberActivated);
             _badgePeekMiss = 0.0;
             GD.Print($"[ArenaOl] 堆叠区悬停展开：{title} {members.Count} 张");
         }
@@ -617,6 +622,29 @@ namespace Script.UI
             GD.Print($"[ArenaOl] 浮层列表单击 {uid}（纯浏览；双击＝发动激活能力）");
         }
 
+        /// <summary>
+        /// 列表里双击 ⇒ 按卡所处区域分派到正确的联机链路（与"场上双击那张卡"同一出口）：
+        ///  · 墓地 + `PlayableFromGraveyard`（JC085 等「墓地行动」）→ `OnGraveyardPlayRequested`；
+        ///  · 其余（资产区角色激活等）→ `OnAttachmentDoubleClicked`（上行激活意图，服务端校验）。
+        /// 面板先收起，避免浮层压住随后弹出的选择窗。
+        /// </summary>
+        private void OnPileMemberActivated(CardUI ui)
+        {
+            if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) return;
+            var inst = ui.Instance;
+            _badgePeek?.HideNow();
+
+            if (inst.CurrentZone == CardZone.Graveyard && inst.PlayerTemplate?.PlayableFromGraveyard == true)
+            {
+                GD.Print($"[ArenaOl] 浮层列表双击（墓地行动）：{inst.PlayerTemplate.CardName}（{inst.UID}）");
+                OnGraveyardPlayRequested(ui);
+                return;
+            }
+
+            GD.Print($"[ArenaOl] 浮层列表双击激活：{inst.PlayerTemplate?.CardName}（{inst.UID}）");
+            OnAttachmentDoubleClicked(ui);
+        }
+
         /// <summary>收到服务端快照：仅入队（同帧多份自动合并），由 <see cref="_Process"/> 在安全时机应用。</summary>
         private void OnSnapshotReceived(GameSnapshot snap)
         {
@@ -644,26 +672,103 @@ namespace Script.UI
 
         /// <summary>【第0回合·调度】本地是否已上报过调度选择（防重复弹出 / 重复上报）。</summary>
         private bool _mulliganReportedLocal;
+        /// <summary>【第0回合·调度】当前打开的调度窗（多选选卡窗；快照到达时靠它判"已弹出"）。</summary>
+        private CardMultiPickWindow _mulliganWindow;
 
         /// <summary>
         /// 【第0回合·调度（客户端驱动）】每次应用快照后检查：若处于第 0 回合且尚未上报，
         /// 就**本地**弹出调度框（不再依赖服务端下发决策请求——那会早于本页挂载而丢失）。
         /// 玩家点"确认调度"时经 `PlayerIntent.MulliganReport` 主动上报，上报那一刻本页必然已就绪。
+        ///
+        /// 【2026-10-19 用户口径】"游戏开始的调度也要采用选卡类似的 UI"：原来走
+        /// `ChoicePromptPanel.BuildMulligan` 的**勾选框列表**（只有卡名、没有卡面），
+        /// 现改用 `CardMultiPickWindow`（真卡面网格 + 区域标签 + 点卡切换选中），
+        /// 与墓地/手牌/牌库的选卡窗（`CardPickWindow`）同一套观感。回包口径不变：仍是 UID 列表。
         /// </summary>
         private void EnsureMulliganPrompt()
         {
             var turn = _matchClient?.ClientTurnManager;
             if (turn == null) return;
-            if (turn.CurrentPhase != global::TurnManager.TurnPhase.Mulligan) return;   // 仅第0回合
+            if (turn.CurrentPhase != global::TurnManager.TurnPhase.Mulligan)   // 仅第0回合
+            {
+                // 阶段已离开调度（服务端超时结算 / 双方都已确认）⇒ 关掉本地还没确认的调度窗，
+                // 否则它会一直挡在战场中央（AllowCancel=false 没有取消出口）。
+                if (_mulliganWindow != null && GodotObject.IsInstanceValid(_mulliganWindow))
+                {
+                    _mulliganWindow.QueueFree();
+                    _mulliganWindow = null;
+                    GD.Print("[ArenaOl] 调度阶段已结束，关闭本地调度窗");
+                }
+                return;
+            }
             if (_mulliganReportedLocal) return;                    // 已上报
-            if (_choicePromptPanel != null && GodotObject.IsInstanceValid(_choicePromptPanel)
-                && _choicePromptPanel.Visible) return;             // 已弹出
+            if (_mulliganWindow != null && GodotObject.IsInstanceValid(_mulliganWindow)) return;   // 已弹出
 
             int localSeat = _matchClient.LocalSeat;
             var hand = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.Hand, localSeat);
             if (hand == null || hand.Count == 0) return;           // 手牌还没到（等下一份快照）
 
-            // 组装一份**本地**请求（服务端不参与下发）：复用同一个 ChoicePromptPanel.BuildMulligan 界面
+            // 候选卡面：直接用**本地手牌实例**（此刻手牌已在本机可见，无需服务端下发 refs）
+            var cards = new List<CardInstance>();
+            foreach (var c in hand)
+                if (c != null) cards.Add(c);
+
+            var req = new CardMultiPickRequest
+            {
+                Title = "开局调度",
+                Hint = "点卡切换选中（选中的牌会置入牌库底，并从牌库顶补抽等量张后洗牌）；可一张都不选 → 按「确认调度」",
+                Cards = cards,
+                ChooserId = localSeat,
+                PlayerNameOf = SeatName,          // 视角归一：与本页其它窗口同口径
+                AreaIndexOf = AreaIndexInView,
+                MinCount = 0,                     // 可以不选（＝不调度）
+                MaxCount = cards.Count,
+                ConfirmLabel = "确认调度",
+                AllowCancel = false,              // 开局调度是固定流程，没有取消出口
+                OnConfirmed = picked =>
+                {
+                    _mulliganReportedLocal = true;
+                    _mulliganWindow = null;
+                    var uids = new System.Collections.Generic.List<string>();
+                    if (picked != null)
+                        foreach (var inst in picked)
+                            if (inst != null && !string.IsNullOrEmpty(inst.UID)) uids.Add(inst.UID);
+                    // 客户端驱动：走意图通道上报（服务端按真实手牌权威复检）
+                    _matchClient?.SendIntentAs(localSeat, Script.Net.PlayerIntent.Kind.MulliganReport, uids.ToArray());
+                    GD.Print($"[ArenaOl] 调度已上报：{uids.Count} 张");
+                },
+            };
+
+            // 低延迟下同一帧可能连发两份快照 ⇒ 先释放旧窗，避免两个窗叠着
+            if (_mulliganWindow != null && GodotObject.IsInstanceValid(_mulliganWindow))
+            {
+                _mulliganWindow.QueueFree();
+                _mulliganWindow = null;
+            }
+
+            var win = new CardMultiPickWindow();
+            AddChild(win);            // **先入树、再 Init**（CardUI._Ready 的 SetFace(false) 会盖掉正面）
+            try
+            {
+                win.Init(req);
+            }
+            catch (System.Exception ex)
+            {
+                GD.PrintErr($"[ArenaOl] 调度窗构建失败，退回通用决策面板：{ex.Message}");
+                win.QueueFree();
+                OpenMulliganFallbackPrompt(localSeat, hand);
+                return;
+            }
+            var vpSize = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)((vpSize.Y - win.Size.Y) / 2));
+            win.Popup();
+            _mulliganWindow = win;
+            GD.Print($"[ArenaOl] 第0回合·已弹出调度选卡窗（候选 {cards.Count} 张手牌）");
+        }
+
+        /// <summary>调度选卡窗构建失败时的兜底：退回原来的勾选框列表（保证流程不卡死）。</summary>
+        private void OpenMulliganFallbackPrompt(int localSeat, List<CardInstance> hand)
+        {
             var req = new Script.Net.ChoiceRequest
             {
                 PlayerId = localSeat,
@@ -688,17 +793,15 @@ namespace Script.UI
             _choicePromptPanel.Init(req, ResolveChoiceLabel, result =>
             {
                 _mulliganReportedLocal = true;
-                // 客户端驱动：走意图通道上报（服务端按真实手牌权威复检）
                 var picked = (result != null && !result.Cancelled && result.SelectedUids != null)
                     ? result.SelectedUids
                     : new System.Collections.Generic.List<string>();
                 _matchClient?.SendIntentAs(localSeat, Script.Net.PlayerIntent.Kind.MulliganReport, picked.ToArray());
-                GD.Print($"[ArenaOl] 调度已上报：{picked.Count} 张");
+                GD.Print($"[ArenaOl] 调度已上报（兜底面板）：{picked.Count} 张");
             });
             var vpSize = GetViewport().GetVisibleRect().Size;
             _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)((vpSize.Y - _choicePromptPanel.Size.Y) / 2));
             _choicePromptPanel.Popup();
-            GD.Print($"[ArenaOl] 第0回合·已弹出调度框（候选 {req.OptionUids.Count} 张手牌）");
         }
 
         /// <summary>服务端下发决策请求：弹出联机决策面板，玩家选择后回包。</summary>
@@ -2281,15 +2384,13 @@ namespace Script.UI
                 RegisterOnlineCardUI(inst, ui);
                 cards.Add(ui);
             }
-            // 【2026-10-19 用户口径】资产区**折叠成一摞**：只露最上面一张 + 「×N」角标；
-            // 悬停整块资产区由 `TickPilePeek` 弹卡列表（与单机 Arena 同口径）。
-            CardLayoutHelper.LayoutPile(container, cards);
-            for (int i = 0; i < cards.Count - 1; i++)
-                if (cards[i] is CardUI prev) CardCountBadge.Clear(prev);
-            if (cards.Count > 1 && cards[cards.Count - 1] is CardUI topUi)
-                CardCountBadge.Apply(topUi, cards.Count);
-            else if (cards.Count == 1 && cards[0] is CardUI onlyUi)
-                CardCountBadge.Clear(onlyUi);
+            // 【2026-10-19 回退】资产区**恢复层叠平铺**（每张露 36px 边、右卡压左卡）：
+            // 用户口径「资产区的折叠UI回退，但是也要支持hover显示所有资产卡」——
+            // 「叠成一摞＋×N」读不出有几张、也点不到具体某张；层叠平铺本身就能一眼数清。
+            // 悬停整块资产区仍由 `TickPilePeek` 弹卡列表面板（这部分**保留**）。
+            CardLayoutHelper.LayoutStacked(container, cards);
+            for (int i = 0; i < cards.Count; i++)
+                if (cards[i] is CardUI uiClear) CardCountBadge.Clear(uiClear);
         }
 
         /// <summary>
@@ -3836,7 +3937,6 @@ namespace Script.UI
         public override void _Process(double delta)
         {
             PumpSnapshotQueue(delta);
-            UpdateOpponentHandHover();     // 【P4·决策 7】对手手牌紧凑 ↔ hover 展开
             TickBadgePeek(delta);          // 【P3b】角标展开面板收起（每帧矩形轮询）
             TickPilePeek(delta);           // 【2026-10-19】资产/墓地：悬停弹卡列表
             UpdateStackArrowEndpoints();   // 堆叠箭头每帧跟随（端点实时更新）
@@ -4294,9 +4394,6 @@ namespace Script.UI
                     hiddenUi.Setup(null);
                     hiddenUi.SetFace(false);
                     hiddenUi.CanDrag = false;
-                    // 【P4·决策 7】牌背占位的 hover 语义是"整排展开数张数"（ArenaOl 接管），
-                    // 不参与 P5 的手牌上浮放大（否则两套动画抢同一位置会抖）。
-                    hiddenUi.SuppressHoverLift = true;
                     _cardUIMap[inst.UID] = hiddenUi;
                     continue;
                 }
@@ -4344,85 +4441,10 @@ namespace Script.UI
             foreach (var child in container.GetChildren())
                 if (child is CardUI c && GodotObject.IsInstanceValid(c)) cards.Add(c);
 
-            // 【P4·决策 7】联机对手手牌：一张牌背 + 「×N」（hover 整排展开成层叠）。
-            // 只在"整排都是隐藏牌背"时生效：若服务端把某张对手手牌明置（IsHidden=false，有模板），
-            // 说明那是玩家有权看见的信息，必须走常规平铺，不能被压到牌背底下。
-            if (IsOpponentHandCtr(container) && AreAllHiddenBacks(cards))
-            {
-                ArrangeOpponentHandBacks(container, cards);
-                return;
-            }
-
+            // 【2026-10-19 回退】对手手牌与本方手牌同口径：逐张平铺（牌背占位由
+            // `RebuildInto` 的 `IsHidden` 分支生成，`SetFace(false)` 打成卡背）。
+            // 用户口径：「对手手牌区域的折叠效果不好 ⇒ 折叠UI回退」。
             CardLayoutHelper.LayoutCardsEvenly(container, cards);
-        }
-
-        // ==================== 对手手牌紧凑（P4·决策 7） ====================
-
-        /// <summary>容器是否是**对手**手牌容器（本方手牌走常规平铺）。</summary>
-        private bool IsOpponentHandCtr(Control container)
-        {
-            if (container == null) return false;
-            if (!ReferenceEquals(container, _p1Hand) && !ReferenceEquals(container, _p2Hand)) return false;
-            var mine = HandCtr(_localPlayerId);
-            return mine != null && !ReferenceEquals(container, mine);
-        }
-
-        /// <summary>整排是否都是"无实例的牌背占位"（`RebuildInto` 的 IsHidden 分支产物）。</summary>
-        private static bool AreAllHiddenBacks(List<Control> cards)
-        {
-            if (cards == null || cards.Count == 0) return false;
-            foreach (var c in cards)
-            {
-                if (!(c is CardUI cui) || cui.Instance != null) return false;
-            }
-            return true;
-        }
-
-        private void ArrangeOpponentHandBacks(Control container, List<Control> cards)
-        {
-            if (cards.Count == 0) return;
-
-            if (_opponentHandExpanded && cards.Count > 1)
-                CardLayoutHelper.LayoutStacked(container, cards, OpponentHandEdge);   // 展开：每张露 36px
-            else
-                CardLayoutHelper.LayoutCompactBacks(container, cards);                // 紧凑：全叠在一处
-
-            // `PlaceCardInContainer` 会强制 `Visible = true`（P3a 恢复可见），
-            // 所以"只露一张"必须在排版**之后**设；展开态则全部恢复可见。
-            for (int i = 1; i < cards.Count; i++)
-                cards[i].Visible = _opponentHandExpanded;
-
-            // 数量角标只挂代表牌背（第一张），其余清掉（防止重建/换态时残留）
-            CardCountBadge.Apply(cards[0], cards.Count);
-            for (int i = 1; i < cards.Count; i++)
-                CardCountBadge.Clear(cards[i]);
-        }
-
-        /// <summary>
-        /// 每帧判定对手手牌是否 hover 展开（紧凑 ↔ 层叠）。
-        ///
-        /// **为什么用"每帧矩形轮询"而不是 `mouse_entered/exited`**：
-        ///  · Godot 各版本对 `mouse_entered/exited` 是否向父节点冒泡不一致 —— 若"进入子卡"时父容器收到
-        ///    `exit`，用事件驱动会在玩家挪到牌背上的一瞬间把整排塌回去；
-        ///  · 而且从子卡直接移出容器时，父容器可能**根本收不到** `exit`，状态会卡在"已展开"。
-        /// 矩形轮询与事件语义完全解耦：鼠标在带内就展开、离开就收起，快照重建也不会打断展开态
-        /// （`_opponentHandExpanded` 只在状态翻转时才重排，不是每帧排版）。
-        /// </summary>
-        private void UpdateOpponentHandHover()
-        {
-            if (!IsVisibleInTree()) return;
-
-            // 【P1】对手座位恒为另一侧：座位号 → 界面容器必须走 HandCtr 的镜像映射。
-            // 直接按"本地=1 取 P2 面板、本地=2 取 P1 面板"写会踩坑：镜像后本地座位 2 自己的手牌就画在
-            // `_p1Hand` 上 ⇒ 取到的是**本方**手牌，玩家 2 视角下对手那排永远不展开（2026-10-19 用户实测）。
-            var opp = HandCtr(_localPlayerId == 1 ? 2 : 1);
-            if (opp == null || !GodotObject.IsInstanceValid(opp)) return;
-            if (opp.GetChildCount() == 0) return;                // 对手没手牌 ⇒ 无需展开/收起
-
-            bool inside = opp.GetGlobalRect().HasPoint(GetGlobalMousePosition());
-            if (_opponentHandExpanded == inside) return;
-            _opponentHandExpanded = inside;
-            ArrangeChildren(opp);
         }
 
         /// <summary>

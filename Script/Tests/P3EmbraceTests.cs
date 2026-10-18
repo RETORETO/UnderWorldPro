@@ -235,8 +235,11 @@ namespace Script.Tests
             var (plainOk, _) = TargetValidity.Check(host, plain, e091.Target, null, game.PlayerManager);
             Assert.IsTrue(plainOk, "对照：普通人类角色仍可被 JC091 指定");
             // JC015/JC019 的"非人类"同口径（实例当前类别）→ 改写后的吸血鬼**合法**
+            // 【2026-10-18】JC015 已移除卡级 TargetRules（它是"打出目标"字段），
+            // 精筛改由**激活目标** `EffectData.Target.Restrictions` 声明 ⇒ 断言改读该处。
             var jc015 = Load("JC015_qumoren");
-            Assert.IsTrue(jc015.TargetRules[0].Restrictions.Contains(TargetRestriction.NotCurrentSubCategory),
+            Assert.IsTrue(FindEffect(jc015, "JC015_QuMoRen_Activate").Target
+                    .Restrictions.Contains(TargetRestriction.NotCurrentSubCategory),
                 "JC015『非人类』改为实例口径（NotCurrentSubCategory）");
             var jc019 = Load("JC019_mierdundezhenmoqiang");
             Assert.IsTrue(FindEffect(jc019, "JC019_1_GrantBlackBladeAndAbility").GrantedAbility.Target

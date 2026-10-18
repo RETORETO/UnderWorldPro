@@ -41,6 +41,8 @@ public partial class WorldDeckZone : Control
         _displayCards.Clear();
 
         int displayCount = System.Math.Min(_countCache, 20);
+        // 【2026-10-19】错位量与牌库同口径收小：0.5px/张、总错位封顶 10px（最多 20 张 ⇒ 约 10px）。
+        float step = CardLayoutHelper.PileStep(displayCount, 0.5f, 10f);
 
         for (int i = 0; i < displayCount; i++)
         {
@@ -51,7 +53,7 @@ public partial class WorldDeckZone : Control
             // 否则 `.tscn` 里的 196×140 会把缩小请求钳回去（地区卡真身已加宽，缩略图不跟）。
             cardUI.CustomMinimumSize = new Vector2(CARD_WIDTH, CARD_HEIGHT);
             cardUI.Size = new Vector2(CARD_WIDTH, CARD_HEIGHT);
-            cardUI.Position = new Vector2(i * 0.5f, i * 0.5f);
+            cardUI.Position = new Vector2(i * step, i * step);
             cardUI.MouseFilter = MouseFilterEnum.Ignore; // 让事件穿透
             _displayCards.Add(cardUI);
         }

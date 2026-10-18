@@ -175,23 +175,13 @@ namespace Script.Tests
                 CardName = "驱魔人",
                 CategoryFlag = CardCategory.Character,
             };
-            // 与真实 JC015 一致：配 TargetRules 使 IsLegalActivateTarget 走精筛分支（Enemy/非人类/费用），
-            // 否则无 TargetRules 时只做大类粗筛，人类/己方/费<3 不会被拦截（测试与游戏行为不一致）。
+            // 【2026-10-18】与真实 JC015 一致：**不配卡级 TargetRules**（真实卡已移除）。
+            // 激活目标精筛现在只由 `EffectData.Target.Restrictions/Param` 承担 ——
+            // `IsLegalActivateTarget` 的无 TargetRules 分支自 P3·K21 起同样走
+            // `TargetValidity.CheckRestrictions`，与 `MatchesRule` 同一函数 ⇒ 下方矩阵仍应逐条成立。
+            // （原注释"无 TargetRules 时只做大类粗筛"已过期：给角色卡配 TargetRules 会让
+            //  `GetRequiresTarget()` 误判"打出需选目标"，反而破坏 JC119 免费打出链路。）
             // 注（2026-09 用户口径）：卡文只写"非人类"→ 子类别判定走**实例当前类别**（NotCurrentSubCategory）。
-            tmpl.TargetRules = new Array<TargetRule>
-            {
-                new TargetRule
-                {
-                    Kind = TargetKind.Character,
-                    Restrictions = new Array<TargetRestriction>
-                    {
-                        TargetRestriction.Enemy,
-                        TargetRestriction.NotCurrentSubCategory,
-                        TargetRestriction.CostAtLeast,
-                    },
-                    Param = "人类|3",
-                },
-            };
             tmpl.EffectDataList.Add(new EffectData
             {
                 EffectId = "JC015_QuMoRen_Activate",

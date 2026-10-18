@@ -105,8 +105,10 @@ public partial class ZoneManager : Node
         _area.Clear();
         _attached.Clear();
         _sealed.Clear();
+        _stack.Clear();   // 【2026-10】堆叠桶同样属于对局状态：角色/附属打出后会在此留值，
+                          // 不清会把上一局的实例带进新局（UID 从 1 重排 ⇒ 新旧实例撞号）
         _detachMode = DetachMode.Normal;
-        GD.Print("[ZoneManager] Reset: 全部区域桶已清空");
+        GD.Print("[ZoneManager] Reset: 全部区域桶已清空（含堆叠桶）");
     }
 
     // ============================================================
@@ -429,15 +431,31 @@ public partial class ZoneManager : Node
     // ============================================================
     // 便捷方法
     // ============================================================
-    /// <summary>进入堆叠区：暗藏者现身（快速能力）入栈时调用。
-    /// 卡从原区（通常是争夺区）移入堆叠区，但不重置状态（卡已在入栈前翻面为正面）；
+    /// <summary>进入堆叠区：暗藏者现身（快速能力）入栈 / 事务卡打出时调用。
+    /// 默认**不重置状态**（暗藏者已在入栈前翻面为正面）；
+    /// `resetToBaseState=true` 时按"入墓"同一套副作用收尾（归属归一 + 基础状态复位），
+    /// 供事务卡打出使用 —— 保证除"所在区域"外与原先"入堆叠即入墓"逐项一致。
     /// 离开争夺区按连带模式处置附属/封印（与 Normal 离场一致，满足需求③/④）。
     /// 此移动使 CurrentZone 变为 Stack，结算时 MoveToArea 的 fromZone != AreaZone
     /// 自然触发 EnterTrigger（“回地区触发进场触发是正常情况”）。</summary>
-    public void MoveToStack(CardInstance card, int playerId)
+    public void MoveToStack(CardInstance card, int playerId, bool resetToBaseState = false)
     {
         if (card == null) return;
         RemoveFromAllZones(card, CardZone.Stack);
+        // 顺序与 MoveToGraveyard（见下）逐句对齐：TransferOwnership → ResetToBaseState → 赋 CurrentZone
+        if (resetToBaseState)
+        {
+            // 【2026-10 根因收口】必须先落区域、再变更归属：
+            // `TransferOwnership` 内部会 `FireMoved(card, card.CurrentZone, ...)` 广播一次"移动"事件，
+            // 若此时 CurrentZone 仍是旧区（从手牌打出＝Hand），监听方会把它当成"移动到旧区"处理——
+            // `Arena.SyncCardUIToZone` 于是走手牌分支把刚挂进 StackEntryUI 的卡重新挂回手牌容器，
+            // 堆叠区只剩空白槽（此前只在 UI 层加"抢挂自愈"补偿，根因就在这一行的先后顺序）。
+            // `ResetToBaseState` 不读 CurrentZone（其注释明确"区域由调用者设置"），故提前赋值安全。
+            card.CurrentZone = CardZone.Stack;
+            card.ZoneDetailId = null;
+            TransferOwnership(card, playerId);
+            card.ResetToBaseState();
+        }
         card.CurrentZone = CardZone.Stack;
         card.ZoneDetailId = null;
         _stack.Add(card);   // 记入堆叠桶：供 ToSnapshot 导出 / 客户端投影重建卡实例
