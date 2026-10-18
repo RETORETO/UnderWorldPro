@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://co2n2fq4ue20x"
-valid=false
+uid="uid://ckrcf8wugpli0"
+path="res://.godot/imported/WM012_haoyuegezhe.jpg-3994ddf8bfe32253d082100ed8244041.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM012_haoyuegezhe.jpg"
+dest_files=["res://.godot/imported/WM012_haoyuegezhe.jpg-3994ddf8bfe32253d082100ed8244041.ctex"]
 
 [params]
 

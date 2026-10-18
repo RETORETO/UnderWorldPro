@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cyw3hdwwlq5cq"
-valid=false
+uid="uid://jmcroylasmbd"
+path="res://.godot/imported/WM019_huoliyazhi.jpg-90036905cab43c1a0cf732943d1a2152.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM019_huoliyazhi.jpg"
+dest_files=["res://.godot/imported/WM019_huoliyazhi.jpg-90036905cab43c1a0cf732943d1a2152.ctex"]
 
 [params]
 

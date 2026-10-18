@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d3u8fj8emfcjs"
-valid=false
+uid="uid://bvtvmi6t1oyk0"
+path="res://.godot/imported/XQ009_linshizhengzhao.jpg-f6c1aafecdf3cf943935bb5631d34063.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ009_linshizhengzhao.jpg"
+dest_files=["res://.godot/imported/XQ009_linshizhengzhao.jpg-f6c1aafecdf3cf943935bb5631d34063.ctex"]
 
 [params]
 

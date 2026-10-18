@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dgyxxg5707uv8"
-valid=false
+uid="uid://b8shpts4lekyi"
+path="res://.godot/imported/WM053_xueshujiaoliuhuiyi.jpg-3faa31ab4aa284302b3048158e419b8e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM053_xueshujiaoliuhuiyi.jpg"
+dest_files=["res://.godot/imported/WM053_xueshujiaoliuhuiyi.jpg-3faa31ab4aa284302b3048158e419b8e.ctex"]
 
 [params]
 

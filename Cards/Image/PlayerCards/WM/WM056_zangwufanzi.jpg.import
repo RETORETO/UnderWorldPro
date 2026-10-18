@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c67vndaqea8ds"
-valid=false
+uid="uid://cakxtubbcftu"
+path="res://.godot/imported/WM056_zangwufanzi.jpg-437b0c3db318e891ff3916d92a44f769.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM056_zangwufanzi.jpg"
+dest_files=["res://.godot/imported/WM056_zangwufanzi.jpg-437b0c3db318e891ff3916d92a44f769.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://xbmcqgvfoyqw"
-valid=false
+uid="uid://cxvlqygn7t6sw"
+path="res://.godot/imported/XQ004_mochuxianshi.jpg-aa60b13dc372a86c97ff9b6b0b7bbe0b.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ004_mochuxianshi.jpg"
+dest_files=["res://.godot/imported/XQ004_mochuxianshi.jpg-aa60b13dc372a86c97ff9b6b0b7bbe0b.ctex"]
 
 [params]
 

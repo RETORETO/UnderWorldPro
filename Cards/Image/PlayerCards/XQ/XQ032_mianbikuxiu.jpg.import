@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d26fmt2052rlt"
-valid=false
+uid="uid://bay0so5l7gqoj"
+path="res://.godot/imported/XQ032_mianbikuxiu.jpg-a2020b91333770309e0b62f889da1f4a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ032_mianbikuxiu.jpg"
+dest_files=["res://.godot/imported/XQ032_mianbikuxiu.jpg-a2020b91333770309e0b62f889da1f4a.ctex"]
 
 [params]
 

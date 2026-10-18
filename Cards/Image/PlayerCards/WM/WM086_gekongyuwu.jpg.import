@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://grpxd6pyb5i0"
-valid=false
+uid="uid://u6iv13am8hj2"
+path="res://.godot/imported/WM086_gekongyuwu.jpg-38616d0959fad244827a8bdfc30f0d5d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM086_gekongyuwu.jpg"
+dest_files=["res://.godot/imported/WM086_gekongyuwu.jpg-38616d0959fad244827a8bdfc30f0d5d.ctex"]
 
 [params]
 

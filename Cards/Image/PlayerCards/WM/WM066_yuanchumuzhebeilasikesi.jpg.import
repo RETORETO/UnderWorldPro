@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://n2onfkb56yu2"
-valid=false
+uid="uid://7h666d8sqxu7"
+path="res://.godot/imported/WM066_yuanchumuzhebeilasikesi.jpg-a3efc1b200d2f461e16443836d8f218a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM066_yuanchumuzhebeilasikesi.jpg"
+dest_files=["res://.godot/imported/WM066_yuanchumuzhebeilasikesi.jpg-a3efc1b200d2f461e16443836d8f218a.ctex"]
 
 [params]
 

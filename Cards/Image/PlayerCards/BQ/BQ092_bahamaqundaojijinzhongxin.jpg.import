@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b7djdlfn53qd8"
-valid=false
+uid="uid://ci280b02j57sx"
+path="res://.godot/imported/BQ092_bahamaqundaojijinzhongxin.jpg-0fceb9acbf8adbc061afc07110bc8cc0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/BQ/BQ092_bahamaqundaojijinzhongxin.jpg"
+dest_files=["res://.godot/imported/BQ092_bahamaqundaojijinzhongxin.jpg-0fceb9acbf8adbc061afc07110bc8cc0.ctex"]
 
 [params]
 

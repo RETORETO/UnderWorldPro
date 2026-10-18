@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dqb2a7ve5sxhh"
-valid=false
+uid="uid://c14kyvy4hdqbl"
+path="res://.godot/imported/WM094_linshizhihuibu.jpg-d31a55dd174d75ce6ecd96a4819be2cb.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM094_linshizhihuibu.jpg"
+dest_files=["res://.godot/imported/WM094_linshizhihuibu.jpg-d31a55dd174d75ce6ecd96a4819be2cb.ctex"]
 
 [params]
 

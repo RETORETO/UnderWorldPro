@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dvowqtjd3nls4"
-valid=false
+uid="uid://djpmljjk50lde"
+path="res://.godot/imported/WM015_shentanleimengdehamite.jpg-9fa47a6283f302ee3fe28ca56704d0ed.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM015_shentanleimengdehamite.jpg"
+dest_files=["res://.godot/imported/WM015_shentanleimengdehamite.jpg-9fa47a6283f302ee3fe28ca56704d0ed.ctex"]
 
 [params]
 

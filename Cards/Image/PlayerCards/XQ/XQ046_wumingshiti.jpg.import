@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bqtdbiyhb64le"
-valid=false
+uid="uid://byqwnmdg7y5yw"
+path="res://.godot/imported/XQ046_wumingshiti.jpg-fa5f2562fab2cdc27a006174b487611a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ046_wumingshiti.jpg"
+dest_files=["res://.godot/imported/XQ046_wumingshiti.jpg-fa5f2562fab2cdc27a006174b487611a.ctex"]
 
 [params]
 

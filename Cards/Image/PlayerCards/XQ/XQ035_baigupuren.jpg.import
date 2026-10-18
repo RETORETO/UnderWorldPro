@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cduk7j4lyjd8u"
-valid=false
+uid="uid://b7egyvf6q0mxu"
+path="res://.godot/imported/XQ035_baigupuren.jpg-ee22253d90be04b8157b39e128a83525.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ035_baigupuren.jpg"
+dest_files=["res://.godot/imported/XQ035_baigupuren.jpg-ee22253d90be04b8157b39e128a83525.ctex"]
 
 [params]
 

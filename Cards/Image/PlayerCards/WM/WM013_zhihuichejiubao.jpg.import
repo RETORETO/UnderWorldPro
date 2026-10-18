@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bq4mwccp1d7du"
-valid=false
+uid="uid://b68vxan8mbt10"
+path="res://.godot/imported/WM013_zhihuichejiubao.jpg-9d6e7f058f2381796404a99ac364194f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM013_zhihuichejiubao.jpg"
+dest_files=["res://.godot/imported/WM013_zhihuichejiubao.jpg-9d6e7f058f2381796404a99ac364194f.ctex"]
 
 [params]
 

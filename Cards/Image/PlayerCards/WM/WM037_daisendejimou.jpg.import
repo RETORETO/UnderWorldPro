@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ba55inoui8w8v"
-valid=false
+uid="uid://bstmi3npqu18r"
+path="res://.godot/imported/WM037_daisendejimou.jpg-f56fde75fda9c023bad4bbe16df9a662.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM037_daisendejimou.jpg"
+dest_files=["res://.godot/imported/WM037_daisendejimou.jpg-f56fde75fda9c023bad4bbe16df9a662.ctex"]
 
 [params]
 

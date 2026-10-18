@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://f7crnft45lmo"
-valid=false
+uid="uid://ba6p7gfcvpv2i"
+path="res://.godot/imported/WM061_tuguitu.jpg-3396b610f9122111e2b8615acde81692.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM061_tuguitu.jpg"
+dest_files=["res://.godot/imported/WM061_tuguitu.jpg-3396b610f9122111e2b8615acde81692.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b28clvr5tromb"
-valid=false
+uid="uid://u8n3giocojbt"
+path="res://.godot/imported/WM082_luodandemilu.jpg-51cd2b71ebf32294d612b22624b1fd1b.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM082_luodandemilu.jpg"
+dest_files=["res://.godot/imported/WM082_luodandemilu.jpg-51cd2b71ebf32294d612b22624b1fd1b.ctex"]
 
 [params]
 

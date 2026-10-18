@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bpkkgxv3y138r"
-valid=false
+uid="uid://b2o6ncdcqvsvn"
+path="res://.godot/imported/WM063_heishi.jpg-4e53edc240682458586f25e010762b21.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM063_heishi.jpg"
+dest_files=["res://.godot/imported/WM063_heishi.jpg-4e53edc240682458586f25e010762b21.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cbt12wcvourar"
-valid=false
+uid="uid://ds6w4cvth6e5a"
+path="res://.godot/imported/WM030_kuangrexinzhong.jpg-77de295ee80ef9bd6122a393be597b3a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM030_kuangrexinzhong.jpg"
+dest_files=["res://.godot/imported/WM030_kuangrexinzhong.jpg-77de295ee80ef9bd6122a393be597b3a.ctex"]
 
 [params]
 

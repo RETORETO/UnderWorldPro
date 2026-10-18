@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cdum2usbvieha"
-valid=false
+uid="uid://dt8ywgj5px4t5"
+path="res://.godot/imported/WM068_youmingsheng.jpg-10cdd9265715e3322b6083639e3c3e6f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM068_youmingsheng.jpg"
+dest_files=["res://.godot/imported/WM068_youmingsheng.jpg-10cdd9265715e3322b6083639e3c3e6f.ctex"]
 
 [params]
 

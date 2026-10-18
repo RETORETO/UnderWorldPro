@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://qi4xcqrnm8f3"
-valid=false
+uid="uid://c2jafve6ml0x5"
+path="res://.godot/imported/WM074_xiaojingfenchadehuayuan.jpg-e20da8630ba3d04997c1a2bd563213c9.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM074_xiaojingfenchadehuayuan.jpg"
+dest_files=["res://.godot/imported/WM074_xiaojingfenchadehuayuan.jpg-e20da8630ba3d04997c1a2bd563213c9.ctex"]
 
 [params]
 

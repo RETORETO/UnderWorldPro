@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://587ith5wxl0g"
-valid=false
+uid="uid://bq5jmv0ij2xj6"
+path="res://.godot/imported/WM003_qianjimiaoli.jpg-281d84b036dc6e8b691b8f6d122e5b62.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM003_qianjimiaoli.jpg"
+dest_files=["res://.godot/imported/WM003_qianjimiaoli.jpg-281d84b036dc6e8b691b8f6d122e5b62.ctex"]
 
 [params]
 

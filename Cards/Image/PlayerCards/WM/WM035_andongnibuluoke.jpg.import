@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dxdlf10odmkhh"
-valid=false
+uid="uid://c4k8fe6pjkkr3"
+path="res://.godot/imported/WM035_andongnibuluoke.jpg-38e5e150f882ba73411da5015077b5d6.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM035_andongnibuluoke.jpg"
+dest_files=["res://.godot/imported/WM035_andongnibuluoke.jpg-38e5e150f882ba73411da5015077b5d6.ctex"]
 
 [params]
 

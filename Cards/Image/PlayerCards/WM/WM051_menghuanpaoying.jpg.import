@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cjxbsgymp36be"
-valid=false
+uid="uid://df6jrdrk1shhf"
+path="res://.godot/imported/WM051_menghuanpaoying.jpg-17877651a0a14fc15c1f7f76e73f7d37.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM051_menghuanpaoying.jpg"
+dest_files=["res://.godot/imported/WM051_menghuanpaoying.jpg-17877651a0a14fc15c1f7f76e73f7d37.ctex"]
 
 [params]
 

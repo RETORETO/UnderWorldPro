@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cedp3liujme4b"
-valid=false
+uid="uid://bs762uq7wk77m"
+path="res://.godot/imported/XQ001_lianhuijinyinshi.jpg-7c33f5c9f609eea0b27789a15ee210d0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ001_lianhuijinyinshi.jpg"
+dest_files=["res://.godot/imported/XQ001_lianhuijinyinshi.jpg-7c33f5c9f609eea0b27789a15ee210d0.ctex"]
 
 [params]
 

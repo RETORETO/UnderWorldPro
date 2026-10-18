@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dldcsixni2m8u"
-valid=false
+uid="uid://ck8lph2ca6imm"
+path="res://.godot/imported/XQ005_tianhuodejieliewa.jpg-d3da4c76a01a87b51c410dfcc6c86592.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ005_tianhuodejieliewa.jpg"
+dest_files=["res://.godot/imported/XQ005_tianhuodejieliewa.jpg-d3da4c76a01a87b51c410dfcc6c86592.ctex"]
 
 [params]
 

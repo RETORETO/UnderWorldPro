@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://civ64gu4vwwwx"
-valid=false
+uid="uid://bk1svixogv22b"
+path="res://.godot/imported/WM048_lindongzhifengyingdila.jpg-b7eb136b2dd60f82f066d3aa7f6c8f89.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM048_lindongzhifengyingdila.jpg"
+dest_files=["res://.godot/imported/WM048_lindongzhifengyingdila.jpg-b7eb136b2dd60f82f066d3aa7f6c8f89.ctex"]
 
 [params]
 

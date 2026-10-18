@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bxnaar88d4ymx"
-valid=false
+uid="uid://beess2yk424c2"
+path="res://.godot/imported/WM073_shenyuandehuhuan.jpg-6dba951f30ef0d74567c32d7b32f6b16.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM073_shenyuandehuhuan.jpg"
+dest_files=["res://.godot/imported/WM073_shenyuandehuhuan.jpg-6dba951f30ef0d74567c32d7b32f6b16.ctex"]
 
 [params]
 

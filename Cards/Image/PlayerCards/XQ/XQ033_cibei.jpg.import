@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ct6pbno88xdsl"
-valid=false
+uid="uid://dd28x8lbqnxhf"
+path="res://.godot/imported/XQ033_cibei.jpg-25bc7c218adfc347f7e8c826566ddbb0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ033_cibei.jpg"
+dest_files=["res://.godot/imported/XQ033_cibei.jpg-25bc7c218adfc347f7e8c826566ddbb0.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cdqqfysjk214i"
-valid=false
+uid="uid://c4s53s8v3xtn"
+path="res://.godot/imported/LC016_jiangyue.jpg-2247017827cf8a611e37a40552f1edc9.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/LC/LC016_jiangyue.jpg"
+dest_files=["res://.godot/imported/LC016_jiangyue.jpg-2247017827cf8a611e37a40552f1edc9.ctex"]
 
 [params]
 

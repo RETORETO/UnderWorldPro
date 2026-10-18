@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://kix4ipamlo12"
-valid=false
+uid="uid://cwlqbvh0aub3w"
+path="res://.godot/imported/WM018_zhenhunqu.jpg-8ce273ac2004b2af889509fba02171ca.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM018_zhenhunqu.jpg"
+dest_files=["res://.godot/imported/WM018_zhenhunqu.jpg-8ce273ac2004b2af889509fba02171ca.ctex"]
 
 [params]
 

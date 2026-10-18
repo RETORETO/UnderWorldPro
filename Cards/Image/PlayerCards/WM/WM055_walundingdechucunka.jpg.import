@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://l6537liq5ivn"
-valid=false
+uid="uid://bkgdgl5y6n8vd"
+path="res://.godot/imported/WM055_walundingdechucunka.jpg-853d674dd23880886c7389683c6461f6.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM055_walundingdechucunka.jpg"
+dest_files=["res://.godot/imported/WM055_walundingdechucunka.jpg-853d674dd23880886c7389683c6461f6.ctex"]
 
 [params]
 

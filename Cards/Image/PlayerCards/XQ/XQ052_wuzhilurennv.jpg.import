@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://buu0v6lyydtnr"
-valid=false
+uid="uid://dl3bardb7cdnq"
+path="res://.godot/imported/XQ052_wuzhilurennv.jpg-1be049edab0a2001c63bca7c119d51f8.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ052_wuzhilurennv.jpg"
+dest_files=["res://.godot/imported/XQ052_wuzhilurennv.jpg-1be049edab0a2001c63bca7c119d51f8.ctex"]
 
 [params]
 

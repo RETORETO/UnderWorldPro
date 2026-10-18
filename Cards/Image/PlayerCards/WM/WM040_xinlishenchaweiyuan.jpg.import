@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cudyg3i12caeb"
-valid=false
+uid="uid://cjxyr5k7jjnrk"
+path="res://.godot/imported/WM040_xinlishenchaweiyuan.jpg-8e9dbd9cf28519f248f8408525df2486.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM040_xinlishenchaweiyuan.jpg"
+dest_files=["res://.godot/imported/WM040_xinlishenchaweiyuan.jpg-8e9dbd9cf28519f248f8408525df2486.ctex"]
 
 [params]
 

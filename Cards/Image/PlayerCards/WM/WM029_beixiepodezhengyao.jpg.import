@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://42x7p7x6v2bs"
-valid=false
+uid="uid://dtqr6wr2nj374"
+path="res://.godot/imported/WM029_beixiepodezhengyao.jpg-536d5da02e00c6a3a1f2e23bfee4443c.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM029_beixiepodezhengyao.jpg"
+dest_files=["res://.godot/imported/WM029_beixiepodezhengyao.jpg-536d5da02e00c6a3a1f2e23bfee4443c.ctex"]
 
 [params]
 

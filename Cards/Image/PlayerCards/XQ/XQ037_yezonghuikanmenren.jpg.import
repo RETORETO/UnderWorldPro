@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dkncutpg1snam"
-valid=false
+uid="uid://bj1snd003clj4"
+path="res://.godot/imported/XQ037_yezonghuikanmenren.jpg-0b6c85bf61f86ab99654d2b661ce9967.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ037_yezonghuikanmenren.jpg"
+dest_files=["res://.godot/imported/XQ037_yezonghuikanmenren.jpg-0b6c85bf61f86ab99654d2b661ce9967.ctex"]
 
 [params]
 

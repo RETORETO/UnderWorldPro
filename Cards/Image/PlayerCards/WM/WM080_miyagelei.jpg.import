@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cbffehd2vqmh7"
-valid=false
+uid="uid://cmvg4w5ewcq0m"
+path="res://.godot/imported/WM080_miyagelei.jpg-6e4f8e88ff3d74fc6c7ce940e9623bf4.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM080_miyagelei.jpg"
+dest_files=["res://.godot/imported/WM080_miyagelei.jpg-6e4f8e88ff3d74fc6c7ce940e9623bf4.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dbi2lcnwjcdkh"
-valid=false
+uid="uid://bufm0ic1j7gm0"
+path="res://.godot/imported/WM017_peng.jpg-41a936576620cdcdc67d8d7ecd77c6b5.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM017_peng.jpg"
+dest_files=["res://.godot/imported/WM017_peng.jpg-41a936576620cdcdc67d8d7ecd77c6b5.ctex"]
 
 [params]
 

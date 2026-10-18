@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c4nq82yha3crt"
-valid=false
+uid="uid://jo1ivm1jfpws"
+path="res://.godot/imported/XQ021_chenfuyumingyun.jpg-74c163d6f4ebb5e887f92154669b7e07.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ021_chenfuyumingyun.jpg"
+dest_files=["res://.godot/imported/XQ021_chenfuyumingyun.jpg-74c163d6f4ebb5e887f92154669b7e07.ctex"]
 
 [params]
 

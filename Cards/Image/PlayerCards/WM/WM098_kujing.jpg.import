@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dwr1gflyd2hv8"
-valid=false
+uid="uid://tv454hi2itpt"
+path="res://.godot/imported/WM098_kujing.jpg-c7384d5356a6849a62a3575151c99a2e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM098_kujing.jpg"
+dest_files=["res://.godot/imported/WM098_kujing.jpg-c7384d5356a6849a62a3575151c99a2e.ctex"]
 
 [params]
 

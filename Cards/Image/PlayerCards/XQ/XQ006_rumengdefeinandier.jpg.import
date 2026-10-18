@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b80ax2rsbt7a8"
-valid=false
+uid="uid://yep1lyo5k7ot"
+path="res://.godot/imported/XQ006_rumengdefeinandier.jpg-0b6c952188e563b4d0295f5514d29477.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ006_rumengdefeinandier.jpg"
+dest_files=["res://.godot/imported/XQ006_rumengdefeinandier.jpg-0b6c952188e563b4d0295f5514d29477.ctex"]
 
 [params]
 

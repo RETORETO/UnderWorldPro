@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://5nwfoqpoo014"
-valid=false
+uid="uid://dklon7k168s6i"
+path="res://.godot/imported/WM095_wuyediantai.jpg-8d2971fae49806412224cb518e7fdf7a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM095_wuyediantai.jpg"
+dest_files=["res://.godot/imported/WM095_wuyediantai.jpg-8d2971fae49806412224cb518e7fdf7a.ctex"]
 
 [params]
 

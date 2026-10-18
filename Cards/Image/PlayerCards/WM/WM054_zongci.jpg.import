@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d3vatykcop85c"
-valid=false
+uid="uid://d1n8vkstxjige"
+path="res://.godot/imported/WM054_zongci.jpg-ba00758efe20b32c91616ef2b797a297.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM054_zongci.jpg"
+dest_files=["res://.godot/imported/WM054_zongci.jpg-ba00758efe20b32c91616ef2b797a297.ctex"]
 
 [params]
 

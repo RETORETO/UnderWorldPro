@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ohy8j6tvk4c6"
-valid=false
+uid="uid://dows5pl05lk3g"
+path="res://.godot/imported/WM032_niuqudebudaozhe.jpg-723098e6740c69c48802f8d725ee8697.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM032_niuqudebudaozhe.jpg"
+dest_files=["res://.godot/imported/WM032_niuqudebudaozhe.jpg-723098e6740c69c48802f8d725ee8697.ctex"]
 
 [params]
 

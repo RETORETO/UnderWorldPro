@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cbiu4gactjtl"
-valid=false
+uid="uid://b5nsd1urikyrw"
+path="res://.godot/imported/WM069_rudongdezaihuo.jpg-d220514d9928cdd2a3777770553169c2.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM069_rudongdezaihuo.jpg"
+dest_files=["res://.godot/imported/WM069_rudongdezaihuo.jpg-d220514d9928cdd2a3777770553169c2.ctex"]
 
 [params]
 

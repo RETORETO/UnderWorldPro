@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bvhwy25qdu1h6"
-valid=false
+uid="uid://6w0lfo6ohh8"
+path="res://.godot/imported/XQ029_atakelaanhunshi.jpg-6da1288ba587135a76daef80a65b52bb.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ029_atakelaanhunshi.jpg"
+dest_files=["res://.godot/imported/XQ029_atakelaanhunshi.jpg-6da1288ba587135a76daef80a65b52bb.ctex"]
 
 [params]
 

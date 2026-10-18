@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://3j82dhcrrdhe"
-valid=false
+uid="uid://dclrai5uudifa"
+path="res://.godot/imported/WM088_xianchangdiaocha.jpg-965334203ed23682d5265016a85e285d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM088_xianchangdiaocha.jpg"
+dest_files=["res://.godot/imported/WM088_xianchangdiaocha.jpg-965334203ed23682d5265016a85e285d.ctex"]
 
 [params]
 

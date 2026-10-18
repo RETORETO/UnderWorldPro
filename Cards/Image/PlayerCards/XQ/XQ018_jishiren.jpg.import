@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d11cx41b3ctiw"
-valid=false
+uid="uid://bebctmu8uh3wy"
+path="res://.godot/imported/XQ018_jishiren.jpg-ead7c6d5c95ea264ca24cbbd8b70e14d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ018_jishiren.jpg"
+dest_files=["res://.godot/imported/XQ018_jishiren.jpg-ead7c6d5c95ea264ca24cbbd8b70e14d.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d3n7av5unjjdb"
-valid=false
+uid="uid://b8xivt66ptl2i"
+path="res://.godot/imported/WM092_jihuashenmixueyanjiu.jpg-249167ee4797e7cf89e85106982248da.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM092_jihuashenmixueyanjiu.jpg"
+dest_files=["res://.godot/imported/WM092_jihuashenmixueyanjiu.jpg-249167ee4797e7cf89e85106982248da.ctex"]
 
 [params]
 

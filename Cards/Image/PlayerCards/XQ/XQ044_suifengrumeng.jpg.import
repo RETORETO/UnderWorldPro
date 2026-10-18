@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cd2y1gwe3v7sv"
-valid=false
+uid="uid://ebg305v30mmw"
+path="res://.godot/imported/XQ044_suifengrumeng.jpg-50cf5b0c09c755a1a383da2a889ec53e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ044_suifengrumeng.jpg"
+dest_files=["res://.godot/imported/XQ044_suifengrumeng.jpg-50cf5b0c09c755a1a383da2a889ec53e.ctex"]
 
 [params]
 

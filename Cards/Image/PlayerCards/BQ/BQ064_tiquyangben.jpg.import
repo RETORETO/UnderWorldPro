@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dm8mtru2ul035"
-valid=false
+uid="uid://cws3t6igr73ow"
+path="res://.godot/imported/BQ064_tiquyangben.jpg-ca2ed26d7d1b78ab508ad984f0bde6c8.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/BQ/BQ064_tiquyangben.jpg"
+dest_files=["res://.godot/imported/BQ064_tiquyangben.jpg-ca2ed26d7d1b78ab508ad984f0bde6c8.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://daxa6gwqdd0fr"
-valid=false
+uid="uid://cv3ybtbjpj5ph"
+path="res://.godot/imported/WM067_jianmingtubianti.jpg-feccabd90abcf48099905173191d180f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM067_jianmingtubianti.jpg"
+dest_files=["res://.godot/imported/WM067_jianmingtubianti.jpg-feccabd90abcf48099905173191d180f.ctex"]
 
 [params]
 

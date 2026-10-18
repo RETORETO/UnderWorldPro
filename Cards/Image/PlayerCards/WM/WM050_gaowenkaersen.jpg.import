@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d2vq7atyp08fy"
-valid=false
+uid="uid://de0hfql84bgtg"
+path="res://.godot/imported/WM050_gaowenkaersen.jpg-7a11a34134c326c48d0fd60693f24142.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM050_gaowenkaersen.jpg"
+dest_files=["res://.godot/imported/WM050_gaowenkaersen.jpg-7a11a34134c326c48d0fd60693f24142.ctex"]
 
 [params]
 

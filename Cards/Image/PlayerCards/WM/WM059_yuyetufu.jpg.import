@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dq2ua3ol6ukgr"
-valid=false
+uid="uid://ysugfrykhlpn"
+path="res://.godot/imported/WM059_yuyetufu.jpg-4e37e2753daf04ced0c2cfce94a06c55.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM059_yuyetufu.jpg"
+dest_files=["res://.godot/imported/WM059_yuyetufu.jpg-4e37e2753daf04ced0c2cfce94a06c55.ctex"]
 
 [params]
 

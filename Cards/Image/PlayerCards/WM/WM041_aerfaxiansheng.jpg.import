@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b4ssvwoqx2vaf"
-valid=false
+uid="uid://c7a3gj066dy2v"
+path="res://.godot/imported/WM041_aerfaxiansheng.jpg-4c9a29020f139869a6a50f5c9e284706.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM041_aerfaxiansheng.jpg"
+dest_files=["res://.godot/imported/WM041_aerfaxiansheng.jpg-4c9a29020f139869a6a50f5c9e284706.ctex"]
 
 [params]
 

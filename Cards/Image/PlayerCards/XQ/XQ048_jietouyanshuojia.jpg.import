@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cb3pwtg632ux8"
-valid=false
+uid="uid://ceo6uc05ecob1"
+path="res://.godot/imported/XQ048_jietouyanshuojia.jpg-62977c98355d2a59d38eef462b9879fb.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ048_jietouyanshuojia.jpg"
+dest_files=["res://.godot/imported/XQ048_jietouyanshuojia.jpg-62977c98355d2a59d38eef462b9879fb.ctex"]
 
 [params]
 

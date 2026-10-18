@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://vnte72hrovh2"
-valid=false
+uid="uid://bn0qwb4ve4a37"
+path="res://.godot/imported/XQ025_jiankongtantou.jpg-bca70ae2b61f8b529d61e46a75c86d15.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ025_jiankongtantou.jpg"
+dest_files=["res://.godot/imported/XQ025_jiankongtantou.jpg-bca70ae2b61f8b529d61e46a75c86d15.ctex"]
 
 [params]
 

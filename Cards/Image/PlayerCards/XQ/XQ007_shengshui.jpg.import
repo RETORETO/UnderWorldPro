@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://3cj32hxgd3kq"
-valid=false
+uid="uid://37cq0gthw7n8"
+path="res://.godot/imported/XQ007_shengshui.jpg-5e38f0f44a568931b3ec3fd247b2b253.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ007_shengshui.jpg"
+dest_files=["res://.godot/imported/XQ007_shengshui.jpg-5e38f0f44a568931b3ec3fd247b2b253.ctex"]
 
 [params]
 

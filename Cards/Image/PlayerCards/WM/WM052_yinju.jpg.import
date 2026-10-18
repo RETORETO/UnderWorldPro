@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c5flm2pybk74r"
-valid=false
+uid="uid://ccy7r421wksqd"
+path="res://.godot/imported/WM052_yinju.jpg-35ab2527d21e41edb708032fb063540f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM052_yinju.jpg"
+dest_files=["res://.godot/imported/WM052_yinju.jpg-35ab2527d21e41edb708032fb063540f.ctex"]
 
 [params]
 

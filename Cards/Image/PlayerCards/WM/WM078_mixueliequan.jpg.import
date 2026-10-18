@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://der15ehfpet8y"
-valid=false
+uid="uid://viohxm502b51"
+path="res://.godot/imported/WM078_mixueliequan.jpg-6a53db2833147a301caa0a0dec3cf466.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM078_mixueliequan.jpg"
+dest_files=["res://.godot/imported/WM078_mixueliequan.jpg-6a53db2833147a301caa0a0dec3cf466.ctex"]
 
 [params]
 

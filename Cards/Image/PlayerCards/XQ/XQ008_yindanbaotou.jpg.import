@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c0ghkwfewf1xn"
-valid=false
+uid="uid://kel6ycs12ib2"
+path="res://.godot/imported/XQ008_yindanbaotou.jpg-f847c93168eca58e6df256a859706070.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ008_yindanbaotou.jpg"
+dest_files=["res://.godot/imported/XQ008_yindanbaotou.jpg-f847c93168eca58e6df256a859706070.ctex"]
 
 [params]
 

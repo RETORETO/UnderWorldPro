@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://darw1al2ml57o"
-valid=false
+uid="uid://cos00u87erjao"
+path="res://.godot/imported/JC127_zhongju.jpg-e409c991773fbf7f48cc426e5efcbe4c.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
-source_file="res://Cards/Image/JC/JC127_zhongju.jpg"
+source_file="res://Cards/Image/PlayerCards/JC/JC127_zhongju.jpg"
+dest_files=["res://.godot/imported/JC127_zhongju.jpg-e409c991773fbf7f48cc426e5efcbe4c.ctex"]
 
 [params]
 

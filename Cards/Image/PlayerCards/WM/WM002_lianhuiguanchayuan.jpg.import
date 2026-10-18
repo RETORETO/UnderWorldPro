@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d2fvpogjmmkv8"
-valid=false
+uid="uid://be7r874onionj"
+path="res://.godot/imported/WM002_lianhuiguanchayuan.jpg-4798643a395487f9cfd2d77665653da0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM002_lianhuiguanchayuan.jpg"
+dest_files=["res://.godot/imported/WM002_lianhuiguanchayuan.jpg-4798643a395487f9cfd2d77665653da0.ctex"]
 
 [params]
 

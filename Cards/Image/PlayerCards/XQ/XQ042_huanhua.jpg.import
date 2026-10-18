@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bu67r3746xm3c"
-valid=false
+uid="uid://d21v5k7ulo8lq"
+path="res://.godot/imported/XQ042_huanhua.jpg-cc45dad168ceebf2e66600e138f829c3.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ042_huanhua.jpg"
+dest_files=["res://.godot/imported/XQ042_huanhua.jpg-cc45dad168ceebf2e66600e138f829c3.ctex"]
 
 [params]
 

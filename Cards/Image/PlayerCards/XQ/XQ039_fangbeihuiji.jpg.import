@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c1rbyvnj5otji"
-valid=false
+uid="uid://dhedec81to2a5"
+path="res://.godot/imported/XQ039_fangbeihuiji.jpg-92834450934f989fbeef7f7cf4c3819e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ039_fangbeihuiji.jpg"
+dest_files=["res://.godot/imported/XQ039_fangbeihuiji.jpg-92834450934f989fbeef7f7cf4c3819e.ctex"]
 
 [params]
 

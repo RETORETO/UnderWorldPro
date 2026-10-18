@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ce3cmkxvx5w0k"
-valid=false
+uid="uid://bsdlgamambntn"
+path="res://.godot/imported/WM034_xiaoshidewuerde.jpg-820be45681291b6d162dc2ebecc1fe9e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM034_xiaoshidewuerde.jpg"
+dest_files=["res://.godot/imported/WM034_xiaoshidewuerde.jpg-820be45681291b6d162dc2ebecc1fe9e.ctex"]
 
 [params]
 

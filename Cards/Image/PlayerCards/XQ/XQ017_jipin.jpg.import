@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dvavnnoul7pfu"
-valid=false
+uid="uid://bktwhlmoyje3b"
+path="res://.godot/imported/XQ017_jipin.jpg-6bfc702b1765739f186cd10af4a40cb4.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ017_jipin.jpg"
+dest_files=["res://.godot/imported/XQ017_jipin.jpg-6bfc702b1765739f186cd10af4a40cb4.ctex"]
 
 [params]
 

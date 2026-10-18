@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cmxlqw3po3avq"
-valid=false
+uid="uid://c80h8q8sek8x7"
+path="res://.godot/imported/WM085_maoshidezhaohuan.jpg-f12a2c99345df5d42bf1f43bce72a38a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM085_maoshidezhaohuan.jpg"
+dest_files=["res://.godot/imported/WM085_maoshidezhaohuan.jpg-f12a2c99345df5d42bf1f43bce72a38a.ctex"]
 
 [params]
 

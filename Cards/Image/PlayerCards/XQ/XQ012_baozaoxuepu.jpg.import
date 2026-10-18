@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ddory6gyt5fq6"
-valid=false
+uid="uid://cads18ehdvb7g"
+path="res://.godot/imported/XQ012_baozaoxuepu.jpg-d9250fb3563b1b6df1c9d04d8a9feb1a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ012_baozaoxuepu.jpg"
+dest_files=["res://.godot/imported/XQ012_baozaoxuepu.jpg-d9250fb3563b1b6df1c9d04d8a9feb1a.ctex"]
 
 [params]
 

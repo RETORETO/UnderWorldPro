@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://sqcjso18ahcr"
-valid=false
+uid="uid://bkoyd16i1lm2s"
+path="res://.godot/imported/WM070_siqi.jpg-85052cd72239035e7f7a03946330d523.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM070_siqi.jpg"
+dest_files=["res://.godot/imported/WM070_siqi.jpg-85052cd72239035e7f7a03946330d523.ctex"]
 
 [params]
 

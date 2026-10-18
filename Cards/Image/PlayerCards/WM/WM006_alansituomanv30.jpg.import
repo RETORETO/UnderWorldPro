@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dyfp872h3w8k1"
-valid=false
+uid="uid://b3c6vimu7gtgt"
+path="res://.godot/imported/WM006_alansituomanv30.jpg-101a05dfbb00691bd29e7b20ce1c0c4b.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM006_alansituomanv30.jpg"
+dest_files=["res://.godot/imported/WM006_alansituomanv30.jpg-101a05dfbb00691bd29e7b20ce1c0c4b.ctex"]
 
 [params]
 

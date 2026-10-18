@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://4r5fm46qc42y"
-valid=false
+uid="uid://e2koqnm5ju0"
+path="res://.godot/imported/XQ020_linghuntongdao.jpg-1a2a157dbf5cb1e0567ef0a4cfc4e16b.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ020_linghuntongdao.jpg"
+dest_files=["res://.godot/imported/XQ020_linghuntongdao.jpg-1a2a157dbf5cb1e0567ef0a4cfc4e16b.ctex"]
 
 [params]
 

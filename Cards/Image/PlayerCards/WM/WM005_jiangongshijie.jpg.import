@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://o2na0wnds12f"
-valid=false
+uid="uid://d14uhugulrn4x"
+path="res://.godot/imported/WM005_jiangongshijie.jpg-2f211eae40402209c4db807f769bf024.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM005_jiangongshijie.jpg"
+dest_files=["res://.godot/imported/WM005_jiangongshijie.jpg-2f211eae40402209c4db807f769bf024.ctex"]
 
 [params]
 

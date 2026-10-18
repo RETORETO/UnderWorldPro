@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcb55egoobuf"
-valid=false
+uid="uid://24den8mo52r6"
+path="res://.godot/imported/LC030_Jluobocihaidiao.jpg-ea1805c5f7f8370443501aa90905994f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/LC/LC030_Jluobocihaidiao.jpg"
+dest_files=["res://.godot/imported/LC030_Jluobocihaidiao.jpg-ea1805c5f7f8370443501aa90905994f.ctex"]
 
 [params]
 

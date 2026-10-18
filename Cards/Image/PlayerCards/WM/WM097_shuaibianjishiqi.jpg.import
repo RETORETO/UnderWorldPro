@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dmfk0c0nw3wyw"
-valid=false
+uid="uid://d10qxdncfkhgw"
+path="res://.godot/imported/WM097_shuaibianjishiqi.jpg-0bb829e1b29678a0ba41b6c1ceac3519.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM097_shuaibianjishiqi.jpg"
+dest_files=["res://.godot/imported/WM097_shuaibianjishiqi.jpg-0bb829e1b29678a0ba41b6c1ceac3519.ctex"]
 
 [params]
 

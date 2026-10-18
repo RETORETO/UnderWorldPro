@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cydc1bufny10b"
-valid=false
+uid="uid://o8jq6c0j00xx"
+path="res://.godot/imported/WM076_wodi.jpg-e88515d841190314af0186e15b314b4b.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM076_wodi.jpg"
+dest_files=["res://.godot/imported/WM076_wodi.jpg-e88515d841190314af0186e15b314b4b.ctex"]
 
 [params]
 

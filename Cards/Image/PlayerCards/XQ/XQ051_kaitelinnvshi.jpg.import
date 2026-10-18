@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://n3d1ciquer4s"
-valid=false
+uid="uid://bddnb5uio8crs"
+path="res://.godot/imported/XQ051_kaitelinnvshi.jpg-73a6130c44305494d224809be514d45e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ051_kaitelinnvshi.jpg"
+dest_files=["res://.godot/imported/XQ051_kaitelinnvshi.jpg-73a6130c44305494d224809be514d45e.ctex"]
 
 [params]
 

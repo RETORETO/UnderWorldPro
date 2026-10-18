@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dhyq7wmwgupfr"
-valid=false
+uid="uid://77yuj3h2evnb"
+path="res://.godot/imported/XQ034_linggan.jpg-e99cfc58653a9991c6be20f6ba21ece0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ034_linggan.jpg"
+dest_files=["res://.godot/imported/XQ034_linggan.jpg-e99cfc58653a9991c6be20f6ba21ece0.ctex"]
 
 [params]
 

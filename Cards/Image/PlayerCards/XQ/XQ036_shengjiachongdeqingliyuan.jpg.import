@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b42hnjawjkgaa"
-valid=false
+uid="uid://2ecdtanggkqv"
+path="res://.godot/imported/XQ036_shengjiachongdeqingliyuan.jpg-8350f8bf093b6d18135d82aa9424e0e3.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ036_shengjiachongdeqingliyuan.jpg"
+dest_files=["res://.godot/imported/XQ036_shengjiachongdeqingliyuan.jpg-8350f8bf093b6d18135d82aa9424e0e3.ctex"]
 
 [params]
 

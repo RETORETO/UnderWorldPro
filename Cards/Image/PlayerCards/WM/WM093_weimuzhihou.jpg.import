@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bjvd2rcy027v1"
-valid=false
+uid="uid://chag1wlm7q72l"
+path="res://.godot/imported/WM093_weimuzhihou.jpg-e23b3f359752993155720526e93a440f.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM093_weimuzhihou.jpg"
+dest_files=["res://.godot/imported/WM093_weimuzhihou.jpg-e23b3f359752993155720526e93a440f.ctex"]
 
 [params]
 

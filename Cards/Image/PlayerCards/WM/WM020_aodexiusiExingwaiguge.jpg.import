@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b7ppfowm2hmvn"
-valid=false
+uid="uid://djelma5ojfojv"
+path="res://.godot/imported/WM020_aodexiusiExingwaiguge.jpg-ecd80c1e2462122352153ca4539b431e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM020_aodexiusiExingwaiguge.jpg"
+dest_files=["res://.godot/imported/WM020_aodexiusiExingwaiguge.jpg-ecd80c1e2462122352153ca4539b431e.ctex"]
 
 [params]
 

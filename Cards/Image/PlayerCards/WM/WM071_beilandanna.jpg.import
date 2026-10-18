@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://v56qgrl0rco"
-valid=false
+uid="uid://dwf41jbfx76sy"
+path="res://.godot/imported/WM071_beilandanna.jpg-212e6b1742af26885e3a1c072d6a4884.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM071_beilandanna.jpg"
+dest_files=["res://.godot/imported/WM071_beilandanna.jpg-212e6b1742af26885e3a1c072d6a4884.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dwd5wigqpp3gm"
-valid=false
+uid="uid://db28gked4ahkk"
+path="res://.godot/imported/WM081_jingzhongligui.jpg-ca180314ddb1a15249920e53675056b8.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM081_jingzhongligui.jpg"
+dest_files=["res://.godot/imported/WM081_jingzhongligui.jpg-ca180314ddb1a15249920e53675056b8.ctex"]
 
 [params]
 

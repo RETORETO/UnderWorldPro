@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://chb0mjmlban2m"
-valid=false
+uid="uid://gyeum6oi588h"
+path="res://.godot/imported/XQ045_poluerchu.jpg-30573c962fb71461af77930b994b31f5.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ045_poluerchu.jpg"
+dest_files=["res://.godot/imported/XQ045_poluerchu.jpg-30573c962fb71461af77930b994b31f5.ctex"]
 
 [params]
 

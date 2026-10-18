@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b3o7mxuamjmq"
-valid=false
+uid="uid://b1y5f8y8giswc"
+path="res://.godot/imported/WM039_PSCjingshenfenxishi.jpg-51bd8c854dad9b9b2c1c056bb225e286.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM039_PSCjingshenfenxishi.jpg"
+dest_files=["res://.godot/imported/WM039_PSCjingshenfenxishi.jpg-51bd8c854dad9b9b2c1c056bb225e286.ctex"]
 
 [params]
 

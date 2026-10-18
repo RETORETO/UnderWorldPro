@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://rnem5dr7633m"
-valid=false
+uid="uid://dnh5uthwx3qlf"
+path="res://.godot/imported/WM060_duoqingdaliya.jpg-8038edb17efad60c2c2840dd314dad9e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM060_duoqingdaliya.jpg"
+dest_files=["res://.godot/imported/WM060_duoqingdaliya.jpg-8038edb17efad60c2c2840dd314dad9e.ctex"]
 
 [params]
 

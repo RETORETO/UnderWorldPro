@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b2c2nww0ahpw1"
-valid=false
+uid="uid://bfl4rs6h0jn4b"
+path="res://.godot/imported/WM089_weijiezhimi.jpg-937a66d5977d8afb6d8b49ce9b8fafd6.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM089_weijiezhimi.jpg"
+dest_files=["res://.godot/imported/WM089_weijiezhimi.jpg-937a66d5977d8afb6d8b49ce9b8fafd6.ctex"]
 
 [params]
 

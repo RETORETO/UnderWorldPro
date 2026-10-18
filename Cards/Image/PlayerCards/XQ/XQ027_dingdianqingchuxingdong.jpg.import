@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bv17bhsxagmk1"
-valid=false
+uid="uid://bdusela06rs3r"
+path="res://.godot/imported/XQ027_dingdianqingchuxingdong.jpg-3801e1a37b128b1eeee5db33c883b040.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ027_dingdianqingchuxingdong.jpg"
+dest_files=["res://.godot/imported/XQ027_dingdianqingchuxingdong.jpg-3801e1a37b128b1eeee5db33c883b040.ctex"]
 
 [params]
 

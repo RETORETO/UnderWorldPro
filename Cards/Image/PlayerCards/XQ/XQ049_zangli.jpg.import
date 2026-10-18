@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://hjob4mx4xue4"
-valid=false
+uid="uid://c5h63ett2esp7"
+path="res://.godot/imported/XQ049_zangli.jpg-5978b988f7c24720ae6408ca5360796c.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ049_zangli.jpg"
+dest_files=["res://.godot/imported/XQ049_zangli.jpg-5978b988f7c24720ae6408ca5360796c.ctex"]
 
 [params]
 

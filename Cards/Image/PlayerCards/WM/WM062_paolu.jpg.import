@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cnjvnt7berhke"
-valid=false
+uid="uid://4ut32a5rc7q7"
+path="res://.godot/imported/WM062_paolu.jpg-abcd13b55e2eb488f2e5eddda4ebd80d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM062_paolu.jpg"
+dest_files=["res://.godot/imported/WM062_paolu.jpg-abcd13b55e2eb488f2e5eddda4ebd80d.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c7sw8crgg5ojd"
-valid=false
+uid="uid://bx2qyuak0slg"
+path="res://.godot/imported/XQ047_fangdanzhanshubeixin.jpg-30fc70521d65e45c959a1bafe59c38a5.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ047_fangdanzhanshubeixin.jpg"
+dest_files=["res://.godot/imported/XQ047_fangdanzhanshubeixin.jpg-30fc70521d65e45c959a1bafe59c38a5.ctex"]
 
 [params]
 

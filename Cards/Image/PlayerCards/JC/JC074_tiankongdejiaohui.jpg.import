@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://sel7drukflo0"
-valid=false
+uid="uid://d7lepg2aimhn"
+path="res://.godot/imported/JC074_tiankongdejiaohui.jpg-2ab37787ca553e765a2162da25e751a2.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
-source_file="res://Cards/Image/JC/JC074_tiankongdejiaohui.jpg"
+source_file="res://Cards/Image/PlayerCards/JC/JC074_tiankongdejiaohui.jpg"
+dest_files=["res://.godot/imported/JC074_tiankongdejiaohui.jpg-2ab37787ca553e765a2162da25e751a2.ctex"]
 
 [params]
 

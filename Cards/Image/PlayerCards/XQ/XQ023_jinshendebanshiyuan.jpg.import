@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://uibd5bcl1c1n"
-valid=false
+uid="uid://btn3s55tycxyw"
+path="res://.godot/imported/XQ023_jinshendebanshiyuan.jpg-43a2184577fcb0283b26a07d9919399e.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ023_jinshendebanshiyuan.jpg"
+dest_files=["res://.godot/imported/XQ023_jinshendebanshiyuan.jpg-43a2184577fcb0283b26a07d9919399e.ctex"]
 
 [params]
 

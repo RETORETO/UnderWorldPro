@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cpbc12ruuaxt8"
-valid=false
+uid="uid://c1xvietcci1iu"
+path="res://.godot/imported/WM001_cuxinxuesheng.jpg-55ee2c1bed1bf3a32c968fa40e8ea1f4.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM001_cuxinxuesheng.jpg"
+dest_files=["res://.godot/imported/WM001_cuxinxuesheng.jpg-55ee2c1bed1bf3a32c968fa40e8ea1f4.ctex"]
 
 [params]
 

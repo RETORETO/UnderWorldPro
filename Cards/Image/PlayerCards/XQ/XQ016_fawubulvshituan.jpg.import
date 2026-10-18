@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cxwxftp5c55cs"
-valid=false
+uid="uid://dt84wacjl1wk8"
+path="res://.godot/imported/XQ016_fawubulvshituan.jpg-f906edf4e268f5524a00f4bfa969dd19.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ016_fawubulvshituan.jpg"
+dest_files=["res://.godot/imported/XQ016_fawubulvshituan.jpg-f906edf4e268f5524a00f4bfa969dd19.ctex"]
 
 [params]
 

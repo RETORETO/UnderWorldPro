@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bowjfhl15ogjg"
-valid=false
+uid="uid://nt4e773po3nr"
+path="res://.godot/imported/WM096_hupoqiulong.jpg-46c5feae25472423bdadbe236e5a4899.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM096_hupoqiulong.jpg"
+dest_files=["res://.godot/imported/WM096_hupoqiulong.jpg-46c5feae25472423bdadbe236e5a4899.ctex"]
 
 [params]
 

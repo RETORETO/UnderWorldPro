@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://badp7jufuerx5"
-valid=false
+uid="uid://dsa164wuv0v7b"
+path="res://.godot/imported/XQ019_shanglihuashen.jpg-c0510b2f0a6df6953da3a05e1cc674aa.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ019_shanglihuashen.jpg"
+dest_files=["res://.godot/imported/XQ019_shanglihuashen.jpg-c0510b2f0a6df6953da3a05e1cc674aa.ctex"]
 
 [params]
 

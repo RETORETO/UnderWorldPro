@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c8ey6o3fc6go4"
-valid=false
+uid="uid://bmx1ees2sqv1l"
+path="res://.godot/imported/WM008_niuqumingyun.jpg-a4788ce147c477a6ae75aa1eff66c1e6.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM008_niuqumingyun.jpg"
+dest_files=["res://.godot/imported/WM008_niuqumingyun.jpg-a4788ce147c477a6ae75aa1eff66c1e6.ctex"]
 
 [params]
 

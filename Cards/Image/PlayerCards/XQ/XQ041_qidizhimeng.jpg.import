@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ckwlxlu453kkk"
-valid=false
+uid="uid://dl0vr0bag44td"
+path="res://.godot/imported/XQ041_qidizhimeng.jpg-198d3a79bd2364a2c7356b1a03827f98.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ041_qidizhimeng.jpg"
+dest_files=["res://.godot/imported/XQ041_qidizhimeng.jpg-198d3a79bd2364a2c7356b1a03827f98.ctex"]
 
 [params]
 

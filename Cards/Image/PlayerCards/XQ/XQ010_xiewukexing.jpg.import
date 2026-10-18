@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dxnxf8db7jgov"
-valid=false
+uid="uid://cilyno5e7muwp"
+path="res://.godot/imported/XQ010_xiewukexing.jpg-3f79861466a389dd37d6f9b4c6f0cfca.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ010_xiewukexing.jpg"
+dest_files=["res://.godot/imported/XQ010_xiewukexing.jpg-3f79861466a389dd37d6f9b4c6f0cfca.ctex"]
 
 [params]
 

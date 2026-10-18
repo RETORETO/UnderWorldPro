@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://fpkduagwkiwj"
-valid=false
+uid="uid://cj6cn7nu72duf"
+path="res://.godot/imported/WM042_xinwenguankong.jpg-5dc4859bee8e470fb27c97579fd387ea.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM042_xinwenguankong.jpg"
+dest_files=["res://.godot/imported/WM042_xinwenguankong.jpg-5dc4859bee8e470fb27c97579fd387ea.ctex"]
 
 [params]
 

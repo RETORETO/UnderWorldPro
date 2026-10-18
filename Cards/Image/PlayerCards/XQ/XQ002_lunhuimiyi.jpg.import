@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dh8bn1yuofsy6"
-valid=false
+uid="uid://bbfby2m55r1yb"
+path="res://.godot/imported/XQ002_lunhuimiyi.jpg-927174c36cfdb316e20f1ab5b3d984a2.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ002_lunhuimiyi.jpg"
+dest_files=["res://.godot/imported/XQ002_lunhuimiyi.jpg-927174c36cfdb316e20f1ab5b3d984a2.ctex"]
 
 [params]
 

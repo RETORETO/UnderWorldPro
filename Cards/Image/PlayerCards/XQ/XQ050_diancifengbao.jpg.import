@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cs2bg2l6a5yxf"
-valid=false
+uid="uid://celrkbv47irkr"
+path="res://.godot/imported/XQ050_diancifengbao.jpg-5a5365c570ae2eac0264f2ff9d4c4b59.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ050_diancifengbao.jpg"
+dest_files=["res://.godot/imported/XQ050_diancifengbao.jpg-5a5365c570ae2eac0264f2ff9d4c4b59.ctex"]
 
 [params]
 

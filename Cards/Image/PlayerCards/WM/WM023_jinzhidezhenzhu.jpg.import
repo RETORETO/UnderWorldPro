@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cnqdeuex5ia7l"
-valid=false
+uid="uid://b6sf5c70owgle"
+path="res://.godot/imported/WM023_jinzhidezhenzhu.jpg-726aed9fd97da9364ea2ed9aee0963f0.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM023_jinzhidezhenzhu.jpg"
+dest_files=["res://.godot/imported/WM023_jinzhidezhenzhu.jpg-726aed9fd97da9364ea2ed9aee0963f0.ctex"]
 
 [params]
 

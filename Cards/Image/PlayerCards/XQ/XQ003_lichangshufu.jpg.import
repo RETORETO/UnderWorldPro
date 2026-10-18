@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bkbj1jvm6cqqo"
-valid=false
+uid="uid://bjwbyf2bxvq4g"
+path="res://.godot/imported/XQ003_lichangshufu.jpg-3774bf2a5adab9d4742c66053f8ff966.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ003_lichangshufu.jpg"
+dest_files=["res://.godot/imported/XQ003_lichangshufu.jpg-3774bf2a5adab9d4742c66053f8ff966.ctex"]
 
 [params]
 

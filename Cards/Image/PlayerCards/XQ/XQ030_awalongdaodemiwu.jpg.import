@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://vn858qb6vkc"
-valid=false
+uid="uid://xhuj6dv7mmmq"
+path="res://.godot/imported/XQ030_awalongdaodemiwu.jpg-f41ea94057a774dc8eb871585d19e3ee.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ030_awalongdaodemiwu.jpg"
+dest_files=["res://.godot/imported/XQ030_awalongdaodemiwu.jpg-f41ea94057a774dc8eb871585d19e3ee.ctex"]
 
 [params]
 

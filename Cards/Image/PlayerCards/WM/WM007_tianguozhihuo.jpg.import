@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bcxkgjgf7sp0v"
-valid=false
+uid="uid://d1hqi1xjwlagi"
+path="res://.godot/imported/WM007_tianguozhihuo.jpg-f5acf531af8131ca62110f644bcd8cae.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM007_tianguozhihuo.jpg"
+dest_files=["res://.godot/imported/WM007_tianguozhihuo.jpg-f5acf531af8131ca62110f644bcd8cae.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dl6vg08lmsv0i"
-valid=false
+uid="uid://c007l65kku8nj"
+path="res://.godot/imported/BQ065_jihuaxiugesi.jpg-21b6714f2329b34c1c3a5fc76eab9540.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/BQ/BQ065_jihuaxiugesi.jpg"
+dest_files=["res://.godot/imported/BQ065_jihuaxiugesi.jpg-21b6714f2329b34c1c3a5fc76eab9540.ctex"]
 
 [params]
 

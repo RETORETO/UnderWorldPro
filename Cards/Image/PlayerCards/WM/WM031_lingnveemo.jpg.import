@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://blwu71tilj52s"
-valid=false
+uid="uid://eqe20tgk5d8x"
+path="res://.godot/imported/WM031_lingnveemo.jpg-45b9f32bd77c8319df4340d09d44b961.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM031_lingnveemo.jpg"
+dest_files=["res://.godot/imported/WM031_lingnveemo.jpg-45b9f32bd77c8319df4340d09d44b961.ctex"]
 
 [params]
 

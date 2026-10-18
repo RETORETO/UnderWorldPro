@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://btrc4ml2jmwcb"
-valid=false
+uid="uid://cf8tg2vs56fos"
+path="res://.godot/imported/WM027_yinyingzhidao.jpg-18fa8cf7811ca1905cc44de6914afa71.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM027_yinyingzhidao.jpg"
+dest_files=["res://.godot/imported/WM027_yinyingzhidao.jpg-18fa8cf7811ca1905cc44de6914afa71.ctex"]
 
 [params]
 

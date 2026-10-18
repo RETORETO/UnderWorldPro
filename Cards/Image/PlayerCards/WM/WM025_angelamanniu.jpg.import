@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://n43m4ahykhw1"
-valid=false
+uid="uid://cwnp486201gtg"
+path="res://.godot/imported/WM025_angelamanniu.jpg-6930ec3c83763d5807f111f5f259c950.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM025_angelamanniu.jpg"
+dest_files=["res://.godot/imported/WM025_angelamanniu.jpg-6930ec3c83763d5807f111f5f259c950.ctex"]
 
 [params]
 

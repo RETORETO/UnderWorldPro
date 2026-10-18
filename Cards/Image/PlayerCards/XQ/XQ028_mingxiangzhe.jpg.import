@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://db76pc0ynjvia"
-valid=false
+uid="uid://deac8dchwmci7"
+path="res://.godot/imported/XQ028_mingxiangzhe.jpg-0b4f61e0a58fd4b48518a4b4c5b6a67c.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ028_mingxiangzhe.jpg"
+dest_files=["res://.godot/imported/XQ028_mingxiangzhe.jpg-0b4f61e0a58fd4b48518a4b4c5b6a67c.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://0dn7m0koiinb"
-valid=false
+uid="uid://5y5qepub6qr2"
+path="res://.godot/imported/WM083_yinmiduikang.jpg-4bca08f57e3fd654d7343adff56d3e86.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM083_yinmiduikang.jpg"
+dest_files=["res://.godot/imported/WM083_yinmiduikang.jpg-4bca08f57e3fd654d7343adff56d3e86.ctex"]
 
 [params]
 

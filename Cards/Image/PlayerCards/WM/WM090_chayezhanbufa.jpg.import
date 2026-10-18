@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://br1k1032e4u1w"
-valid=false
+uid="uid://bi32lwi4iiikg"
+path="res://.godot/imported/WM090_chayezhanbufa.jpg-542ab86f03bf231ccffadd1d5cc10636.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM090_chayezhanbufa.jpg"
+dest_files=["res://.godot/imported/WM090_chayezhanbufa.jpg-542ab86f03bf231ccffadd1d5cc10636.ctex"]
 
 [params]
 

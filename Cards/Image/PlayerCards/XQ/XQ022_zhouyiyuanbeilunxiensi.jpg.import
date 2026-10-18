@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bmrf2h8tmeoqn"
-valid=false
+uid="uid://1jort5krdwyl"
+path="res://.godot/imported/XQ022_zhouyiyuanbeilunxiensi.jpg-bd07387608508e72271a56c871468cea.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ022_zhouyiyuanbeilunxiensi.jpg"
+dest_files=["res://.godot/imported/XQ022_zhouyiyuanbeilunxiensi.jpg-bd07387608508e72271a56c871468cea.ctex"]
 
 [params]
 

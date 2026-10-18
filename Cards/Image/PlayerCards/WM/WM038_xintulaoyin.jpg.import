@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dyjrcw2lntpvg"
-valid=false
+uid="uid://jnmbdniqny27"
+path="res://.godot/imported/WM038_xintulaoyin.jpg-6bbae7223ad5a88e5e683ae6f856b96d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM038_xintulaoyin.jpg"
+dest_files=["res://.godot/imported/WM038_xintulaoyin.jpg-6bbae7223ad5a88e5e683ae6f856b96d.ctex"]
 
 [params]
 

@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bukwkkek07ffj"
-valid=false
+uid="uid://brltiscv7vko0"
+path="res://.godot/imported/WM058_tanhuangdaoqiansi.jpg-5e596be15ec2b9d7f56668c61479aa9a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM058_tanhuangdaoqiansi.jpg"
+dest_files=["res://.godot/imported/WM058_tanhuangdaoqiansi.jpg-5e596be15ec2b9d7f56668c61479aa9a.ctex"]
 
 [params]
 

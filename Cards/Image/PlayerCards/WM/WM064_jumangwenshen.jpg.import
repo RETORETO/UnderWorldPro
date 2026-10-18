@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cepc3q36sudsn"
-valid=false
+uid="uid://be7aj0wvooyeg"
+path="res://.godot/imported/WM064_jumangwenshen.jpg-e75c7bb30185e11a6fb39ab531ab1504.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM064_jumangwenshen.jpg"
+dest_files=["res://.godot/imported/WM064_jumangwenshen.jpg-e75c7bb30185e11a6fb39ab531ab1504.ctex"]
 
 [params]
 

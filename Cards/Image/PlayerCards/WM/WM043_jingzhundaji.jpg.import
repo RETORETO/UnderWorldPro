@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cqu4b08o5irw8"
-valid=false
+uid="uid://bhev27jw1nkiv"
+path="res://.godot/imported/WM043_jingzhundaji.jpg-2ad2d692821b9ffa376635a399d55d8a.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM043_jingzhundaji.jpg"
+dest_files=["res://.godot/imported/WM043_jingzhundaji.jpg-2ad2d692821b9ffa376635a399d55d8a.ctex"]
 
 [params]
 

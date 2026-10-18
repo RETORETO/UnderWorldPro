@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://comjuhkm7slt"
-valid=false
+uid="uid://ce0oxd5dq0jn5"
+path="res://.godot/imported/XQ024_fangbaojingcha.jpg-e200ce465538a53bf9e9ca24e128c31c.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/XQ/XQ024_fangbaojingcha.jpg"
+dest_files=["res://.godot/imported/XQ024_fangbaojingcha.jpg-e200ce465538a53bf9e9ca24e128c31c.ctex"]
 
 [params]
 

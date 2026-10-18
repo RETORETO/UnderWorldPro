@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://gg54ipobyyx7"
-valid=false
+uid="uid://t304oyk8kbjd"
+path="res://.godot/imported/WM036_jinguijin.jpg-f38e115e119693774a29086b6d770034.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM036_jinguijin.jpg"
+dest_files=["res://.godot/imported/WM036_jinguijin.jpg-f38e115e119693774a29086b6d770034.ctex"]
 
 [params]
 

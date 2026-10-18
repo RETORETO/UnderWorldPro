@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ck44vx830eoid"
-valid=false
+uid="uid://bmpr7af4qksqv"
+path="res://.godot/imported/WM087_gaoyangzhixue.jpg-cfc6be506a043f534e78e60d9a0dc41d.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM087_gaoyangzhixue.jpg"
+dest_files=["res://.godot/imported/WM087_gaoyangzhixue.jpg-cfc6be506a043f534e78e60d9a0dc41d.ctex"]
 
 [params]
 

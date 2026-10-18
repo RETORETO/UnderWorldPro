@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dmtls1f2eir4j"
-valid=false
+uid="uid://bvvs56o46kpv"
+path="res://.godot/imported/WM079_zhangjiao.jpg-f7e01648d4b8c637572a3a181f0fad04.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM079_zhangjiao.jpg"
+dest_files=["res://.godot/imported/WM079_zhangjiao.jpg-f7e01648d4b8c637572a3a181f0fad04.ctex"]
 
 [params]
 

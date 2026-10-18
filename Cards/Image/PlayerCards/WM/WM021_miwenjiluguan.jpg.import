@@ -2,12 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://narjfsehsh81"
-valid=false
+uid="uid://dcxj0pkake6ju"
+path="res://.godot/imported/WM021_miwenjiluguan.jpg-e395888c8fd3cd41ac5685cfbb40cee5.ctex"
+metadata={
+"vram_texture": false
+}
 
 [deps]
 
 source_file="res://Cards/Image/PlayerCards/WM/WM021_miwenjiluguan.jpg"
+dest_files=["res://.godot/imported/WM021_miwenjiluguan.jpg-e395888c8fd3cd41ac5685cfbb40cee5.ctex"]
 
 [params]
 
