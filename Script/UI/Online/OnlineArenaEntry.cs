@@ -67,6 +67,7 @@ namespace Script.UI.Online
             if (state.Phase == RoomPhase.Closed)
             {
                 GD.Print("[OnlineArenaEntry] 房间已关闭，返回大厅");
+                TeardownArena();                      // ★ 必须先拆战场，再释放会话
                 OnlineClientContext.Disconnect();
                 GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
                 return;
@@ -91,8 +92,32 @@ namespace Script.UI.Online
         private void OnDisconnected()
         {
             GD.PrintErr("[OnlineArenaEntry] 与服务端断开连接，返回大厅");
+            TeardownArena();                          // ★ 必须先拆战场，再释放会话
             OnlineClientContext.Disconnect();
             GameManager.Instance?.GoToStateDeferred(GameManager.GameState.LobbyOnline);
+        }
+
+        /// <summary>
+        /// 拆掉战场子树。
+        ///
+        /// 【2026-10-17 · 顺序很重要】**必须先拆 Arena 再释放会话**：
+        /// `ArenaOl` 会把投影的 `ClientPlayerManager` / `ClientZoneManager` 注入 `CardUI` / `AreaSlot`
+        /// 的长期字段（`SetStatsDependencies`）。若先 `ClientSession.Dispose()`（它会 `Free()` 这 9 个 Manager），
+        /// UI 下一次刷新就会访问已释放的原生节点（use-after-free）。
+        ///
+        /// `RemoveChild` 是**同步**的，会立刻触发 `ArenaOl._ExitTree` → `DetachLauncher()`（反订阅 + 清快照队列），
+        /// 之后再没有任何活跃的访问路径，这时才安全地释放投影。
+        /// </summary>
+        private void TeardownArena()
+        {
+            var arena = _arena;
+            _arena = null;
+            if (arena == null || !GodotObject.IsInstanceValid(arena)) return;
+
+            arena.DetachLauncher();                                  // 先反订阅（幂等）
+            if (arena.GetParent() == this) RemoveChild(arena);        // 同步离树 → 触发 _ExitTree
+            arena.QueueFree();                                       // 子树帧末释放
+            GD.Print("[OnlineArenaEntry] 战场子树已拆除");
         }
 
         public override void _ExitTree()

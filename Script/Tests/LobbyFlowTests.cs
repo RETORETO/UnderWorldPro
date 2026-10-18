@@ -49,9 +49,11 @@ namespace Script.Tests
 
             public void Dispose()
             {
-                Host1?.Disconnect();
-                Guest2?.Disconnect();
-                Guest3?.Disconnect();
+                // 【2026-10-17】改用 Dispose：Disconnect 只停链，不释放客户端对局视图
+                // （每个视图会 new 9 个不入树的投影 Manager Node）。
+                Host1?.Dispose();
+                Guest2?.Dispose();
+                Guest3?.Dispose();
                 Host?.Stop();
             }
         }
@@ -372,6 +374,83 @@ namespace Script.Tests
             rig.Host1.Send(new LobbyRequest { Kind = LobbyRequestKind.StartMatch });
             if (expectInMatch)
                 Assert.IsTrue(Pump(rig, 8000, () => rig.Last1?.Phase == RoomPhase.InMatch), "房主开始后应进入 InMatch");
+        }
+
+        // ==================== 回归：批量断开 / 客户端投影释放 ====================
+
+        /// <summary>
+        /// 【2026-10-17】同帧批量断开时，服务端**不得**再向已关闭的 peer 调用 `PutPacket`。
+        ///
+        /// 背景（源码级根因）：Godot 的 `_poll_server()` 先把本帧所有 `ready_state != OPEN` 的 peer
+        /// 收进 `to_remove`，再**逐个** `emit_signal(peer_disconnected)` + `peers_map.erase()`。
+        /// 因此处理第 1 个断开时，同帧关闭的其它 peer 仍在传输层字典里、但已非 OPEN；旧代码据此判"在线"
+        /// 继续发包 → 原生层打 `ERROR: Condition "ready_state != STATE_OPEN"` + C# 堆栈。
+        ///
+        /// 原生 ERROR 走 stderr、C# 断言不到，故以"是否真的调用了 PutPacket"为等价判据。
+        /// </summary>
+        public void TestBatchDisconnectSkipsClosedPeers()
+        {
+            using var rig = StartRig();
+            Pump(rig, 3000, () => rig.Host1.MySessionId != null && rig.Guest2.MySessionId != null);
+            // 进对局：这样断开时会真的走到 ForfeitSeat → OnMatchGameOver → Broadcast / NoticeRoom，
+            // 也就是历史上刷屏最厉害的那条路径。
+            PrepareMatch(rig, out _);
+
+            var ws = rig.Transport as GodotWebSocketTransport;
+            Assert.IsNotNull(ws, "本套件服务端传输应为 GodotWebSocketTransport");
+
+            // 两个客户端**连续**断开，中间不给服务端 Poll 的机会 → 服务端会在一帧里同时发现两条断开。
+            rig.Host1.Disconnect();
+            rig.Guest2.Disconnect();
+
+            int attempts0 = ws.PutPacketAttempts;
+
+            Pump(rig, 6000, () => rig.Host.SessionCount == 0);
+
+            Assert.AreEqual(0, rig.Host.SessionCount, "批量断开后两个会话都应被清理");
+            Assert.AreEqual(attempts0, ws.PutPacketAttempts,
+                $"批量断开窗口内不得向已关闭 peer 调用 PutPacket（实际多调用了 {ws.PutPacketAttempts - attempts0} 次）");
+        }
+
+        /// <summary>
+        /// 【2026-10-17】`ClientSession.Dispose()` 必须释放客户端对局视图创建的 9 个投影 Manager，
+        /// 且释放后**不得**再懒创建（否则等于换个方式继续泄漏）。
+        ///
+        /// 背景：`ClientMatchView.Assemble()` 用 `new` 造 9 个 Node，既不 AddChild 也不 Free；
+        /// 压测 `--load 8`（16 会话）时 16 × 9 = 144，正是退出时
+        /// `WARNING: 144 ObjectDB instances were leaked at exit` 的来源。
+        /// </summary>
+        public void TestClientSessionDisposeFreesProjection()
+        {
+            var session = new ClientSession(new LoopbackTransport(), "释放自检");
+            var view = session.MatchView;
+            Assert.IsNotNull(view, "懒创建应产生对局视图");
+
+            var card = view.ClientCardManager;
+            var deck = view.ClientDeckManager;
+            var zone = view.ClientZoneManager;
+            var player = view.ClientPlayerManager;
+            var stack = view.ClientStackManager;
+            var turn = view.ClientTurnManager;
+            var world = view.ClientWorldDeckManager;
+            var area = view.ClientAreaManager;
+            Assert.IsNotNull(card, "投影 ClientCardManager 应存在");
+
+            session.Dispose();
+
+            Assert.IsFalse(GodotObject.IsInstanceValid(card), "ClientCardManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(deck), "ClientDeckManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(zone), "ClientZoneManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(player), "ClientPlayerManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(stack), "ClientStackManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(turn), "ClientTurnManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(world), "ClientWorldDeckManager 应被释放");
+            Assert.IsFalse(GodotObject.IsInstanceValid(area), "ClientAreaManager 应被释放");
+
+            Assert.IsNull(session.MatchView, "Dispose 之后不得再懒创建对局视图（否则继续泄漏 9 个 Node）");
+
+            session.Dispose();   // 二次释放：不得抛异常
+            Assert.IsTrue(true, "二次 Dispose 应安全返回");
         }
 
         /// <summary>

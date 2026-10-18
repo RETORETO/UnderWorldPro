@@ -1,4 +1,5 @@
 using Godot;
+using Script.Data.Cards;
 using Script.Game.Entities;
 using Script.Manager;
 
@@ -92,17 +93,49 @@ namespace Script.UI
             if (_frame == null) return;   // 尚未 _Ready
 
             _current = card;
+            // 玩家卡 / 秘社卡分别取图；其它模板（地区卡等）没有可展示卡图 → 不弹。
+            BaseCardData template = card.PlayerTemplate != null
+                ? (BaseCardData)card.PlayerTemplate
+                : card.CouncilTemplate;
+            if (template == null) { HidePreview(); return; }
+
+            ShowTemplateCore(template, anchorGlobalPos, areaHint);
+        }
+
+        /// <summary>
+        /// 【2026-10-17 · 卡组编辑器】按**卡模板**直接预览，不需要 `CardInstance`。
+        ///
+        /// 用途：构筑界面里的卡是"模板路径 + 份数"（`DeckBuilder._workingCards`），根本没有实例；
+        /// 且构筑界面是独立场景、不接 `CardPreviewBus`（进场景时战场视图已 `Detach`，总线的全局浮层为空），
+        /// 故由 `DeckBuilder` 自己挂一个 `CardHoverPreview` 并直接调本重载。
+        ///
+        /// 相比"临时 `new CardInstance(模板)`"：`CardInstance` 的构造会做领域重建、子类别拷贝等
+        /// 有副作用与分配的工作，而悬浮是高频操作，故新增本重载而非造实例。
+        /// **注意**：本重载不设置 `Current`（保持 null），避免影响 `CardPreviewBus.EndHover` 的归属判定。
+        /// </summary>
+        public void ShowFor(BaseCardData template, Vector2 anchorGlobalPos, string areaHint = null)
+        {
+            if (template == null) { HidePreview(); return; }
+            if (_frame == null) return;   // 尚未 _Ready
+
+            _current = null;
+            ShowTemplateCore(template, anchorGlobalPos, areaHint);
+        }
+
+        /// <summary>取图 + 贴图 + 定位（`CardInstance` 路径与"模板直连"路径共用的一段）。</summary>
+        private void ShowTemplateCore(BaseCardData template, Vector2 anchorGlobalPos, string areaHint)
+        {
             string path;
             string cardName;
-            if (card.PlayerTemplate != null)
+            if (template is PlayerCardData player)
             {
-                path = CardUI.ResolveCardImagePath(card.PlayerTemplate.UID);
-                cardName = card.PlayerTemplate.CardName;
+                path = CardUI.ResolveCardImagePath(player.UID);
+                cardName = player.CardName;
             }
-            else if (card.CouncilTemplate != null)
+            else if (template is CouncilCardData council)
             {
-                path = card.CouncilTemplate.CardImagePath;
-                cardName = card.CouncilTemplate.CardName;
+                path = council.CardImagePath;
+                cardName = council.CardName;
             }
             else
             {

@@ -74,7 +74,8 @@ namespace Script.Tests
             }
             finally
             {
-                session?.Disconnect();
+                // 【2026-10-17】改用 Dispose：Disconnect 不释放客户端对局视图（9 个不入树的投影 Manager）。
+                session?.Dispose();
                 LocalHostServer.Stop();
             }
         }

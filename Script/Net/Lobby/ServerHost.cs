@@ -271,7 +271,12 @@ namespace Script.Net.Lobby
         public void SendRaw(string sessionId, string envelopedMessage)
         {
             if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(envelopedMessage)) return;
+            // 测试注入的下行钩子必须排在在线判断**之前**：它可能替换掉传输层（回环/替身），
+            // 用真实传输的在线状态去过滤会误杀测试消息。
             if (OutboundHook != null) { OutboundHook(sessionId, envelopedMessage); return; }
+            // 【纵深防御 · 2026-10-17】所有大厅/房间下行都经过这里。传输层已按 ready_state 预检，
+            // 这里再挡一道，任何绕过 LobbyServer 的直发也不会打到已关闭对端。
+            if (!_transport.IsSessionConnected(sessionId)) return;
             _transport.SendToSession(sessionId, envelopedMessage);
         }
 

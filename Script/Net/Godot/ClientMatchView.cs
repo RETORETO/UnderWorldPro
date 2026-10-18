@@ -65,7 +65,7 @@ namespace Script.Net.Godot
     /// 纪律：本类**不驱动规则**（不结算、不判定胜负），只做"快照 → 投影状态"的恢复与消息分发。
     /// 上行（意图/回包）由外部注入的两个委托完成：旧单场路径经回环/ENet 直发，大厅路径经 `ClientSession`。
     /// </summary>
-    public class ClientMatchView : IMatchClientView
+    public class ClientMatchView : IMatchClientView, IDisposable
     {
         public int LocalSeat { get; private set; }
 
@@ -96,9 +96,29 @@ namespace Script.Net.Godot
         private Func<PlayerIntent.Kind, string[], string> _intentSender;
         private Action<ChoiceResult> _choiceSender;
 
-        public ClientMatchView(CardManager clientCard, int localSeat)
+        /// <summary>已释放（幂等 + 防释放后继续处理消息）。</summary>
+        private bool _disposed;
+        /// <summary>是否接管构造参数传入的 `ClientCardManager` 的所有权（决定 Dispose 时是否 Free 它）。</summary>
+        private readonly bool _ownsCardManager;
+        /// <summary>
+        /// 世界牌库/地区卡专用的独立 CardManager。
+        /// 【2026-10-17】它原来是 `Assemble` 里的局部变量 `worldCard`，导致这一个 Node 根本无处释放；
+        /// 提升为字段后才能在 <see cref="Dispose"/> 里 Free 掉。
+        /// </summary>
+        private NetClientCardManager _worldCardManager;
+
+        /// <param name="ownsCardManager">
+        /// 本视图是否**接管** <paramref name="clientCard"/> 的所有权（Dispose 时是否把它 Free 掉）。
+        /// 【必须由调用方显式声明 · 2026-10-17】
+        ///   · `ClientSession` 传的是它自己 `new` 的 `NetClientCardManager` → 传 true；
+        ///   · `NetworkMatchLauncher` 单场路径传的是 `serverGame.CardManager`（已在场景树内、
+        ///     `CardManager.Instance` 正指向它）→ 传 false。
+        /// 后者若被 Free，服务端/单机对局会直接崩（访问已释放节点）。
+        /// </param>
+        public ClientMatchView(CardManager clientCard, int localSeat, bool ownsCardManager = false)
         {
             LocalSeat = localSeat;
+            _ownsCardManager = ownsCardManager;
             Assemble(clientCard);
         }
 
@@ -142,12 +162,76 @@ namespace Script.Net.Godot
 
             // 世界牌库/地区的地区卡（DQ）用【独立 CardManager】重建，与玩家卡彻底隔离，
             // 避免地区卡实例与玩家卡实例在共享 _allInstances 里串扰。
-            var worldCard = new NetClientCardManager();
+            // 【2026-10-17】存字段而非局部变量：它是 9 个 Node 之一，必须能被 Dispose 释放。
+            _worldCardManager = new NetClientCardManager();
             ClientWorldDeckManager = new WorldDeckManager();
-            ClientWorldDeckManager.SetCardManager(worldCard);
+            ClientWorldDeckManager.SetCardManager(_worldCardManager);
             ClientAreaManager = new AreaManager();
             ClientAreaManager.Initialize(ClientWorldDeckManager, ClientZoneManager, ClientStackManager);
-            ClientAreaManager.SetCardManager(worldCard);
+            ClientAreaManager.SetCardManager(_worldCardManager);
+        }
+
+        // ==================== 释放 ====================
+
+        /// <summary>
+        /// 释放本视图创建的投影 Manager。
+        ///
+        /// 【为什么必须显式释放 · 2026-10-17】`Assemble` 里这 9 个 Manager 都是 `new` 出来的 Node，
+        /// 既不 AddChild 到场景树、也没有任何地方 Free 它们 → **每个 `ClientMatchView` 泄漏 9 个 ObjectDB 实例**。
+        /// 压测 `--load 8` 时 16 个会话 × 9 = 144，正是退出时
+        /// `WARNING: 144 ObjectDB instances were leaked at exit` 的来源。
+        ///
+        /// 纪律：
+        ///  · 未入树的节点用 `Free()`（确定性）。`QueueFree()` 要等帧末，退出路径可能没有下一帧；
+        ///  · **只释放自己创建的**：`ClientCardManager` 是构造参数，可能是外部在树内的 `CardManager`
+        ///    （`NetworkMatchLauncher` 单场路径），只有 `ownsCardManager == true` 时才释放；
+        ///  · 这些 Manager 从未入树 ⇒ `_Ready()` 从未执行 ⇒ 不会写 `CardManager.Instance`/`TurnManager.Instance`，
+        ///    因此释放它们**不会**留下悬空静态单例，无需清理 Instance。
+        ///  · 调用前应确保界面已解绑（`ArenaOl.DetachLauncher`），否则 UI 缓存的 Manager 引用会变成悬空。
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            // 先摘回调，避免释放过程中还有事件打到残留订阅者。
+            OnClientSnapshot = null;
+            OnClientChoiceRequest = null;
+            OnClientIntentRejected = null;
+            _intentSender = null;
+            _choiceSender = null;
+
+            // 先释放"依赖方"，再释放被依赖者（都只是 C# 引用，顺序不影响正确性，按直觉来）。
+            FreeNode(ClientAreaManager);
+            FreeNode(ClientWorldDeckManager);
+            FreeNode(_worldCardManager);
+            FreeNode(ClientTurnManager);
+            FreeNode(ClientStackManager);
+            FreeNode(ClientPlayerManager);
+            FreeNode(ClientZoneManager);
+            FreeNode(ClientDeckManager);
+            if (_ownsCardManager) FreeNode(ClientCardManager);
+
+            ClientAreaManager = null;
+            ClientWorldDeckManager = null;
+            _worldCardManager = null;
+            ClientTurnManager = null;
+            ClientStackManager = null;
+            ClientPlayerManager = null;
+            ClientZoneManager = null;
+            ClientDeckManager = null;
+            ClientCardManager = null;
+
+            _costMods = new List<CostModSnap>();
+            _stackSnaps = new List<StackEntrySnap>();
+            _investigationCards = new List<CardInstance>();
+            LastSnapshot = null;
+        }
+
+        /// <summary>未入树节点的确定性释放（`IsInstanceValid` 兜底，避免二次 Free）。</summary>
+        private static void FreeNode(Node n)
+        {
+            if (n != null && GodotObject.IsInstanceValid(n)) n.Free();
         }
 
         // ==================== 消息分发 ====================
@@ -158,7 +242,7 @@ namespace Script.Net.Godot
         /// </summary>
         public void HandleMessage(string message)
         {
-            if (string.IsNullOrEmpty(message)) return;
+            if (_disposed || string.IsNullOrEmpty(message)) return;
 
             if (message.StartsWith(SnapshotSerializer.SnapPrefix, StringComparison.Ordinal))
             {
@@ -202,7 +286,7 @@ namespace Script.Net.Godot
         /// <summary>应用整局快照到投影（顺序：区域 → 世界牌库 → 玩家 → 堆叠 → 回合 → 地区）。</summary>
         public void ApplySnapshot(GameSnapshot snap)
         {
-            if (snap == null) return;
+            if (_disposed || snap == null) return;
             int before = ClientZoneManager.GetZoneCards(Script.Enums.CardZone.Hand, LocalSeat).Count;
             ClientZoneManager.ApplySnapshot(snap.Zones);
             int after = ClientZoneManager.GetZoneCards(Script.Enums.CardZone.Hand, LocalSeat).Count;
@@ -237,6 +321,7 @@ namespace Script.Net.Godot
 
         public string SendIntentAs(int seat, PlayerIntent.Kind kind, params string[] args)
         {
+            if (_disposed) return null;
             if (_intentSender == null)
             {
                 GD.PrintErr("[ClientMatchView] 未绑定意图上行通道，SendIntent 被忽略");
@@ -245,6 +330,10 @@ namespace Script.Net.Godot
             return _intentSender(kind, args);
         }
 
-        public void SendChoiceResult(ChoiceResult result) => _choiceSender?.Invoke(result);
+        public void SendChoiceResult(ChoiceResult result)
+        {
+            if (_disposed) return;
+            _choiceSender?.Invoke(result);
+        }
     }
 }

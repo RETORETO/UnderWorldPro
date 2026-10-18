@@ -8,10 +8,15 @@ using Script.UI;
 public partial class DeckBuilder : Control
 {
     private VBoxContainer _poolList;
-    private VBoxContainer _deckList;
     private LineEdit _nameEdit;
     private Label _countLabel;
-    private OptionButton _loadOption;
+    /// <summary>【2026-10-17】卡组构成统计条（颜色数量 + 费用数量），显示在底栏。</summary>
+    private Label _statsLabel;
+    // 【2026-10-17 · 卡组名 + 载入合并】原来"顶部下拉框选卡组"与"底栏输入卡组名"是两处控件；
+    // 现在合并为一条「输入框 + 右侧 ▾ 下拉」：选卡组文件即打开并回填卡组名，保存时按卡组名覆盖同名文件。
+    private Button _deckLoadButton;
+    private PanelContainer _deckLoadPanel;
+    private VBoxContainer _deckLoadList;
     private LineEdit _searchBox;
     private Button _prevPage;
     private Button _nextPage;
@@ -30,6 +35,45 @@ public partial class DeckBuilder : Control
     // 【秘社批次】构筑限制展示与违规校验（"当前 X 张 / 需要 ≥N 张"）
     private VBoxContainer _restrictionBox;
     private Label _restrictionSummary;
+
+    // ============================================================
+    // 【2026-10-17 · 卡组框重做】卡组不再用 VBoxContainer 逐行排列，改成**固定尺寸的列式卡组板**：
+    //   DeckPanel（固定锚点 = 卡组框尺寸固定）
+    //     ├ InfoPanel   ← 秘社条 + 构筑限制（**框外**，需求 11 保证内容量不减）
+    //     ├ SortBar     ← 排序优先级下拉（框外）
+    //     ├ DeckScroll  ← 卡组框本体（ScrollContainer，竖向不滚、内建横条隐藏）
+    //     │   └ DeckBoard ← 运行期绝对定位所有"同名组"节点
+    //     └ DeckHBar    ← 框外底部的横向滑动条（仅内容横向溢出时显示）
+    // 列高 = DeckScroll 的可视高度（运行期量取），故列高天然等于"卡组框可视高度"。
+    // ============================================================
+    private ScrollContainer _deckScroll;
+    private Control _deckBoard;
+    private HScrollBar _deckHBar;
+    private Button _sortModeButton;
+    private CardHoverPreview _hoverPreview;
+    private DeckBoardLayout.DeckSortMode _sortMode = DeckBoardLayout.DeckSortMode.CostFirst;
+    /// <summary>列高（= 卡组框可视高度），首帧后由 <see cref="RecomputeDeckLayout"/> 量取。</summary>
+    private float _columnH;
+    private bool _boardBuilt;
+    /// <summary>外置横滑条 ↔ 内建横滑条 同步时的重入保护。</summary>
+    private bool _syncingHBar;
+    private int _layoutRetry;
+    /// <summary>当前被悬浮的组的节点（null = 没有）。</summary>
+    private Control _hoverGroupNode;
+    /// <summary>组节点 ↔ 组数据（悬浮命中用；顺序 = 绘制顺序）。</summary>
+    private readonly List<(DeckBoardLayout.DeckBoardGroup Group, Control Node)> _groupNodes
+        = new List<(DeckBoardLayout.DeckBoardGroup, Control)>();
+    /// <summary>模板路径 → 卡模板数据（供悬浮展示，避免每次悬浮都重新 Load）。</summary>
+    private readonly Dictionary<string, PlayerCardData> _boardData = new Dictionary<string, PlayerCardData>();
+
+    /// <summary>卡组板：列宽（卡宽 + 列间空隙）。</summary>
+    private const float DeckColumnW = CardLayoutHelper.CARD_WIDTH + 10f;
+    /// <summary>卡组板：初始堆叠错位步长 = 上方卡露出的高度（正好压住卡图顶部标题栏的卡名）。</summary>
+    private const float DeckOffset0 = 28f;
+    /// <summary>卡组板：异名组之间的纵向空隙（保证异名组不重叠）。</summary>
+    private const float DeckGroupGap = 8f;
+    /// <summary>卡组板：同名组张数上限（超出部分另起一组）。</summary>
+    private const int DeckMaxPerGroup = 50;
 
     /// <summary>卡组合法所需的最少卡牌张数（不含秘社卡，按份数累计）。不足则视为违规卡组。</summary>
     private const int MinDeckSize = 50;
@@ -100,10 +144,14 @@ public partial class DeckBuilder : Control
         ulong __tStart = Time.GetTicksMsec();
 
         _poolList = GetNode<VBoxContainer>("PoolPanel/PoolScroll/PoolList");
-        _deckList = GetNode<VBoxContainer>("DeckPanel/DeckScroll/DeckList");
-        _nameEdit = GetNode<LineEdit>("BottomBar/NameEdit");
+        _deckScroll = GetNode<ScrollContainer>("DeckPanel/DeckScroll");
+        _deckBoard = GetNode<Control>("DeckPanel/DeckScroll/DeckBoard");
+        _nameEdit = GetNode<LineEdit>("DeckPanel/DeckBar/NameEdit");
         _countLabel = GetNode<Label>("BottomBar/CountLabel");
-        _loadOption = GetNode<OptionButton>("LoadOption");
+        _statsLabel = GetNode<Label>("BottomBar/StatsLabel");
+        _deckLoadButton = GetNode<Button>("DeckPanel/DeckBar/LoadBtn");
+        _deckLoadPanel = GetNode<PanelContainer>("DeckPanel/DeckLoadPanel");
+        _deckLoadList = GetNode<VBoxContainer>("DeckPanel/DeckLoadPanel/DeckLoadScroll/DeckLoadList");
         _searchBox = GetNode<LineEdit>("PoolPanel/SearchBox");
         _searchBox.TextChanged += OnSearchTextChanged;
         _prevPage = GetNode<Button>("PoolPanel/PoolPager/PrevPage");
@@ -134,6 +182,9 @@ public partial class DeckBuilder : Control
         if (WebPerfParams.AutoExpandFilter && _filterToggleButton != null)
             _filterToggleButton.ButtonPressed = true;
 
+        // 【2026-10-17 卡组框重做】卡组板的滚动模式 / 框外横滑条 / 排序下拉 / 本场景悬浮浮层
+        BuildDeckBoardChrome();
+
         // 搜索防抖计时器
         _searchTimer = new Timer();
         _searchTimer.WaitTime = 0.25f;
@@ -141,9 +192,15 @@ public partial class DeckBuilder : Control
         AddChild(_searchTimer);
         _searchTimer.Timeout += () => { ApplyPoolFilter(); RefreshPoolView(); };
 
-        GetNode<Button>("BottomBar/SaveButton").Pressed += OnSave;
+        // 【2026-10-17】保存按钮已挪到卡组名输入框右侧（DeckPanel/DeckBar）
+        GetNode<Button>("DeckPanel/DeckBar/SaveButton").Pressed += OnSave;
         GetNode<Button>("BottomBar/BackButton").Pressed += OnBack;
-        _loadOption.ItemSelected += OnLoadSelected;
+        // 【2026-10-17】载入卡组改为"卡组名右侧的 ▾ 下拉"（与输入框合并）
+        _deckLoadButton.Pressed += ToggleDeckLoadPanel;
+        _deckLoadPanel.Visible = false;
+        // 下拉外观与卡池卡片行统一（深底 + 细边框），"以搜索框为准"的一套视觉语言
+        _deckLoadPanel.AddThemeStyleboxOverride("panel", GetPoolRowStyle());
+        SetProcessInput(true);   // 用于"点下拉面板之外时自动收起"
 
         ulong __tBind = Time.GetTicksMsec();
         // 整段套 try/catch：Web 上「托管异常跨原生边界」会直接 abort、看不到内容；
@@ -154,7 +211,7 @@ public partial class DeckBuilder : Control
             ulong __tScanPool = Time.GetTicksMsec();
             ScanCouncils();
             ulong __tScanCouncil = Time.GetTicksMsec();
-            BuildLoadOptions();
+            RefreshDeckLoadList();
             ulong __tLoadOpts = Time.GetTicksMsec();
             RefreshPoolView();
             ulong __tPool = Time.GetTicksMsec();
@@ -164,11 +221,10 @@ public partial class DeckBuilder : Control
                 + $"loadOpts={__tLoadOpts - __tScanCouncil}ms refreshPool={__tPool - __tLoadOpts}ms "
                 + $"(" + PageSize + $" 行/页) readyTotal={__tPool - __tStart}ms");
 
-            // 若从房间/主菜单带入了要编辑的卡组，则载入
+            // 若从房间/主菜单带入了要编辑的卡组，则载入（卡组名由文件里的 deckName 回填）
             var editPath = GameManager.Instance.EditingDeckPath;
             if (!string.IsNullOrEmpty(editPath))
             {
-                _loadOption.Select(FindLoadIndex(editPath));
                 LoadDeckFromFile(editPath);
             }
             else
@@ -180,6 +236,9 @@ public partial class DeckBuilder : Control
             StartFirstFrameProbe();
             // 首帧后布局已就绪：按像素排布高级筛选区并把 PoolScroll 顶边钉到位
             Callable.From(ReflowPoolTop).CallDeferred();
+            // 【2026-10-17 卡组框重做】列高 = 卡组框可视高度，必须等首帧布局完成才能量到真像素
+            Callable.From(RecomputeDeckLayout).CallDeferred();
+            if (GetViewport() != null) GetViewport().SizeChanged += OnViewportResized;
             // 【2026-10-17】索引加载实测约 170ms（System.Text.Json 首次反序列化偏慢），
             // 放在 _Ready 里会白白拖慢"进卡组编辑"。改为进屏 0.4s 后空闲预热：
             // 用户点开「高级筛选」再点「搜索」时索引早已就绪，首次结构化搜索无需等待。
@@ -276,8 +335,29 @@ public partial class DeckBuilder : Control
     private ulong _lastBeatMs;
     private bool _probeStopped = true;
 
+    /// <summary>
+    /// 【2026-10-17】点在下拉面板与 ▾ 按钮之外时自动收起卡组载入列表（按钮自身的点击交给 Toggle 处理）。
+    /// 用 `_Input` 而不是给整个界面挂"点击穿透"监听：本界面控件很多，逐个挂会碎成一地。
+    /// </summary>
+    public override void _Input(InputEvent @event)
+    {
+        if (_deckLoadPanel == null || !_deckLoadPanel.Visible) return;
+        if (!(@event is InputEventMouseButton mb) || !mb.Pressed) return;
+
+        Vector2 pos = mb.GlobalPosition;
+        if (_deckLoadPanel.GetGlobalRect().HasPoint(pos)) return;
+        if (_deckLoadButton != null && _deckLoadButton.GetGlobalRect().HasPoint(pos)) return;
+        HideDeckLoadPanel();
+    }
+
     public override void _Process(double delta)
     {
+        // 【2026-10-17 卡组框重做】这两项与性能探针无关，必须每帧跑：
+        //   ① 卡组板悬浮解析（含悬浮时浮出的 +/- 微按钮）；
+        //   ② 框外横滑条跟随内建横滑条（滚轮滚动时同步）。
+        UpdateDeckHover();
+        SyncDeckHBarFromScroll();
+
         if (!WebPerfParams.FrameProbe) return;
 
         _processTicks++;
@@ -296,6 +376,8 @@ public partial class DeckBuilder : Control
 
     public override void _ExitTree()
     {
+        if (GetViewport() != null) GetViewport().SizeChanged -= OnViewportResized;
+        if (_hoverPreview != null) _hoverPreview.HidePreview();
         // 场景切换时若探针还没摘干净，会在已释放的节点上调回调
         if (!_probeStopped)
         {
@@ -318,7 +400,7 @@ public partial class DeckBuilder : Control
         ApplyPoolFilter();
     }
 
-    // 根据搜索关键字过滤当前模式的候选列表（按文件路径卡号片段 / 秘社名匹配，不区分大小写）
+    // 根据顶部搜索框的关键字过滤卡池（**按卡名**匹配，不区分大小写；秘社模式按秘社名/编号）
     private void ApplyPoolFilter()
     {
         _poolPage = 0;   // 过滤后回到第一页
@@ -353,12 +435,13 @@ public partial class DeckBuilder : Control
 
         _poolPaths.Clear();
 
-        // 【2026-10-17 结构化检索】索引可用 → 走索引过滤：
-        //   编号（文件名/卡号子串）AND 结构化条件（卡名/副卡名/类别/子类别/领域/忠诚/7 属性/独有）。
-        //   结构化条件全空时，结果与改造前的"纯文件名子串"逐条等价（保证不退化）。
-        _filter.UidQuery = _poolFilter;
+        // 【2026-10-17 · 检索目标互换】
+        //   顶部搜索框 → **卡名**（NameQuery，走索引的 NameFold 子串匹配）；
+        //   高级筛选里的"卡号"框 → **编号**（UidQuery，见 OnFilterSearch）。
+        //   两者都是"AND"关系，与其它结构化条件共同收窄结果。
+        _filter.NameQuery = _poolFilter;
         _filter.PrepareForSearch();
-        // 只有真的用到结构化条件时才需要索引（编号搜索走旧路径即可，零额外成本）
+        // 卡名属于"结构化条件"，走索引匹配；编号条件仍由 MatchesUid 单独组合
         if (_filter.HasStructured) EnsureIndexForStructured();
         if (_indexReady)
         {
@@ -377,7 +460,15 @@ public partial class DeckBuilder : Control
             return;
         }
 
-        // 回退（索引不可用/失败）：沿用改造前的"按文件名（含卡号）子串"过滤，行为逐字节不变。
+        // 回退（索引不可用/失败）：中文卡名必须靠索引里的 `NameFold` 才能匹配，
+        // 没有索引就只能退化为"按文件名（含卡号/拼音 UID）子串"——即此时输入中文卡名搜不到。
+        // 索引由构建期 `CardIndexRunner` 生成并随仓库提交，正常打包必然存在；
+        // 这里只在异常情况下兜底，并**只在第一次**打一条告警，避免每敲一个字就刷屏。
+        if (f.Length > 0 && !_fallbackWarned)
+        {
+            _fallbackWarned = true;
+            GD.PrintErr("【DeckBuilder】卡池索引不可用：顶部搜索框已退化为按卡号/文件名匹配（中文卡名搜不到）。请重跑 CardIndexRunner");
+        }
         if (f.Length == 0)
         {
             _poolPaths.AddRange(_allPoolPaths);
@@ -392,6 +483,9 @@ public partial class DeckBuilder : Control
             }
         }
     }
+
+    /// <summary>回退告警是否已打过（只打一次）。</summary>
+    private bool _fallbackWarned;
 
     private Timer _searchTimer;
 
@@ -429,7 +523,7 @@ public partial class DeckBuilder : Control
     private void UpdateModeUi()
     {
         if (_searchBox != null)
-            _searchBox.PlaceholderText = _councilMode ? "输入秘社名或编号过滤，如 MSJC" : "输入卡号过滤，如 JC";
+            _searchBox.PlaceholderText = _councilMode ? "输入秘社名或编号过滤，如 MSJC" : "输入卡名过滤，如 通灵猫头鹰";
         if (_poolPager != null)
             _poolPager.Visible = !_councilMode;
         // 【2026-10-17】秘社模式不做结构化筛选：收起并隐藏高级筛选入口，
@@ -462,33 +556,92 @@ public partial class DeckBuilder : Control
     }
 
     // ============================================================
-    // 下拉选项构建
+    // 【2026-10-17】卡组名输入框 + 右侧 ▾ 下拉（合并"新建/载入"与"卡组名"）
+    //   下拉用"场景内面板"而不是 PopupMenu：Popups 是 Window，在 viewport 拉伸下
+    //   屏幕坐标与控件坐标会错位（Web 导出尤其明显）；面板方案定位确定、样式也好统一。
     // ============================================================
-    private void BuildLoadOptions()
+    private const int DeckLoadRowH = 34;
+    private const int DeckLoadMaxH = 320;
+
+    /// <summary>重建下拉里的卡组文件列表（"（新建卡组）" + `Decks/*.json`，按文件名序数升序）。</summary>
+    private void RefreshDeckLoadList()
     {
-        _loadOption.Clear();
-        _loadOption.AddItem("（新建卡组）");
-        using var dir = DirAccess.Open(DecksDir);
-        if (dir != null)
+        if (_deckLoadList == null) return;
+        ClearChildren(_deckLoadList);
+
+        // ① 新建（清空当前编辑内容）
+        _deckLoadList.AddChild(MkDeckLoadRow("（新建卡组）", null));
+
+        // ② 已保存的卡组
+        var files = new List<string>();
+        using (var dir = DirAccess.Open(DecksDir))
         {
-            dir.ListDirBegin();
-            string name = dir.GetNext();
-            while (!string.IsNullOrEmpty(name))
+            if (dir != null)
             {
-                if (!dir.CurrentIsDir() && name.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase))
-                    _loadOption.AddItem(name);
-                name = dir.GetNext();
+                dir.ListDirBegin();
+                string name = dir.GetNext();
+                while (!string.IsNullOrEmpty(name))
+                {
+                    if (!dir.CurrentIsDir() && name.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase))
+                        files.Add(name);
+                    name = dir.GetNext();
+                }
+                dir.ListDirEnd();
             }
-            dir.ListDirEnd();
         }
+        // 显式 Ordinal：无参 Sort() 走文化敏感比较器（ICU），Web 上会 abort
+        files.Sort(System.StringComparer.Ordinal);
+        foreach (var f in files)
+        {
+            _deckLoadList.AddChild(MkDeckLoadRow(f, DecksDir + "/" + f));
+        }
+
+        // 面板高度按条目数收紧（不多占、也不超出）
+        int h = Mathf.Clamp(6 + DeckLoadRowH * (files.Count + 1), DeckLoadRowH + 12, DeckLoadMaxH);
+        _deckLoadPanel.OffsetBottom = 42f + h;
     }
 
-    private int FindLoadIndex(string path)
+    /// <summary>下拉里的一行：整行可点（按钮铺满宽度，文字左对齐）。</summary>
+    private Button MkDeckLoadRow(string text, string path)
     {
-        for (int i = 1; i < _loadOption.ItemCount; i++)
-            if (DecksDir + "/" + _loadOption.GetItemText(i) == path)
-                return i;
-        return 0;
+        var b = new Button
+        {
+            Text = text,
+            Alignment = HorizontalAlignment.Left,
+            CustomMinimumSize = new Vector2(0, DeckLoadRowH),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            ClipText = true,
+        };
+        b.Pressed += () =>
+        {
+            HideDeckLoadPanel();
+            if (path == null) ClearWorkingDeck();
+            else LoadDeckFromFile(path);
+        };
+        return b;
+    }
+
+    /// <summary>"（新建卡组）"：清空编辑态（与原先选到第 0 项的语义一致）。</summary>
+    private void ClearWorkingDeck()
+    {
+        _workingCards.Clear();
+        _nameEdit.Text = "";
+        RefreshDeckView();
+        GD.Print("【DeckBuilder】已切换为新建卡组");
+    }
+
+    private void ToggleDeckLoadPanel()
+    {
+        if (_deckLoadPanel == null) return;
+        if (_deckLoadPanel.Visible) { HideDeckLoadPanel(); return; }
+        RefreshDeckLoadList();          // 每次展开都重扫一遍，保存/外部新增文件后立刻可见
+        _deckLoadPanel.Visible = true;
+        _deckLoadPanel.MoveToFront();
+    }
+
+    private void HideDeckLoadPanel()
+    {
+        if (_deckLoadPanel != null) _deckLoadPanel.Visible = false;
     }
 
     // ============================================================
@@ -739,6 +892,7 @@ public partial class DeckBuilder : Control
             if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
                 SetCouncil(path);
         };
+        AttachCardHover(thumb, data);          // 需求 9：秘社候选卡图同样支持悬浮看整卡
         row.AddChild(thumb);
 
         row.AddChild(BuildCouncilDetailColumn(path, data, isCurrent));
@@ -844,6 +998,7 @@ public partial class DeckBuilder : Control
             if (e is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left)
                 AddCard(path);
         };
+        AttachCardHover(thumb, data);          // 需求 9：卡池的卡图也要能悬浮看整卡
         row.AddChild(thumb);
 
         row.AddChild(BuildCardDetailColumn(path, data));
@@ -1130,119 +1285,610 @@ public partial class DeckBuilder : Control
     }
 
     // ============================================================
-    // 当前卡组渲染（带份数 +/-）
+    // 【2026-10-17 卡组框重做】卡组板：秘社信息条 / 排序下拉 / 换列装箱 / 悬浮
     // ============================================================
 
+    /// <summary>秘社缩略卡图高度（信息带 112px，留 6px 上下边距）。</summary>
+    private const float CouncilThumbH = 100f;
+    /// <summary>秘社缩略卡图宽度（卡面 5:7，100 → 71）。</summary>
+    private const float CouncilThumbW = 71f;
+
     /// <summary>
-    /// 卡组列表顶部的秘社行（独立于 <see cref="_workingCards"/>，不计入卡牌总数）。
-    /// 只有一张，也无份数概念；"-" 用于移除以便重新选择。
+    /// 秘社信息条（**卡组框之外**，挂在 `DeckPanel/InfoPanel/CouncilSlot`）。
+    /// 独立于 <see cref="_workingCards"/>、不计入卡牌总数：秘社只有一张、无份数，
+    /// 增删语义也与玩家卡不同（<see cref="SetCouncil"/> / <see cref="ClearCouncil"/>），
+    /// 故不参与卡组板的排序与换列。内容：卡图 + 秘社名 + 移除按钮。
+    ///
+    /// 【2026-10-17 修复】原来这里还显示"编号"，编号一换行就把"✕ 移除秘社"顶到信息带之外、
+    /// 压到下面的排序按钮上。现按用户口径处理：
+    ///   · **去掉编号显示**；
+    ///   · **移除按钮的下边缘与秘社卡图的下边缘对齐** —— 卡图固定 <see cref="CouncilThumbH"/> 高，
+    ///     右侧竖列同样钉成这个高度（`SizeFlagsVertical=ShrinkBegin` + `CustomMinimumSize.Y`），
+    ///     中间塞一个可扩展的空条把按钮压到底部，于是两者底边恒等，与名字几行无关。
     /// </summary>
-    private void BuildDeckCouncilRow()
+    private void BuildCouncilInfoStrip()
     {
+        var slot = GetNodeOrNull<Control>("DeckPanel/InfoPanel/CouncilSlot");
+        if (slot == null) return;
+        ClearChildren(slot);
         if (string.IsNullOrEmpty(_workingCouncil)) return;
 
         var data = ResourceLoader.Load<CouncilCardData>(_workingCouncil);
         string imgPath = ResolveCouncilImagePath(data);
-        var tex = string.IsNullOrEmpty(imgPath) ? null : ResourceLoader.Load<Texture2D>(imgPath);
+        Texture2D tex = null;
+        if (!string.IsNullOrEmpty(imgPath) && !_texCache.TryGetValue(imgPath, out tex))
+        {
+            tex = ResourceLoader.Load<Texture2D>(imgPath);
+            if (tex != null) _texCache[imgPath] = tex;      // 与卡池/卡组共用缓存
+        }
         if (tex == null) GD.PrintErr($"【DeckBuilder】卡组秘社卡图加载失败: {_workingCouncil}");
 
-        var row = new HBoxContainer();
-        row.AddChild(MakeCardThumb(tex));
+        // 缩略卡图（71×100，塞进信息带；悬浮看整卡）—— 它就是"下方边缘"的基准
+        var thumb = new TextureRect
+        {
+            Texture = tex,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered,
+            ExpandMode = (TextureRect.ExpandModeEnum)1,     // FitWidth
+            CustomMinimumSize = new Vector2(CouncilThumbW, CouncilThumbH),
+            SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
+        };
+        AttachCardHover(thumb, data);
+        slot.AddChild(thumb);
 
+        // 右侧竖列：高度恒等于卡图高度（ShrinkBegin 保持最小高度并顶端对齐，不被 HBox 拉满 112）
+        var col = new VBoxContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
+            CustomMinimumSize = new Vector2(0f, CouncilThumbH),
+        };
+        col.AddThemeConstantOverride("separation", 2);
+
+        string councilName = string.IsNullOrEmpty(data?.CardName)
+            ? System.IO.Path.GetFileNameWithoutExtension(_workingCouncil)
+            : data.CardName;
         var name = new Label
         {
-            Text = "【秘社】" + (string.IsNullOrEmpty(data?.CardName)
-                ? System.IO.Path.GetFileNameWithoutExtension(_workingCouncil)
-                : data.CardName),
-            CustomMinimumSize = new Vector2(40, 140),
-            VerticalAlignment = VerticalAlignment.Center,
+            Text = "【秘社】" + councilName,
+            // 短标签用按字符换行，避开 WordSmart 的分词测量（见 MakeTextLine 注释）
+            AutowrapMode = TextServer.AutowrapMode.Arbitrary,
+            // 最多两行：名字再长也不会把下面的按钮挤出信息带（同 112px 高度内的硬保护）
+            MaxLinesVisible = 2,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
+            Modulate = new Color(0.55f, 0.95f, 0.55f),
         };
-        // 【2026-10-12】--wp-nowrap 时退回按字符换行（理由见 MakeTextLine 注释）
-        name.AutowrapMode = WebPerfParams.NoWordWrap
-            ? TextServer.AutowrapMode.Arbitrary
-            : TextServer.AutowrapMode.WordSmart;
-        name.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        name.Modulate = new Color(0.55f, 0.95f, 0.55f);
-        row.AddChild(name);
+        col.AddChild(name);
 
-        var minus = new Button { Text = "-", CustomMinimumSize = new Vector2(28, 140) };
-        minus.Pressed += ClearCouncil;
-        row.AddChild(minus);
+        // 可扩展空条：吃掉"卡图高度 − 名字 − 按钮"的余量，把按钮压到列底 = 卡图下边缘
+        col.AddChild(new Control { SizeFlagsVertical = Control.SizeFlags.ExpandFill });
 
-        _deckList.AddChild(row);
+        var remove = new Button
+        {
+            Text = "✕ 移除秘社",
+            SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkEnd,
+        };
+        remove.Pressed += ClearCouncil;
+        col.AddChild(remove);
+
+        slot.AddChild(col);
+    }
+
+    /// <summary>卡图控件的悬浮预览接线（卡池 / 秘社候选 / 秘社条共用）。</summary>
+    private void AttachCardHover(Control control, BaseCardData data)
+    {
+        if (control == null || data == null) return;
+        control.MouseFilter = Control.MouseFilterEnum.Stop;   // 必须吃鼠标事件才能拿到 entered/exited
+        control.MouseEntered += () =>
+        {
+            if (_hoverPreview == null) return;
+            // 锚点取卡图左上角：浮层按"卡右侧优先、贴边转左"定位（见 CardHoverPreview.PositionFrame）
+            _hoverPreview.ShowFor(data, control.GlobalPosition);
+        };
+        control.MouseExited += () =>
+        {
+            if (_hoverPreview != null) _hoverPreview.HidePreview();
+        };
+    }
+
+    /// <summary>
+    /// 【2026-10-17】卡组板的外框装配（运行期创建，沿用 <see cref="BuildRestrictionPanel"/> 的惯例）：
+    ///   · 卡组框：竖向不滚、内建横条隐藏（`ShowNever` 只隐藏显示、保留滚动能力）；
+    ///   · 框外横滑条：与内建条双向同步，**仅内容横向溢出时显示**；
+    ///   · 排序优先级下拉；
+    ///   · 本场景专用的悬浮浮层（挂在根节点最后 ⇒ 画在最上层）。
+    /// </summary>
+    private void BuildDeckBoardChrome()
+    {
+        if (_deckScroll != null)
+        {
+            _deckScroll.VerticalScrollMode = ScrollContainer.ScrollMode.Disabled;
+            // ShowNever：横条不显示但仍可滚动；显示交给框外的 _deckHBar
+            _deckScroll.HorizontalScrollMode = ScrollContainer.ScrollMode.ShowNever;
+        }
+
+        _deckHBar = GetNodeOrNull<HScrollBar>("DeckPanel/DeckHBar");
+        if (_deckHBar != null)
+        {
+            _deckHBar.Visible = false;      // 内容没溢出前不占位、不显示
+            _deckHBar.ValueChanged += OnDeckHBarValueChanged;
+        }
+
+        var sortBar = GetNodeOrNull<Control>("DeckPanel/SortBar");
+        if (sortBar != null)
+        {
+            // 【2026-10-17】排序改为**一个按钮点一下就切换**（原来是 OptionButton 下拉）：
+            // 按钮文字直接显示当前优先级，点一次在"费用优先 / 颜色优先"之间来回切。
+            _sortModeButton = new Button
+            {
+                SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+                CustomMinimumSize = new Vector2(150, 0),
+                TooltipText = "点击切换排序优先级（费用优先 ⇄ 颜色优先）",
+            };
+            _sortModeButton.Pressed += OnSortModeButtonPressed;
+            UpdateSortModeButtonText();
+            sortBar.AddChild(_sortModeButton);
+
+            var hint = new Label
+            {
+                Text = "（左键 +1 ｜ 右键 -1 ｜ 悬浮看整卡）",
+                VerticalAlignment = VerticalAlignment.Center,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Modulate = new Color(0.7f, 0.72f, 0.78f),
+            };
+            hint.AutowrapMode = TextServer.AutowrapMode.Arbitrary;
+            sortBar.AddChild(hint);
+        }
+
+        // 本场景专用浮层：DeckBuilder 是独立场景且不是 Window，CardPreviewBus 的全局浮层此时为空
+        // （战场视图进场时 Attach、离场时 Detach），故不能走总线，直接持有一个本地实例。
+        _hoverPreview = new CardHoverPreview { Name = "CardHoverPreview" };
+        _hoverPreview.CanPreviewOverride = _ => true;
+        AddChild(_hoverPreview);
+    }
+
+    /// <summary>
+    /// 【2026-10-17】排序优先级**按钮切换**：点一次在「费用优先」与「颜色优先」之间来回切，
+    /// 只重排卡组板，不重扫卡池。按钮文字随当前模式更新，界面上直接看得到现在的优先级。
+    /// </summary>
+    private void OnSortModeButtonPressed()
+    {
+        _sortMode = _sortMode == DeckBoardLayout.DeckSortMode.CostFirst
+            ? DeckBoardLayout.DeckSortMode.ColorFirst
+            : DeckBoardLayout.DeckSortMode.CostFirst;
+        UpdateSortModeButtonText();
+        RebuildDeckBoard();
+    }
+
+    /// <summary>按钮文字＝当前优先级（费用优先 = 高费在前；颜色优先 = 按颜色枚举升序）。</summary>
+    private void UpdateSortModeButtonText()
+    {
+        if (_sortModeButton == null) return;
+        _sortModeButton.Text = _sortMode == DeckBoardLayout.DeckSortMode.ColorFirst
+            ? "排序：颜色优先"
+            : "排序：费用优先";
+    }
+
+    /// <summary>视口尺寸变化（窗口缩放 / Web 画布变化）→ 重新量列高并重排。</summary>
+    private void OnViewportResized()
+    {
+        Callable.From(RecomputeDeckLayout).CallDeferred();
+    }
+
+    /// <summary>
+    /// 量取"列高 = 卡组框可视高度"后重排。必须等首帧布局完成（此时 `Size` 才有真实像素），
+    /// 早于此会拿到 0 —— 与 `ReflowPoolTop` 同一套首帧后处理惯例。
+    /// </summary>
+    private void RecomputeDeckLayout()
+    {
+        if (_deckScroll == null || _deckBoard == null) return;
+
+        float h = _deckScroll.Size.Y;
+        if (h <= 1f)
+        {
+            // 布局尚未完成：下一帧再试（限次，避免场景异常时无限重试）
+            if (_layoutRetry++ < 20) Callable.From(RecomputeDeckLayout).CallDeferred();
+            return;
+        }
+        _layoutRetry = 0;
+
+        float newH = Mathf.Max(h, CardLayoutHelper.CARD_HEIGHT);   // 钳制：列高不得小于卡高
+        if (_boardBuilt && Mathf.Abs(newH - _columnH) < 0.5f) return;   // 列高没变就不重建
+        _columnH = newH;
+        RebuildDeckBoard();
+        GD.Print($"【DeckBuilder】卡组框重排：列高 {WebSafeText.Int((int)_columnH)}px / 组 {_groupNodes.Count} 个");
+    }
+
+    /// <summary>
+    /// 重建卡组板：组装排序输入 → 算法层算出每个"同名组"的列号/Y/错位步长 → 建节点绝对定位。
+    /// 取代原来"每个卡种一行 HBox（卡图 + xN + - + +）"的纵向列表。
+    /// </summary>
+    private void RebuildDeckBoard()
+    {
+        if (_deckBoard == null) return;
+        ulong __t0 = Time.GetTicksMsec();
+        if (_columnH <= 1f) _columnH = CardLayoutHelper.CARD_HEIGHT;   // 首帧前兜底
+
+        // ① 组装排序/分组输入（同时缓存模板数据供悬浮使用）
+        _boardData.Clear();
+        var cards = new List<DeckBoardLayout.DeckBoardCard>();
+        int total = 0, fail = 0;
+        foreach (var kv in _workingCards)
+        {
+            total += kv.Value;
+            var data = ResourceLoader.Load<PlayerCardData>(kv.Key);
+            if (data == null) { fail++; continue; }
+            _boardData[kv.Key] = data;
+            cards.Add(new DeckBoardLayout.DeckBoardCard
+            {
+                TemplatePath = kv.Key,
+                CardName = data.CardName ?? "",
+                Uid = data.UID ?? "",
+                Cost = data.Cost,
+                ColorKey = ColorKeyOf(data),
+                Count = kv.Value,
+            });
+        }
+
+        // ② 排序 → 分组（50 张切分）→ 换列装箱（含压缩）
+        var p = new DeckBoardLayout.DeckBoardParams
+        {
+            CardW = CardLayoutHelper.CARD_WIDTH,
+            CardH = CardLayoutHelper.CARD_HEIGHT,
+            ColumnW = DeckColumnW,
+            ColumnH = _columnH,
+            Offset0 = DeckOffset0,
+            GroupGap = DeckGroupGap,
+            MaxPerGroup = DeckMaxPerGroup,
+            Mode = _sortMode,
+        };
+        var result = DeckBoardLayout.Compute(cards, p);
+
+        // ③ 重建节点
+        ClearChildren(_deckBoard);
+        _groupNodes.Clear();
+        _hoverGroupNode = null;
+        if (_hoverPreview != null) _hoverPreview.HidePreview();
+
+        foreach (var g in result.Groups)
+        {
+            var node = BuildDeckGroupNode(g);
+            _deckBoard.AddChild(node);
+            _groupNodes.Add((g, node));
+        }
+
+        // ④ 板内容尺寸（决定 ScrollContainer 的横向滚动范围）
+        var contentSize = new Vector2(result.ContentWidth, _columnH);
+        _deckBoard.CustomMinimumSize = contentSize;
+        _deckBoard.Size = contentSize;
+        _boardBuilt = true;
+
+        WebPerfParams.Summary(
+            $"deck.board groups={result.Groups.Count} cols={result.ColumnCount} "
+            + $"cards={total} contentW={WebSafeText.Int((int)result.ContentWidth)} "
+            + $"colH={WebSafeText.Int((int)_columnH)} total={Time.GetTicksMsec() - __t0}ms");
+    }
+
+    /// <summary>
+    /// 一个"同名组"的节点：一个普通 Control（接收点击/悬浮），内部 N 张卡按 `offset` 纵向错位。
+    ///
+    /// 层级：子节点按 i 升序添加 ⇒ 越靠下越后画 ⇒ **Y 越靠下层级越高**；
+    /// 于是最下方那张完整显示，上方每张只露出顶部 `offset` 像素（正好是卡图标题栏的卡名）。
+    /// 命中的合理性：组内所有卡图与角标都是 `MouseFilter=Ignore`，指针落在组矩形任意位置都命中组节点；
+    /// 同名组里 N 张是同一张卡，所以"点哪儿都是加/删一张同名卡"，语义一致。
+    /// </summary>
+    private Control BuildDeckGroupNode(DeckBoardLayout.DeckBoardGroup g)
+    {
+        float cardW = CardLayoutHelper.CARD_WIDTH;
+        float groupH = Mathf.Max(g.GroupHeight, 1f);
+
+        var node = new Control
+        {
+            Name = "G_" + (string.IsNullOrEmpty(g.Uid) ? "x" : g.Uid),
+            Position = new Vector2(g.Column * DeckColumnW, g.StartY),
+            CustomMinimumSize = new Vector2(cardW, groupH),
+            Size = new Vector2(cardW, groupH),
+            // Pass：本节点不处理的输入（滚轮等）继续冒泡给 ScrollContainer，
+            // 否则鼠标停在卡上时卡组框滚不动（Stop 会把事件吞掉）。
+            MouseFilter = Control.MouseFilterEnum.Pass,
+        };
+
+        // 卡图（与卡池共用 _texCache，避免点一次 + 就把整个卡组重载一遍）
+        Texture2D tex = null;
+        string imgPath = CardUI.ResolveCardImagePath(g.Uid);
+        if (!string.IsNullOrEmpty(imgPath))
+        {
+            if (!_texCache.TryGetValue(imgPath, out tex))
+            {
+                tex = ResourceLoader.Load<Texture2D>(imgPath);
+                if (tex != null) _texCache[imgPath] = tex;
+            }
+            if (tex == null) GD.PrintErr($"【DeckBuilder】卡组卡图加载失败: {g.TemplatePath}");
+        }
+
+        for (int i = 0; i < g.Count; i++)
+        {
+            var card = MakeCardThumb(tex);
+            card.Position = new Vector2(0f, i * g.Offset);
+            card.MouseFilter = Control.MouseFilterEnum.Ignore;   // 事件统一由组节点收
+            node.AddChild(card);
+        }
+
+        // 常驻份数角标（叠在最下方那张完整显示的卡的左下角）
+        if (g.Count > 1)
+        {
+            var badge = new Label
+            {
+                Text = "×" + WebSafeText.Int(g.Count),
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Position = new Vector2(2f, groupH - 22f),
+                Size = new Vector2(46f, 18f),
+            };
+            badge.AddThemeColorOverride("font_color", new Color(1f, 0.96f, 0.78f));
+            badge.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
+            badge.AddThemeConstantOverride("outline_size", 4);
+            badge.AddThemeFontSizeOverride("font_size", 14);
+            node.AddChild(badge);
+        }
+
+        // 悬浮时浮出的 +/- 微按钮（默认隐藏，由 UpdateDeckHover 显隐）
+        var minus = new Button
+        {
+            Text = "－",
+            Visible = false,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            Position = new Vector2(cardW - 46f, groupH - 22f),
+            CustomMinimumSize = new Vector2(20f, 20f),
+            Size = new Vector2(20f, 20f),
+        };
+        minus.SetMeta("deck_micro", true);
+        minus.Pressed += () => RemoveCard(g.TemplatePath);
+
+        var plus = new Button
+        {
+            Text = "＋",
+            Visible = false,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            Position = new Vector2(cardW - 22f, groupH - 22f),
+            CustomMinimumSize = new Vector2(20f, 20f),
+            Size = new Vector2(20f, 20f),
+        };
+        plus.SetMeta("deck_micro", true);
+        plus.Pressed += () => AddCard(g.TemplatePath);
+
+        // 按钮比 100px 宽的卡窄，卡高 140 —— 这里只是把它们压在组矩形右下角，不做额外布局
+        node.AddChild(minus);
+        node.AddChild(plus);
+
+        // 交互（需求 7）：左键 +1、右键 -1
+        // 先 AcceptEvent 再改数据：改数据会立刻重建卡组板（本节点被移出树），
+        // 之后再 AcceptEvent 就成了空操作，事件会继续冒泡给卡组框。
+        node.GuiInput += (InputEvent e) =>
+        {
+            if (!(e is InputEventMouseButton mb) || !mb.Pressed) return;
+            if (mb.ButtonIndex == MouseButton.Left)
+            {
+                node.AcceptEvent();
+                AddCard(g.TemplatePath);
+            }
+            else if (mb.ButtonIndex == MouseButton.Right)
+            {
+                node.AcceptEvent();
+                RemoveCard(g.TemplatePath);
+            }
+        };
+
+        return node;
+    }
+
+    /// <summary>
+    /// 卡图颜色排序键：取该卡颜色枚举值中的**最小者**（与 `CardColor` 定义顺序一致），
+    /// 无合法颜色时回落棕（中立 0）。见 `DeckBoardLayout.ColorKeyOf`。
+    /// </summary>
+    private static int ColorKeyOf(PlayerCardData data)
+    {
+        if (data?.Colors == null) return 0;
+        var vals = new List<int>();
+        foreach (var c in data.Colors)
+        {
+            if (!System.Enum.IsDefined(typeof(CardColor), c)) continue;   // 过滤哨兵/脏值
+            vals.Add((int)c);
+        }
+        return DeckBoardLayout.ColorKeyOf(vals);
+    }
+
+    // ============================================================
+    // 【2026-10-17】框外横滑条 ↔ 内建横滑条 同步
+    // ============================================================
+
+    /// <summary>框外横滑条被拖动 → 驱动卡组框横向滚动。</summary>
+    private void OnDeckHBarValueChanged(double value)
+    {
+        if (_syncingHBar || _deckScroll == null) return;
+        _deckScroll.ScrollHorizontal = Mathf.RoundToInt((float)value);
+    }
+
+    /// <summary>
+    /// 每帧把内建横滑条的范围/位置同步到框外条，并按"是否横向溢出"决定显隐。
+    /// 每帧做（而不是只在重建后做一次）的原因：`MaxValue/Page` 要等 ScrollContainer 完成一次布局
+    /// 才更新，`CallDeferred` 仍可能赶在布局之前；而这几行每帧成本可以忽略（需求 8：性能暂不优化）。
+    /// </summary>
+    private void SyncDeckHBarFromScroll()
+    {
+        if (_deckScroll == null || _deckHBar == null) return;
+        var inner = _deckScroll.GetHScrollBar();
+        if (inner == null) return;
+
+        if (!Mathf.IsEqualApprox((float)_deckHBar.MaxValue, (float)inner.MaxValue)) _deckHBar.MaxValue = inner.MaxValue;
+        if (!Mathf.IsEqualApprox((float)_deckHBar.Page, (float)inner.Page)) _deckHBar.Page = inner.Page;
+
+        // 仅当内容横向溢出时显示（且不遮挡卡片：它在卡组框下沿之外）
+        bool overflow = inner.MaxValue > inner.Page + 0.5f;
+        if (_deckHBar.Visible != overflow) _deckHBar.Visible = overflow;
+
+        // 滚轮在卡组框里滚动时，框外条跟随
+        if (!_syncingHBar && Mathf.Abs((float)_deckHBar.Value - (float)inner.Value) > 0.6f)
+        {
+            _syncingHBar = true;
+            _deckHBar.Value = inner.Value;
+            _syncingHBar = false;
+        }
+    }
+
+    // ============================================================
+    // 【2026-10-17】卡组板悬浮解析
+    // ============================================================
+
+    /// <summary>
+    /// 每帧解析"鼠标落在哪个同名组上"，然后显隐该组的 +/- 微按钮并弹整卡浮层。
+    ///
+    /// 为什么不用 `MouseEntered/Exited`：
+    ///   · 悬浮时浮出的 +/- 微按钮是 `MouseFilter=Stop` 的子控件，指针移入子控件会让父节点收到
+    ///     `mouse_exited` ⇒ 按钮会在鼠标按下去的瞬间消失；
+    ///   · 同名组里卡片互相遮挡，逐卡绑定 entered/exited 还要处理"被遮挡的卡"的命中。
+    /// 用组矩形的几何命中一次解决两件事（组矩形 = `(col*列宽, StartY, 卡宽, 组高)`，
+    /// 与卡片实际占据区域完全一致）。
+    /// </summary>
+    private void UpdateDeckHover()
+    {
+        if (_hoverPreview == null || _deckBoard == null) return;
+
+        Vector2 mouse = GetGlobalMousePosition();
+        int hit = -1;
+        for (int i = _groupNodes.Count - 1; i >= 0; i--)   // 后加的画在上层 ⇒ 倒序优先命中
+        {
+            var node = _groupNodes[i].Node;
+            if (node == null || !GodotObject.IsInstanceValid(node) || !node.Visible) continue;
+            if (node.GetGlobalRect().HasPoint(mouse)) { hit = i; break; }
+        }
+
+        if (hit < 0)
+        {
+            if (_hoverGroupNode != null)
+            {
+                SetGroupHoverChrome(_hoverGroupNode, false);
+                _hoverGroupNode = null;
+                _hoverPreview.HidePreview();
+            }
+            return;
+        }
+
+        var (group, hitNode) = _groupNodes[hit];
+        if (!GodotObject.IsInstanceValid(hitNode)) { _hoverGroupNode = null; return; }
+        if (ReferenceEquals(hitNode, _hoverGroupNode)) return;   // 没换组 ⇒ 什么都不用做
+
+        if (_hoverGroupNode != null && GodotObject.IsInstanceValid(_hoverGroupNode))
+            SetGroupHoverChrome(_hoverGroupNode, false);
+
+        _hoverGroupNode = hitNode;
+        SetGroupHoverChrome(hitNode, true);
+
+        if (_boardData.TryGetValue(group.TemplatePath, out var data) && data != null)
+            _hoverPreview.ShowFor((BaseCardData)data, hitNode.GlobalPosition);
+    }
+
+    /// <summary>切某个组的"悬浮态外观"：抬层 + 显隐 +/- 微按钮。</summary>
+    private static void SetGroupHoverChrome(Control node, bool on)
+    {
+        if (node == null || !GodotObject.IsInstanceValid(node)) return;
+        node.ZIndex = on ? 5 : 0;      // 抬到同列其它组之上（只在组间排序，不影响框外元素）
+        foreach (var child in node.GetChildren())
+            if (child is Button b && b.HasMeta("deck_micro")) b.Visible = on;
+    }
+
+
+    /// <summary>
+    /// 【2026-10-17】卡组构成统计条：按颜色、费用分别统计**张数**（按份数累计）。
+    ///
+    ///   · 颜色：多色卡对它的每个颜色**各计一次** —— 与构筑限制（`CouncilRestriction.GetActualCount`）
+    ///     的口径一致（那条规则也是"含该颜色即计入"），所以两处数字能对上；
+    ///     代价是存在多色卡时，颜色合计可能大于总张数。
+    ///   · 费用：按 `Cost` 分组、升序排列；`Cost &lt; 0`（不可直接打出）单独归为"不可打出"。
+    ///
+    /// 显示形如：<c>卡组构成： 黄25 蓝25 1费12 2费24 不可打出3</c>
+    /// </summary>
+    private void RefreshDeckStats()
+    {
+        if (_statsLabel == null) return;
+
+        var colorCounts = new int[9];
+        var costCounts = new Dictionary<int, int>();
+        int unplayable = 0;
+        bool any = false;
+
+        foreach (var kv in _workingCards)
+        {
+            if (!_boardData.TryGetValue(kv.Key, out var data) || data == null) continue;
+            any = true;
+            int copies = kv.Value;
+
+            bool anyColor = false;
+            if (data.Colors != null)
+            {
+                foreach (var c in data.Colors)
+                {
+                    if (!System.Enum.IsDefined(typeof(CardColor), c)) continue;   // 过滤哨兵/脏值
+                    int ci = (int)c;
+                    if (ci < 0 || ci >= colorCounts.Length) continue;
+                    colorCounts[ci] += copies;
+                    anyColor = true;
+                }
+            }
+            if (!anyColor) colorCounts[(int)CardColor.Brown] += copies;           // 无颜色按默认棕/中立
+
+            if (data.Cost < 0) unplayable += copies;
+            else costCounts[data.Cost] = (costCounts.TryGetValue(data.Cost, out int n) ? n : 0) + copies;
+        }
+
+        if (!any)
+        {
+            _statsLabel.Text = "卡组构成：—";
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder("卡组构成： ");
+        for (int i = 0; i < colorCounts.Length; i++)
+        {
+            if (colorCounts[i] <= 0) continue;
+            sb.Append(ColorCn[(CardColor)i]).Append(WebSafeText.Int(colorCounts[i])).Append(' ');
+        }
+
+        var costs = new List<int>(costCounts.Keys);
+        costs.Sort();   // int 升序：Int32 默认比较器，不碰 ICU
+        foreach (int c in costs)
+            sb.Append(WebSafeText.Int(c)).Append('费').Append(WebSafeText.Int(costCounts[c])).Append(' ');
+
+        if (unplayable > 0)
+            sb.Append("不可打出").Append(WebSafeText.Int(unplayable)).Append(' ');
+
+        _statsLabel.Text = sb.ToString().TrimEnd(' ');
     }
 
     private void RefreshDeckView()
     {
         ulong __t0 = Time.GetTicksMsec();
-        _fillToken++;   // 作废可能在途的卡池渐进填充（它持有的是卡池行的节点，不能往卡组行上贴）
+        _fillToken++;   // 作废可能在途的卡池渐进填充（它持有的是卡池行的节点，不能往卡组板上贴）
 
-        ClearChildren(_deckList);
+        // 【2026-10-17】卡组框改为"固定尺寸列式卡组板"：一次重建全部同名组节点（取代原来的逐行 HBox）
+        RebuildDeckBoard();
+        // 秘社信息条（卡组框之外；内容量保持原样：卡图 + 名称 + 移除）
+        BuildCouncilInfoStrip();
 
-        BuildDeckCouncilRow();
-
-        int total = 0;
-        int deckFail = 0, texHit = 0, texLoad = 0;
-        ulong dData = 0, dTex = 0, dNode = 0;
-        foreach (var kv in _workingCards)
-        {
-            total += kv.Value;
-            ulong __sNode = Time.GetTicksMsec();
-            var row = new HBoxContainer();
-
-            // 轻量卡图（不实例化 CardUI）
-            ulong s = Time.GetTicksMsec();
-            var data = ResourceLoader.Load<PlayerCardData>(kv.Key);
-            dData += Time.GetTicksMsec() - s;
-
-            // 【B6】与卡池共用 _texCache：原来每张都无条件重新 Load，点一次 +/- 就把整个卡组重载一遍
-            Texture2D tex = null;
-            if (data != null)
-            {
-                string imgPath = CardUI.ResolveCardImagePath(data.UID);
-                if (!string.IsNullOrEmpty(imgPath))
-                {
-                    if (_texCache.TryGetValue(imgPath, out tex))
-                    {
-                        texHit++;
-                    }
-                    else
-                    {
-                        s = Time.GetTicksMsec();
-                        tex = ResourceLoader.Load<Texture2D>(imgPath);
-                        dTex += Time.GetTicksMsec() - s; texLoad++;
-                        if (tex != null) _texCache[imgPath] = tex;
-                    }
-                }
-            }
-            var tr = new TextureRect();
-            tr.Texture = tex;
-            tr.StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered;
-            tr.ExpandMode = (TextureRect.ExpandModeEnum)1; // FitWidth：纹理按节点宽度缩放，否则按原始像素绘制导致过大
-            tr.CustomMinimumSize = new Vector2(100, 140);
-            tr.Size = new Vector2(100, 140);
-            tr.SizeFlagsHorizontal = 0;
-            if (tex == null) { deckFail++; GD.PrintErr($"【DeckBuilder】卡组卡图加载失败: {kv.Key}"); }
-            row.AddChild(tr);
-
-            var count = new Label { Text = $"x{kv.Value}", CustomMinimumSize = new Vector2(40, 140), VerticalAlignment = VerticalAlignment.Center };
-            var minus = new Button { Text = "-", CustomMinimumSize = new Vector2(28, 140) };
-            var plus = new Button { Text = "+", CustomMinimumSize = new Vector2(28, 140) };
-            minus.Pressed += () => RemoveCard(kv.Key);
-            plus.Pressed += () => AddCard(kv.Key);
-            row.AddChild(count);
-            row.AddChild(minus);
-            row.AddChild(plus);
-
-            _deckList.AddChild(row);
-            dNode += Time.GetTicksMsec() - __sNode;
-        }
-
+        int total = GetDeckCardCount();
         _countLabel.Text = $"{total} 张";
+        // 卡组构成统计条（颜色数量 + 费用数量），必须在 RebuildDeckBoard 之后调用：
+        // 它复用那一趟已加载好的模板缓存 _boardData，不额外 Load 模板。
+        RefreshDeckStats();
+
+        GD.Print($"【DeckBuilder】刷新卡组视图：共 {total} 张 / 卡种 {_workingCards.Count} / 组 {_groupNodes.Count}");
         WebPerfParams.Summary(
-            $"deck.view rows={_workingCards.Count} cards={total} data={dData}ms tex={dTex}ms(load {texLoad}/hit {texHit}) "
-            + $"nodes={dNode}ms total={Time.GetTicksMsec() - __t0}ms");
-        GD.Print($"【DeckBuilder】刷新卡组视图：共 {total} 张 / 加载失败 {deckFail} 张 / 行数 {_deckList.GetChildCount()}");
+            $"deck.view cards={total} kinds={_workingCards.Count} groups={_groupNodes.Count} "
+            + $"total={Time.GetTicksMsec() - __t0}ms");
+
         // 【2026-10-12 Web 修复】原来是 `$"卡组{System.DateTime.Now:HHmmss}"`。
         // 自定义日期时间格式串会走 DateTimeFormatInfo → 全球化/ICU 路径，
         // 实测在魔改版 Web 运行时上让 wasm 直接 abort（本行正是 RefreshDeckView 的最后崩点）。
@@ -1289,27 +1935,20 @@ public partial class DeckBuilder : Control
     // ============================================================
     // 加载 / 保存 / 返回
     // ============================================================
-    private void OnLoadSelected(long index)
-    {
-        int i = (int)index;
-        if (i <= 0)
-        {
-            _workingCards.Clear();
-            _nameEdit.Text = "";
-            RefreshDeckView();
-            return;
-        }
-        string fileName = _loadOption.GetItemText(i);
-        LoadDeckFromFile(DecksDir + "/" + fileName);
-    }
-
+    /// <summary>
+    /// 载入卡组文件（唯一入口：下拉列表点选、以及从主菜单/房间带入的编辑目标）。
+    /// 除了打开卡组，**同时把卡组名回填到输入框**（需求 1）；保存时按这个名字覆盖同名文件。
+    /// </summary>
     private void LoadDeckFromFile(string path)
     {
         var deck = DeckListLoader.Load(path);
         if (deck == null) return;
         _workingCards.Clear();
         foreach (var e in deck.Cards) _workingCards[e.TemplatePath] = e.Copies;
-        _nameEdit.Text = deck.DeckName;
+        // 文件名兜底：老卡组 JSON 可能没有 deckName，此时用文件名当卡组名（否则输入框一片空白）
+        _nameEdit.Text = WebSafeText.IsNullOrWhiteSpaceAscii(deck.DeckName)
+            ? System.IO.Path.GetFileNameWithoutExtension(path)
+            : deck.DeckName;
         if (deck.Councils.Count > 0) _workingCouncil = deck.Councils[0].TemplatePath;
         RefreshDeckView();
         GD.Print($"【DeckBuilder】已载入卡组：{path}");
@@ -1318,27 +1957,24 @@ public partial class DeckBuilder : Control
     // ============================================================
     // 【秘社批次】构筑限制：展示 + 保存拦截
     // ============================================================
-    /// <summary>运行期创建"秘社限制"面板（挂在 DeckPanel 顶部，不影响既有场景节点）。</summary>
+    /// <summary>
+    /// 【秘社批次】运行期创建"秘社限制"面板。
+    /// 【2026-10-17 卡组框重做】改挂在 **卡组框之外** 的信息带里（`DeckPanel/InfoPanel/RestrictionScroll`）：
+    /// 卡组板现在要独占整个卡组框（列高 = 框可视高度），不能再用 `DeckScroll.OffsetTop = 56` 给它让位。
+    /// 明细过长时由外层 ScrollContainer 滚动，不挤压卡组框。
+    /// </summary>
     private void BuildRestrictionPanel()
     {
-        var deckPanel = GetNodeOrNull<Control>("DeckPanel");
-        if (deckPanel == null) return;
+        var host = GetNodeOrNull<ScrollContainer>("DeckPanel/InfoPanel/RestrictionScroll");
+        if (host == null) return;
 
-        _restrictionBox = new VBoxContainer { Name = "RestrictionBox" };
-        _restrictionBox.SetAnchorsPreset(Control.LayoutPreset.TopWide);
-        _restrictionBox.OffsetLeft = 8;
-        _restrictionBox.OffsetRight = -8;
-        _restrictionBox.OffsetTop = 4;
-        _restrictionBox.OffsetBottom = 4;
+        _restrictionBox = new VBoxContainer { Name = "RestrictionBox", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         _restrictionBox.AddThemeConstantOverride("separation", 2);
-        deckPanel.AddChild(_restrictionBox);
+        host.AddChild(_restrictionBox);
 
         _restrictionSummary = new Label { Name = "RestrictionSummary", Text = "" };
+        _restrictionSummary.AutowrapMode = TextServer.AutowrapMode.Arbitrary;
         _restrictionBox.AddChild(_restrictionSummary);
-
-        // 给 DeckScroll 留出顶部空间，避免被限制面板压住。
-        var scroll = deckPanel.GetNodeOrNull<Control>("DeckScroll");
-        if (scroll != null) scroll.OffsetTop = 56;
     }
 
     /// <summary>
@@ -1481,6 +2117,9 @@ public partial class DeckBuilder : Control
 
         string path = DecksDir + "/" + SanitizeFileName(display) + ".json";
         DeckListLoader.Save(deck, path);
+        // 输入框回填"实际用于文件名的名字"：名字里若有非法文件名字符会被替换成下划线，
+        // 回填后下次保存仍命中同一个文件（真正实现"按卡组名覆盖"）。
+        _nameEdit.Text = display;
         GameManager.Instance.SelectedDeckPath = path;
         GameManager.Instance.UseSelectedDeck = true;
         GD.Print($"【DeckBuilder】卡组已保存：{path}");
@@ -1525,7 +2164,7 @@ public partial class DeckBuilder : Control
     private Button _filterToggleButton;
     private ScrollContainer _filterBoxScroll;
     private VBoxContainer _filterBox;
-    private LineEdit _fNameBox;
+    private LineEdit _fUidBox;
     private LineEdit _fSubNameBox;
     private LineEdit _fSubCatBox;
     private OptionButton _fCategoryOption;
@@ -1556,6 +2195,20 @@ public partial class DeckBuilder : Control
     private static readonly string[] FilterAttrNames =
         { "调查≥", "战斗≥", "势力≥", "防御≥", "先手调查≥", "先手战斗≥", "先手势力≥" };
 
+    /// <summary>
+    /// 7 个属性在 2 列网格里的**显示顺序**（用户 2026-10-17 口径）：
+    ///   调查 / 先手调查 同一行；战斗 / 先手战斗 同一行；势力 / 先手势力 同一行；防御单独一行。
+    /// 注意：这里只决定"摆在哪一格"，`_fAttrEdits` 仍按 `DeckFilterModel.Attr*` 下标存放，
+    /// 故取值/回填逻辑不受影响。
+    /// </summary>
+    private static readonly int[] FilterAttrDisplayOrder =
+    {
+        DeckFilterModel.AttrInvestigation, DeckFilterModel.AttrFsInvestigation,
+        DeckFilterModel.AttrStrength,      DeckFilterModel.AttrFsStrength,
+        DeckFilterModel.AttrPower,         DeckFilterModel.AttrFsPower,
+        DeckFilterModel.AttrDefense,
+    };
+
     private void BuildFilterPanel()
     {
         var poolPanel = GetNodeOrNull<Control>("PoolPanel");
@@ -1584,12 +2237,14 @@ public partial class DeckBuilder : Control
         _filterBox.AddThemeConstantOverride("separation", 4);
         _filterBoxScroll.AddChild(_filterBox);
 
-        // 第 1 行：卡名 / 副卡名
+        // 第 1 行：卡号 / 副卡名
+        // 【2026-10-17 · 检索目标互换】这里原来是"卡名"（与顶部搜索框重复）；
+        // 现在顶部搜索框改成按卡名过滤，本格改成**按卡号**过滤（文件名/UID 子串，如 JC001）。
         var row1 = MkRow();
-        row1.AddChild(MkLabel("卡名", 52));
-        _fNameBox = MkEdit("卡名包含…");
-        _fNameBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        row1.AddChild(_fNameBox);
+        row1.AddChild(MkLabel("卡号", 52));
+        _fUidBox = MkEdit("编号包含…如 JC001");
+        _fUidBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        row1.AddChild(_fUidBox);
         row1.AddChild(MkLabel("副卡名", 48));
         _fSubNameBox = MkEdit("暂无数据");
         _fSubNameBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
@@ -1620,17 +2275,18 @@ public partial class DeckBuilder : Control
         row3.AddChild(_fSubCatBox);
         _filterBox.AddChild(row3);
 
-        // 第 4 行区：7 个属性（≥ 语义）
+        // 第 4 行区：7 个属性（≥ 语义）——按 FilterAttrDisplayOrder 摆位：
+        //   调查/先手调查 · 战斗/先手战斗 · 势力/先手势力 各占一行，防御单独一行
         var attrGrid = new GridContainer { Columns = 2 };
         attrGrid.AddThemeConstantOverride("h_separation", 10);
         attrGrid.AddThemeConstantOverride("v_separation", 2);
-        for (int i = 0; i < DeckFilterModel.AttrCount; i++)
+        foreach (int ai in FilterAttrDisplayOrder)
         {
             var cell = MkRow(4);
             cell.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-            cell.AddChild(MkLabel(FilterAttrNames[i], 68));
-            _fAttrEdits[i] = MkNumEdit();
-            cell.AddChild(_fAttrEdits[i]);
+            cell.AddChild(MkLabel(FilterAttrNames[ai], 68));
+            _fAttrEdits[ai] = MkNumEdit();
+            cell.AddChild(_fAttrEdits[ai]);
             attrGrid.AddChild(cell);
         }
         _filterBox.AddChild(attrGrid);
@@ -1794,8 +2450,8 @@ public partial class DeckBuilder : Control
 
         float yBoxTop = y + toggleH + 4f;
 
-        // 给 PoolScroll 保底 150px（PoolPager 占底部 0.07）
-        float scrollTopLimit = h * 0.93f - 150f;
+        // 给 PoolScroll 保底 150px（PoolPager 固定在底部 -42..-6，故卡池下界 = h - 46）
+        float scrollTopLimit = (h - 46f) - 150f;
         float maxBoxH = Mathf.Max(60f, scrollTopLimit - yBoxTop - 6f);
 
         float contentH = 0f;
@@ -1824,7 +2480,7 @@ public partial class DeckBuilder : Control
             + " toggleH=" + WebSafeText.Int((int)toggleH)
             + " filterBoxH=" + WebSafeText.Int((int)boxH)
             + " contentH=" + WebSafeText.Int((int)contentH)
-            + " poolScrollH=" + WebSafeText.Int((int)(h * 0.93f - (yBoxTop + boxH + 6f)))
+            + " poolScrollH=" + WebSafeText.Int((int)((h - 46f) - (yBoxTop + boxH + 6f)))
             + " expanded=" + (_filterExpanded ? "1" : "0"));
     }
 
@@ -1917,7 +2573,8 @@ public partial class DeckBuilder : Control
     /// <summary>点「搜索」：把面板上的条件读进 _filter，然后重新过滤 + 重绘卡池。</summary>
     private void OnFilterSearch()
     {
-        _filter.NameQuery = _fNameBox.Text ?? "";
+        // 卡名由顶部搜索框实时提供（ApplyPoolFilter 里写 _filter.NameQuery），本面板只管卡号
+        _filter.UidQuery = _fUidBox.Text ?? "";
         _filter.SubCardNameQuery = _fSubNameBox.Text ?? "";
         _filter.SubCategoryQuery = _fSubCatBox.Text ?? "";
 

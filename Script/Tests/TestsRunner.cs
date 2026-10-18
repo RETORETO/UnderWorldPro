@@ -98,6 +98,7 @@ namespace Script.Tests
                 new P3DestroyOnTargetTests(),          // P3·K2 扩展：消灭"目标卡上"的整组卡 + JC013 貘 / JC017 除咒师
                 new P3SpiritKeywordTests(),            // 灵体前缀必须授予关键词：6 张卡的灵体防止伤害（JC022 实测 + 同类排查）
                 new P5LayoutMathTests(),               // UI 几何：横置卡视觉中心＝Position+PivotOffset（附属/封印排版与卡位摆放基准）
+                new DeckBoardLayoutTests(),            // 卡组编辑器：同名堆叠 / 50 张切分 / 换列 / 压缩 offset 布局算法
                 new P3RuntimeKeywordTests(),           // P3·K13：运行期授予的触发类关键词参与收集 + 群体 Gain 主体 + JC024①/ JC089
                 new P3CompositeTargetTests(),          // P3：复合目标限制（SpecAlt 两条声明 OR）+ HostIsCouncil + JC043 纵火狂
                 new P3LatentTests(),                   // P3：新时机「被潜伏/翻面时」(OnLatent) + 群体伤害 + JC054 蒙古死亡蠕虫①
