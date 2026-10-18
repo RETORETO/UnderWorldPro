@@ -18,7 +18,7 @@
 | **P1** 联机视角归一 | ✅ 已完成 | `ArenaOl.cs` 收口为 `ViewMirrored/ViewCtr/HandCtr/AssetCtr/ScoreCtr/CouncilCtr/DeckZoneOf/GraveZoneOf/PlayerAreaNode/SeatName`；**身份判断（`SendIntentAs`/`ControllerId`/`IsLocalPlayer`）不镜像** |
 | **P2** 争夺区重排 | ✅ 已完成 | 槽 480×540（`AreaSlot.tscn` + `AreaSlot.cs` 兜底值 + `ArrangeAreas`）；`Player1Area` 250→290、`CenterArea` 580→540、`HandContainer` 250→290、`ScoreZone` 随之下移，`StackPanel` 同步 |
 | **P3a** 角标折叠 | ✅ 已完成 | 新增 `CardBadges.Apply()`；4 个实例级偏移函数改为"成员 `Visible=false` + 宿主角标"；**cat-1（结附/封印于地区）不折叠**，仍走 `ArrangeAreaAttachmentsAndSeals` 平铺 |
-| **P3b** 角标 hover 展开 | ✅ 已完成 | 新增 `CardBadgePeek` + `Arena.BadgePeek.cs`；点击成员只调 `CardPickWindow.SelectByUid`（置选中、不提交）；无选择窗时纯浏览 |
+| **P3b** 角标 hover 展开 | ✅ 已完成 | 新增 `CardBadgePeek` + `Arena.BadgePeek.cs`；**封印/附属分家**（各自独立悬浮区，一次只列一种，面板有标题）；**双击成员＝发动激活能力**（复用既有双击链路，补回 JC020 这类被折叠附属的唯一入口）；单击成员只调 `CardPickWindow.SelectByUid`（置选中、不提交）；无选择窗时纯浏览 |
 | **P4** 资产/分数层叠 | ✅ 已完成 | 新增 `CardLayoutHelper.LayoutStacked()`（露边 36px，放不下自动压缩）；单机 + 联机双侧接入 |
 | **P4** 对手手牌紧凑 | ⏸ 待拍板 | 单机是同屏热座，压成"一张牌背 + 数字"会**直接废掉热座可玩性** ⇒ 需用户确认是否只改联机端 |
 | **P5** 手牌 hover 上浮 | ✅ 已完成 | `CardUI` 叠加 `HoverOffset()`（+28px / 1.18x），移动节点而非 shader/pivot ⇒ `GetVisualGlobalRect()` 自动一致；手牌上下文**抑制整卡预览** |

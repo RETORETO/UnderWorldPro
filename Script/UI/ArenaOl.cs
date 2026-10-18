@@ -380,36 +380,49 @@ namespace Script.UI
             base._ExitTree();
         }
 
-        /// <summary>【P3b】角标悬浮展开：联机侧纯浏览（联机没有 CardPickWindow，"置选中"不适用）。</summary>
+        /// <summary>
+        /// 【P3b】角标悬浮展开（联机侧）。
+        /// 【2026-10-18 用户口径】① 封印卡与附属卡来自不同区域 ⇒ 按 `CardBadgeKind` **分开列**，不混排；
+        /// ② 双击面板里的卡＝发动激活能力（转调 `OnAttachmentDoubleClicked`，与场上双击同一出口，
+        /// 客户端只上行意图，服务端权威校验）。
+        /// 联机没有 `CardPickWindow`，"置选中"不适用 ⇒ 单击为纯浏览。
+        /// </summary>
         private CardBadgePeek _badgePeek;
         private int _badgePeekHideToken;
 
         private void InitBadgePeek()
         {
             CardBadges.OnBadgeHover = ShowBadgePeek;
-            CardBadges.OnBadgeHoverEnd = _ => ScheduleHideBadgePeek();
+            CardBadges.OnBadgeHoverEnd = (host, kind) => ScheduleHideBadgePeek();
         }
 
         private void DetachBadgePeek()
         {
-            if (CardBadges.OnBadgeHover == (System.Action<Control>)ShowBadgePeek) CardBadges.OnBadgeHover = null;
+            if (CardBadges.OnBadgeHover == (System.Action<Control, CardBadgeKind>)ShowBadgePeek)
+                CardBadges.OnBadgeHover = null;
             CardBadges.OnBadgeHoverEnd = null;
             if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)) _badgePeek.HideNow();
         }
 
-        private void ShowBadgePeek(Control host)
+        private void ShowBadgePeek(Control host, CardBadgeKind kind)
         {
             if (host == null || !GodotObject.IsInstanceValid(host)) return;
             var inst = host is CardUI c ? c.Instance : (host as CouncilCardUI)?.Instance;
             if (inst == null) return;
 
             var members = new System.Collections.Generic.List<CardInstance>();
-            if (inst.AttachedCards != null)
-                foreach (var m in inst.AttachedCards)
-                    if (m != null) members.Add(m);
-            if (inst.SealedCards != null)
-                foreach (var s in inst.SealedCards)
-                    if (s != null && ReferenceEquals(s.SealedBy, inst)) members.Add(s);
+            if (kind == CardBadgeKind.Seal)
+            {
+                if (inst.SealedCards != null)
+                    foreach (var s in inst.SealedCards)
+                        if (s != null && ReferenceEquals(s.SealedBy, inst)) members.Add(s);
+            }
+            else
+            {
+                if (inst.AttachedCards != null)
+                    foreach (var m in inst.AttachedCards)
+                        if (m != null && ReferenceEquals(m.AttachedTo, inst)) members.Add(m);
+            }
             if (members.Count == 0) return;
 
             _badgePeekHideToken++;
@@ -420,7 +433,17 @@ namespace Script.UI
                 _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
                 AddChild(_badgePeek);
             }
-            _badgePeek.ShowNear(host, members, _ => _badgePeek?.HideNow());
+            string title = kind == CardBadgeKind.Seal ? "封印卡" : "附属卡";
+            _badgePeek.ShowNear(host, title, members, _ => _badgePeek?.HideNow(), OnBadgeMemberActivated);
+        }
+
+        /// <summary>展开面板里双击成员 ⇒ 走既有联机双击链路（上行激活意图，服务端校验）。</summary>
+        private void OnBadgeMemberActivated(CardUI ui)
+        {
+            if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) return;
+            _badgePeek?.HideNow();
+            GD.Print($"[ArenaOl] 角标展开面板双击激活：{ui.Instance.PlayerTemplate?.CardName}（{ui.Instance.UID}）");
+            OnAttachmentDoubleClicked(ui);
         }
 
         private void ScheduleHideBadgePeek()
@@ -2297,7 +2320,12 @@ namespace Script.UI
             if (hostUi == null || !GodotObject.IsInstanceValid(hostUi)) return;
             CardInstance inst = hostUi is CardUI c ? c.Instance : (hostUi as CouncilCardUI)?.Instance;
             if (inst == null) return;
-            int attached = inst.AttachedCards?.Count ?? 0;
+            // 计数口径必须与展开面板的过滤条件**同源**（否则"角标写附×2、面板只列 1 张"）：
+            // 附属只算 AttachedTo == 本宿主，封印只算 SealedBy == 本宿主（封印于地区的走 cat-1 平铺）。
+            int attached = 0;
+            if (inst.AttachedCards != null)
+                foreach (var m in inst.AttachedCards)
+                    if (m != null && ReferenceEquals(m.AttachedTo, inst)) attached++;
             int sealedCount = 0;
             if (inst.SealedCards != null)
                 foreach (var s in inst.SealedCards)

@@ -168,6 +168,9 @@ public partial class Arena
         if (hostInst.AttachedCards != null)
             foreach (var m in hostInst.AttachedCards)
             {
+                // 只算"结附于本卡"（AttachedTo == 本宿主）：结附于地区的（AttachedTo == null）走 cat-1 平铺，
+                // 与展开面板的过滤条件**必须同源**，否则会出现"角标写附×2、面板只列 1 张"。
+                if (m == null || !ReferenceEquals(m.AttachedTo, hostInst)) continue;
                 var ui = m == null ? null : FindCardUIByUID(m.UID);
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
                 attached++;

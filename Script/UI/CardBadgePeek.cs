@@ -8,12 +8,21 @@ namespace Script.UI
     /// <summary>
     /// 【P3b·2026-10-18】角标悬浮展开面板：在宿主卡旁边横向列出被折叠的成员卡面。
     ///
+    /// 【2026-10-18 用户口径】① 封印卡与附属卡来自两个不同区域 ⇒ 面板**一次只列一种**
+    /// （标题写明"封印卡"或"附属卡"，由调用方按 `CardBadgeKind` 过滤后传入）；
+    /// ② 面板里的卡**双击＝发动激活能力**（如 JC020 引匕的飞刀：横置自身横置目标暗藏者）——
+    /// 这些卡被折叠成角标后，场上已经没有可双击的卡面了，双击入口必须在这里补回来。
+    ///
     /// 定位＝`Layers.CardHoverPreview`（830），与整卡预览同层但**互斥**（视图在展开前先关掉整卡预览，
     /// 保证同一时刻只有一个浮层）。位置优先放在宿主**上方**（不遮住宿主与争夺区），空间不足则放下方，
     /// 最后统一钳进视口。
     ///
-    /// 出口：点击成员 → 回调 `onPick(uid)`。调用方（战场视图）只把它转成
-    /// `CardPickWindow.SelectByUid`（**只置选中、不提交**，仍需用户按「确认」）；没有选择窗时纯浏览。
+    /// 出口：
+    ///  · 单击成员 → `onPick(uid)`：调用方只把它转成 `CardPickWindow.SelectByUid`
+    ///    （**只置选中、不提交**，仍需用户按「确认」）；没有选择窗时纯浏览。
+    ///  · 双击成员 → `onActivate(cardUI)`：走既有双击激活链路（`Arena.OpenAttachmentActivateChoice`
+    ///    / `ArenaOl.OnAttachmentDoubleClicked`），是否真的可发动、要不要取目标、横置与付费
+    ///    全部由 Controller/服务端把关，本面板不写 Model。
     /// </summary>
     public partial class CardBadgePeek : Control
     {
@@ -23,8 +32,11 @@ namespace Script.UI
         private const float Pad = 6f;
 
         private PanelContainer _panel;
+        private VBoxContainer _column;
+        private Label _title;
         private HBoxContainer _row;
         private Action<string> _onPick;
+        private Action<CardUI> _onActivate;
         private bool _mouseInside;
 
         public override void _Ready()
@@ -38,9 +50,23 @@ namespace Script.UI
             _panel.AddThemeStyleboxOverride("panel", BuildStyle());
             AddChild(_panel);
 
+            _column = new VBoxContainer();
+            _column.AddThemeConstantOverride("separation", 4);
+            _panel.AddChild(_column);
+
+            // 标题：明确"这一排是封印卡还是附属卡"（两者来自不同区域，不混排）
+            _title = new Label
+            {
+                MouseFilter = MouseFilterEnum.Ignore,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            _title.AddThemeFontSizeOverride("font_size", 12);
+            _title.AddThemeColorOverride("font_color", new Color(1f, 0.95f, 0.75f));
+            _column.AddChild(_title);
+
             _row = new HBoxContainer();
             _row.AddThemeConstantOverride("separation", (int)Gap);
-            _panel.AddChild(_row);
+            _column.AddChild(_row);
 
             MouseEntered += () => _mouseInside = true;
             MouseExited += () => { _mouseInside = false; };
@@ -50,12 +76,22 @@ namespace Script.UI
         public bool ContainsGlobalPoint(Vector2 globalPos)
             => Visible && GetGlobalRect().Grow(4f).HasPoint(globalPos);
 
-        /// <summary>展开：在 host 旁边列出 members（超出 6 张只列前 6 张并加「…」提示）。</summary>
-        public void ShowNear(Control host, IReadOnlyList<CardInstance> members, Action<string> onPick)
+        /// <summary>
+        /// 展开：在 host 旁边列出 members（超出 6 张只列前 6 张并加「…」提示）。
+        /// </summary>
+        /// <param name="title">标题（"封印卡" / "附属卡"），一次只列一种来源。</param>
+        /// <param name="onPick">单击：置选中（不提交）。</param>
+        /// <param name="onActivate">双击：发动激活能力（由调用方走既有双击链路）。</param>
+        public void ShowNear(Control host, string title, IReadOnlyList<CardInstance> members,
+                             Action<string> onPick, Action<CardUI> onActivate)
         {
             if (host == null || !GodotObject.IsInstanceValid(host) || members == null || members.Count == 0) return;
 
             _onPick = onPick;
+            _onActivate = onActivate;
+            _title.Text = title ?? string.Empty;
+            _title.Visible = !string.IsNullOrEmpty(title);
+
             foreach (Node child in _row.GetChildren())
             {
                 _row.RemoveChild(child);
@@ -88,15 +124,23 @@ namespace Script.UI
                 ui.SetFace(!inst.IsHidden);
 
                 string uid = inst.UID;
-                ui.GuiInput += ev => { if (ev is InputEventMouseButton mb && mb.Pressed && mb.ButtonIndex == MouseButton.Left) _onPick?.Invoke(uid); };
+                var capturedUi = ui;
+                ui.GuiInput += ev =>
+                {
+                    if (ev is not InputEventMouseButton mb) return;
+                    if (!mb.Pressed || mb.ButtonIndex != MouseButton.Left) return;
+                    // 双击＝发动激活能力（JC020 等被折叠的附属卡唯一入口）；单击＝置选中（不提交）
+                    if (mb.DoubleClick) _onActivate?.Invoke(capturedUi);
+                    else _onPick?.Invoke(uid);
+                };
             }
 
             if (members.Count > shown)
                 _row.AddChild(new Label { Text = "…", VerticalAlignment = VerticalAlignment.Center });
 
-            // 先量尺寸再定位：PanelContainer 的合并最小尺寸此时已可用
-            Vector2 want = new Vector2(_row.GetCombinedMinimumSize().X + Pad * 2f,
-                                       cardH + Pad * 2f);
+            // 先量尺寸再定位：标题 + 卡列的合并最小尺寸此时已可用
+            Vector2 content = _column.GetCombinedMinimumSize();
+            Vector2 want = new Vector2(content.X + Pad * 2f, content.Y + Pad * 2f);
 
             var viewport = GetViewportRect().Size;
             Vector2 hostPos = host.GlobalPosition;

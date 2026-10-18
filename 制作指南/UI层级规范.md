@@ -77,6 +77,20 @@
 - **角标可点区域只覆盖右下角**（`MouseFilter = Pass`）：既收 `mouse_entered/exited` 做 hover 展开，
   又不吞掉卡片点击。展开面板走浮层带 `CardHoverPreview = 830`（`Script/UI/CardBadgePeek.cs`）。
 
+**实施订正·续（2026-10-18 用户口径：角标分家 + 双击激活）**：
+
+- **「封×N」与「附×N」是两个独立命中区**，根节点 `__CardBadges` 改成 `MouseFilter = Ignore`（只做布局），
+  两个 `Label` 各自 `Pass` + 各自 `mouse_entered/exited`，回调携带 `CardBadgeKind`
+  （`CardBadges.OnBadgeHover(host, kind)`）。原因：封印卡与附属卡来自**两个不同区域**，
+  混在一排里玩家会选错对象；悬浮哪一类就只展开那一类，面板标题直接写「封印卡」/「附属卡」。
+- **展开面板里的卡双击＝发动激活能力**（`CardBadgePeek` 的 `mb.DoubleClick` → `onActivate`）：
+  附属/封印被折叠成角标后场上已无卡面可双击，`JC020 引匕的飞刀` 这类 `AttachmentActivated` 能力
+  会彻底变成死卡。双击**必须复用既有双击链路**（单机 `_onAttachmentDoubleClickedForward`、
+  联机 `OnAttachmentDoubleClicked`），不得另开通道绕开门禁/日志。
+- **计数与列表同源**：`CollapseOneHost` / `RefreshHostBadge` 统计与展开面板过滤都用
+  `ReferenceEquals(m.AttachedTo, host)` / `ReferenceEquals(s.SealedBy, host)`，
+  否则会出现"角标写附×2、面板只列 1 张"。回归由 `Script/Tests/BadgePeekTests.cs` 锁定。
+
 ## 三、模态窗口为什么不占这张表
 
 调查/战斗/破平/触发排序/选目标等弹窗的根节点都是 Godot **`Window`**（独立子窗口），
