@@ -340,6 +340,7 @@ namespace Script.UI.Interaction
                 ClosePickWindowSilently();
                 _targetSelectionWindow.Visible = false;
                 _targetSelectionWindow.OnCancelled = null;
+                _targetSelectionWindow.OnTargetPicked = null;   // 一次性：防止收尾后重复投递（重复解锁/重复入堆叠）
                 // 选目标结束，恢复按钮状态（批量预选期间不改，由 NotifyBatchFinished 统一恢复）
                 if (!_batchSelectMode) _triggerOrderWindow?.SetButtonsEnabled(true);
             }
@@ -515,6 +516,7 @@ namespace Script.UI.Interaction
                 }
                 _targetSelectionWindow.Visible = false;
                 _targetSelectionWindow.OnExtra = null;
+                _targetSelectionWindow.OnTargetPicked = null;   // 一次性：防止收尾后重复投递再次触发收尾（重复解锁）
                 _cancelActivateTargetSelection = null;
                 _triggerOrderWindow?.SetButtonsEnabled(true);
             }
@@ -538,10 +540,18 @@ namespace Script.UI.Interaction
 
             _targetSelectionWindow.OnTargetPicked = (uid) =>
             {
+                // 幂等：窗口把回调挂在自身字段上（`PickFromArena` 不清理），同一帧/重复投递可能进来第二次。
+                // 收尾只允许做一次，否则会重复 `UnlockModal` 把外层的原子锁一并掀掉。
+                if (!_targetSelectionActive) return;
                 GD.Print($"[TriggerCoordinator] 激活选目标 OnTargetPicked UID={uid}");
-                FinishSelection();
-                _onTargetPicked?.Invoke(uid);
+                // 【2026-10 修复·JC041 第二次弃牌不落地】**先取走再回调**：
+                // 回调链里常会**立刻发起下一次选择**（如 JC041「双方各弃一张」：玩家1 弃完 → 玩家2 立刻弹窗）。
+                // 旧写法把 `_onTargetPicked = null` 放在回调**之后**，于是内层刚装上的新回调被这行清空 ⇒
+                // 第二次点选会打印 `OnTargetPicked` 却**没有任何人接收**（日志实测：点完牌不弃牌）。
+                var cb = _onTargetPicked;
                 _onTargetPicked = null;
+                FinishSelection();
+                cb?.Invoke(uid);
             };
             // 【2026-09·K15】该槽的出口按钮（留空该槽 / 取消不打出）：只是"离开本槽"的通道，不选目标
             _targetSelectionWindow.OnExtra = () =>

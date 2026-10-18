@@ -3017,6 +3017,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             bool success = _actionService.PlayCard(playerId, card.UID, targetAreaName, targetCardUid, sacrificeUid);
             if (!success)
             {
+                // 【诊断】规则层拒绝时把"为什么"留在 UI 侧日志里（真正原因由 TurnManager 打印）：
+                // 这条一旦出现，说明"额外费用选择完成但打出被拒"——卡会退回手牌，不会白付牺牲。
+                GD.PrintErr($"[Arena] ❌ 【K10 额外费用】{card.PlayerTemplate?.CardName}（牺牲={sacrificeUid}）" +
+                            $"打出被规则层拒绝 → 退回手牌（原因见上方 TurnManager 日志）");
                 _actionService.ReturnCardToHand(playerId, card.UID);
                 ArrangeAllCardsInternal();
                 return;

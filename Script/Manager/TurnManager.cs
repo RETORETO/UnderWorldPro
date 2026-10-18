@@ -4193,7 +4193,7 @@ public partial class TurnManager : Node
         if (freePlay) GD.Print($"[TurnManager] 🆓 免费打出：{tmpl.CardName}（不需支付费用，忠诚已校验）");
 
         // 【K10】额外费用①（牺牲）：**牺牲＝死亡**（照常广播死亡时机），在**入堆叠之前**、原子锁内支付。
-        // 放在费用校验之后：确保"费用不足"这类失败**不会白牺牲**（校验段已保证 totalCost 可支付）。
+        // 先做"费用是否够"的预检：确保"费用不足"这类失败**不会白牺牲**（真正的支付在下方，早于牺牲发生）。
         if (totalCost > 0 && _playerManager.GetAvailableMana(playerId) < totalCost)
         {
             GD.Print($"❌ [TurnManager] 可用费用不足！需要 {totalCost}（含额外费用 {extraMana}），当前 {_playerManager.GetAvailableMana(playerId)}");
@@ -4210,18 +4210,29 @@ public partial class TurnManager : Node
         if (extraSacrifice != null)
         {
             GD.Print($"[TurnManager] ✝ 【K10 额外费用】{tmpl.CardName}：牺牲 {extraSacrifice.PlayerTemplate?.CardName}（打出者选择，不可被响应）");
-            _cardManager?.ResolveDeath(extraSacrifice, CardManager.DeathCause.Sacrifice);
         }
 
+        // 【2026-10 修复·JC049「支付了额外费用却不进堆叠」】**先付费、再牺牲**：
+        // 旧顺序是"先 `ResolveDeath` 牺牲 → 再 `SpendMana`"，一旦付费失败（可用费用在死亡触发里被改变、
+        // 或横置资产被同时横置等）就会 `return false` ⇒ **额外费用已经付掉（角色已死）但卡没进堆叠**，
+        // 界面上表现为"点了牺牲，效果没进堆叠"。费用校验/支付都属付费阶段，与牺牲的先后不影响规则，
+        // 但把可失败的步骤提前即可保证"牺牲 ⇒ 一定入堆叠"。
+        // 注：`TryResolveExtraCost` 已保证 `extraSacrifice` 是合法候选、`totalCost` 可支付（预检在死亡之前）。
         if (totalCost > 0)
         {
             if (!_playerManager.SpendMana(playerId, totalCost))
             {
-                GD.Print($"❌ [TurnManager] 费用支付失败");
+                GD.PrintErr($"❌ [TurnManager] 【K10 额外费用】{tmpl.CardName} 费用支付失败（额外费用未支付，卡不入堆叠）");
                 ExitAtomicWhenIdle();
                 return false;
             }
             GD.Print($"[TurnManager] 玩家{playerId} 支付 {totalCost} 费用（含额外费用 {extraMana}），剩余可用 {_playerManager.GetAvailableMana(playerId)}");
+        }
+
+        // 费用付清后才真正支付"牺牲"这一额外费用（牺牲＝死亡，照常广播死亡时机）。
+        if (extraSacrifice != null)
+        {
+            _cardManager?.ResolveDeath(extraSacrifice, CardManager.DeathCause.Sacrifice);
         }
 
         // 【2026-10 用户口径·JC103】一次性费用修正（"下一张"语义）的消费**与"是否真的扣了费"解耦**：

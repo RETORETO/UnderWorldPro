@@ -90,29 +90,63 @@ namespace Script.UI
             };
             vb.AddChild(hintRow);
 
-            // ---- 卡面网格（横向滚动，照抄 InspectWindow）----
-            const int cardH = 140, gap = 8, colW = 136;
+            // ---- 卡面网格（多行网格；卡面按 CardScale 缩放，避免被容器横向拉伸）----
+            // 【2026-10 用户实测】旧实现把 CardUI 直接放进 VBox（列宽 136 > 卡宽 100）⇒ 容器把卡面
+            // **横向拉伸到列宽**（卡图变形、看着"偏大"），且每列下方的区域标签被挤出可视区（显示不全）。
+            // 现改为：外层 Control 定尺寸 + CardUI 按 CardScale 缩放（PivotOffset 归零 ⇒ 缩放后仍与左上角对齐），
+            // 卡片用 GridContainer 排成网格，整体放进可横竖滚动的 ScrollContainer，窗口尺寸按屏幕钳制。
+            const float cardBaseW = 100f, cardBaseH = 140f;
+            const float cardScale = 0.86f;   // 略小于战场卡面，观感接近悬浮预览框
+            const int labelH = 44, gapX = 10, gapY = 10, colPad = 10, maxCols = 6;
+            float dispW = cardBaseW * cardScale;
+            float dispH = cardBaseH * cardScale;
             int n = System.Math.Max(1, _cards.Count);
-            int rowW = n * colW + (n - 1) * gap;
+            int cols = System.Math.Min(n, maxCols);
+            int rows = (n + cols - 1) / cols;
+            float colW = dispW + colPad;
+            float gridW = cols * colW + (cols - 1) * gapX;
+            float gridH = rows * (dispH + labelH) + (rows - 1) * gapY;
+
+            // 窗口尺寸：内容优先，但**必须留在屏幕内**（否则标题栏/按钮/最后一行会被裁掉）
+            var screen = GetTree()?.Root?.GetVisibleRect().Size ?? new Vector2(1280, 720);
+            float maxWinW = System.Math.Min(1184f, screen.X * 0.92f);
+            float maxWinH = System.Math.Max(260f, screen.Y * 0.86f);
+            const float chromeH = 36f + 26f + 10f + 12f + 44f + 12f;   // 标题栏/提示/间距/按钮/内边距
+            float maxGridH = System.Math.Max(dispH + labelH, maxWinH - chromeH);
+            float scrollW = System.Math.Min(gridW, maxWinW - 60f);
+            float scrollH = System.Math.Min(gridH, maxGridH);
 
             _scroll = new ScrollContainer
             {
-                CustomMinimumSize = new Vector2(System.Math.Min(1160, rowW + 8), cardH + 64),
+                CustomMinimumSize = new Vector2(scrollW + 8f, scrollH + (gridH > scrollH ? 16f : 0f)),
                 HorizontalScrollMode = ScrollContainer.ScrollMode.Auto,
-                VerticalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
             };
             vb.AddChild(_scroll);
 
-            var row = new HBoxContainer();
-            row.AddThemeConstantOverride("separation", gap);
-            _scroll.AddChild(row);
+            var grid = new GridContainer
+            {
+                Columns = cols,
+                SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,   // 不随滚动容器横向拉伸
+            };
+            grid.AddThemeConstantOverride("h_separation", gapX);
+            grid.AddThemeConstantOverride("v_separation", gapY);
+            _scroll.AddChild(grid);
 
             var cardScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
             foreach (var inst in _cards)
             {
                 var col = new VBoxContainer { CustomMinimumSize = new Vector2(colW, 0) };
                 col.AddThemeConstantOverride("separation", 4);
-                row.AddChild(col);
+                grid.AddChild(col);
+
+                // 卡面槽：显式尺寸 + 鼠标穿透（卡面本身仍是 Click 的接收者）
+                var slot = new Control
+                {
+                    CustomMinimumSize = new Vector2(dispW, dispH),
+                    MouseFilter = Control.MouseFilterEnum.Ignore,
+                };
+                col.AddChild(slot);
 
                 CardUI ui = null;
                 if (cardScene != null)
@@ -120,7 +154,10 @@ namespace Script.UI
                     ui = cardScene.Instantiate<CardUI>();
                     ui.CanDrag = false;           // 选择窗只展示，不可拖动
                     ui.FreezeSmoothMove = true;   // 位置由容器统一排布
-                    col.AddChild(ui);             // 先入树
+                    slot.AddChild(ui);            // 先入树（`_Ready` 会写 PivotOffset/SetFace(false)）
+                    ui.PivotOffset = Vector2.Zero;      // 缩放锚点归零：否则 0.86 缩放会把卡面推离左上角
+                    ui.Scale = new Vector2(cardScale, cardScale);
+                    ui.Position = Vector2.Zero;
                     ui.Setup(inst);               // 再 Setup（否则 _Ready 的 SetFace(false) 盖成卡背）
                     // 隐藏占位（对手手牌/牌库）只画卡背；其余一律显示真卡面（单机热座无信息隔离问题）
                     ui.SetFace(!inst.IsHidden);
@@ -138,12 +175,16 @@ namespace Script.UI
                 }
 
                 // ---- 所在区域标签（唯一解析入口，明确到"哪个玩家 / 哪个地区"）----
+                string zoneText = CardZoneLabel.Describe(inst, _req.ChooserId, _req.PlayerNameOf, _req.AreaIndexOf);
                 col.AddChild(new Label
                 {
-                    Text = CardZoneLabel.Describe(inst, _req.ChooserId, _req.PlayerNameOf, _req.AreaIndexOf),
+                    Text = zoneText,
+                    TooltipText = zoneText,
                     HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Top,
                     AutowrapMode = TextServer.AutowrapMode.WordSmart,
-                    CustomMinimumSize = new Vector2(colW, 0),
+                    CustomMinimumSize = new Vector2(colW, labelH),
+                    SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
                 });
             }
 
@@ -182,9 +223,11 @@ namespace Script.UI
             AddChild(hover);
 
             // ---- 显式窗口尺寸（Window 默认 100×100，PopupCentered 只按当前 Size）----
+            // 宽高都按"内容 + 留白"算，并钳制在屏幕内（见上方 maxWinW/maxWinH）。
+            float contentH = System.Math.Min(gridH, maxGridH) + (gridH > maxGridH ? 16f : 0f);
             Size = new Vector2I(
-                System.Math.Clamp(rowW + 56, 360, 1184),
-                36 + 28 + 10 + (cardH + 64) + 10 + 40 + 16);
+                (int)System.Math.Clamp(scrollW + 60f, 420f, maxWinW),
+                (int)System.Math.Clamp(chromeH + contentH + 12f, 240f, maxWinH));
 
             // 关闭语义：允许取消 ⇒ 点窗外/关闭按钮 ＝ 取消；不允许 ⇒ 一律忽略（强制选择）
             CloseRequested += OnCloseRequested;

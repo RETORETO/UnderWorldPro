@@ -41,6 +41,9 @@ namespace Script.UI
         private Button _cancelButton;
         private bool _multiPick;
 
+        /// <summary>【2026-10 修复】本次 `Open` 发生的帧号：用于吞掉"开窗同帧的关闭请求"。</summary>
+        private ulong _openedFrame = ulong.MaxValue;
+
         // 全屏遮罩层：选目标时需要点击穿透到下层（场上卡/地区槽位），故默认不阻塞。
         private ColorRect _blockLayer;
 
@@ -56,6 +59,15 @@ namespace Script.UI
         /// <summary>标题栏关闭键：优先按「取消」交付回调；没有取消回调时退回该槽的「出口」（K15 激活路径）。</summary>
         private void OnCloseRequested()
         {
+            // 【2026-10 修复·JC049 实测】**开窗同帧的关闭请求一律忽略**：本窗常在"拖拽松手"的事件里被
+            // 打开（`DragEnd → 额外费用窗`），松手/焦点切换会在同一帧触发一次 `close_requested`，
+            // 于是窗口刚出现就自我取消 ⇒ 玩家看到"点了额外费用却没打出"。
+            // 只吞**同帧**这一次，之后的真实关闭（点 X / 取消按钮）行为不变。
+            if (Engine.GetProcessFrames() == _openedFrame)
+            {
+                GD.Print("[TargetSelectionWindow] 忽略开窗同帧的关闭请求（拖拽松手/焦点切换误触）");
+                return;
+            }
             if (_multiPick || OnCancelled != null) { OnCancelPressed(); return; }
             var extra = OnExtra;
             if (extra != null)
@@ -100,6 +112,7 @@ namespace Script.UI
             if (HintLabel != null) HintLabel.Text = string.IsNullOrEmpty(hint) ? "左键选择右键取消" : hint;
             var vp = GetViewport().GetVisibleRect().Size;
             Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
+            _openedFrame = Engine.GetProcessFrames();   // 同上：吞掉开窗同帧的误触关闭
             Popup();
         }
 
@@ -255,6 +268,7 @@ namespace Script.UI
             // 水平、垂直双向居中
             var vp = GetViewport().GetVisibleRect().Size;
             Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
+            _openedFrame = Engine.GetProcessFrames();   // 记录开窗帧（吞掉同帧误触的关闭请求，见 OnCloseRequested）
             Popup();
             _pickedUid = null;
             // 标题：调用方给的文案已是**完整句子**（如"请选择要弃掉的手牌""额外费用：选择要牺牲的角色"）时
@@ -310,6 +324,13 @@ namespace Script.UI
             if (!string.IsNullOrEmpty(_pickedUid))
             {
                 PickFromArena(_pickedUid);
+                return;
+            }
+            // 【2026-10 修复·JC049】开窗同帧的"确认/出口"按键一律忽略：本窗常在拖拽松手的同一帧被打开，
+            // 松手/焦点切换会把按钮判成被按下 ⇒ 玩家还没看到窗就被当成"取消（不打出）"。
+            if (Engine.GetProcessFrames() == _openedFrame)
+            {
+                GD.Print("[TargetSelectionWindow] 忽略开窗同帧的确认/出口按钮（拖拽松手误触）");
                 return;
             }
             var extra = OnExtra;
