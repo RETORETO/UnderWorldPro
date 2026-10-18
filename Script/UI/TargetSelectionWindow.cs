@@ -257,7 +257,18 @@ namespace Script.UI
             Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
             Popup();
             _pickedUid = null;
-            if (TitleLabel != null) TitleLabel.Text = $"选择目标：{effectName}";
+            // 标题：调用方给的文案已是**完整句子**（如"请选择要弃掉的手牌""额外费用：选择要牺牲的角色"）时
+            // 不再叠加"选择目标："前缀——否则会显示成"选择目标：请选择要弃掉的手牌"（2026-10 用户实测语句不通）。
+            // 只对"卡名/效果名"这类短语补前缀（`Contains(string)` 为序数比较，Web 安全）。
+            if (TitleLabel != null)
+            {
+                bool fullSentence = effectName != null
+                    && (effectName.Contains("请选择", System.StringComparison.Ordinal)
+                        || effectName.Contains("选择要", System.StringComparison.Ordinal)
+                        || effectName.Contains("额外费用", System.StringComparison.Ordinal)
+                        || effectName.Contains("额外代价", System.StringComparison.Ordinal));
+                TitleLabel.Text = fullSentence ? effectName : $"选择目标：{effectName}";
+            }
             if (HintLabel != null) HintLabel.Text = hint;
             if (ConfirmButton != null)
             {

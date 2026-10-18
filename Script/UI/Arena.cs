@@ -863,8 +863,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             if (uids.Count > 0)
             {
                 GD.Print($"[Arena] 🗑 PromptDiscard：玩家{chooserPlayerId} 弃牌走『场上点选手牌』通道（候选 {uids.Count} 张，全 cat-1）");
-                // 弃牌＝**强制选一张**：不给出口（`onExtra = null` ⇒ 必选、右键不生效）；卡目标不弹居中提示窗
-                // （`hintWindow = false`）——玩家直接点高亮手牌完成选择。窗口不可用（返回 false）⇒ 回退列表窗。
+                // 弃牌＝**强制选一张**：不给出口（`onExtra = null` ⇒ 必选、右键不生效）。
+                // 【2026-10 用户口径】**强制选择同样必须弹提示窗**（"不管什么选择只要涉及选择都要弹出弹窗，
+                // 不能取消的情况下也要弹出提示框"）——JC041 禁婆的双方弃牌此前没有任何提示，就是这里被关成了 false。
+                // 窗口只承载"请点高亮手牌"的指引，选择仍在场上高亮卡上完成。窗口不可用（返回 false）⇒ 回退列表窗。
                 bool opened = _triggerCoordinator.RequestActivateTargetSelection(
                     prompt, isArea: false, uids,
                     uid =>
@@ -872,7 +874,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         var picked = string.IsNullOrEmpty(uid) ? null : _cardManager?.GetInstance(uid);
                         if (picked != null) onPicked?.Invoke(picked);
                     },
-                    extraLabel: null, onExtra: null, hint: null, hintWindow: false,
+                    extraLabel: null, onExtra: null, hint: null, hintWindow: true,
                     chooserPlayerId: chooserPlayerId);
                 if (opened) return;
                 GD.Print("[Arena] PromptDiscard：场上点选通道不可用 → 回退列表窗");
@@ -959,6 +961,45 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【2026-10 用户口径·选卡 UI 统一通道】"让玩家从候选卡里选一张"的**唯一推荐入口**：
+    /// 场上高亮 + **必弹提示窗**（含强制选择，没有取消时也弹），候选含 cat-2（牌库/墓地/资产/
+    /// 结附于卡/对手手牌…）时由协调器自动改走**卡面网格选择窗**。
+    ///
+    /// 引入原因（JC049 实测）：同一件事（从场上选一张卡）此前在多条路径上各写一套 UI——
+    /// `BeginActivateWithSacrifice` / `BeginActivateWithCounterCostChoice` / `BeginPlayWithExtraCostChoice`
+    /// （JC049 额外费用）/ 现身额外费用 4 处仍用旧的**按钮列表窗**（一列纯卡名），与新 UI 不一致。
+    /// 收口到本方法后，这些路径的交互与"取目标 / 弃牌 / 检索选卡"完全同构。
+    ///
+    /// 返回 false ＝ 通道不可用（协调器或窗口缺失、已有另一次选择在等）⇒ 调用方**必须回退**自己的
+    /// 按钮列表窗，绝不静默丢弃本次选择（否则玩家会卡在"点了没反应"）。
+    /// </summary>
+    /// <param name="title">窗标题（卡文口径，如"额外费用：选择要牺牲的角色"）。</param>
+    /// <param name="hint">窗内提示（留空用中性文案）。</param>
+    /// <param name="extraLabel">退出按钮文案（如"取消（不发动）"）；null ＝ 必选，没有退出。</param>
+    /// <param name="onExtra">退出回调（与场上右键同一出口）；`extraLabel` 为 null 时不生效。</param>
+    private bool TryPickCardOnField(string title, string hint,
+        System.Collections.Generic.List<CardInstance> candidates, int chooserPlayerId,
+        string extraLabel, System.Action onExtra, System.Action<CardInstance> onPicked)
+    {
+        if (_triggerCoordinator == null || candidates == null || candidates.Count == 0) return false;
+        var uids = new System.Collections.Generic.List<string>();
+        foreach (var c in candidates)
+            if (c != null && !string.IsNullOrEmpty(c.UID)) uids.Add(c.UID);
+        if (uids.Count == 0) return false;
+
+        return _triggerCoordinator.RequestActivateTargetSelection(
+            string.IsNullOrEmpty(title) ? "请选择一张牌" : title,
+            isArea: false,
+            uids,
+            uid => onPicked?.Invoke(string.IsNullOrEmpty(uid) ? null : _cardManager?.GetInstance(uid)),
+            extraLabel: extraLabel,
+            onExtra: onExtra,
+            hint: hint,
+            chooserPlayerId: chooserPlayerId,
+            hintWindow: true);
+    }
+
+    /// <summary>
     /// 【P2】通用选卡 UI：让 `chooserPlayerId` 从候选卡中选一张（封印取手牌 / 检索取牌 / 弃牌共用）。
     /// View 只负责"展示候选 + 收集选择"，实际动作由 Controller 经回调执行（View 不写 Model）。
     /// </summary>
@@ -1002,8 +1043,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 if (c != null) fieldUids.Add(c.UID);
             if (fieldUids.Count > 0)
             {
-                // 强制选择（弃牌等）⇒ 不弹提示窗、无出口，玩家直接点高亮卡；
-                // 可取消 ⇒ 保留提示窗承载「取消」按钮（场上右键同样可用）。
+                // 【2026-10 用户口径】**任何涉及选择的流程都要弹提示窗**——强制选择（`allowCancel=false`）
+                // 也照样弹：窗口给出"请点高亮卡"的指引，只是不带取消按钮/出口（场上右键同样不生效）。
                 System.Action extra = allowCancel ? () => onPicked?.Invoke(null) : (System.Action)null;
                 bool openedField = _triggerCoordinator.RequestActivateTargetSelection(
                     string.IsNullOrEmpty(prompt) ? "请选择目标" : prompt,
@@ -1016,7 +1057,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                     extraLabel: allowCancel ? "取消" : null,
                     onExtra: extra,
                     hint: null,
-                    hintWindow: allowCancel,
+                    hintWindow: true,
                     chooserPlayerId: chooserPlayerId);
                 if (openedField) return;
                 GD.Print("[Arena] PromptPickCard：场上点选通道不可用 → 回退旧的按钮列表窗");
@@ -2505,6 +2546,19 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 GD.PrintErr($"[Arena] 牺牲代价无候选：{ability.EffectId}");
                 return;
             }
+            // 【2026-10 选卡 UI 统一】优先走"场上高亮 + 提示窗"（点击高亮角色即付出代价并发动），
+            // 与取目标/弃牌同构；通道不可用才回退下面的按钮列表窗（旧 UI 仅作兜底）。
+            if (TryPickCardOnField("选择要牺牲的角色",
+                    "请点击一个高亮的角色完成牺牲（点击即支付代价并发动）。",
+                    candidates, inst.ControllerId, "取消（不发动）", () => { },
+                    picked =>
+                    {
+                        if (picked == null) return;
+                        _actionService.ActivateAbility(inst, ability, target, targetPlayerId, picked.UID, areaUid);
+                        RefreshActivateHighlights();
+                    }))
+                return;
+
             var items = new System.Collections.Generic.List<ActivationChoiceItem>();
             foreach (var c in candidates)
             {
@@ -2564,6 +2618,18 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         {
             var candidates = _actionService.GetCounterCostChoiceCandidates(inst, ability);
             if (candidates.Count == 0) { GD.PrintErr($"[Arena] 标志代价无候选：{ability.EffectId}"); return; }
+            // 【2026-10 选卡 UI 统一】场上高亮 + 提示窗（点击高亮卡即移除标志并发动）；不可用才回退旧列表窗。
+            if (TryPickCardOnField("选择要移除标志的卡",
+                    $"请点击一个高亮的卡（需带有 ≥ {ability.CounterCost.Amount} 个标志）。",
+                    candidates, inst.ControllerId, "取消（不发动）", () => { },
+                    picked =>
+                    {
+                        if (picked == null) return;
+                        _actionService.ActivateAbility(inst, ability, target, targetPlayerId, null, null, picked.UID);
+                        RefreshActivateHighlights();
+                    }))
+                return;
+
             var items = new System.Collections.Generic.List<ActivationChoiceItem>();
             foreach (var c in candidates)
             {
@@ -2744,6 +2810,19 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 ArrangeAllCardsInternal();
                 return;
             }
+            // 【2026-10 选卡 UI 统一】JC049 额外费用原为旧按钮列表窗（一列卡名），与新选卡 UI 不一致。
+            // 改走"场上高亮 + 提示窗"：点击高亮角色＝支付额外费用并打出（取消＝不打出、不扣费用）。
+            if (TryPickCardOnField("额外费用：选择要牺牲的角色",
+                    "请点击一个高亮的角色作为额外费用（点击即牺牲并打出该牌）。",
+                    candidates, playerId, "取消（不打出）", () => { },
+                    picked =>
+                    {
+                        if (picked == null) return;
+                        FinishPlayWithExtraCost(card, cardUI, playerId, hand,
+                            targetAreaName, targetCardUid, picked.UID);
+                    }))
+                return;
+
             var items = new System.Collections.Generic.List<ActivationChoiceItem>();
             foreach (var c in candidates)
             {
@@ -2873,6 +2952,18 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                         GD.PrintErr($"[Arena] 【K10 额外费用】{tmpl.CardName} 现身：无合法牺牲对象 → 不能现身");
                         return;
                     }
+                    // 【2026-10 选卡 UI 统一】与 JC049 打出路径同一套 UI（场上高亮 + 提示窗）。
+                    if (TryPickCardOnField("额外费用：选择要牺牲的角色（现身）",
+                            "请点击一个高亮的角色作为额外费用（点击即牺牲并现身）。",
+                            cands, playerId, "取消（不现身）", () => { },
+                            picked =>
+                            {
+                                if (picked == null) return;
+                                _actionService.RevealCovert(playerId, inst.UID, picked.UID);
+                                RefreshActivateHighlights();
+                            }))
+                        return;
+
                     var items = new System.Collections.Generic.List<ActivationChoiceItem>();
                     foreach (var c in cands)
                     {

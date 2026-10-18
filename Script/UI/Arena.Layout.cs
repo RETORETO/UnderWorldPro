@@ -477,6 +477,23 @@ public partial class Arena
         }
     }
 
+    /// <summary>【2026-10】附属"先移动后绑定"窗口期的延迟重放抑制标志（见 `SyncCardUIToZone` 头注释）。
+    /// 只用于本次延迟重放，避免绑定仍未建立时反复自我延迟（每张卡最多重放一次）。</summary>
+    private bool _suppressAttachDefer;
+
+    /// <summary>【2026-10】把"附属区 + 尚未绑定"的卡延迟重放一次归位（`AttachAndRegister` 完成绑定后调用）。</summary>
+    private void ResyncAttachedCardUI(string uid)
+    {
+        if (string.IsNullOrEmpty(uid)) return;
+        // 防御：延迟回调可能落在换局/退出之后（节点已释放）——此处直接放弃，避免访问已释放对象。
+        if (!GodotObject.IsInstanceValid(this) || !IsInsideTree()) return;
+        var inst = _cardManager?.GetInstance(uid);
+        if (inst == null) return;
+        _suppressAttachDefer = true;
+        try { SyncCardUIToZone(inst, inst.CurrentZone, inst.ControllerId, inst.ZoneDetailId); }
+        finally { _suppressAttachDefer = false; }
+    }
+
     /// <summary>
     /// 根据卡牌的逻辑区域，把对应 CardUI 重新挂载到正确的 UI 容器。
     /// 这样通过 ZoneManager 的移动（如 PM 的 move 命令、出牌、死亡等）都能自动驱动视觉归位。
@@ -484,6 +501,28 @@ public partial class Arena
     private void SyncCardUIToZone(CardInstance card, CardZone toZone, int playerId, string detailId)
     {
         if (card == null) return;
+
+        // 【2026-10 修复·结附秘社的附属"UI 上看不见"】
+        // `ZoneManager.AttachAndRegister` 为规避 `DetachAttachmentsToGraveyard` 的无限递归，采用
+        // "**先移动、后绑定**"顺序（见该方法注释）：MoveToAttachedZone → FireMoved → 本方法执行时
+        // `AttachedTo` / `IsAttached` 都**尚未建立**。
+        //  · 结附于角色／地区：`ZoneDetailId` 一定有值 ⇒ 走下方"附属于地区"兜底分支也能先挂进地区容器；
+        //  · 结附于秘社：秘社没有 `ZoneDetailId`（detail=""）⇒ 兜底分支 `slot == null`，而此时 CardUI
+        //    已在步骤 2 被摘出父节点、这里又挂不回去 ⇒ **数据正确但 UI 完全消失**
+        //    （用户实测："附属卡结附到秘社后 UI 上没有显示在秘社上"）。
+        // 处理：窗口期内**不动 UI**，把这次同步延迟到本帧末重放一次——届时 AttachAndRegister 已建好
+        // 双向绑定，正常走"宿主=秘社 → 挂 CouncilContainer → ArrangeCouncilAttachments"分支。
+        if (!_suppressAttachDefer
+            && toZone == CardZone.AttachedZone
+            && card.AttachedTo == null
+            && !card.IsAttached
+            && string.IsNullOrEmpty(card.ZoneDetailId))
+        {
+            string pendingUid = card.UID;
+            GD.Print($"[Arena.Sync] 附属 {card.PlayerTemplate?.CardName}(UID={pendingUid}) 处于『先移动后绑定』窗口期 → 延迟到本帧末重放");
+            Callable.From(() => ResyncAttachedCardUI(pendingUid)).CallDeferred();
+            return;
+        }
 
         // 议会（秘社）卡：走专用同步路径（与玩家卡 _cardUIMap 解耦）。
         // 【2026-09】判定放宽为"**曾是**秘社 UI（`_councilCardUIs` 里有它）"——秘社重放/移除时其
