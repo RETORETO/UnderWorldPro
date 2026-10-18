@@ -696,11 +696,21 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 // 必须先 AddChild 触发 _Ready（初始化子节点引用），再调用 Setup 赋值/挂卡，
                 // 否则 Setup 内访问 _effectPanel 等字段时仍为 null 导致 NullReferenceException。
                 _stackContainer.AddChild(inst);
-                // 卡片型复用真卡 UI：从手牌列表取对应 CardUI（入堆叠时已脱离手牌容器）
+                // 卡片型复用真卡 UI：从手牌/资产区取对应 CardUI（入堆叠时已脱离手牌容器）。
+                // 【2026-10 修复·事务卡堆叠条目不可见】事务（EventToGraveyard）**入堆叠即置入弃牌堆**：
+                // `TurnManager` 在 Push 之后立刻 `MoveCardToGraveyard` ⇒ 若此处复用了那张真卡，
+                // `SyncCardUIToZone` 会把它从 StackEntryUI 摘走挂进墓地容器，条目退化成
+                // 110×150 的空白槽（`IsCard` 隐藏了文字面板）——玩家观感＝"效果根本没进堆叠"，
+                // 于是不知道该点让过，堆叠永远不结算（实测 JC049 深渊细语）。
+                // 事务卡一律用**自建卡面副本**，让"牌在堆叠里等响应"始终可见。
+                bool sourceWillLeaveStack = entry.Kind == ResolveKind.EventToGraveyard;
                 CardUI reuse = null;
-                if (entry.IsCard && !string.IsNullOrEmpty(entry.SourceCardUid))
+                if (entry.IsCard && !sourceWillLeaveStack && !string.IsNullOrEmpty(entry.SourceCardUid))
                     reuse = FindCardUIByUID(entry.SourceCardUid);
                 inst.Setup(entry, reuse);
+                // 自建卡面（事务卡）要注入统计依赖，否则卡面势力等数值退化
+                if (entry.IsCard && reuse == null && inst.ShownCard != null)
+                    inst.ShownCard.SetStatsDependencies(_playerManager);
 
                 // 赢取地区条目：复制并显示一张该地区卡的卡面（复用 AreaCardUI.tscn）
                 if (entry.Kind == ResolveKind.AreaWon && !string.IsNullOrEmpty(entry.WonAreaUid))

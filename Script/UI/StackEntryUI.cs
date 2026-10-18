@@ -19,6 +19,12 @@ namespace Script.UI
 
         public StackEntry Entry => _entry;
 
+        /// <summary>
+        /// 本条目当前展示的卡面（卡片型恒非空；效果型为 null）。
+        /// 供调用方在 `Setup` 后补注入依赖（如统计依赖仅供自建卡面使用）。
+        /// </summary>
+        public CardUI ShownCard => _cardUI;
+
         public override void _Ready()
         {
             // 注意：tscn 不再内嵌 CardUI 子节点（改为 Setup 时动态挂入复用卡），
