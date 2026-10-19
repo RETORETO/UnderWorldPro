@@ -238,23 +238,11 @@ namespace Script.UI
                 (int)System.Math.Clamp(scrollW + 60f, 420f, maxWinW),
                 (int)System.Math.Clamp(winH, 240f, maxWinH));
 
-            // 关闭语义：允许取消 ⇒ 点窗外/关闭按钮 ＝ 取消；不允许 ⇒ 一律忽略（强制选择）
+            // 关闭语义：允许取消 ⇒ **仅**"取消"按钮 / 窗口关闭按钮（X）＝ 取消；不允许 ⇒ 一律忽略（强制选择）。
+            // 【2026-10-19 修复·JC107】**点窗口外 ≠ 取消**：用户去点场上 hover 展开面板里的卡（资产/墓地/角标）
+            // 期望"等效窗口内选中同一张卡"（`SelectByUid`），而旧实现订阅 `FocusExited` 会在鼠标点到主视口
+            // 时把选卡窗取消掉 ⇒ 点 hover 面板的卡变成了"取消"。故不再订阅 FocusExited，取消只走显式按钮。
             CloseRequested += OnCloseRequested;
-            // 延迟连接：Popup 期间立即连接会在窗口刚获得焦点时误触发一次 FocusExited ⇒ 直接取消。
-            Callable.From(ConnectFocusExited).CallDeferred();
-        }
-
-        private void ConnectFocusExited()
-        {
-            FocusExited += OnFocusExited;
-        }
-
-        private void OnFocusExited()
-        {
-            if (_done) return;
-            // 强制选择：点窗外不关闭（唯一出口是「确认」）
-            if (_req == null || !_req.AllowCancel) return;
-            Cancel();
         }
 
         private void OnCloseRequested()

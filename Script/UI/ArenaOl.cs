@@ -419,25 +419,9 @@ namespace Script.UI
             if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)) _badgePeek.HideNow();
         }
 
-        /// <summary>
-        /// 联机选卡窗（`CardPickWindow`）是否正在弹出。
-        ///
-        /// 【2026-10-19 修复·JC107】选卡窗是**独立 `Window`**（独立渲染表面，永远盖在主视口之上），
-        /// 而角标/资产/墓地 hover 展开面板是**战场内 Control**（层级 830）。两者同开时：
-        ///  · 面板被 Window 盖住，用户根本点不到面板里的卡；
-        ///  · 用户去点"对手资产区的卡"，落点其实在 Window 上 / 主视口空白 ⇒ 触发
-        ///    `CardPickWindow.OnFocusExited`（允许取消时）⇒ 选卡窗被取消。
-        /// 用户实测原话："弹出选择窗，点击对手 HOVER 区的资产卡，没有选择选择窗内的卡"。
-        /// 故**选卡窗打开期间，一律不弹 hover 面板**（含角标/资产/墓地），选卡一律在窗内完成。
-        /// </summary>
-        private bool IsOnlinePickWindowOpen()
-            => _onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow)
-               && _onlinePickWindow.Visible;
-
         private void ShowBadgePeek(Control host, CardBadgeKind kind)
         {
             if (host == null || !GodotObject.IsInstanceValid(host)) return;
-            if (IsOnlinePickWindowOpen()) return;   // 选卡窗开着时不弹角标面板（见方法注释）
             var inst = host is CardUI c ? c.Instance : (host as CouncilCardUI)?.Instance;
             if (inst == null) return;
 
@@ -495,14 +479,6 @@ namespace Script.UI
         /// </summary>
         private void TickBadgePeek(double delta)
         {
-            // 选卡窗（独立 Window）开着时收起已有 hover 面板（与 TickPilePeek 同口径，见 IsOnlinePickWindowOpen）。
-            if (IsOnlinePickWindowOpen())
-            {
-                _badgePeek?.HideNow();
-                _badgePeekMiss = 0.0;
-                return;
-            }
-
             if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible)
             {
                 _badgePeekMiss = 0.0;
@@ -534,16 +510,6 @@ namespace Script.UI
 
         private void TickPilePeek(double delta)
         {
-            // 选卡窗（独立 Window）开着时不弹资产/墓地面板：面板被 Window 盖住点不到，
-            // 去点它反而触发选卡窗 FocusExited 取消（JC107 实测）。收起已有的面板。
-            if (IsOnlinePickWindowOpen())
-            {
-                _pilePeekInside = false;
-                _pilePeekHost = null;
-                _badgePeek?.HideNow();
-                return;
-            }
-
             Vector2 mouse = GetGlobalMousePosition();
 
             if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)

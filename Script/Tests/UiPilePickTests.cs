@@ -151,24 +151,20 @@ namespace Script.Tests
         }
 
         /// <summary>
-        /// ②e 【JC107 修复】选卡窗（独立 Window）打开期间，角标/资产/墓地 hover 面板一律不弹（两端都要）。
-        /// 面板是战场内 Control（层级 830），被 Window 盖住点不到，去点它反而触发 `OnFocusExited` ⇒ 选卡窗被取消。
+        /// ②e 【JC107 修复】选卡窗"**点窗外 ≠ 取消**"：去掉 `FocusExited` 订阅，取消只走显式"取消"按钮/关闭按钮。
+        /// 用户口径："点击 HOVER 区域内卡片 UI 等效窗口内选择了同一张卡"——点 hover 面板卡走
+        /// `OnPileMemberPicked → SelectByUid`（选中窗口内同一张卡），而不是触发 `FocusExited` 把选卡窗取消掉。
         /// </summary>
-        public void TestPile_选卡窗打开时抑制hover面板()
+        public void TestPick_选卡窗点窗外不取消()
         {
-            string ol = Read("Script/UI/ArenaOl.cs");
-            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
-            Assert.IsTrue(ol.Contains("IsOnlinePickWindowOpen"),
-                "联机必须提供『选卡窗是否打开』的判据（否则 hover 面板会在选卡窗期间乱弹）");
-            Assert.IsTrue(ol.Contains("if (IsOnlinePickWindowOpen()) return;"),
-                "联机角标 hover 入口必须在选卡窗打开时直接 return（不弹面板）");
-
-            string arena = Read("Script/UI/Arena.BadgePeek.cs");
-            Assert.IsFalse(string.IsNullOrEmpty(arena), "必须能读到 Arena.BadgePeek.cs");
-            Assert.IsTrue(arena.Contains("IsActivePickWindowOpen"),
-                "单机必须提供『选卡窗是否打开』的判据");
-            Assert.IsTrue(arena.Contains("if (IsActivePickWindowOpen()) return;"),
-                "单机角标 hover 入口必须在选卡窗打开时直接 return（不弹面板）");
+            string win = Read("Script/UI/CardPickWindow.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(win), "必须能读到 CardPickWindow.cs");
+            Assert.IsFalse(win.Contains("FocusExited += OnFocusExited"),
+                "选卡窗禁止订阅 FocusExited（点窗外会触发取消，把『点 hover 面板卡』变成『取消发动』）");
+            Assert.IsFalse(win.Contains("private void OnFocusExited()"),
+                "选卡窗不得再有 OnFocusExited 取消处理（取消只走显式按钮）");
+            Assert.IsTrue(win.Contains("public void SelectByUid(string uid)"),
+                "选卡窗必须保留 SelectByUid（hover 面板点选等效窗口内选中同一张卡）");
         }
 
         /// <summary>③ 联机选卡窗：三种"从区域选一张"都走 CardPickWindow，回包仍是 SelectedUid。</summary>

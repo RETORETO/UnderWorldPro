@@ -49,23 +49,10 @@ public partial class Arena
         _badgePeek?.HideNow();
     }
 
-    /// <summary>
-    /// 单机选卡窗（`CardPickWindow`）是否正在弹出。
-    ///
-    /// 【2026-10-19 修复·JC107（与联机 ArenaOl 同款）】选卡窗是**独立 `Window`**（独立渲染表面，
-    /// 永远盖在主视口之上），而角标/资产/墓地 hover 面板是**战场内 Control**（层级 830）。两者同开时：
-    /// 面板被 Window 盖住点不到，去点它反而触发 `CardPickWindow.OnFocusExited`（允许取消时）⇒ 选卡窗被取消。
-    /// 故**选卡窗打开期间，一律不弹 hover 面板**（含角标/资产/墓地），选卡一律在窗内完成。
-    /// </summary>
-    private bool IsActivePickWindowOpen()
-        => _activePickWindow != null && GodotObject.IsInstanceValid(_activePickWindow)
-           && _activePickWindow.Visible;
-
     /// <summary>展开宿主卡上**某一种**角标对应的成员列表（封印 / 附属二选一）。</summary>
     private void ShowBadgePeek(Control host, CardBadgeKind kind)
     {
         if (host == null || !GodotObject.IsInstanceValid(host)) return;
-        if (IsActivePickWindowOpen()) return;   // 选卡窗开着时不弹角标面板（见方法注释）
         var inst = host is CardUI c ? c.Instance : (host as CouncilCardUI)?.Instance;
         if (inst == null) return;
 
@@ -148,14 +135,6 @@ public partial class Arena
     /// </summary>
     private void TickBadgePeek(double delta)
     {
-        // 选卡窗（独立 Window）开着时收起已有 hover 面板（与 TickPilePeek 同口径，见 IsActivePickWindowOpen）。
-        if (IsActivePickWindowOpen())
-        {
-            _badgePeek?.HideNow();
-            _badgePeekMiss = 0.0;
-            return;
-        }
-
         if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek) || !_badgePeek.Visible)
         {
             _badgePeekMiss = 0.0;
@@ -195,16 +174,6 @@ public partial class Arena
     /// <summary>每帧判定"鼠标是否落在某个可悬停的堆叠区"；进入瞬间弹列表，离开交给 `TickBadgePeek` 收起。</summary>
     private void TickPilePeek(double delta)
     {
-        // 选卡窗（独立 Window）开着时不弹资产/墓地面板：面板被 Window 盖住点不到，
-        // 去点它反而触发选卡窗 FocusExited 取消（JC107 实测）。收起已有的面板。
-        if (IsActivePickWindowOpen())
-        {
-            _pilePeekInside = false;
-            _pilePeekHost = null;
-            _badgePeek?.HideNow();
-            return;
-        }
-
         Vector2 mouse = GetGlobalMousePosition();
 
         // 鼠标已经在面板上 ⇒ 保持现状（否则从容器移向面板时会被判成"离开"而重建）
