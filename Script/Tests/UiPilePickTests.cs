@@ -167,6 +167,51 @@ namespace Script.Tests
                 "选卡窗必须保留 SelectByUid（hover 面板点选等效窗口内选中同一张卡）");
         }
 
+        /// <summary>
+        /// ②f 【JC085 修复】联机"墓地行动"第二级选地区必须走**场上高亮地区 + 点击**（对齐单机
+        /// `RequestActivateTargetSelection(isArea: true)`），不再弹「地区1/地区2/地区3」文字按钮窗。
+        /// </summary>
+        public void TestPile_联机墓地行动选地区走场上高亮()
+        {
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("_pendingGraveyardPlayUid = inst.UID"),
+                "联机墓地行动选地区必须记录待打出的墓地卡 UID（地区点击后据此上行 PlayCard）");
+            Assert.IsTrue(ol.Contains("请点击场上高亮的地区完成打出"),
+                "联机墓地行动选地区必须走『场上高亮地区 + 点击』（用户口径），提示窗文案应引导点地区而非列文字按钮");
+            Assert.IsTrue(ol.Contains("OnAreaTargetPicked"),
+                "地区点击必须走统一入口 OnAreaTargetPicked（据上下文分发：服务端回 ChoiceResult / 墓地行动上行 PlayCard）");
+        }
+
+        /// <summary>
+        /// ②g 【JC005 修复】选卡窗打开期间，点场上的**候选卡**（cat-1，如结附于地区的附属）⇒
+        /// 等效窗口内选中同一张卡（`SelectByUid`），而不是走默认点击（拖拽/双击激活）导致"点场上卡无反馈"。
+        /// </summary>
+        public void TestPick_选卡窗打开时点场上候选卡等效选中()
+        {
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("_onlinePickWindow.HasCard(hitCard.Instance.UID)"),
+                "联机：选卡窗打开期间点场上候选卡必须走 SelectByUid（JC005 点结附于地区的附属）");
+
+            string arena = Read("Script/UI/Arena.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(arena), "必须能读到 Arena.cs");
+            Assert.IsTrue(arena.Contains("_activePickWindow.HasCard(hitCard.Instance.UID)"),
+                "单机：选卡窗打开期间点场上候选卡必须走 SelectByUid（两端口径一致）");
+        }
+
+        /// <summary>
+        /// ②h 【游戏结束不了】`CheckGameOver` 必须有平局出口：双方牌库均耗尽 / 双方总分相等时，
+        /// 旧实现 `return 0`（不判胜），而 CheckGameOver 只在"卡进分数区"时触发 ⇒ 对局永久卡死。
+        /// </summary>
+        public void TestGameOver_平局出口不卡死()
+        {
+            string pm = Read("Script/Manager/PlayerManager.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(pm), "必须能读到 PlayerManager.cs");
+            Assert.IsTrue(pm.Contains("BreakTieByFirst"),
+                "游戏结束判定必须有平局出口（双方牌库均耗尽/双方总分相等时不能再 return 0 卡死）");
+        }
+
         /// <summary>③ 联机选卡窗：三种"从区域选一张"都走 CardPickWindow，回包仍是 SelectedUid。</summary>
         public void TestPick_联机选卡窗走真卡面且协议不变()
         {

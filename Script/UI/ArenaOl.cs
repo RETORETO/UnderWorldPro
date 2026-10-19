@@ -129,6 +129,8 @@ namespace Script.UI
         private string _pendingPlayCardUid;
         /// <summary>「服务端选目标请求」的待回包请求（非空表示本轮选中的目标要回成 ChoiceResult，而非上行意图）。</summary>
         private Script.Net.ChoiceRequest _pendingChoiceTargetRequest;
+        /// <summary>「墓地行动」待打出的卡 UID（非空表示本轮地区点击是为 JC085 类「从墓地正面打出到地区」服务）。</summary>
+        private string _pendingGraveyardPlayUid;
         /// <summary>服务端选目标请求中的**地区目标**集合（机动类触发：高亮地区槽位、点击地区完成选择）。</summary>
         private readonly System.Collections.Generic.HashSet<string> _activationLegalAreaUids = new System.Collections.Generic.HashSet<string>();
 
@@ -2266,8 +2268,38 @@ namespace Script.UI
                 bool selectable = _activationLegalAreaUids.Contains(slot.AreaUID);
                 slot.IsTargetSelectable = selectable;
                 slot.SetHighlight(selectable);
-                slot.OnAreaClicked = selectable ? new Action<string>(OnServerChoiceTargetPicked) : null;
+                // 【2026-10-19 修复·JC085】地区点击统一走 `OnAreaTargetPicked`（据上下文分发）：
+                // 服务端下发 → 回 ChoiceResult；本地发起（墓地行动选地区）→ 上行 PlayCard。
+                slot.OnAreaClicked = selectable ? new Action<string>(OnAreaTargetPicked) : null;
             }
+        }
+
+        /// <summary>
+        /// 地区槽位点击的统一入口：按"谁发起了这轮地区选择"分发。
+        ///  · 服务端下发（`_pendingChoiceTargetRequest` 非空）→ 回 `ChoiceResult`；
+        ///  · 本地发起·墓地行动（`_pendingGraveyardPlayUid` 非空）→ 上行 `PlayCard(cardUid, areaUid, "")`（JC085）。
+        /// </summary>
+        private void OnAreaTargetPicked(string areaUid)
+        {
+            // 服务端下发
+            if (_pendingChoiceTargetRequest != null)
+            {
+                OnServerChoiceTargetPicked(areaUid);
+                return;
+            }
+            // 本地发起·墓地行动（JC085）：从墓地正面打出到所选地区
+            if (!string.IsNullOrEmpty(_pendingGraveyardPlayUid))
+            {
+                var gUid = _pendingGraveyardPlayUid;
+                var gTmpl = _matchClient?.ClientCardManager?.GetInstance(gUid)?.PlayerTemplate;
+                ClearActivationTargetSelection();
+                if (string.IsNullOrEmpty(areaUid)) return;
+                _matchClient?.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard, gUid, areaUid, "");
+                GD.Print($"[ArenaOl] 墓地行动：上行 PlayCard（从墓地正面打出）{gTmpl?.CardName} → 地区 {areaUid}");
+                return;
+            }
+            // 其余本地发起（防御：地区目标走既有点选路径）
+            OnActivationTargetPicked(areaUid);
         }
 
         /// <summary>清除地区槽位的高亮/可选状态（选目标结束或取消时调用）。</summary>
@@ -3377,6 +3409,22 @@ namespace Script.UI
                 return;
             }
 
+            // 【2026-10-19 修复·JC005】选卡窗（CardPickWindow）打开时，点场上的**候选卡**（cat-1，
+            // 如结附于地区的附属）⇒ 等效于窗口内选中同一张卡（`SelectByUid`，只置选中、不提交）。
+            // 否则点场上 cat-1 卡会走它的默认点击（单击无订阅/双击激活），表现为"点场上卡无反馈"。
+            if (_onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow) && _onlinePickWindow.Visible
+                && @event is InputEventMouseButton pwMb && pwMb.Pressed && pwMb.ButtonIndex == MouseButton.Left)
+            {
+                var hitCard = PickFieldCardAt(pwMb.GlobalPosition);
+                if (hitCard?.Instance != null && _onlinePickWindow.HasCard(hitCard.Instance.UID))
+                {
+                    _onlinePickWindow.SelectByUid(hitCard.Instance.UID);
+                    GD.Print($"[ArenaOl] 选卡窗打开期间点场上卡 {hitCard.Instance.UID}（等效窗口内选中，不提交）");
+                    AcceptEvent();
+                    return;
+                }
+            }
+
             // 场上点击高亮选目标：左键命中合法目标卡/地区 → 完成选择（经复用的 TargetSelectionWindow.PickFromArena）
             if (_activationTargetActive
                 && @event is InputEventMouseButton tsMb && tsMb.Pressed && tsMb.ButtonIndex == MouseButton.Left)
@@ -3661,7 +3709,11 @@ namespace Script.UI
             GD.Print($"[ArenaOl] 墓地行动：{tmpl.CardName} 双击 → 弹技能选择窗（1 条）");
         }
 
-        /// <summary>【2026-10·JC085·联机】墓地行动第二级：**选择地区窗**（地区按钮）→ 上行 `PlayCard{targetAreaUid}`。</summary>
+        /// <summary>
+        /// 【2026-10·JC085·联机】墓地行动第二级：**场上高亮地区 + 点击**（对齐单机 `OpenGraveyardAreaChoice` 的
+        /// `RequestActivateTargetSelection(isArea: true)`），选中地区后上行 `PlayCard{targetAreaUid}`。
+        /// 【2026-10-19 用户口径】不再弹「地区1/地区2/地区3」文字按钮窗——应选择场上高亮地区。
+        /// </summary>
         private void OpenOnlineGraveyardAreaChoice(CardInstance inst)
         {
             if (inst == null || _matchClient == null) return;
@@ -3669,8 +3721,7 @@ namespace Script.UI
             // 【2026-10-19 修复·JC085】地区列表必须取 `ClientAreaManager.GetOrderedAreaUids()`——
             // 与单机 `OpenGraveyardAreaChoice` 同源。旧写法 `ClientZoneManager.GetZoneCards(AreaZone, 0)`
             // 在联机快照投影下拿不到地区卡（地区卡注册在 `AreaManager._areas`，不在 ZoneManager 的
-            // `_area` 桶），于是 `areas.Count == 0` ⇒ 直接 return，第二级"选地区"窗永远弹不出来
-            // （用户实测："点发动效果后什么都没结算"）。
+            // `_area` 桶），于是 `areas.Count == 0` ⇒ 直接 return，第二级选地区永远弹不出来。
             var areas = _matchClient.ClientAreaManager?.GetOrderedAreaUids() ?? new List<string>();
             if (areas.Count == 0)
             {
@@ -3678,29 +3729,37 @@ namespace Script.UI
                 _activationSelectionBusy = false;
                 return;
             }
-            // 【2026-10-19】入口留痕：把"没进本函数 / 地区为空 / 窗被旧 popup 吞掉"三种情形在日志上分开
-            GD.Print($"[ArenaOl] 墓地行动：进入选地区（候选 {areas.Count} 个，{tmpl?.CardName}）");
+            GD.Print($"[ArenaOl] 墓地行动：进入选地区（高亮 {areas.Count} 个地区，{tmpl?.CardName}）");
 
-            var items = new List<ActivationChoiceItem>();
-            for (int i = 0; i < areas.Count; i++)
-            {
-                string areaUid = areas[i];
-                int areaNo = _matchClient?.ClientAreaManager?.GetSlotIndex(areaUid) ?? (i + 1);
-                items.Add(new ActivationChoiceItem
-                {
-                    Label = $"地区{areaNo}",
-                    OnChosen = () =>
-                    {
-                        _activationSelectionBusy = false;
-                        _matchClient.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard,
-                            inst.UID, areaUid, "");
-                        GD.Print($"[ArenaOl] 墓地行动：上行 PlayCard（从墓地正面打出）{tmpl?.CardName} → 地区{areaNo}");
-                    },
-                });
-            }
+            // 场上高亮地区 + 点击（地区点击经 AreaSlot.OnAreaClicked → OnAreaTargetPicked → 上行 PlayCard）
+            _pendingGraveyardPlayUid = inst.UID;
             _activationSelectionBusy = true;
-            OpenOnlineChoiceWindow(items, () => { _activationSelectionBusy = false; });
-            GD.Print($"[ArenaOl] 墓地行动：{tmpl?.CardName} → 弹选择地区窗（{areas.Count} 个地区）");
+            _activationTargetActive = true;
+            _activationTargetSource = null;       // 本路径不是"激活/出牌"，地区点击走 OnAreaTargetPicked
+            _activationTargetAbility = null;
+            _pendingPlayCardUid = null;
+            _pendingChoiceTargetRequest = null;   // 非服务端下发，不回到 ChoiceResult
+            _activationLegalCardUids.Clear();
+            _activationLegalAreaUids.Clear();
+            foreach (var u in areas) _activationLegalAreaUids.Add(u);
+            ApplyOnlineAreaHighlights();
+
+            EnsureTargetWindow();
+            if (_onlineTargetWindow == null)
+            {
+                GD.PrintErr("[ArenaOl] 墓地行动：目标提示窗不可用 → 回退文字按钮");
+                ClearActivationTargetSelection();
+                _activationSelectionBusy = false;
+                return;
+            }
+            _onlineTargetWindow.OnTargetPicked = null;   // 本路径不点卡，只点地区
+            _onlineTargetWindow.SetBlocking(false);
+            _onlineTargetWindow.Open(tmpl?.CardName ?? "墓地行动", "请点击场上高亮的地区完成打出。", extraLabel: "取消（不打出）");
+            _onlineTargetWindow.OnExtra = () =>
+            {
+                GD.Print($"[ArenaOl] 墓地行动：选地区被取消（不上行 PlayCard）：{tmpl?.CardName}");
+                ClearActivationTargetSelection();
+            };
         }
 
         /// <summary>秘社双击激活：有多个激活选项则弹联机选项列表供选择，再按所选发动。
@@ -4181,6 +4240,7 @@ namespace Script.UI
             _activationTargetAbility = null;
             _activationTargetSource = null;
             _pendingPlayCardUid = null;
+            _pendingGraveyardPlayUid = null;
             _activationLegalCardUids.Clear();
             _activationLegalAreaUids.Clear();
             _activationSelectionBusy = false;

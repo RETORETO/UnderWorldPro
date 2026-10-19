@@ -341,7 +341,12 @@ public partial class PlayerManager : Node
     /// <summary>
     /// 判定当前是否满足游戏结束条件，返回获胜玩家 ID（1 或 2）；无胜者返回 0。
     /// 规则优先级：先手牌库耗尽（条件2）直接判对手胜；否则比较总分（条件1）。
-    /// 若同回合双方均达标，取总分更高者；仍相等不判胜（返回 0）。
+    /// 若同回合双方均达标，取总分更高者。
+    /// 【2026-10-19 修复·游戏结束不了】两个"相等"分支必须有判胜出口：
+    ///  · 双方牌库均耗尽但总分都未达标 —— 按总分高者胜（相等 → 先手胜）；
+    ///  · 双方总分均达标且相等 —— 先手胜。
+    /// 旧实现这两处都 `return 0`（不判胜），而 `CheckGameOver` 只在"卡进分数区"时触发，
+    /// 之后若无分数区变化就再也不会被调用 ⇒ 对局永久卡死、结束不了。
     /// </summary>
     public int CheckGameOver()
     {
@@ -349,7 +354,6 @@ public partial class PlayerManager : Node
         bool deck2Empty = IsDeckEmpty(2);
         if (deck1Empty && !deck2Empty) { GD.Print("🏁 [胜利] 玩家1 牌库耗尽 → 玩家2 获胜"); TriggerGameOver(2); return 2; }
         if (deck2Empty && !deck1Empty) { GD.Print("🏁 [胜利] 玩家2 牌库耗尽 → 玩家1 获胜"); TriggerGameOver(1); return 1; }
-        if (deck1Empty && deck2Empty)  { GD.Print("🏁 [胜利] 双方牌库均耗尽 → 按总分高者胜"); }
 
         int s1 = GetScoreTotal(1);
         int s2 = GetScoreTotal(2);
@@ -361,10 +365,27 @@ public partial class PlayerManager : Node
         {
             if (s1 > s2) { GD.Print($"🏁 [胜利] 双方达标，玩家1 总分更高 {s1}>{s2} → 玩家1 获胜"); TriggerGameOver(1); return 1; }
             if (s2 > s1) { GD.Print($"🏁 [胜利] 双方达标，玩家2 总分更高 {s2}>{s1} → 玩家2 获胜"); TriggerGameOver(2); return 2; }
-            GD.Print($"⚖️ [胜利] 双方均达标且总分相等 {s1}={s2}，本回合不判胜（继续）");
-            return 0;
+            return BreakTieByFirst(s1, s2, "双方均达标且总分相等");
         }
+
+        // 双方牌库均耗尽、但总分都未达标：按总分高者胜；相等 → 先手胜（必须有出口，否则结束不了）
+        if (deck1Empty && deck2Empty)
+            return BreakTieByFirst(s1, s2, "双方牌库均耗尽且总分未达标");
+
         return 0;
+    }
+
+    /// <summary>
+    /// 总分相等时的平局出口：总分高者胜；仍相等 → **先手玩家胜**（游戏必须结束，不能卡死）。
+    /// </summary>
+    private int BreakTieByFirst(int s1, int s2, string reason)
+    {
+        if (s1 > s2) { TriggerGameOver(1); return 1; }
+        if (s2 > s1) { TriggerGameOver(2); return 2; }
+        int first = IsFirstPlayer(1) ? 1 : 2;
+        GD.Print($"⚖️ [胜利] {reason} {s1}={s2} → 先手玩家{first}胜（平局出口）");
+        TriggerGameOver(first);
+        return first;
     }
 
     /// <summary>

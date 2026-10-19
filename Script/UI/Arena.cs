@@ -3527,6 +3527,23 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
             return;
 
+        // 【2026-10-19 修复·JC005】选卡窗（CardPickWindow）打开时，点场上的**候选卡**（cat-1，
+        // 如结附于地区的附属）⇒ 等效于窗口内选中同一张卡（`SelectByUid`，只置选中、不提交）。
+        // 否则点场上 cat-1 卡会走它的默认点击（拖拽/双击激活），表现为"点场上卡无反馈"。
+        if (_activePickWindow != null && GodotObject.IsInstanceValid(_activePickWindow) && _activePickWindow.Visible
+            && @event is InputEventMouseButton pwMb && pwMb.Pressed && pwMb.ButtonIndex == MouseButton.Left
+            && !_cardDragController.IsDragging && !_cardDragController.IsActivating)
+        {
+            var hitCard = _cardDragController.PickAreaCardAt(pwMb.GlobalPosition);
+            if (hitCard?.Instance != null && _activePickWindow.HasCard(hitCard.Instance.UID))
+            {
+                _activePickWindow.SelectByUid(hitCard.Instance.UID);
+                GD.Print($"[Arena] 选卡窗打开期间点场上卡 {hitCard.Instance.UID}（等效窗口内选中，不提交）");
+                AcceptEvent();
+                return;
+            }
+        }
+
         // ---- 手牌拖拽（全局输入驱动，绕开 Godot 命中分发失效问题）----
         // 【MVC 修复 M-08】拖拽起手/放手路由已收归 CardDragController，此处仅转发。
         if (@event is InputEventMouseButton dragDown && dragDown.Pressed && dragDown.ButtonIndex == MouseButton.Left)
