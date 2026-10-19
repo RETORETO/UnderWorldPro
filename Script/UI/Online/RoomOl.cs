@@ -60,6 +60,8 @@ namespace Script.UI.Online
             if (_leaveButton != null) _leaveButton.Pressed += LeaveRoom;
             GD.Print("[RoomOl] r2 按钮已绑定");
 
+            ApplyTheme();   // 【2026-10-20 UI 美化】统一到卡组编辑界面的暗色金主题
+
             GD.Print("[RoomOl] r3 即将 BuildDeckDropdown");
             BuildDeckDropdown();
             GD.Print("[RoomOl] r4 BuildDeckDropdown 完成");
@@ -88,6 +90,38 @@ namespace Script.UI.Online
         }
 
         // ==================== 卡组下拉框 ====================
+
+        /// <summary>
+        /// 【2026-10-20 UI 美化】应用统一主题（见 `Script/UI/UITheme.cs`，真源取自卡组编辑界面）。
+        /// 只动表现层：改颜色/样式，不碰任何节点名（`Panel/ReadyButton` 被 `LobbyFlowTests` 断言依赖）。
+        /// </summary>
+        private void ApplyTheme()
+        {
+            if (GetNodeOrNull<ColorRect>("Background") is ColorRect bg) bg.Color = UITheme.Background;
+            if (GetNodeOrNull<Panel>("Panel") is Panel panel) UITheme.ApplyPanel(panel);
+
+            // 【2026-10-20 背景】场景图压在深色底之上、面板之下（等比铺满裁切，压暗 0.72）。
+            var cover = BackdropHelper.AttachCover(this, "res://Cards/Image/桌面8.jpg", 0.72f);
+            if (cover != null) MoveChild(cover, 1);
+
+            if (_roomLabel != null) UITheme.ApplyTitle(_roomLabel, 26);
+            foreach (string path in new[] { "Panel/DeckTitleLabel" })
+            {
+                if (GetNodeOrNull<Label>(path) is Label lb) UITheme.ApplyBody(lb);
+            }
+            if (_seat1Label != null) UITheme.ApplyBody(_seat1Label);
+            if (_seat2Label != null) UITheme.ApplyBody(_seat2Label);
+            if (_statusLabel != null) UITheme.ApplyBody(_statusLabel);
+            if (_deckStatusLabel != null) UITheme.ApplyBody(_deckStatusLabel);
+            if (_hostHintLabel != null) UITheme.ApplyBody(_hostHintLabel);
+
+            UITheme.ApplySecondaryButton(_deckOption);   // OptionButton 继承 Button，复用按钮样式
+            UITheme.ApplySecondaryButton(_deckButton);
+            UITheme.ApplyPrimaryButton(_readyButton);
+            UITheme.ApplyPrimaryButton(_startButton);
+            UITheme.ApplySecondaryButton(_kickButton);
+            UITheme.ApplySecondaryButton(_leaveButton);
+        }
 
         /// <summary>
         /// 构建卡组下拉框：列出 `res://Decks/` 下全部卡组**文件名**（不含扩展名），

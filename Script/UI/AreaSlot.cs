@@ -79,7 +79,35 @@ public partial class AreaSlot : Control
         _player1Area.SetAnchorsAndOffsetsPreset(LayoutPreset.TopLeft);
         _player2Area.SetAnchorsAndOffsetsPreset(LayoutPreset.TopLeft);
 
+        // 【2026-10-20】地区背景：每个地区一张独立场景图，上下半区取同一张图的不同裁切窗口。
+        ApplyAreaBackdrop();
+
         // 颜色由场景文件中的 modulate/self_modulate 控制，不在此覆盖
+    }
+
+    /// <summary>
+    /// 【2026-10-20 区域背景】给本槽位的上下半区铺地区场景图。
+    ///
+    /// 修正的历史问题：`AreaSlot.tscn` 里 `Player1Area/Background`、`Player2Area/Background` 用的是
+    /// `堆叠1.jpg`（90×365 的竖条），却被**默认 SCALE 拉伸**铺满 480×200 的横条 ⇒ 横向放大 5.3 倍、纵向压缩
+    /// 1.8 倍，人物被拉成一张"饼"。现改为：场景图 + `AtlasTexture` 取景窗口 + `KeepAspectCovered`
+    /// （等比铺满、溢出裁掉），全程零拉伸。
+    ///
+    /// 取景窗口 = 原图 888×370，恰好等于半区 480×200 的 2.4 比例；上下半区窗口横向错开，
+    /// 使"本方/对方"两侧画面不同（否则上下两半一模一样，玩家分不清谁是谁）。
+    /// </summary>
+    private void ApplyAreaBackdrop()
+    {
+        if (_player1Area == null || _player2Area == null) return;
+
+        string path = ArenaBackdrop.AreaImage(_areaIndex);
+        if (string.IsNullOrEmpty(path)) return;
+
+        var p2Bg = _player2Area.GetNodeOrNull<TextureRect>("Background");   // 上半 = 对手半边
+        var p1Bg = _player1Area.GetNodeOrNull<TextureRect>("Background");   // 下半 = 本方半边
+
+        BackdropHelper.ApplyCoverWindow(p2Bg, path, ArenaBackdrop.TopWindow, ArenaBackdrop.TopScrim);
+        BackdropHelper.ApplyCoverWindow(p1Bg, path, ArenaBackdrop.BottomWindow, ArenaBackdrop.BottomScrim);
     }
 
     /// <summary>彻底方案B：由地区卡实例驱动槽位显示。AreaUID 取实例 UID（槽位身份=实例身份）。</summary>
@@ -105,6 +133,7 @@ public partial class AreaSlot : Control
             }
         }
         UpdateLayout();
+        ApplyAreaBackdrop();   // 槽位序号已知 ⇒ 换成该地区对应的场景图
         UpdateMarks(0, 0);
         ClearCombatZones();
         RefreshStatsLabels();
@@ -336,7 +365,11 @@ public partial class AreaSlot : Control
         RefreshStatsLabels();
     }
 
-    public void SetAreaIndex(int index) => _areaIndex = index;
+    public void SetAreaIndex(int index)
+    {
+        _areaIndex = index;
+        ApplyAreaBackdrop();   // 序号变了 ⇒ 场景图跟着换
+    }
 
     public Control GetTargetContainer(Vector2 globalPos)
     {

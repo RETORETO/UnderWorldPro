@@ -296,6 +296,10 @@ namespace Script.UI
             // 【P3b】角标悬浮展开（联机侧纯浏览：无 CardPickWindow，点成员只收起）
             InitBadgePeek();
 
+            // 【2026-10-20 区域背景】各区域铺背景图（等比铺满裁切，绝不拉伸）。
+            // 与单机 `Arena` 共用 `ArenaBackdrop`（两端节点路径一致），避免各写一份漂移。
+            ArenaBackdrop.Apply(this);
+
             var passBtn = GetNodeOrNull<Button>("ActionPanel/PassButton");
             if (passBtn != null) passBtn.Pressed += () => DoPass(_localPlayerId);
             var endTurnBtn = GetNodeOrNull<Button>("ActionPanel/EndTurnButton");

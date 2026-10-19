@@ -256,5 +256,45 @@ namespace Script.Tests
             Assert.IsTrue(ol.Contains("new CardMultiPickWindow()"),
                 "CardMultiPickWindow 只作兜底，不能删");
         }
+
+        /// <summary>
+        /// ④ 【2026-10-20 区域背景】素材尺寸与目标区域不一致时**只许裁剪、不许拉伸**。
+        ///
+        /// 历史上 `AreaSlot.tscn` 把 90×365 的竖条素材用默认拉伸铺到 480×200 的横条上（横向放大 5.3 倍），
+        /// 人物被拉成一张饼。本契约锁死：背景一律经 `BackdropHelper`，且必须是等比铺满裁切的填充模式。
+        /// </summary>
+        public void TestBackdrop_区域背景只裁切不拉伸()
+        {
+            string helper = Read("Script/UI/BackdropHelper.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(helper), "必须能读到 BackdropHelper.cs");
+            Assert.IsTrue(helper.Contains("KeepAspectCovered"),
+                "背景必须用「等比铺满 + 溢出裁掉」的填充模式（stretch_mode = 6）");
+            Assert.IsFalse(helper.Contains("StretchModeEnum.Scale"),
+                "BackdropHelper 内不得出现按矩形强行拉伸的填充模式");
+
+            foreach (string p in new[] { "Script/UI/ArenaBackdrop.cs", "Script/UI/Arena.cs", "Script/UI/ArenaOl.cs" })
+            {
+                string s = Read(p);
+                Assert.IsFalse(string.IsNullOrEmpty(s), $"必须能读到 {p}");
+                Assert.IsFalse(s.Contains("StretchModeEnum.Scale"),
+                    $"{p}：背景不得用强行拉伸的填充模式（裁剪优先）");
+            }
+
+            // 地区槽：一个地区一张场景图，上下半区各取不同裁切窗口（否则上下两半一模一样，分不清本方/对方）
+            string slot = Read("Script/UI/AreaSlot.cs");
+            Assert.IsTrue(slot.Contains("ArenaBackdrop.AreaImage(_areaIndex)"),
+                "地区槽必须按槽位序号取对应的场景图（四个地区视觉可区分）");
+            Assert.IsTrue(slot.Contains("ArenaBackdrop.TopWindow") && slot.Contains("ArenaBackdrop.BottomWindow"),
+                "上下半区必须用不同的取景窗口（否则本方/对方半边画面相同）");
+
+            // 场景文件层也不许留着拉伸：AreaSlot.tscn 的 TextureRect 必须是 stretch_mode = 6
+            string tscn = Read("Scenes/UI/AreaSlot.tscn");
+            Assert.IsTrue(tscn.Contains("stretch_mode = 6"),
+                "AreaSlot.tscn 的区域背景必须是 stretch_mode = 6（等比铺满裁切）");
+
+            string bg = Read("Script/UI/ArenaBackdrop.cs");
+            Assert.IsTrue(bg.Contains("\"Player1Area\"") && bg.Contains("\"Player2Area\""),
+                "区域背景必须双方玩家区都铺（单机/联机同款）");
+        }
     }
 }

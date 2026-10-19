@@ -1,6 +1,7 @@
 using Godot;
 using Script.IO;
 using Script.Net.Godot;
+using Script.UI;
 using Script.UI.Online;
 
 public partial class MainMenu : Control
@@ -50,6 +51,65 @@ public partial class MainMenu : Control
 
         if (!string.IsNullOrEmpty(WebPerfParams.AutoEnter))
             ScheduleAutoEnter();
+
+        // 【2026-10-19 UI 美化】统一到卡组编辑界面的暗色金主题。
+        ApplyTheme();
+    }
+
+    /// <summary>应用统一主题：深色底 + 场景背景图 + 左侧皮革侧栏 + 金色标题 + 按钮统一样式。</summary>
+    private void ApplyTheme()
+    {
+        // 【2026-10-20 背景】三层背景放进独立容器并压到 index 0，保证一定在标题/按钮之下：
+        //   ① 纯深色底（图片加载失败时的兜底）  ② 全屏场景图（等比铺满裁切）  ③ 左侧皮革竖版侧栏。
+        var backdrop = new Control
+        {
+            Name = "__MenuBackdrop",
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        backdrop.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        AddChild(backdrop);
+        MoveChild(backdrop, 0);
+
+        var baseRect = UITheme.BackgroundRect();
+        backdrop.AddChild(baseRect);
+
+        // 场景里预留的空 Background 节点（还带 custom_maximum_size=250×250）一律停用，避免和上面的背景层打架。
+        if (GetNodeOrNull<TextureRect>("Background") is TextureRect legacyBg) legacyBg.Visible = false;
+
+        // ② 全屏场景图：庄园夜景，压暗 0.58 保证标题与按钮可读（不追求"看清图"，只做氛围）。
+        BackdropHelper.AttachCover(backdrop, "res://Cards/Image/桌面3.jpg", 0.58f);
+
+        // ③ 左侧皮革侧栏：`牌手信息.jpg` 是 300×900（0.333），铺 360×1080 时缩放系数恰为 1.2，
+        //    纵向正好铺满、横向零裁切 ⇒ 底部「隐秘世界」压印 LOGO 完整可见。
+        var spine = new TextureRect
+        {
+            Name = "__MenuSpine",
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        backdrop.AddChild(spine);
+        BackdropHelper.MakeCover(spine, BackdropHelper.LeatherPanel, 0.22f);
+        spine.SetAnchorsAndOffsetsPreset(LayoutPreset.LeftWide);
+        spine.OffsetRight = 360f;
+        spine.OffsetLeft = 0f;
+
+        var title = GetNodeOrNull<Label>("Title");
+        if (title != null)
+        {
+            title.Text = "UWPro";
+            title.HorizontalAlignment = HorizontalAlignment.Center;
+            UITheme.ApplyTitle(title, 56);
+            // 金色标题压在图片上，需要描边才不糊
+            title.AddThemeColorOverride("font_outline_color", new Color(0f, 0f, 0f, 0.85f));
+            title.AddThemeConstantOverride("outline_size", 8);
+        }
+
+        if (_startButton != null) UITheme.ApplyPrimaryButton(_startButton);
+        if (_onlineButton != null) UITheme.ApplyPrimaryButton(_onlineButton);
+        if (_hostButton != null) UITheme.ApplyPrimaryButton(_hostButton);
+        if (_deckButton != null) UITheme.ApplyPrimaryButton(_deckButton);
+        if (_quitButton != null) UITheme.ApplySecondaryButton(_quitButton);
     }
 
     /// <summary>
@@ -84,7 +144,7 @@ public partial class MainMenu : Control
         st = GameManager.GameState.DeckBuilder;
         if (string.Equals(s, "deck", System.StringComparison.OrdinalIgnoreCase)
          || string.Equals(s, "deckbuilder", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.DeckBuilder; return true; }
-        if (string.Equals(s, "lobby", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.Lobby; return true; }
+        if (string.Equals(s, "lobby", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.Room; return true; }   // 单机无大厅，直接进房间
         if (string.Equals(s, "lobbyonline", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.LobbyOnline; return true; }
         if (string.Equals(s, "room", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.Room; return true; }
         if (string.Equals(s, "roomonline", System.StringComparison.OrdinalIgnoreCase)) { st = GameManager.GameState.RoomOnline; return true; }
@@ -180,9 +240,14 @@ public partial class MainMenu : Control
 
     private void OnStartPressed()
     {
-        GD.Print("点击开始游戏，切换到大厅");
-        // 统一经 GameManager（应用级 Controller）流转场景（问题 3 修复）
-        GameManager.Instance.GoToState(GameManager.GameState.Lobby);
+        GD.Print("点击开始游戏，直接进入房间");
+        // 【2026-10-19 用户口径】单机不再经过大厅：直接初始化单人房间并进入房间。
+        // Room._Ready 本身也有兜底（RoomPlayers 为空时自动 InitRoom），这里显式建一个干净房间。
+        var gm = GameManager.Instance;
+        if (gm == null) return;
+        string roomId = System.DateTime.Now.Ticks.ToString();
+        gm.InitRoom(roomId, string.IsNullOrEmpty(gm.PlayerName) ? "玩家" : gm.PlayerName);
+        gm.GoToState(GameManager.GameState.Room);
     }
 
     /// <summary>【增量 B】进入联机大厅页（在线专用场景；单机「开始游戏」流程不受影响）。</summary>

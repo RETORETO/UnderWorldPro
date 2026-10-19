@@ -641,6 +641,10 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         RefreshAssetLabels();   // 初始化时先渲染资产区标签
         InitializePMCommands();
 
+        // 【2026-10-20 区域背景】各区域铺背景图（等比铺满裁切，绝不拉伸）。放在区域容器建好之后、
+        // 开局排布之前：背景是纯静态底图，不参与任何卡牌布局计算。
+        ArenaBackdrop.Apply(this);
+
         // ---- 8. 开局 ----
         //【MVC 修复 M-02】开局编排（发起始手牌、起局）由 GameInitializer（Composition Root）负责，
         // View 只在自身 UI 与事件订阅全部就绪后触发一次，不再感知发牌张数等规则参数。

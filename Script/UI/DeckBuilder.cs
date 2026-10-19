@@ -202,6 +202,10 @@ public partial class DeckBuilder : Control
         _deckLoadPanel.AddThemeStyleboxOverride("panel", GetPoolRowStyle());
         SetProcessInput(true);   // 用于"点下拉面板之外时自动收起"
 
+        // 【2026-10-20 背景】卡组编辑界面本身是视觉基准，也补一层场景底图（压暗 0.80，几乎只做质感，
+        // 保证复杂表格/卡池行的高对比可读性不被破坏）。
+        ApplyBackdrop();
+
         ulong __tBind = Time.GetTicksMsec();
         // 整段套 try/catch：Web 上「托管异常跨原生边界」会直接 abort、看不到内容；
         // 捕获后打印 ex 就能拿到异常类型/消息/托管栈，便于以后定位。
@@ -963,6 +967,22 @@ public partial class DeckBuilder : Control
     // ============================================================
     // 搜索结果的结构化信息面板（五行数据）
     // ============================================================
+
+    /// <summary>
+    /// 【2026-10-20 背景】卡组编辑界面的场景底图。
+    /// 本界面是全工程的**视觉基准**，底色原本是纯色；补一层压暗到 0.80 的场景图只为质感，
+    /// 卡池行/卡组板的对比度优先（所以压暗值给得很高）。
+    /// 图片一律「等比铺满 + 溢出裁掉」，全部经 `BackdropHelper`，杜绝拉伸变形。
+    /// </summary>
+    private void ApplyBackdrop()
+    {
+        var baseRect = UITheme.BackgroundRect();
+        AddChild(baseRect);
+        MoveChild(baseRect, 0);
+
+        var cover = BackdropHelper.AttachCover(this, "res://Cards/Image/桌面6.jpg", 0.80f);
+        if (cover != null) MoveChild(cover, 1);
+    }
 
     /// <summary>卡片行外观资源（全局复用一份，避免每行重复创建主题资源）。</summary>
     private StyleBoxFlat GetPoolRowStyle()

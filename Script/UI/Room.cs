@@ -2,6 +2,7 @@ using Godot;
 using System.Collections.Generic;
 using System.IO;
 using Script.IO;
+using Script.UI;
 
 public partial class Room : Control
 {
@@ -52,6 +53,27 @@ public partial class Room : Control
 
         RefreshDeckDropdown();
         RefreshRoomUI();
+        ApplyTheme();   // 【2026-10-19 UI 美化】统一到暗色金主题
+    }
+
+    /// <summary>应用统一主题：深色背景 + 场景底图 + 金色标题 + 按钮统一样式（见 Script/UI/UITheme.cs）。</summary>
+    private void ApplyTheme()
+    {
+        var bg = UITheme.BackgroundRect();
+        AddChild(bg);
+        MoveChild(bg, 0);
+
+        // 【2026-10-20 背景】场景图压在深色底之上、所有面板之下（等比铺满裁切，压暗 0.72——本页以面板为主）。
+        var cover = BackdropHelper.AttachCover(this, "res://Cards/Image/桌面8.jpg", 0.72f);
+        if (cover != null) MoveChild(cover, 1);
+
+        if (_roomIdLabel != null) UITheme.ApplyTitle(_roomIdLabel, 34);
+        if (_playerNameLabel1 != null) UITheme.ApplyBody(_playerNameLabel1);
+        if (_playerNameLabel2 != null) UITheme.ApplyBody(_playerNameLabel2);
+        if (_readyBtn != null) UITheme.ApplyPrimaryButton(_readyBtn);
+        if (_startBtn != null) UITheme.ApplyPrimaryButton(_startBtn);
+        if (_exitBtn != null) UITheme.ApplySecondaryButton(_exitBtn);
+        if (_deckOption != null) UITheme.ApplySecondaryButton(_deckOption);   // OptionButton 继承 Button，复用按钮样式
     }
 
     /// <summary>扫描 res://Decks/*.json 填充下拉框；首个选项固定为「默认卡组（硬编码）」。</summary>
@@ -118,17 +140,31 @@ public partial class Room : Control
         if (_roomIdLabel != null) _roomIdLabel.Text = $"房间号：{gm.RoomId}";
 
         if (_playerNameLabel1 != null) _playerNameLabel1.Text = gm.RoomPlayers.Count > 0 ? gm.RoomPlayers[0] : "玩家1";
-        if (_readyStatus1 != null) _readyStatus1.Text = gm.RoomReady.Count > 0 && gm.RoomReady[0] ? "已准备" : "未准备";
+        if (_readyStatus1 != null)
+        {
+            bool r1 = gm.RoomReady.Count > 0 && gm.RoomReady[0];
+            _readyStatus1.Text = r1 ? "已准备" : "未准备";
+            _readyStatus1.AddThemeColorOverride("font_color", r1 ? UITheme.Success : UITheme.Text);
+        }
 
         if (gm.RoomPlayers.Count > 1)
         {
             if (_playerNameLabel2 != null) _playerNameLabel2.Text = gm.RoomPlayers[1];
-            if (_readyStatus2 != null) _readyStatus2.Text = gm.RoomReady.Count > 1 && gm.RoomReady[1] ? "已准备" : "未准备";
+            if (_readyStatus2 != null)
+            {
+                bool r2 = gm.RoomReady.Count > 1 && gm.RoomReady[1];
+                _readyStatus2.Text = r2 ? "已准备" : "未准备";
+                _readyStatus2.AddThemeColorOverride("font_color", r2 ? UITheme.Success : UITheme.Text);
+            }
         }
         else
         {
             if (_playerNameLabel2 != null) _playerNameLabel2.Text = "AI玩家";
-            if (_readyStatus2 != null) _readyStatus2.Text = "已准备";
+            if (_readyStatus2 != null)
+            {
+                _readyStatus2.Text = "已准备";
+                _readyStatus2.AddThemeColorOverride("font_color", UITheme.Success);
+            }
         }
 
         _isReady = gm.RoomReady.Count > 0 && gm.RoomReady[0];
@@ -158,9 +194,9 @@ public partial class Room : Control
 
     private void OnExitPressed()
     {
-        GD.Print("【房间】退出房间，返回大厅");
+        GD.Print("【房间】退出房间，返回主菜单");
         GameManager.Instance.RoomPlayers.Clear();
         GameManager.Instance.RoomReady.Clear();
-        GameManager.Instance.GoToState(GameManager.GameState.Lobby);
+        GameManager.Instance.GoToState(GameManager.GameState.MainMenu);
     }
 }

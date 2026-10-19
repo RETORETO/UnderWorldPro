@@ -8,17 +8,17 @@ public partial class GameManager : Node
     public static GameManager Instance { get; private set; }  // 添加这一行
 
     /// <summary>
-    /// 应用级场景状态。`LobbyOnline`/`RoomOnline`/`OnlineArena` 为**联机专用**（增量 B 追加，不动单机三态语义）：
-    /// 大厅页 → 房间页 → 联机战场页；单机 `Lobby/Room/Arena` 保持原样。
+    /// 应用级场景状态。`LobbyOnline`/`RoomOnline`/`OnlineArena` 为**联机专用**（增量 B 追加，不动单机语义）：
+    /// 大厅页 → 房间页 → 联机战场页。
+    /// 【2026-10-19 用户口径】单机不再有独立大厅：`MainMenu → Room`（单人直接进房间），故移除 `Lobby`。
     /// </summary>
-    public enum GameState { MainMenu, Lobby, Room, Arena, DeckBuilder, LobbyOnline, RoomOnline, OnlineArena }
+    public enum GameState { MainMenu, Room, Arena, DeckBuilder, LobbyOnline, RoomOnline, OnlineArena }
     public GameState CurrentState { get; private set; }
 
     // 状态 → 场景路径映射（唯一真相源，避免散落在各 View）
     private static readonly Dictionary<GameState, string> ScenePaths = new()
     {
         { GameState.MainMenu,    "res://Scenes/MainMenu.tscn" },
-        { GameState.Lobby,       "res://Scenes/Lobby.tscn" },
         { GameState.Room,        "res://Scenes/Room.tscn" },
         { GameState.Arena,       "res://Scenes/Arena/Arena.tscn" },
         { GameState.DeckBuilder,  "res://Scenes/DeckBuilder.tscn" },

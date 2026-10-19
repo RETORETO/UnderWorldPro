@@ -48,6 +48,8 @@ namespace Script.UI.Online
             if (_createBtn != null) _createBtn.Pressed += OnCreateRoomPressed;
             if (_backBtn != null) _backBtn.Pressed += OnBackPressed;
 
+            ApplyTheme();   // 【2026-10-20 UI 美化】统一到卡组编辑界面的暗色金主题
+
             SetRoomActionsEnabled(false);
             if (Script.Net.Godot.GodotWebSocketTransport.IsWeb)
             {
@@ -86,6 +88,39 @@ namespace Script.UI.Online
                 GD.Print("[LobbyOl] --lobby 自动连接模式：使用回填地址直接连接");
                 OnConnectPressed();
             }
+        }
+
+        /// <summary>
+        /// 【2026-10-20 UI 美化】应用统一主题（见 `Script/UI/UITheme.cs`，真源取自卡组编辑界面）。
+        /// 只动表现层：改颜色/样式，不碰任何节点名（`Panel/ConnectButton` 等路径被 `LobbyFlowTests` 断言依赖）。
+        /// </summary>
+        private void ApplyTheme()
+        {
+            if (GetNodeOrNull<ColorRect>("Background") is ColorRect bg) bg.Color = UITheme.Background;
+            if (GetNodeOrNull<Panel>("Panel") is Panel panel) UITheme.ApplyPanel(panel);
+
+            // 【2026-10-20 背景】场景图压在深色底之上、面板之下（等比铺满裁切，压暗 0.72）。
+            var cover = BackdropHelper.AttachCover(this, "res://Cards/Image/桌面3.jpg", 0.72f);
+            if (cover != null) MoveChild(cover, 1);
+
+            if (GetNodeOrNull<Label>("Panel/TitleLabel") is Label title) UITheme.ApplyTitle(title, 34);
+            foreach (string path in new[]
+            {
+                "Panel/HostLabel", "Panel/PortLabel", "Panel/NameLabel", "Panel/RoomListTitle",
+            })
+            {
+                if (GetNodeOrNull<Label>(path) is Label lb) UITheme.ApplyBody(lb);
+            }
+            if (_statusLabel != null) UITheme.ApplyBody(_statusLabel);
+
+            if (_hostInput != null) UITheme.ApplyLineEdit(_hostInput);
+            if (_portInput != null) UITheme.ApplyLineEdit(_portInput);
+            if (_nameInput != null) UITheme.ApplyLineEdit(_nameInput);
+
+            UITheme.ApplyPrimaryButton(_connectBtn);
+            UITheme.ApplyPrimaryButton(_createBtn);
+            UITheme.ApplySecondaryButton(_refreshBtn);
+            UITheme.ApplySecondaryButton(_backBtn);
         }
 
         /// <summary>冒烟用：进入大厅后自动建房/加入（与按钮走同一处理函数）。</summary>
@@ -203,8 +238,10 @@ namespace Script.UI.Online
             if (_roomListBox == null || _session == null) return false;
             foreach (var child in _roomListBox.GetChildren())
             {
-                if (child is not HBoxContainer row) continue;
-                foreach (var sub in row.GetChildren())
+                // 【2026-10-20】房间行改成 PanelContainer（卡片底）包 HBoxContainer，这里两种都认。
+                Node rowNode = child is HBoxContainer h ? h : (child as PanelContainer)?.GetChildOrNull<HBoxContainer>(0);
+                if (rowNode == null) continue;
+                foreach (var sub in rowNode.GetChildren())
                 {
                     if (sub is not Button btn || btn.Text != "加入" || btn.Disabled) continue;
                     btn.EmitSignal(BaseButton.SignalName.Pressed);
@@ -329,6 +366,7 @@ namespace Script.UI.Online
             if (list.Rooms.Count == 0)
             {
                 var empty = new Label { Text = "（暂无可加入的房间，可点「创建房间」）" };
+                UITheme.ApplyBody(empty);
                 _roomListBox.AddChild(empty);
                 SetStatus($"房间列表已刷新：0 / {list.MaxRooms} 间");
                 return;
@@ -336,21 +374,30 @@ namespace Script.UI.Online
 
             foreach (var room in list.Rooms)
             {
+                // 【2026-10-20 UI 美化】每间房做成一张「深底 + 灰蓝描边」的卡片行，与卡组编辑界面的行风格一致。
+                var card = new PanelContainer();
+                UITheme.ApplyPanel(card);
                 var row = new HBoxContainer();
+                row.AddThemeConstantOverride("separation", 10);
+                card.AddChild(row);
+
                 var label = new Label
                 {
                     Text = $"{room.RoomName}    {room.PlayerCount}/{room.MaxPlayers}    房主：{room.HostDisplayName}    阶段：{room.Phase}",
                     SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                    VerticalAlignment = VerticalAlignment.Center,
                 };
+                label.AddThemeColorOverride("font_color", UITheme.Gold);
                 row.AddChild(label);
 
                 var join = new Button { Text = "加入", Disabled = room.PlayerCount >= room.MaxPlayers || room.Phase != RoomPhase.Waiting };
+                UITheme.ApplySecondaryButton(join);
                 string captured = room.RoomId;
                 join.Pressed += () => _session?.Send(new LobbyRequest { Kind = LobbyRequestKind.JoinRoom, RoomId = captured });
                 row.AddChild(join);
                 _joinButtons.Add(join);
 
-                _roomListBox.AddChild(row);
+                _roomListBox.AddChild(card);
             }
             SetStatus($"房间列表已刷新：{list.Rooms.Count} / {list.MaxRooms} 间");
         }
