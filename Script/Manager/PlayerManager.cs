@@ -408,17 +408,26 @@ public partial class PlayerManager : Node
     /// 调用 SetFirstPlayer(firstPlayerId) 统一设置，避免此处读取不可靠的快照字段。</summary>
     public void ApplySnapshot(System.Collections.Generic.List<Script.Net.PlayerSnapshot> players)
     {
-        if (players == null) return;
+        if (players == null || players.Count == 0) return;
         _projectedDeployCovertBlocked.Clear();
+        // 【2026-10-19 修复·跨局残留】结束标志必须**按快照权威赋值**，不能只置 true：
+        // 服务端每份快照都写双方条目（`TurnManager.ToSnapshot`：`IsGameOver = pm.IsGameOver` 是全局值），
+        // 而联机客户端单进程复用同一个 PlayerManager（`ClientSession._match` 懒创建、只有 Dispose 才置空）。
+        // 旧写法「if (p.IsGameOver) _isGameOver = true」只置不清 ⇒ 第一局结束后回房间再开第二局，
+        // 该标志永远为 true，`TurnManager.CanPlayFromGraveyardNow` 恒以外「对局已结束」拒绝墓地行动，
+        // 表现为 JC085 复生行尸在 hover 面板里双击毫无反应、连绿框都不亮。
+        bool anyGameOver = false;
         foreach (var p in players)
         {
+            if (p == null) continue;
             var data = GetPlayer(p.PlayerId);
+            if (p.IsGameOver) anyGameOver = true;
             if (data == null) continue;
-            if (p.IsGameOver) _isGameOver = true;
             // 【P1】全局封锁秘密派遣（JC068-B）：服务端权威态随快照投影到客户端，
             // 供客户端派遣门禁（DeployCovertEligibility）与服务端同解。
             if (p.DeployCovertBlocked) _projectedDeployCovertBlocked.Add(p.PlayerId);
         }
+        _isGameOver = anyGameOver;   // 全量赋值：新一局的快照会把上一局的 true 清回 false
     }
 
     // ============================================================

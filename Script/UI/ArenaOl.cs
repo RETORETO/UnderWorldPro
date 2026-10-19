@@ -445,7 +445,12 @@ namespace Script.UI
 
             if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
             {
-                _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+                // 【2026-10-19】注入"可发动"探针：面板只画不判，与场上绿框同一实现（投影优先）
+                _badgePeek = new CardBadgePeek
+                {
+                    Name = "CardBadgePeek",
+                    ActivatableProbe = IsCardActivatableForUi,
+                };
                 AddChild(_badgePeek);
             }
             // 标题写明"双击发动能力"（折叠后看不到卡面、也没有其它提示，只能靠猜；封印卡通常无可发动能力，不加这句）
@@ -536,7 +541,11 @@ namespace Script.UI
 
             if (_badgePeek == null || !GodotObject.IsInstanceValid(_badgePeek))
             {
-                _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+                _badgePeek = new CardBadgePeek
+                {
+                    Name = "CardBadgePeek",
+                    ActivatableProbe = IsCardActivatableForUi,
+                };
                 AddChild(_badgePeek);
             }
             // 【2026-10-19 修复·JC085】资产/墓地列表的**双击出口**不能是空实现：
@@ -675,6 +684,13 @@ namespace Script.UI
         /// <summary>【第0回合·调度】当前打开的调度窗（多选选卡窗；快照到达时靠它判"已弹出"）。</summary>
         private CardMultiPickWindow _mulliganWindow;
 
+        // ==================== 【2026-10-19·cat-1 调度】场上手牌多选态 ====================
+        // 用户口径：调度候选＝自己手牌＝全 cat-1 ⇒ **不弹卡面网格窗**，改用
+        // "手牌高亮 + 左键加选/右键取消 + 提示窗确认"（与 JC021/JC062 的"一个窗多选"同款交互）。
+        private bool _mulliganPickActive;
+        private readonly System.Collections.Generic.List<CardInstance> _mulliganPickCards = new();
+        private readonly System.Collections.Generic.HashSet<string> _mulliganPickPicked = new();
+
         /// <summary>
         /// 【第0回合·调度（客户端驱动）】每次应用快照后检查：若处于第 0 回合且尚未上报，
         /// 就**本地**弹出调度框（不再依赖服务端下发决策请求——那会早于本页挂载而丢失）。
@@ -699,10 +715,12 @@ namespace Script.UI
                     _mulliganWindow = null;
                     GD.Print("[ArenaOl] 调度阶段已结束，关闭本地调度窗");
                 }
+                if (_mulliganPickActive) CloseMulliganPick("调度阶段已结束");
                 return;
             }
             if (_mulliganReportedLocal) return;                    // 已上报
             if (_mulliganWindow != null && GodotObject.IsInstanceValid(_mulliganWindow)) return;   // 已弹出
+            if (_mulliganPickActive) return;                       // cat-1 场上多选态已在进行
 
             int localSeat = _matchClient.LocalSeat;
             var hand = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.Hand, localSeat);
@@ -712,6 +730,13 @@ namespace Script.UI
             var cards = new List<CardInstance>();
             foreach (var c in hand)
                 if (c != null) cards.Add(c);
+
+            // 【2026-10-19 用户口径·cat-1】调度候选＝自己手牌 ⇒ 全 cat-1 ⇒ **不弹卡面网格窗**，
+            // 走"手牌高亮 + 左键加选/右键取消 + 提示窗确认"。只有分类器判成 Window（理论上不会发生，
+            // 属于服务端下发隐藏占位等异常）或选目标窗不可用时，才退回原来的 CardMultiPickWindow。
+            if (CardPickChannel.Classify(cards, localSeat) == CardPickChannelKind.FieldClick
+                && BeginMulliganFieldPick(localSeat, cards))
+                return;
 
             var req = new CardMultiPickRequest
             {
@@ -764,6 +789,154 @@ namespace Script.UI
             win.Popup();
             _mulliganWindow = win;
             GD.Print($"[ArenaOl] 第0回合·已弹出调度选卡窗（候选 {cards.Count} 张手牌）");
+        }
+
+        // ============================================================
+        // 【2026-10-19 用户口径·cat-1】**开局调度＝场上手牌多选**（不弹卡面网格窗）
+        // 候选是自己手牌 ⇒ 全 cat-1 ⇒ 按规则走"场上高亮 + 左键点选"。
+        // 多选（0..N）不能"点一张即提交"，故配一个提示窗承载「确认调度 / 不调度」。
+        // 回包仍是 `PlayerIntent.Kind.MulliganReport`（协议零改动）。
+        // ============================================================
+
+        /// <summary>开"场上手牌多选"调度态。返回 false ⇒ 调用方退回 `CardMultiPickWindow` 兜底。</summary>
+        private bool BeginMulliganFieldPick(int localSeat, List<CardInstance> cards)
+        {
+            EnsureTargetWindow();
+            if (_onlineTargetWindow == null || cards == null || cards.Count == 0) return false;
+
+            _mulliganPickActive = true;
+            _mulliganPickCards.Clear();
+            _mulliganPickCards.AddRange(cards);
+            _mulliganPickPicked.Clear();
+
+            _activationSelectionBusy = true;      // 决策期间延后快照应用，避免重建把手牌高亮洗掉
+            _activationTargetActive = false;      // 独立状态机：点一张不提交
+            _pendingPlayCardUid = null;
+            _pendingChoiceTargetRequest = null;
+
+            _onlineTargetWindow.OnTargetPicked = null;
+            _onlineTargetWindow.OnExtra = null;
+            _onlineTargetWindow.OnMultiConfirmed = () => SubmitMulliganPick(localSeat);
+            // 调度允许"一张都不选" ⇒ 取消按钮的语义就是"不调度（提交空选）"，不是中断流程。
+            _onlineTargetWindow.OnCancelled = () => SubmitMulliganPick(localSeat);
+            _onlineTargetWindow.SetBlocking(false);
+            _onlineTargetWindow.OpenMultiPick(
+                "左键选择要调度的牌，右键取消选择；选中的牌会置入牌库底并补抽等量张",
+                cancelLabel: "不调度（一张不选）");
+            if (_onlineTargetWindow.ConfirmButton != null) _onlineTargetWindow.ConfirmButton.Text = "确认调度";
+
+            RefreshMulliganPick();
+            GD.Print($"[ArenaOl] 第0回合·调度走场上手牌多选（候选 {cards.Count} 张，不弹卡面窗）");
+            return true;
+        }
+
+        /// <summary>重算调度高亮：候选＝手牌全部亮起；已选＝`SetPickedHighlight` 另一种强调。</summary>
+        private void RefreshMulliganPick()
+        {
+            if (!_mulliganPickActive) return;
+
+            _activationLegalCardUids.Clear();
+            foreach (var c in _mulliganPickCards)
+                if (c != null) _activationLegalCardUids.Add(c.UID);
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (ui.Instance.CurrentZone != CardZone.Hand || ui.Instance.OwnerId != _localPlayerId) continue;
+                bool candidate = _activationLegalCardUids.Contains(ui.Instance.UID);
+                ui.SetTargetHighlight(candidate);
+                ui.SetPickedHighlight(candidate && _mulliganPickPicked.Contains(ui.Instance.UID));
+            }
+
+            // 调度不涉及地区：清掉可能残留的地区高亮/选中，避免与上一局或上一槽串味
+            HighlightOnlineCouncilTargets(false);
+            ClearOnlineAreaHighlights();
+            if (_areaSlots != null)
+                foreach (var slot in _areaSlots)
+                {
+                    if (slot == null || !GodotObject.IsInstanceValid(slot)) continue;
+                    slot.SetSelected(false);
+                    slot.SetHighlight(false);
+                    slot.OnAreaClicked = null;
+                    slot.OnAreaRightClicked = null;
+                }
+
+            _onlineTargetWindow?.SetMultiPick(
+                "左键选择要调度的牌，右键取消选择",
+                $"开局调度：已选择（{_mulliganPickPicked.Count}/{_mulliganPickCards.Count}）",
+                true);   // 0 张也可以确认（＝不调度）
+        }
+
+        /// <summary>左键＝切换选中；右键＝取消该卡的选中。</summary>
+        private void ToggleMulliganPick(string uid, bool rightClick)
+        {
+            if (string.IsNullOrEmpty(uid) || !_mulliganPickActive) return;
+            if (rightClick)
+            {
+                if (_mulliganPickPicked.Remove(uid)) RefreshMulliganPick();
+                return;
+            }
+            if (!_activationLegalCardUids.Contains(uid)) return;
+            if (!_mulliganPickPicked.Remove(uid)) _mulliganPickPicked.Add(uid);
+            RefreshMulliganPick();
+        }
+
+        /// <summary>确认/不调度：按候选顺序输出已选 UID，上报 `MulliganReport`。</summary>
+        private void SubmitMulliganPick(int localSeat)
+        {
+            if (!_mulliganPickActive) return;
+            var uids = new System.Collections.Generic.List<string>();
+            foreach (var c in _mulliganPickCards)
+                if (c != null && _mulliganPickPicked.Contains(c.UID)) uids.Add(c.UID);
+
+            _mulliganReportedLocal = true;     // 先置：避免上报后的快照又弹一次
+            CloseMulliganPick("已提交");
+            _matchClient?.SendIntentAs(localSeat, PlayerIntent.Kind.MulliganReport, uids.ToArray());
+            GD.Print($"[ArenaOl] 调度已上报：{uids.Count} 张（场上手牌多选）");
+        }
+
+        /// <summary>关闭调度多选态：清高亮 / 清回调 / 关提示窗 / 复位本地模态。</summary>
+        private void CloseMulliganPick(string why)
+        {
+            if (!_mulliganPickActive) return;
+            _mulliganPickActive = false;
+
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+                ui.SetTargetHighlight(false);
+                ui.SetPickedHighlight(false);
+            }
+
+            _mulliganPickCards.Clear();
+            _mulliganPickPicked.Clear();
+            ClearActivationTargetSelection();      // 清合法集/地区高亮/关窗/复位 _activationSelectionBusy
+            if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
+            {
+                _onlineTargetWindow.OnMultiConfirmed = null;
+                _onlineTargetWindow.OnCancelled = null;
+            }
+            GD.Print($"[ArenaOl] 调度多选态结束（{why}）");
+        }
+
+        /// <summary>命中点击处的手牌 UI（调度多选用；公共 `PickFieldCardAt` 故意不含手牌）。</summary>
+        private CardUI PickHandCardAt(Vector2 globalPos)
+        {
+            CardUI best = null;
+            int bestZ = int.MinValue;
+            foreach (var kv in _cardUIMap)
+            {
+                var ui = kv.Value;
+                if (ui == null || !GodotObject.IsInstanceValid(ui) || ui.Instance == null) continue;
+                if (ui.Instance.CurrentZone != CardZone.Hand) continue;
+                if (ui.Instance.OwnerId != _localPlayerId) continue;
+                if (!ui.Visible) continue;
+                if (!ui.GetVisualGlobalRect().HasPoint(globalPos)) continue;
+                if (ui.ZIndex >= bestZ) { bestZ = ui.ZIndex; best = ui; }
+            }
+            return best;
         }
 
         /// <summary>调度选卡窗构建失败时的兜底：退回原来的勾选框列表（保证流程不卡死）。</summary>
@@ -1408,6 +1581,83 @@ namespace Script.UI
             return true;
         }
 
+        /// <summary>
+        /// 【2026-10-19 用户口径·cat-1/cat-2】按 **UID 列表**直接开卡面选择窗（不依赖服务端下发 `OptionCardRefs`）。
+        ///
+        /// 用途：候选里含 **cat-2**（资产区 / 结附或封印于角色·秘社的附属·封印）时必须走选择窗 ——
+        /// 这些卡被 `Arena.Layout.CollapseMember` 折叠成角标（`Visible=false`），场上没有可点的卡面；
+        /// 只给"高亮 + 提示窗"会让玩家看到"亮着却点不动"，效果直接卡死。
+        ///
+        /// 返回 false ⇒ 调用方**必须回退**到原路径（不要静默什么都不做）。
+        /// 关闭顺序纪律：旧窗先 `QueueFree`；新窗先 `AddChild` 再 `Init`（`CardUI._Ready()` 会 `SetFace(false)`）。
+        /// </summary>
+        private bool TryOpenOnlineCardPickWindow(string title, System.Collections.Generic.IReadOnlyList<string> uids,
+            int chooserId, string hint, bool allowCancel, string cancelLabel,
+            System.Action<CardInstance> onPicked, System.Action onCancelled)
+        {
+            var mgr = _matchClient?.ClientCardManager;
+            if (mgr == null || uids == null || uids.Count == 0 || onPicked == null) return false;
+
+            var cards = new System.Collections.Generic.List<CardInstance>();
+            var seen = new System.Collections.Generic.HashSet<string>();
+            foreach (var uid in uids)
+            {
+                if (string.IsNullOrEmpty(uid) || !seen.Add(uid)) continue;
+                var inst = mgr.GetInstance(uid);
+                if (inst != null) cards.Add(inst);
+            }
+            if (cards.Count == 0)
+            {
+                GD.PrintErr($"[ArenaOl] 选卡窗（按实例）：候选 UID 一个都解析不出实例（{title}）→ 回退原路径");
+                return false;
+            }
+
+            // 低延迟同一帧连发两个决策时，旧窗还没被释放 ⇒ 先关掉，避免两个窗叠着
+            if (_onlinePickWindow != null && GodotObject.IsInstanceValid(_onlinePickWindow))
+            {
+                _onlinePickWindow.QueueFree();
+                _onlinePickWindow = null;
+            }
+
+            var pickReq = new CardPickRequest
+            {
+                Title = string.IsNullOrEmpty(title) ? "选择一张牌" : title,
+                Hint = hint,
+                Cards = cards,
+                ChooserId = chooserId,
+                PlayerNameOf = SeatName,
+                AreaIndexOf = AreaIndexInView,
+                AllowCancel = allowCancel,
+                CancelLabel = string.IsNullOrEmpty(cancelLabel) ? "取消" : cancelLabel,
+                OnPicked = inst =>
+                {
+                    _onlinePickWindow = null;
+                    _activationSelectionBusy = false;
+                    GD.Print($"[ArenaOl] 选卡窗（按实例）回包：{inst?.PlayerTemplate?.CardName ?? inst?.UID}");
+                    onPicked(inst);
+                },
+                OnCancelled = () =>
+                {
+                    _onlinePickWindow = null;
+                    _activationSelectionBusy = false;
+                    GD.Print("[ArenaOl] 选卡窗（按实例）取消");
+                    onCancelled?.Invoke();
+                },
+            };
+
+            var win = new CardPickWindow();
+            AddChild(win);          // **先入树、再 Init**（CardUI._Ready 的 SetFace(false) 会盖掉正面）
+            win.Init(pickReq);
+            var vp = GetViewport().GetVisibleRect().Size;
+            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
+            win.Popup();
+
+            _onlinePickWindow = win;
+            _activationSelectionBusy = true;   // 决策期间延后快照应用
+            GD.Print($"[ArenaOl] 选卡窗（按实例）已打开：「{pickReq.Title}」候选 {cards.Count} 张，允许取消={allowCancel}");
+            return true;
+        }
+
         /// <summary>地区 UID → 地区编号（1-based；与 `_areaSlots` 创建顺序一致，两视角相同，不做镜像）。</summary>
         private int AreaIndexInView(string areaUid)
         {
@@ -1514,6 +1764,46 @@ namespace Script.UI
                 if (string.IsNullOrEmpty(uid)) continue;
                 if (IsKnownAreaUid(uid)) areaUids.Add(uid);
                 else cardUids.Add(uid);
+            }
+
+            // 【2026-10-19 用户口径·cat-1/cat-2】卡目标里含**任意 cat-2**（资产区 / 结附或封印于角色·秘社的
+            // 附属·封印）⇒ 走卡面选择窗；全 cat-1 才继续"场上高亮 + 点击"。
+            // 服务端目前按 `TargetKind` 的"类级别"下发 `SelectTarget`（`TargetZonePool.IsFieldVisibleSpec`），
+            // 所以"结附于角色"的附属也会被塞进场上点选通道 —— 客户端必须按**实例**再分一次。
+            if (cardUids.Count > 0)
+            {
+                var pickMgr = _matchClient?.ClientCardManager;
+                int pickChooser = req.PlayerId > 0 ? req.PlayerId : _localPlayerId;
+                if (pickMgr != null
+                    && CardPickChannel.ClassifyUids(cardUids, uid => pickMgr.GetInstance(uid), pickChooser)
+                       == CardPickChannelKind.Window)
+                {
+                    var capturedReq = req;
+                    // 逐槽多选里的"可留空槽"：出口语义是"留空该槽"（SelectedUid="", Cancelled=false），
+                    // 不能回 Cancelled（那会把整次打出中止掉）。
+                    bool optionalSlot = capturedReq.SlotFieldVisible && capturedReq.SlotOptional;
+                    if (TryOpenOnlineCardPickWindow(
+                            string.IsNullOrEmpty(capturedReq.Prompt) ? "请选择目标" : capturedReq.Prompt,
+                            cardUids, pickChooser,
+                            "候选含资产区 / 结附于角色·秘社的附属（场上不可直接点选），请在窗内选择目标。",
+                            allowCancel: !capturedReq.ForceChoice || optionalSlot,
+                            cancelLabel: optionalSlot ? "不选（留空该槽）" : "取消",
+                            onPicked: inst => _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                            {
+                                RequestId = capturedReq.RequestId,
+                                SelectedUid = inst?.UID ?? string.Empty,
+                            }),
+                            onCancelled: () => _matchClient?.SendChoiceResult(new Script.Net.ChoiceResult
+                            {
+                                RequestId = capturedReq.RequestId,
+                                SelectedUid = optionalSlot ? string.Empty : null,
+                                Cancelled = !optionalSlot,
+                            })))
+                    {
+                        GD.Print($"[ArenaOl] 取目标走选择窗（候选含 cat-2）：{capturedReq.Prompt}｜卡候选 {cardUids.Count} 张");
+                        return true;
+                    }
+                }
             }
 
             _activationSelectionBusy = true;
@@ -2175,6 +2465,13 @@ namespace Script.UI
         /// </summary>
         private void ReapplyLocalSelectionHighlights()
         {
+            // 【2026-10-19·cat-1 调度】快照重建会 `ClearAllUI()` 抹掉手牌高亮，而快照延迟只有 1.5s
+            // （玩家在调度时稍微多想一会儿就会被强制应用）⇒ 必须按当前选择补回。
+            if (_mulliganPickActive)
+            {
+                RefreshMulliganPick();
+                return;
+            }
             if (_onlineMultiPickActive)
             {
                 RefreshOnlineMultiPick();
@@ -2273,10 +2570,31 @@ namespace Script.UI
                 if (inst.PlayerTemplate == null || !inst.PlayerTemplate.PlayableFromGraveyard) continue;
                 if (!_cardUIMap.TryGetValue(inst.UID, out var ui)) continue;
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                bool projected = ClientLegalityView?.PlayTargets?.Exists(x => x != null && x.SourceUid == inst.UID) == true;
-                bool can = projected && turn.CanPlayFromGraveyardNow(inst, out _);
-                ui.SetActivatableHighlight(can);
+                ui.SetActivatableHighlight(IsCardActivatableForUi(inst));
             }
+        }
+
+        /// <summary>
+        /// 【2026-10-19 用户口径·"hover 展开的卡片区域，效果可激活时高亮要正常显示"】
+        /// 联机版**唯一判定**（场上绿框 ↔ hover 展开面板绿框同源）：
+        ///  · 墓地 → 服务端投影认可"该卡是合法打出源" + `CanPlayFromGraveyardNow`（快照投影态）；
+        ///  · 争夺区 / 结附区（含结附或封印于卡、秘社的成员）→ `IsActivatableForClient`（投影优先）；
+        ///  · 其它区域 → 不参与。
+        /// </summary>
+        private bool IsCardActivatableForUi(CardInstance inst)
+        {
+            if (inst == null || inst.IsHidden) return false;
+            if (inst.CurrentZone == CardZone.Graveyard)
+            {
+                if (inst.ControllerId != _localPlayerId) return false;
+                if (inst.PlayerTemplate == null || !inst.PlayerTemplate.PlayableFromGraveyard) return false;
+                bool projected = ClientLegalityView?.PlayTargets?.Exists(x => x != null && x.SourceUid == inst.UID) == true;
+                var turn = _matchClient?.ClientTurnManager;
+                return projected && turn != null && turn.CanPlayFromGraveyardNow(inst, out _);
+            }
+            if (inst.CurrentZone is CardZone.AreaZone or CardZone.AttachedZone or CardZone.SealedZone)
+                return IsActivatableForClient(inst);
+            return false;
         }
 
         /// <summary>服务端为本客户端下发的合法性投影（随最近一次快照；null=未下发）。</summary>
@@ -3002,6 +3320,22 @@ namespace Script.UI
                 && _badgePeek.ContainsGlobalPoint(peekMb.GlobalPosition))
                 return;
 
+            // 【2026-10-19·cat-1 调度】手牌多选态：左键切换选中 / 右键取消选中。
+            // 必须在"手牌拖拽起手"之前接管（否则第一次按下会被当成拖牌）。
+            // 没点在手牌上时不吞事件 —— 窗口上的「确认调度 / 不调度」按钮仍要能点。
+            if (_mulliganPickActive
+                && @event is InputEventMouseButton mullMb && mullMb.Pressed
+                && (mullMb.ButtonIndex == MouseButton.Left || mullMb.ButtonIndex == MouseButton.Right))
+            {
+                var mullHit = PickHandCardAt(mullMb.GlobalPosition);
+                if (mullHit?.Instance != null)
+                {
+                    ToggleMulliganPick(mullHit.Instance.UID, mullMb.ButtonIndex == MouseButton.Right);
+                    AcceptEvent();
+                    return;
+                }
+            }
+
             // 战斗对抗窗口：点击场上卡分配伤害（左键 +1 / 右键 -1），与单机 Arena._Input 的路由一致
             if (_onlineStrengthWindow != null && GodotObject.IsInstanceValid(_onlineStrengthWindow)
                 && @event is InputEventMouseButton strMb && strMb.Pressed
@@ -3308,7 +3642,7 @@ namespace Script.UI
             var clientTurn = _matchClient.ClientTurnManager;
             if (clientTurn != null && !clientTurn.CanPlayFromGraveyardNow(inst, out string why))
             {
-                GD.Print($"[ArenaOl] 墓地行动忽略：{tmpl.CardName} → {why}");
+                GD.PrintErr($"[ArenaOl] 墓地行动忽略：{tmpl.CardName} → {why}");
                 RefreshActivateHighlights();
                 return;
             }
@@ -3345,6 +3679,8 @@ namespace Script.UI
                 _activationSelectionBusy = false;
                 return;
             }
+            // 【2026-10-19】入口留痕：把"没进本函数 / 地区为空 / 窗被旧 popup 吞掉"三种情形在日志上分开
+            GD.Print($"[ArenaOl] 墓地行动：进入选地区（候选 {areas.Count} 个，{tmpl?.CardName}）");
 
             var items = new List<ActivationChoiceItem>();
             for (int i = 0; i < areas.Count; i++)
@@ -3443,12 +3779,20 @@ namespace Script.UI
         private void OpenOnlineChoiceWindow(List<ActivationChoiceItem> items, System.Action onCancelled = null)
         {
             if (_onlineChoiceWindow != null && GodotObject.IsInstanceValid(_onlineChoiceWindow))
+            {
+                // 【2026-10-19】旧窗必须**先 Hide() 再 QueueFree()**：QueueFree 是帧末延迟释放，
+                // 只靠它会与新窗共存一个 popup 帧，新窗在 Godot 的 popup 秩序里被压掉（JC085 实测：
+                // "点了墓地行动没有任何反应"）。与 `OnlineActivationChoiceWindow.ChooseAndClose` 同口径。
+                _onlineChoiceWindow.Hide();
                 _onlineChoiceWindow.QueueFree();
+            }
             _onlineChoiceWindow = new OnlineActivationChoiceWindow();
             AddChild(_onlineChoiceWindow);
             _onlineChoiceWindow.OnCancelled = onCancelled ?? (() => { _activationSelectionBusy = false; });
             _onlineChoiceWindow.Init(items);
             _onlineChoiceWindow.PopupCentered();
+            // 焦点异步抢回：旧窗刚 Hide 掉，同帧抢焦点可能被引擎的焦点恢复逻辑盖回去
+            Callable.From(() => { if (GodotObject.IsInstanceValid(_onlineChoiceWindow)) _onlineChoiceWindow.GrabFocus(); }).CallDeferred();
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
         }
 
@@ -3898,6 +4242,31 @@ namespace Script.UI
             {
                 GD.Print($"[ArenaOl] 事务卡 {card.PlayerTemplate.CardName} 无合法目标，不弹出选择");
                 return;
+            }
+
+            // 【2026-10-19 用户口径·cat-1/cat-2】**候选里含任意 cat-2 ⇒ 整单走卡面选择窗**。
+            // JC107「崩塌的时空」是典型：目标 = 所有区域的附属 或 资产区的卡 ⇒ 候选同时含
+            // "结附于地区的附属(cat-1)" 与 "结附于角色/秘社的附属 + 资产区(cat-2)"。
+            // cat-2 的卡被折叠成角标、场上没有可点卡面，旧逻辑只给"高亮 + 提示窗"⇒ 高亮却点不动。
+            var pickKind = CardPickChannel.ClassifyUids(legal, uid => clientCardMgr.GetInstance(uid), _localPlayerId);
+            if (pickKind == CardPickChannelKind.Window)
+            {
+                var pickSource = card;
+                if (TryOpenOnlineCardPickWindow(
+                        pickSource.PlayerTemplate.CardName, legal, _localPlayerId,
+                        "候选含资产区 / 结附于角色·秘社的附属（场上不可直接点选），请在窗内选择目标。",
+                        allowCancel: true, cancelLabel: "取消（不打出）",
+                        onPicked: inst =>
+                        {
+                            _matchClient?.SendIntentAs(_localPlayerId, PlayerIntent.Kind.PlayCard,
+                                pickSource.UID, "", inst.UID);
+                            GD.Print($"[ArenaOl] 事务卡选目标（选卡窗）：{pickSource.PlayerTemplate?.CardName} → {inst.UID}");
+                        },
+                        onCancelled: () => GD.Print($"[ArenaOl] 事务卡取目标被取消（选卡窗，不上行）：{pickSource.PlayerTemplate?.CardName}")))
+                {
+                    GD.Print($"[ArenaOl] 事务卡 {card.PlayerTemplate.CardName} 候选含 cat-2 ⇒ 走选择窗（{legal.Count} 张）");
+                    return;
+                }
             }
 
             _pendingPlayCardUid = card.UID;

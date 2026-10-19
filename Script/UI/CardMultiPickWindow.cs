@@ -100,50 +100,53 @@ namespace Script.UI
             };
             vb.AddChild(hintRow);
 
-            // ---- 卡面网格（与 CardPickWindow 同参数，保证两个窗看起来是同一套 UI）----
+            // ---- 卡面横排（与 CardPickWindow 同一套参数，两个窗看起来才像同一套 UI）----
+            // 【2026-10-19 用户口径】单行横向 + 放大卡面 + 底部横向滚动条；一次最多看 7.5 张。
+            // 与单选窗的区别只有宽度下限（460，多一个"已选 N 张"标签）和点选语义（可来回切换）。
             float cardBaseW = CardLayoutHelper.CARD_WIDTH, cardBaseH = CardLayoutHelper.CARD_HEIGHT;
-            const float cardScale = 0.61f;
-            const int labelH = 44, gapX = 10, gapY = 10, colPad = 10, maxCols = 6;
-            float dispW = cardBaseW * cardScale;
-            float dispH = cardBaseH * cardScale;
+            const float VisibleCards = 7.5f;
+            const float gapX = 10f, colPad = 10f, labelH = 44f, scrollBarH = 14f;
             int n = System.Math.Max(1, _cards.Count);
-            int cols = System.Math.Min(n, maxCols);
-            int rows = (n + cols - 1) / cols;
-            float colW = dispW + colPad;
-            float gridW = cols * colW + (cols - 1) * gapX;
-            float gridH = rows * (dispH + labelH) + (rows - 1) * gapY;
 
             var screen = GetTree()?.Root?.GetVisibleRect().Size ?? new Vector2(1280, 720);
             float maxWinW = System.Math.Min(1184f, screen.X * 0.92f);
             float maxWinH = System.Math.Max(260f, screen.Y * 0.86f);
-            const float chromeH = 36f + 26f + 10f + 12f + 44f + 12f;
-            float maxGridH = System.Math.Max(dispH + labelH, maxWinH - chromeH);
-            float scrollW = System.Math.Min(gridW, maxWinW - 60f);
-            float scrollH = System.Math.Min(gridH, maxGridH);
+
+            float avail = System.Math.Max(220f, maxWinW - 60f - scrollBarH);
+            float unit = (avail + gapX) / VisibleCards;
+            float dispW0 = System.Math.Max(1f, unit - gapX);
+            float cardScale = System.Math.Clamp(dispW0 / cardBaseW, 0.55f, 1.0f);
+            float dispW = cardBaseW * cardScale;
+            float dispH = cardBaseH * cardScale;
+            float colW = dispW + colPad;
+
+            float scrollH = dispH + 4f + labelH + scrollBarH;
+            float contentW = n * (dispW + gapX) - gapX;
+            float scrollW = System.Math.Min(contentW, avail);
 
             _scroll = new ScrollContainer
             {
-                CustomMinimumSize = new Vector2(scrollW + 8f, scrollH + (gridH > scrollH ? 16f : 0f)),
+                CustomMinimumSize = new Vector2(scrollW, scrollH),
+                SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
                 HorizontalScrollMode = ScrollContainer.ScrollMode.Auto,
-                VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                ScrollHorizontal = 0,
             };
             vb.AddChild(_scroll);
 
-            var grid = new GridContainer
+            var row = new HBoxContainer
             {
-                Columns = cols,
                 SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
             };
-            grid.AddThemeConstantOverride("h_separation", gapX);
-            grid.AddThemeConstantOverride("v_separation", gapY);
-            _scroll.AddChild(grid);
+            row.AddThemeConstantOverride("separation", (int)gapX);
+            _scroll.AddChild(row);
 
             var cardScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
             foreach (var inst in _cards)
             {
                 var col = new VBoxContainer { CustomMinimumSize = new Vector2(colW, 0) };
                 col.AddThemeConstantOverride("separation", 4);
-                grid.AddChild(col);
+                row.AddChild(col);
 
                 // 卡面槽：显式尺寸 + 鼠标穿透（卡面本身仍是 Click 的接收者）
                 var slot = new Control
@@ -227,15 +230,15 @@ namespace Script.UI
             var hover = new CardHoverPreview
             {
                 Name = CardPreviewBus.WindowOverlayName,
-                PreviewScale = 0.72f,
+                PreviewScale = System.Math.Max(0.86f, cardScale + 0.1f),
             };
             hover.CanPreviewOverride = c => c != null && _cards.Contains(c);
             AddChild(hover);
 
-            float contentH = System.Math.Min(gridH, maxGridH) + (gridH > maxGridH ? 16f : 0f);
+            float winH = 36f + 26f + 10f + scrollH + 10f + 44f + 12f;
             Size = new Vector2I(
                 (int)System.Math.Clamp(scrollW + 60f, 460f, maxWinW),
-                (int)System.Math.Clamp(chromeH + contentH + 12f, 240f, maxWinH));
+                (int)System.Math.Clamp(winH, 240f, maxWinH));
 
             // 关闭语义：允许取消 ⇒ 点窗外/关闭按钮＝取消；不允许 ⇒ 一律忽略（调度是固定流程）
             CloseRequested += OnCloseRequested;
@@ -284,6 +287,8 @@ namespace Script.UI
                 if (max > 0 && _picked.Count >= max) return;
                 _picked.Add(uid);
                 ui.SetPickedHighlight(true);
+                // 【2026-10-19】单行横排后，选中靠右侧的卡必须自动滚进视野（原多选窗缺这一句）
+                _scroll?.EnsureControlVisible(ui);
             }
 
             if (_countLabel != null) _countLabel.Text = CountText();

@@ -155,26 +155,26 @@ namespace Script.Tests
                 "是否可取消必须跟 ForceChoice 走，不能一律给取消按钮");
         }
 
-        /// <summary>④ 开局调度改用多选卡面窗（与选卡窗同一套观感）。</summary>
-        public void TestMulligan_开局调度走多选卡面窗()
+        /// <summary>④ 开局调度：候选＝自己手牌（全 cat-1）⇒ 场上手牌多选，**不弹卡面网格窗**。</summary>
+        public void TestMulligan_调度按cat1走场上手牌多选()
         {
             string win = Read("Script/UI/CardMultiPickWindow.cs");
             Assert.IsFalse(string.IsNullOrEmpty(win),
-                "必须存在 CardMultiPickWindow（多选卡面窗）");
+                "CardMultiPickWindow 仍保留（分类异常 / 选目标窗不可用时的兜底）");
             Assert.IsTrue(win.Contains("public void Init(CardMultiPickRequest req)"),
                 "多选窗必须走 `AddChild` 之后再 `Init`（CardUI._Ready 会 SetFace(false) 盖掉正面）");
-            Assert.IsTrue(win.Contains("SetPickedHighlight(true)") && win.Contains("SetPickedHighlight(false)"),
-                "点卡必须能来回切换选中（再点一次＝取消选中）");
 
             string ol = Read("Script/UI/ArenaOl.cs");
-            Assert.IsTrue(ol.Contains("new CardMultiPickWindow()"),
-                "ArenaOl 的调度必须弹出多选卡面窗");
-            Assert.IsTrue(ol.Contains("ConfirmLabel = \"确认调度\""),
-                "确认按钮文案保持「确认调度」");
-            Assert.IsTrue(ol.Contains("Kind.MulliganReport"),
+            Assert.IsTrue(ol.Contains("CardPickChannel.Classify(cards, localSeat)"),
+                "调度必须先按 cat-1/cat-2 分类（自己手牌＝全 cat-1 ⇒ 不弹窗）");
+            Assert.IsTrue(ol.Contains("BeginMulliganFieldPick"),
+                "cat-1 调度必须走『场上手牌高亮 + 左键切换 + 提示窗确认』");
+            Assert.IsTrue(ol.Contains("OnMultiConfirmed = () => SubmitMulliganPick"),
+                "提示窗的确认必须落到调度上报");
+            Assert.IsTrue(ol.Contains("PlayerIntent.Kind.MulliganReport"),
                 "回包仍是 MulliganReport 意图（协议零改动）");
-            Assert.IsTrue(ol.Contains("AllowCancel = false"),
-                "开局调度是固定流程：不给取消出口");
+            Assert.IsTrue(ol.Contains("new CardMultiPickWindow()"),
+                "CardMultiPickWindow 只作兜底，不能删");
         }
     }
 }

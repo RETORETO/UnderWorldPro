@@ -79,19 +79,30 @@ namespace Script.UI
             Size = new Vector2I(460, Mathf.Clamp(70 + count * 46, 150, 640));
         }
 
+        /// <summary>
+        /// 【2026-10-19 修复·联机"复生行尸（JC085）点了没弹地区选择"】**先关本窗、再跑回调**。
+        ///
+        /// 旧实现是 `chosen?.Invoke(); QueueFree();`——回调里立刻打开下一级窗（墓地行动的"选择地区"），
+        /// 而本窗此刻**仍然是可见的模态 popup**，且 `QueueFree()` 要到帧末才真正释放 ⇒ 新窗在
+        /// Godot 的 popup 秩序里被压掉（hide），玩家看到的就是"点了没有任何反应"。
+        /// 单机 `ActivationChoiceWindow.Dismiss()` 早已因同一问题（效果清单 A74）改成先关后回调，
+        /// 联机这一份从未同步，此处补齐：`Hide()` 立即退出 popup 秩序，`QueueFree()` 交给帧末回收。
+        /// </summary>
         private void ChooseAndClose(Action chosen)
         {
             if (_dismissed) return;
             _dismissed = true;
-            chosen?.Invoke();
+            Hide();            // 关键：立即从 popup 秩序里退出（QueueFree 是延迟释放，不够）
             QueueFree();
+            chosen?.Invoke();  // 回调里再开下一级窗
         }
 
-        /// <summary>静默关闭（取消路径），先置标志防重复释放。</summary>
+        /// <summary>静默关闭（取消路径），先置标志防重复释放；同样是"先关窗、后回调"。</summary>
         private void CloseQuiet()
         {
             if (_dismissed) return;
             _dismissed = true;
+            Hide();
             QueueFree();
         }
     }

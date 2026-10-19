@@ -87,7 +87,12 @@ public partial class Arena
     private void EnsureBadgePeek()
     {
         if (_badgePeek != null && GodotObject.IsInstanceValid(_badgePeek)) return;
-        _badgePeek = new CardBadgePeek { Name = "CardBadgePeek" };
+        // 【2026-10-19】注入"可发动"探针：面板只负责画，判定与场上绿框**同一实现**。
+        _badgePeek = new CardBadgePeek
+        {
+            Name = "CardBadgePeek",
+            ActivatableProbe = IsCardActivatableForUi,
+        };
         AddChild(_badgePeek);
     }
 
@@ -276,6 +281,12 @@ public partial class Arena
         {
             _activePickWindow.SelectByUid(uid);
             GD.Print($"[Arena] 堆叠区列表点选 {uid}（置选中，不提交）");
+        }
+        else
+        {
+            // 【2026-10-19 诊断】与联机端对齐：纯浏览也要留痕，否则"点了没反应"无法区分
+            // 是面板没收到点击、还是收到了但没有选择窗可置选中。
+            GD.Print($"[Arena] 堆叠区列表单击 {uid}（纯浏览；双击＝发动激活能力）");
         }
     }
 

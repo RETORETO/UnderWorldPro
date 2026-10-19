@@ -23,11 +23,15 @@ namespace Script.UI
     ///   `IsSeal` / `SealedBy` / `OwnerId`），**不新增任何字段**；
     /// - 只决定"要不要多开一个选择窗"，**不改变候选集合**（View 不增不减、不改合法性）。
     ///
-    /// 归类（方案 3.1/3.2）：
-    /// - **cat-1**：争夺区角色/暗藏者｜结附于地区的附属（`AttachedTo == null`）｜封印于地区的封印
-    ///   （`SealedBy == null`）｜自己手牌（`OwnerId == chooserId`）｜秘社；
-    /// - **cat-2**：结附/封印**于卡**的附属封印｜**资产（无条件）**｜牌库｜墓地｜对手手牌｜放逐区｜
-    ///   计分区｜堆叠｜任何拿不到可见场上 UI 的卡。
+    /// 归类（方案 3.1/3.2，**2026-10-19 用户口径最终确认**）：
+    /// - **cat-1**：争夺区角色/暗藏者｜结附于**地区**的附属（`AttachedTo == null`）｜封印于**地区**的封印
+    ///   （`SealedBy == null`）｜自己手牌（`OwnerId == chooserId`）｜秘社**卡本身**；
+    /// - **cat-2**：结附/封印**于卡**的附属封印（宿主是**角色**或**秘社卡**，被折叠成角标、场上点不到）｜
+    ///   **资产区（无条件）**｜牌库｜墓地｜对手手牌｜放逐区｜计分区｜堆叠｜隐藏占位｜任何拿不到可见场上 UI 的卡。
+    ///
+    /// **判据必须是"全部 cat-1"**：候选里只要混进一张 cat-2（例如同时有"结附于地区的附属"和
+    /// "结附于角色的附属"），整单就必须走选择窗 —— 否则那张 cat-2 在场上没有可点 UI，
+    /// 玩家会看到"高亮了却点不动 / 根本看不到高亮"。
     /// </summary>
     public static class CardPickChannel
     {
@@ -37,6 +41,9 @@ namespace Script.UI
         public static bool IsCat1(CardInstance inst, int chooserId)
         {
             if (inst == null) return false;
+            // 隐藏占位（对手手牌/牌堆/地区牌堆）没有任何可读卡面，也没有可信的归属字段
+            // ⇒ 一律 cat-2（fail-closed，宁多开一个窗，也不出现"高亮了点不到"）。
+            if (inst.IsHidden) return false;
             switch (inst.CurrentZone)
             {
                 case CardZone.AreaZone:

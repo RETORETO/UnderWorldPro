@@ -783,6 +783,10 @@ public partial class Arena
             case CardZone.Graveyard:
             {
                 GetGraveyardZone(card.ControllerId)?.AddCard(cardUI);
+                // 【2026-10-19】墓地卡的唯一交互是"双击 → 墓地行动"；不能拖拽。
+                // 此前未关闭 ⇒ 单击会起手拖拽（日志实测「拖拽开始 复生行尸」），
+                // 干扰 hover 面板的双击判定与后续提示窗。
+                cardUI.CanDrag = false;
                 break;
             }
             case CardZone.ScoreZone:

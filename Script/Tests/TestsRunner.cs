@@ -101,6 +101,7 @@ namespace Script.Tests
                 new BadgePeekTests(),                  // UI 契约：角标分家（封印/附属各自悬浮）+ 展开面板双击＝发动激活能力
                 new OnlineViewMirrorTests(),           // UI 契约：联机镜像视图（本地座位 2）座位→槽位映射不得直取面板
                 new UiPilePickTests(),                 // UI 契约：资产区折叠/资产+墓地悬停展卡/联机选卡窗
+                new CardPickChannelTests(),            // UI 契约：cat-1/cat-2 分类（混合候选必须弹选择窗）+ 联机接线 + 快照跨局复位
                 new DeckBoardLayoutTests(),            // 卡组编辑器：同名堆叠 / 50 张切分 / 换列 / 压缩 offset 布局算法
                 new P3RuntimeKeywordTests(),           // P3·K13：运行期授予的触发类关键词参与收集 + 群体 Gain 主体 + JC024①/ JC089
                 new P3CompositeTargetTests(),          // P3：复合目标限制（SpecAlt 两条声明 OR）+ HostIsCouncil + JC043 纵火狂

@@ -151,5 +151,60 @@ namespace Script.Tests
             Assert.IsTrue(peek.Contains("ui.SetTapped(true)") && peek.Contains("ui.RotationDegrees = 90f"),
                 "横置卡必须真的旋转 90°（玩家靠它判断本回合还能不能横置自身，如 JC020 的代价）");
         }
+
+        // ============================================================
+        // 【2026-10-19】两条"看着像布局、实际决定功能能不能用"的契约：
+        //  A. **链式选择窗必须先关本窗、再跑回调**——否则下一级窗（墓地行动的"选择地区"）
+        //     会被上一级仍然可见的模态 popup 压掉，用户看到的就是"点了没有任何反应"。
+        //  B. **面板内可激活的卡必须画绿框**——成员卡被折叠成角标后场上没有可看的卡面，
+        //     玩家只能从这个面板判断"这张能不能发动"，不画就等于不可发现。
+        // ============================================================
+
+        /// <summary>A. 链式选择窗：`Hide()` 必须在 `chosen` 回调之前执行（单机/联机两份都要守）。</summary>
+        public void TestWindow_链式选择窗先关本窗再开下一窗()
+        {
+            string online = Read("Script/UI/OnlineActivationChoiceWindow.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(online), "必须能读到 OnlineActivationChoiceWindow.cs");
+            int hideIdx = online.IndexOf("private void ChooseAndClose", System.StringComparison.Ordinal);
+            Assert.IsTrue(hideIdx >= 0, "必须能定位 ChooseAndClose（联机选项窗的唯一选择出口）");
+            int hideCall = online.IndexOf("Hide();", hideIdx, System.StringComparison.Ordinal);
+            int invoke = online.IndexOf("chosen?.Invoke();", hideIdx, System.StringComparison.Ordinal);
+            Assert.IsTrue(hideCall > 0 && invoke > 0, "ChooseAndClose 里必须同时有 Hide() 与 chosen?.Invoke()");
+            Assert.IsTrue(hideCall < invoke,
+                "联机：必须先 Hide() 再跑 chosen 回调（QueueFree 是帧末延迟释放，挡不住 popup 秩序）");
+
+            string offline = Read("Script/UI/ActivationChoiceWindow.cs");
+            int offlineInvoke = offline.IndexOf("_items[captured].OnChosen?.Invoke();", System.StringComparison.Ordinal);
+            Assert.IsTrue(offlineInvoke > 0, "必须能定位单机 OnChosen 回调");
+            int from = System.Math.Max(0, offlineInvoke - 200);
+            string beforeInvoke = offline.Substring(from, offlineInvoke - from);
+            Assert.IsTrue(beforeInvoke.Contains("Dismiss();"),
+                "单机：必须保持『先 Dismiss 再跑 OnChosen』（A74 既有结论，勿回退）");
+
+            string ol = Read("Script/UI/ArenaOl.cs");
+            int openWin = ol.IndexOf("private void OpenOnlineChoiceWindow", System.StringComparison.Ordinal);
+            Assert.IsTrue(openWin >= 0, "必须能定位 OpenOnlineChoiceWindow");
+            int oldHide = ol.IndexOf("_onlineChoiceWindow.Hide();", openWin, System.StringComparison.Ordinal);
+            int oldFree = ol.IndexOf("_onlineChoiceWindow.QueueFree();", openWin, System.StringComparison.Ordinal);
+            Assert.IsTrue(oldHide > 0 && oldFree > 0 && oldHide < oldFree,
+                "联机：销毁旧选项窗必须先 Hide() 再 QueueFree()（否则新窗与旧窗共处一帧会被压掉）");
+        }
+
+        /// <summary>B. 面板内可激活的卡必须显示绿框（探针由视图注入，面板本身不判定规则）。</summary>
+        public void TestBadge_面板内可激活卡显示高亮()
+        {
+            string peek = Read("Script/UI/CardBadgePeek.cs");
+            Assert.IsTrue(peek.Contains("ActivatableProbe"),
+                "面板必须暴露 ActivatableProbe 探针（规则判定留在视图/Controller，面板只负责画）");
+            Assert.IsTrue(peek.Contains("SetActivatableHighlight("),
+                "造卡后必须调用 SetActivatableHighlight（否则折叠进面板的卡永远是白框）");
+
+            string arena = Read("Script/UI/Arena.BadgePeek.cs");
+            Assert.IsTrue(arena.Contains("ActivatableProbe"),
+                "单机：必须给面板注入可发动探针（与场上高亮同源）");
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("ActivatableProbe"),
+                "联机：必须给面板注入可发动探针（服务端投影优先）");
+        }
     }
 }

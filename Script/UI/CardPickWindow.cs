@@ -90,57 +90,62 @@ namespace Script.UI
             };
             vb.AddChild(hintRow);
 
-            // ---- 卡面网格（多行网格；卡面按 CardScale 缩放，避免被容器横向拉伸）----
-            // 【2026-10 用户实测】旧实现把 CardUI 直接放进 VBox（列宽 > 卡宽）⇒ 容器把卡面
-            // **横向拉伸到列宽**（卡图变形、看着"偏大"），且每列下方的区域标签被挤出可视区（显示不全）。
-            // 现改为：外层 Control 定尺寸 + CardUI 按 CardScale 缩放（PivotOffset 归零 ⇒ 缩放后仍与左上角对齐），
-            // 卡片用 GridContainer 排成网格，整体放进可横竖滚动的 ScrollContainer，窗口尺寸按屏幕钳制。
-            // 【P0】卡面基准尺寸改从 CardLayoutHelper 取（140×196）；缩放比随之重算，
-            // 保证**屏幕上的实际显示尺寸不变**（140×196 基准下 0.61 ≈ 旧 100×140 基准下的 0.86）。
+            // ---- 卡面横排（单行"胶片条"；一次最多看 7.5 张，超出靠底部横向滚动条左右滑）----
+            // 【2026-10-19 用户口径】旧实现是**固定最多 6 列的网格**，卡一多就换行、只做纵向滚动，
+            // 玩家永远看不到"第 7 张以后"，也拿不到"还剩多少"的视觉提示。现改为：
+            //  · 全部卡排成**一行**（HBox），只开**横向**滚动（竖向禁用，避免误滚出可视区）；
+            //  · 卡面缩放按"7.5 张刚好占满可用宽度"**反算**：1280+ 屏 ≈ 1.0（战场满尺寸 140×196），
+            //    小屏自动回落到 0.55 下限；第 8 张只露半张＝"右边还有卡"的天然提示；
+            //  · 卡少时窗口跟着变窄（不强行占满 7.5 张的宽度）。
+            // 注意：卡面槽必须显式定尺寸（旧坑：CardUI 直接进 VBox 会被横向拉伸到列宽）。
             float cardBaseW = CardLayoutHelper.CARD_WIDTH, cardBaseH = CardLayoutHelper.CARD_HEIGHT;
-            const float cardScale = 0.61f;   // 略小于战场卡面，观感接近悬浮预览框
-            const int labelH = 44, gapX = 10, gapY = 10, colPad = 10, maxCols = 6;
-            float dispW = cardBaseW * cardScale;
-            float dispH = cardBaseH * cardScale;
+            const float VisibleCards = 7.5f;      // 一次最多显示的卡数（半张＝滚动提示）
+            const float gapX = 10f, colPad = 10f, labelH = 44f, scrollBarH = 14f;
             int n = System.Math.Max(1, _cards.Count);
-            int cols = System.Math.Min(n, maxCols);
-            int rows = (n + cols - 1) / cols;
-            float colW = dispW + colPad;
-            float gridW = cols * colW + (cols - 1) * gapX;
-            float gridH = rows * (dispH + labelH) + (rows - 1) * gapY;
 
-            // 窗口尺寸：内容优先，但**必须留在屏幕内**（否则标题栏/按钮/最后一行会被裁掉）
             var screen = GetTree()?.Root?.GetVisibleRect().Size ?? new Vector2(1280, 720);
             float maxWinW = System.Math.Min(1184f, screen.X * 0.92f);
             float maxWinH = System.Math.Max(260f, screen.Y * 0.86f);
-            const float chromeH = 36f + 26f + 10f + 12f + 44f + 12f;   // 标题栏/提示/间距/按钮/内边距
-            float maxGridH = System.Math.Max(dispH + labelH, maxWinH - chromeH);
-            float scrollW = System.Math.Min(gridW, maxWinW - 60f);
-            float scrollH = System.Math.Min(gridH, maxGridH);
+
+            // 可用宽度 = 窗口上限 − 左右留白 − 横向滚动条占位
+            float avail = System.Math.Max(220f, maxWinW - 60f - scrollBarH);
+            // 7.5 个"卡宽 + 间距"单元刚好铺满 avail（最后一张后面不留间距）
+            float unit = (avail + gapX) / VisibleCards;
+            float dispW0 = System.Math.Max(1f, unit - gapX);
+            float cardScale = System.Math.Clamp(dispW0 / cardBaseW, 0.55f, 1.0f);
+            float dispW = cardBaseW * cardScale;
+            float dispH = cardBaseH * cardScale;
+            float colW = dispW + colPad;
+
+            // 卡面 + 间距 + 区域标签 + 横向滚动条（滚动条在卡片外侧底部）
+            float scrollH = dispH + 4f + labelH + scrollBarH;
+            // 要显示的宽度：min(全部卡, 7.5 张)；卡少时窗口自然变窄（末张后面不留间距）
+            float contentW = n * (dispW + gapX) - gapX;
+            float scrollW = System.Math.Min(contentW, avail);
 
             _scroll = new ScrollContainer
             {
-                CustomMinimumSize = new Vector2(scrollW + 8f, scrollH + (gridH > scrollH ? 16f : 0f)),
+                CustomMinimumSize = new Vector2(scrollW, scrollH),
+                SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
                 HorizontalScrollMode = ScrollContainer.ScrollMode.Auto,
-                VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                ScrollHorizontal = 0,
             };
             vb.AddChild(_scroll);
 
-            var grid = new GridContainer
+            var row = new HBoxContainer
             {
-                Columns = cols,
                 SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,   // 不随滚动容器横向拉伸
             };
-            grid.AddThemeConstantOverride("h_separation", gapX);
-            grid.AddThemeConstantOverride("v_separation", gapY);
-            _scroll.AddChild(grid);
+            row.AddThemeConstantOverride("separation", (int)gapX);
+            _scroll.AddChild(row);
 
             var cardScene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
             foreach (var inst in _cards)
             {
                 var col = new VBoxContainer { CustomMinimumSize = new Vector2(colW, 0) };
                 col.AddThemeConstantOverride("separation", 4);
-                grid.AddChild(col);
+                row.AddChild(col);
 
                 // 卡面槽：显式尺寸 + 鼠标穿透（卡面本身仍是 Click 的接收者）
                 var slot = new Control
@@ -216,20 +221,22 @@ namespace Script.UI
             vb.AddChild(btnRow);
 
             // ---- 窗内专用悬浮预览（子窗口自有视口，主视口浮层压不到窗上）----
+            // 【2026-10-19】卡面已放大到接近满尺寸（scale≈1.0），仍按 0.72 预览会"越看越小"⇒ 预览恒定略大于卡面。
             var hover = new CardHoverPreview
             {
                 Name = CardPreviewBus.WindowOverlayName,
-                PreviewScale = 0.72f,
+                PreviewScale = System.Math.Max(0.86f, cardScale + 0.1f),
             };
             hover.CanPreviewOverride = c => c != null && _cards.Contains(c);
             AddChild(hover);
 
             // ---- 显式窗口尺寸（Window 默认 100×100，PopupCentered 只按当前 Size）----
             // 宽高都按"内容 + 留白"算，并钳制在屏幕内（见上方 maxWinW/maxWinH）。
-            float contentH = System.Math.Min(gridH, maxGridH) + (gridH > maxGridH ? 16f : 0f);
+            // 高度：标题栏 36 + 提示 26 + 间距 10 + 卡面区 + 间距 10 + 按钮行 44 + 内边距 12
+            float winH = 36f + 26f + 10f + scrollH + 10f + 44f + 12f;
             Size = new Vector2I(
                 (int)System.Math.Clamp(scrollW + 60f, 420f, maxWinW),
-                (int)System.Math.Clamp(chromeH + contentH + 12f, 240f, maxWinH));
+                (int)System.Math.Clamp(winH, 240f, maxWinH));
 
             // 关闭语义：允许取消 ⇒ 点窗外/关闭按钮 ＝ 取消；不允许 ⇒ 一律忽略（强制选择）
             CloseRequested += OnCloseRequested;

@@ -2289,7 +2289,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 // 过滤已释放（QueueFree 后 IsInstanceValid=false）的卡 UI：赢地区移入分数区等路径可能
                 // 释放节点但 _cardUIMap 中仍保留引用，访问其 Label 会抛 ObjectDisposedException，中断本 handler。
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                bool can = ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
+                bool can = IsCardActivatableForUi(inst);
                 ui.SetActivatableHighlight(can);
                 // 【MVC 收口-问题A】仅对"**可用拖拽表达**的激活"预计算合法目标集合，供拖拽控制器只读查询。
                 // 【2026-09】能力取法改为 `GetFirstActivateAbility`（模板 ∪ 运行期授予，JC019 宿主可用），
@@ -2315,8 +2315,29 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 if (inst?.PlayerTemplate == null || !inst.PlayerTemplate.PlayableFromGraveyard) continue;
                 var ui = FindCardUIByUID(inst.UID);
                 if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
-                ui.SetActivatableHighlight(_turnManager.CanPlayFromGraveyardNow(inst, out _));
+                ui.SetActivatableHighlight(IsCardActivatableForUi(inst));
             }
+        }
+
+        /// <summary>
+        /// 【2026-10-19 用户口径·"hover 展开的卡片区域，效果可激活时高亮要正常显示"】
+        /// **唯一判定**：场上绿框与 hover 展开面板里的绿框必须同源，否则会出现"场上亮、面板白"，
+        /// 而折叠卡的场上原 UI 是 `Visible=false`，玩家根本看不到那个绿框。
+        ///
+        /// 范围与 `RefreshActivateHighlights` 完全一致：
+        ///  · 争夺区 / 结附区（含结附或封印于卡、秘社的成员）→ `ActivateEligibility.CanActivate`；
+        ///  · 墓地 → `TurnManager.CanPlayFromGraveyardNow`（墓地行动，双击→选地区→正面打出）；
+        ///  · 其它区域 → 不参与（资产/计分/牌库/手牌的可发动另有入口，不在此处预判）。
+        /// </summary>
+        internal bool IsCardActivatableForUi(CardInstance inst)
+        {
+            if (inst == null || _turnManager == null || _playerManager == null || _cardManager == null) return false;
+            if (inst.CurrentZone == CardZone.Graveyard)
+                return inst.PlayerTemplate?.PlayableFromGraveyard == true
+                    && _turnManager.CanPlayFromGraveyardNow(inst, out _);
+            if (inst.CurrentZone is CardZone.AreaZone or CardZone.AttachedZone or CardZone.SealedZone)
+                return ActivateEligibility.CanActivate(inst, _turnManager, _playerManager, _cardManager);
+            return false;
         }
 
         /// <summary>D9：取某卡的第一个角色/附属激活能力（**模板 ∪ 运行期授予**，与拖拽控制器同源）。</summary>
@@ -2414,7 +2435,7 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             }
             if (!_turnManager.CanPlayFromGraveyardNow(inst, out string why))
             {
-                GD.Print($"[Arena] 墓地行动忽略：{tmpl.CardName} → {why}");
+                GD.PrintErr($"[Arena] 墓地行动忽略：{tmpl.CardName} → {why}");
                 RefreshActivateHighlights();
                 return;
             }

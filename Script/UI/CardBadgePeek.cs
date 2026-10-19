@@ -38,8 +38,13 @@ namespace Script.UI
     public partial class CardBadgePeek : Control
     {
         private const float CardScale = 0.55f;      // 展开态每张卡的缩放（约 77×108）
-        /// <summary>无论视口多宽，一次最多列这么多张（再多就读不出是哪个了，宁可按视口宽度截断）。</summary>
-        private const int MaxCards = 14;
+        /// <summary>
+        /// 【2026-10-19 用户口径】面板**一次最多显示 11.5 张**（第 12 张露半张＝"右边还有卡"的提示），
+        /// 超出的部分靠**卡片外侧底部的横向滚动条**左右拖动查看——不再硬截断成"…（共 N 张）"。
+        /// </summary>
+        private const float VisibleCards = 11.5f;
+        /// <summary>给横向滚动条预留的高度（滚动条在卡片下方、面板内部底端）。</summary>
+        private const float ScrollBarH = 14f;
         private const float Gap = 6f;
         private const float Pad = 6f;
 
@@ -49,9 +54,22 @@ namespace Script.UI
         private PanelContainer _panel;
         private VBoxContainer _column;
         private Label _title;
+        private ScrollContainer _scroll;
         private HBoxContainer _row;
         private Action<string> _onPick;
         private Action<CardUI> _onActivate;
+
+        /// <summary>
+        /// 【2026-10-19 用户口径】"效果可激活时高亮要正常显示"——**探针由视图注入**，面板只负责画。
+        ///
+        /// 为什么必须是探针：成员卡被折叠成角标后，场上那张原 `CardUI` 是 `Visible=false`，
+        /// 视图算出来的绿框谁也看不见；而面板里是**新建的镜像 `CardUI`**，不会继承任何状态。
+        /// 判定真源留在视图（单机 `Arena.IsCardActivatableForUi` / 联机 `ArenaOl.IsCardActivatableForUi`，
+        /// 与场上高亮同一实现），面板不复制规则、不写 Model。
+        /// null ⇒ 一律不高亮（建面板时忘记注入会表现为"面板里没有绿框"，而不是乱画）。
+        /// </summary>
+        public Func<CardInstance, bool> ActivatableProbe;
+
         private bool _mouseInside;
         private Control _host;
         /// <summary>上一次左键按下的成员 UID 与时刻（自持双击判定用，0＝无）。</summary>
@@ -86,9 +104,20 @@ namespace Script.UI
             _title.AddThemeColorOverride("font_color", new Color(1f, 0.95f, 0.75f));
             _column.AddChild(_title);
 
+            // 卡面横排区：**只开横向滚动**（竖向禁用）。滚动条位于卡片外侧底部，
+            // 鼠标可拖动左右滑；面板的 `ContainsGlobalPoint` 用 `GetGlobalRect()`，
+            // 已经覆盖滚动条区域 ⇒ 拖滚动条不会被 `TickBadgePeek` 判成"鼠标离开"而收起。
+            _scroll = new ScrollContainer
+            {
+                HorizontalScrollMode = ScrollContainer.ScrollMode.Auto,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                SizeFlagsVertical = SizeFlags.ShrinkBegin,
+            };
+            _column.AddChild(_scroll);
+
             _row = new HBoxContainer();
             _row.AddThemeConstantOverride("separation", (int)Gap);
-            _column.AddChild(_row);
+            _scroll.AddChild(_row);
 
             MouseEntered += () => _mouseInside = true;
             MouseExited += () => { _mouseInside = false; };
@@ -99,8 +128,8 @@ namespace Script.UI
             => Visible && GetGlobalRect().Grow(4f).HasPoint(globalPos);
 
         /// <summary>
-        /// 展开：在 host 旁边列出 members。
-        /// 一次能列多少张**按视口宽度算**（不再写死 6 张）：张数超出可视宽度才截断，并提示总张数。
+        /// 展开：在 host 旁边列出 members（**单行横向**，一次最多看 11.5 张；
+        /// 更多时靠卡片外侧底部的横向滚动条左右滑，不再截断，也不再显示"…（共 N 张）"）。
         /// </summary>
         /// <param name="title">标题（"封印卡" / "附属卡" / "资产" / "墓地"），一次只列一种来源。</param>
         /// <param name="onPick">单击：置选中（不提交）。</param>
@@ -125,12 +154,9 @@ namespace Script.UI
             var scene = ResourceLoader.Load<PackedScene>("res://Scenes/UI/CardUI.tscn");
             float cardW = CardLayoutHelper.CARD_WIDTH * CardScale;
             float cardH = CardLayoutHelper.CARD_HEIGHT * CardScale;
-            // 张数按视口宽度算（视口越宽列越多），再受 MaxCards 封顶；超出部分用尾部提示交代总数。
-            float viewportW = GetViewportRect().Size.X;
-            int fit = Mathf.Max(1, (int)((viewportW - 24f + Gap) / (cardW + Gap)));
-            int shown = Math.Min(members.Count, Math.Min(fit, MaxCards));
 
-            for (int i = 0; i < shown; i++)
+            // 【2026-10-19】不再按视口截断：**全部成员都造出来**，超出部分由横向滚动条查看。
+            for (int i = 0; i < members.Count; i++)
             {
                 var inst = members[i];
                 if (inst == null) continue;
@@ -165,6 +191,8 @@ namespace Script.UI
                 ui.Scale = new Vector2(CardScale, CardScale);
                 ui.Setup(inst);
                 ui.SetFace(!inst.IsHidden);
+                // 【2026-10-19】可发动绿框：折叠成角标后，这是玩家唯一能看出"这张现在能发动"的地方
+                ui.SetActivatableHighlight(ActivatableProbe?.Invoke(inst) == true);
                 if (tapped)
                 {
                     ui.SetTapped(true);
@@ -182,19 +210,16 @@ namespace Script.UI
                 slot.GuiInput += ev => HandleMemberInput(ev, uid, capturedUi);
             }
 
-            if (members.Count > shown)
-                _row.AddChild(new Label
-                {
-                    Text = $"…（共 {members.Count} 张）",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    MouseFilter = MouseFilterEnum.Ignore,
-                });
-
-            // 先量尺寸再定位：标题 + 卡列的合并最小尺寸此时已可用
-            Vector2 content = _column.GetCombinedMinimumSize();
-            Vector2 want = new Vector2(content.X + Pad * 2f, content.Y + Pad * 2f);
-
+            // ---- 尺寸：**按"11.5 张可视宽"算**，不能用 `_column.GetCombinedMinimumSize()` ----
+            // 滚动模式下合并最小尺寸＝全部内容宽度（几十张会拉出屏幕），必须显式给可视宽度。
             var viewport = GetViewportRect().Size;
+            float visibleW = Mathf.Min(viewport.X - 24f, VisibleCards * (cardW + Gap) - Gap);
+            float rowH = cardH + ScrollBarH;            // 卡面 + 底部横向滚动条
+            _scroll.CustomMinimumSize = new Vector2(visibleW, rowH);
+            _scroll.ScrollHorizontal = 0;
+            float titleH = _title.Visible ? _title.GetCombinedMinimumSize().Y : 0f;
+            float sep = _title.Visible ? 4f : 0f;       // 与 `_column` 的 separation 一致
+            Vector2 want = new Vector2(visibleW + Pad * 2f, titleH + sep + rowH + Pad * 2f);
             Vector2 hostPos = host.GlobalPosition;
             Vector2 hostSize = host.Size;
             float x = hostPos.X + hostSize.X / 2f - want.X / 2f;
@@ -226,6 +251,11 @@ namespace Script.UI
             bool sameCard = _lastClickUid == uid && now - _lastClickMs <= DoubleClickMs;
             bool isDoubleClick = mb.DoubleClick || sameCard;
 
+            // 【2026-10-19 诊断】"点了没反应"时必须能在日志上区分四种情形：
+            // 面板没收到 → 收到了但判定成单击 → 判定成双击但出口为空 → 出口被门禁静默拒绝。
+            Godot.GD.Print($"[CardBadgePeek] 成员左键：{uid} DoubleClick={mb.DoubleClick} sameCard={sameCard} " +
+                           $"isDouble={isDoubleClick} onActivate={(_onActivate == null ? "null" : "set")} onPick={(_onPick == null ? "null" : "set")}");
+
             // 双击已消费 ⇒ 立刻清记账，避免"第三次点击"又被算成一次双击
             _lastClickUid = isDoubleClick ? null : uid;
             _lastClickMs = now;
@@ -233,6 +263,8 @@ namespace Script.UI
             if (isDoubleClick)
             {
                 // 双击＝发动激活能力（JC020 等被折叠的附属卡唯一入口）
+                if (_onActivate == null)
+                    Godot.GD.PrintErr($"[CardBadgePeek] 双击 {uid} 但面板未注入 OnActivate ⇒ 无任何动作（调用方装配问题）");
                 _onActivate?.Invoke(capturedUi);
                 return;
             }

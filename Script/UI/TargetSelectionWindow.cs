@@ -102,13 +102,16 @@ namespace Script.UI
         /// 与单选取目标的区别：窗口**保持打开**（不点选即关闭），玩家左键加选、右键取消，
         /// 最后按"确认"或"取消"；"确认"的可用性由调用方判定（JC021：必须已选地区且至少 1 个角色）。
         /// </summary>
-        public void OpenMultiPick(string hint)
+        public void OpenMultiPick(string hint, string cancelLabel = null)
         {
             SetMultiPickLayout(true);
             _multiPick = true;
             _pickedUid = null;
             if (ConfirmButton != null) ConfirmButton.Text = "确认";
-            if (_cancelButton != null) _cancelButton.Text = "取消";
+            // 【2026-10-19】多选的"取消"语义由调用方决定：取目标场景＝"取消"，
+            // 开局调度场景＝"不调度（一张不选）"——两者都只是回一个空清单，但文案必须说人话。
+            if (_cancelButton != null)
+                _cancelButton.Text = string.IsNullOrEmpty(cancelLabel) ? "取消" : cancelLabel;
             if (HintLabel != null) HintLabel.Text = string.IsNullOrEmpty(hint) ? "左键选择右键取消" : hint;
             var vp = GetViewport().GetVisibleRect().Size;
             Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
