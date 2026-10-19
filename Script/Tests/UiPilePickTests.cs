@@ -295,6 +295,19 @@ namespace Script.Tests
             string bg = Read("Script/UI/ArenaBackdrop.cs");
             Assert.IsTrue(bg.Contains("\"Player1Area\"") && bg.Contains("\"Player2Area\""),
                 "区域背景必须双方玩家区都铺（单机/联机同款）");
+
+            // 堆叠区（StackPanel，表头「堆叠区（后进先出）」）必须用「堆叠2」做底
+            Assert.IsTrue(bg.Contains("ApplyStackPanel") && bg.Contains("PileReaper"),
+                "堆叠区背景必须用「堆叠2」（PileReaper）");
+
+            // 争夺区（地区槽上下半区）：红/蓝必须按**座位**着色，不能按节点名写死——
+            // 联机镜像视图下 Player1Area 恒为本方半边，玩家 2 视角下红蓝必须互换。
+            Assert.IsTrue(slot.Contains("MirrorSeats ? 2 : 1") && slot.Contains("MirrorSeats ? 1 : 2"),
+                "争夺区红/蓝必须按座位着色（镜像视角下互换）");
+            Assert.IsTrue(slot.Contains("__SeatFrame"),
+                "争夺区必须有可见的座位色边框（突出范围）");
+            Assert.IsTrue(slot.Contains("__SeatFill"),
+                "没有可用场景图时必须能退回接近纯色的座位底色");
         }
     }
 }

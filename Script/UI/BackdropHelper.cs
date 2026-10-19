@@ -131,18 +131,18 @@ namespace Script.UI
         /// 再由 `KeepAspectCovered` 铺满——全程零拉伸，纯裁切。
         /// </summary>
         /// <param name="region">原图上的取景窗口；传 `new Rect2()` 表示用整张图。</param>
-        public static void ApplyCoverWindow(TextureRect rect, string resPath, Rect2 region, float scrimAlpha = 0f)
+        /// <returns>是否成功挂上背景图（false = 素材不可用，调用方应自行用纯色兜底）。</returns>
+        public static bool ApplyCoverWindow(TextureRect rect, string resPath, Rect2 region, float scrimAlpha = 0f)
         {
-            if (rect == null || !GodotObject.IsInstanceValid(rect)) return;
+            if (rect == null || !GodotObject.IsInstanceValid(rect)) return false;
 
             var tex = resPath == null ? null : ResourceLoader.Load<Texture2D>(resPath);
-            if (tex != null)
-            {
-                bool whole = region.Size.X <= 0f || region.Size.Y <= 0f;   // 空窗口 = 用整张图
-                rect.Texture = whole
-                    ? tex
-                    : new AtlasTexture { Atlas = tex, Region = region };
-            }
+            if (tex == null) return false;   // 不清空原 texture，避免闪白；由调用方决定纯色兜底
+
+            bool whole = region.Size.X <= 0f || region.Size.Y <= 0f;   // 空窗口 = 用整张图
+            rect.Texture = whole
+                ? tex
+                : new AtlasTexture { Atlas = tex, Region = region };
             rect.CustomMinimumSize = Vector2.Zero;
             rect.CustomMaximumSize = Vector2.Zero;   // 关键：清掉历史上误设的 250×250 上限
             rect.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
@@ -158,6 +158,7 @@ namespace Script.UI
                 else
                     AddScrim(rect, scrimAlpha);
             }
+            return true;
         }
 
         /// <summary>给「纯色底」的区域补一层半透明色块（不拦截鼠标）；重复调用只更新颜色。</summary>

@@ -48,7 +48,17 @@ public partial class AreaSlot : Control
     /// ⇒ 不跟着换就会把"自己的数字"显示在对手那半边（玩家 2 视角独有）。
     /// 单机 `Arena` 恒为 false（本地恒为座位 1，画面不镜像）。
     /// </summary>
-    public bool MirrorSeats { get; set; }
+    public bool MirrorSeats
+    {
+        get => _mirrorSeats;
+        set
+        {
+            _mirrorSeats = value;
+            // 争夺区的红/蓝归属色依赖本标记 ⇒ 任何时刻被改写都要立刻重刷（不依赖调用方在 _Ready 前设好）。
+            ApplyAreaBackdrop();
+        }
+    }
+    private bool _mirrorSeats;
 
     /// <summary>注入统计所需的逻辑层依赖。必须在 Setup 之前调用。</summary>
     public void SetStatsDependencies(ZoneManager zoneManager, PlayerManager playerManager)
@@ -101,13 +111,69 @@ public partial class AreaSlot : Control
         if (_player1Area == null || _player2Area == null) return;
 
         string path = ArenaBackdrop.AreaImage(_areaIndex);
-        if (string.IsNullOrEmpty(path)) return;
 
         var p2Bg = _player2Area.GetNodeOrNull<TextureRect>("Background");   // 上半 = 对手半边
         var p1Bg = _player1Area.GetNodeOrNull<TextureRect>("Background");   // 下半 = 本方半边
 
-        BackdropHelper.ApplyCoverWindow(p2Bg, path, ArenaBackdrop.TopWindow, ArenaBackdrop.TopScrim);
-        BackdropHelper.ApplyCoverWindow(p1Bg, path, ArenaBackdrop.BottomWindow, ArenaBackdrop.BottomScrim);
+        bool topOk = BackdropHelper.ApplyCoverWindow(p2Bg, path, ArenaBackdrop.TopWindow, ArenaBackdrop.TopScrim);
+        bool bottomOk = BackdropHelper.ApplyCoverWindow(p1Bg, path, ArenaBackdrop.BottomWindow, ArenaBackdrop.BottomScrim);
+
+        // 座位归属：`Player1Area` **恒为「本方」半边**（联机镜像视图下本方 = 座位 2）。
+        // 故红/蓝必须按「座位」着色，而不是按节点名 —— 否则玩家 2 视角下红蓝会反。
+        ApplySeatFrame(p1Bg, bottomOk, MirrorSeats ? 2 : 1);
+        ApplySeatFrame(p2Bg, topOk, MirrorSeats ? 1 : 2);
+    }
+
+    /// <summary>座位 1 的红 / 座位 2 的蓝（争夺区归属色）。</summary>
+    private static readonly Color Seat1Color = new Color(0.80f, 0.28f, 0.26f, 1f);
+    private static readonly Color Seat2Color = new Color(0.26f, 0.52f, 0.82f, 1f);
+
+    /// <summary>
+    /// 给某个争夺区半区套「座位色边框 + 淡色罩」，让"这一半归谁"一眼可辨。
+    ///
+    /// 为什么不放在 `PlayerXArea` 下、而要挂进已有的 `Background` 节点里：
+    /// `ClearCombatZones()` 每次清场只保留名为 `Background` / `StatsLabel` 的子节点，
+    /// 挂在外层会被当场删掉（表现为"打着打着红蓝边框消失"）。
+    /// </summary>
+    private static void ApplySeatFrame(TextureRect bg, bool hasImage, int seat)
+    {
+        if (bg == null || !GodotObject.IsInstanceValid(bg)) return;
+        Color c = seat == 1 ? Seat1Color : Seat2Color;
+
+        // 没有可用场景图 ⇒ 用接近纯色的座位底色兜底（同时仍保留边框范围）。
+        if (!hasImage)
+        {
+            BackdropHelper.EnsureFill(bg, new Color(c.R * 0.26f, c.G * 0.26f, c.B * 0.28f, 0.98f), "__SeatFill");
+        }
+        else
+        {
+            // 有图时把兜底色藏起来，免得重复叠一层色块
+            var staleFill = bg.GetNodeOrNull<ColorRect>("__SeatFill");
+            if (staleFill != null && GodotObject.IsInstanceValid(staleFill)) staleFill.Visible = false;
+        }
+
+        // 淡色罩：0.14 足够读出色相，又不至于把卡面压灰。
+        var wash = bg.GetNodeOrNull<ColorRect>("__SeatWash");
+        if (wash == null || !GodotObject.IsInstanceValid(wash))
+        {
+            wash = new ColorRect { Name = "__SeatWash", MouseFilter = MouseFilterEnum.Ignore };
+            wash.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+            bg.AddChild(wash);
+        }
+        wash.Color = new Color(c.R, c.G, c.B, 0.14f);
+
+        // 边框：用「透明底 + 纯描边」的 Panel，范围一眼可见（2px）。
+        var frame = bg.GetNodeOrNull<Panel>("__SeatFrame");
+        if (frame == null || !GodotObject.IsInstanceValid(frame))
+        {
+            frame = new Panel { Name = "__SeatFrame", MouseFilter = MouseFilterEnum.Ignore };
+            frame.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+            bg.AddChild(frame);
+        }
+        var sb = new StyleBoxFlat { BgColor = new Color(0f, 0f, 0f, 0f), BorderColor = c };
+        sb.SetBorderWidthAll(2);
+        sb.SetCornerRadiusAll(6);
+        frame.AddThemeStyleboxOverride("panel", sb);
     }
 
     /// <summary>彻底方案B：由地区卡实例驱动槽位显示。AreaUID 取实例 UID（槽位身份=实例身份）。</summary>

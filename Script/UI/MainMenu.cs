@@ -105,6 +105,17 @@ public partial class MainMenu : Control
             title.AddThemeConstantOverride("outline_size", 8);
         }
 
+        // 【2026-10-20 用户口径】首页按钮尺寸必须完全统一：之前只有「开始游戏 / 编辑卡组 / 退出游戏」
+        // 在场景里写了 custom_minimum_size=(0,50)，而「联机对战 / 建立主机」没写 ⇒ 后两个矮一截。
+        // 这里对所有按钮统一给同一尺寸，不再依赖 .tscn 里各自的写法。
+        const float btnHeight = 52f;
+        foreach (Button btn in new[] { _startButton, _onlineButton, _hostButton, _deckButton, _quitButton })
+        {
+            if (btn == null) continue;
+            btn.CustomMinimumSize = new Vector2(0f, btnHeight);
+            btn.CustomMaximumSize = new Vector2(-1f, btnHeight);
+        }
+
         if (_startButton != null) UITheme.ApplyPrimaryButton(_startButton);
         if (_onlineButton != null) UITheme.ApplyPrimaryButton(_onlineButton);
         if (_hostButton != null) UITheme.ApplyPrimaryButton(_hostButton);
