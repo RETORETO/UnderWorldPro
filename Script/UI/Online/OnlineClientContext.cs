@@ -21,8 +21,9 @@ namespace Script.UI.Online
         public static bool HasSession => _session != null;
 
         /// <summary>最近一次使用的服务端地址/端口/昵称（用于返回大厅时回填输入框）。</summary>
-        public static string LastHost = "127.0.0.1";
-        public static ushort LastPort = 18950;
+        /// <remarks>默认值见 <see cref="Script.IO.OnlineDefaults"/>；「建立主机」流程会在运行时把它改成 127.0.0.1。</remarks>
+        public static string LastHost = Script.IO.OnlineDefaults.Host;
+        public static ushort LastPort = Script.IO.OnlineDefaults.Port;
         public static string LastName = "玩家";
 
         /// <summary>

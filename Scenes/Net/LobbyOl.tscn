@@ -55,7 +55,7 @@ offset_left = 130.0
 offset_top = 56.0
 offset_right = 400.0
 offset_bottom = 88.0
-text = "127.0.0.1"
+text = "120.76.248.92"
 
 [node name="PortLabel" type="Label" parent="Panel"]
 layout_mode = 0
@@ -71,7 +71,7 @@ offset_left = 470.0
 offset_top = 56.0
 offset_right = 590.0
 offset_bottom = 88.0
-text = "18950"
+text = "28950"
 
 [node name="NameLabel" type="Label" parent="Panel"]
 layout_mode = 0

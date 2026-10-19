@@ -105,7 +105,7 @@ public partial class MainMenu : Control
             title.AddThemeConstantOverride("outline_size", 8);
         }
 
-        // 【2026-10-20 用户口径】首页按钮尺寸必须完全统一：之前只有「开始游戏 / 编辑卡组 / 退出游戏」
+        // 【2026-10-20 用户口径】首页按钮尺寸必须完全统一：之前只有「单机测试模式 / 编辑卡组 / 退出游戏」
         // 在场景里写了 custom_minimum_size=(0,50)，而「联机对战 / 建立主机」没写 ⇒ 后两个矮一截。
         // 这里对所有按钮统一给同一尺寸，不再依赖 .tscn 里各自的写法。
         const float btnHeight = 52f;
@@ -185,7 +185,7 @@ public partial class MainMenu : Control
         }
         if (_autoAction == "online")
         {
-            string host = string.IsNullOrEmpty(WebPerfParams.NetHost) ? "127.0.0.1" : WebPerfParams.NetHost;
+            string host = string.IsNullOrEmpty(WebPerfParams.NetHost) ? Script.IO.OnlineDefaults.Host : WebPerfParams.NetHost;
             string name = string.IsNullOrEmpty(WebPerfParams.NetName) ? "玩家" : WebPerfParams.NetName;
             GD.Print($"[WebPerf] 自动动作：联机大厅自动连接 host={host} port={WebPerfParams.NetPort}");
             OnlineClientContext.AutoConnect = true;     // 进大厅页后自动点「连接」
@@ -251,7 +251,7 @@ public partial class MainMenu : Control
 
     private void OnStartPressed()
     {
-        GD.Print("点击开始游戏，直接进入房间");
+        GD.Print("点击单机测试模式，直接进入房间");
         // 【2026-10-19 用户口径】单机不再经过大厅：直接初始化单人房间并进入房间。
         // Room._Ready 本身也有兜底（RoomPlayers 为空时自动 InitRoom），这里显式建一个干净房间。
         var gm = GameManager.Instance;

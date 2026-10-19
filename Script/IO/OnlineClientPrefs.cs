@@ -18,9 +18,9 @@ namespace Script.IO
         /// <summary>上次使用的卡组全路径（`res://Decks/xxx.json`；无记录时为空）。</summary>
         public static string LastDeckPath { get; private set; } = "";
         /// <summary>上次连接的服务端地址。</summary>
-        public static string LastHost { get; private set; } = "127.0.0.1";
+        public static string LastHost { get; private set; } = OnlineDefaults.Host;
         /// <summary>上次连接的端口。</summary>
-        public static ushort LastPort { get; private set; } = 18950;
+        public static ushort LastPort { get; private set; } = OnlineDefaults.Port;
         /// <summary>上次使用的昵称。</summary>
         public static string LastName { get; private set; } = "玩家";
 
@@ -43,8 +43,20 @@ namespace Script.IO
             LastPort = (ushort)(int)cfg.GetValue(Section, "last_port", (int)LastPort);
             LastName = cfg.GetValue(Section, "last_nick", LastName).AsString();
             // 【Web 安全】空白判定改用 ASCII 版（Windows 上空实现会经 Unicode 类别表，Web 上不可靠）。
-            if (WebSafeText.IsNullOrWhiteSpaceAscii(LastHost)) LastHost = "127.0.0.1";
-            if (LastPort == 0) LastPort = 18950;
+            if (WebSafeText.IsNullOrWhiteSpaceAscii(LastHost)) LastHost = OnlineDefaults.Host;
+            if (LastPort == 0) LastPort = OnlineDefaults.Port;
+
+            // 【2026-10-20 迁移】旧版本把默认地址写死成 `127.0.0.1:18950`（本机自测），
+            // 而这个偏好文件落在 `user://`（跨版本共用），老用户本地存的就是这对"旧默认值"——
+            // 不处理的话它会把新的公共服默认地址整个盖住，表现为"改了代码但界面还是 127.0.0.1"。
+            // 因此把「旧默认那一对」视为"用户从未自定义"，直接迁到新默认；其余地址/端口一律原样保留。
+            if (string.Equals(LastHost, "127.0.0.1", System.StringComparison.Ordinal) && LastPort == 18950)
+            {
+                LastHost = OnlineDefaults.Host;
+                LastPort = OnlineDefaults.Port;
+                GD.Print($"[OnlineClientPrefs] 旧默认地址迁移为 {LastHost}:{LastPort}");
+            }
+
             if (WebSafeText.IsNullOrWhiteSpaceAscii(LastName)) LastName = "玩家";
             GD.Print($"[OnlineClientPrefs] 已载入偏好：卡组={LastDeckPath}，服务端={LastHost}:{LastPort}，昵称={LastName}");
         }
@@ -56,8 +68,8 @@ namespace Script.IO
         public static void SaveConnection(string host, ushort port, string nick)
         {
             EnsureLoaded();
-            LastHost = WebSafeText.IsNullOrWhiteSpaceAscii(host) ? "127.0.0.1" : WebSafeText.TrimAscii(host);
-            LastPort = port == 0 ? (ushort)18950 : port;
+            LastHost = WebSafeText.IsNullOrWhiteSpaceAscii(host) ? OnlineDefaults.Host : WebSafeText.TrimAscii(host);
+            LastPort = port == 0 ? OnlineDefaults.Port : port;
             LastName = WebSafeText.IsNullOrWhiteSpaceAscii(nick) ? "玩家" : WebSafeText.TrimAscii(nick);
             Save();
         }

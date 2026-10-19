@@ -45,7 +45,7 @@ metadata/_edit_use_anchors_ = true
 custom_minimum_size = Vector2(0, 50)
 custom_maximum_size = Vector2(-1, 50)
 layout_mode = 2
-text = "开始游戏"
+text = "单机测试模式"
 
 [node name="OnlineButton" type="Button" parent="ButtonContainer"]
 layout_mode = 2

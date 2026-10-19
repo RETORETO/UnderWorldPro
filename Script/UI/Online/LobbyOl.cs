@@ -145,12 +145,12 @@ namespace Script.UI.Online
             //   `string.IsNullOrWhiteSpace` / `Trim()` / `ushort.TryParse` 都可能经 NumberFormatInfo 或
             //   Unicode 类别表落到 ICU 上（Web 上直接 abort）。见 Script/IO/WebSafeText.cs 类头。
             string host = Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(_hostInput?.Text)
-                ? "127.0.0.1" : Script.IO.WebSafeText.TrimAscii(_hostInput.Text);
+                ? Script.IO.OnlineDefaults.Host : Script.IO.WebSafeText.TrimAscii(_hostInput.Text);
             GD.Print("[LobbyOl] k2 host 解析完成: " + host);
 
             GD.Print("[LobbyOl] k3 即将解析 port");
             if (!Script.IO.WebSafeText.TryParseUshort(Script.IO.WebSafeText.TrimAscii(_portInput?.Text), out var port))
-                port = 18950;
+                port = Script.IO.OnlineDefaults.Port;
             GD.Print("[LobbyOl] k3b port=" + Script.IO.WebSafeText.Int(port));
 
             string name = Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(_nameInput?.Text)
