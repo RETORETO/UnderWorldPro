@@ -3752,7 +3752,12 @@ namespace Script.UI
                 _activationSelectionBusy = false;
                 return;
             }
-            _onlineTargetWindow.OnTargetPicked = null;   // 本路径不点卡，只点地区
+            // 【2026-10-19 修复·JC085 无法确认】地区点击必须接到 `OnTargetPicked`：
+            // `ArenaOl._Input` 的"场上点击高亮选目标"分支（`_activationTargetActive`）**先于**
+            // `AreaSlot._GuiInput` 执行，点地区会走 `PickLegalActivationAreaAt` → `_onlineTargetWindow.PickFromArena(hit)`
+            // → `OnTargetPicked`。旧写法把这里置 null ⇒ 点地区后 `PickFromArena` 空投递，什么都不发生
+            // （用户实测："选择地区后无法点确认，确认框消失了"）。现接到统一入口 `OnAreaTargetPicked`（墓地行动上行 PlayCard）。
+            _onlineTargetWindow.OnTargetPicked = OnAreaTargetPicked;
             _onlineTargetWindow.SetBlocking(false);
             _onlineTargetWindow.Open(tmpl?.CardName ?? "墓地行动", "请点击场上高亮的地区完成打出。", extraLabel: "取消（不打出）");
             _onlineTargetWindow.OnExtra = () =>

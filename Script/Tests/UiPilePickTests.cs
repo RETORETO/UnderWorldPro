@@ -181,6 +181,9 @@ namespace Script.Tests
                 "联机墓地行动选地区必须走『场上高亮地区 + 点击』（用户口径），提示窗文案应引导点地区而非列文字按钮");
             Assert.IsTrue(ol.Contains("OnAreaTargetPicked"),
                 "地区点击必须走统一入口 OnAreaTargetPicked（据上下文分发：服务端回 ChoiceResult / 墓地行动上行 PlayCard）");
+            Assert.IsTrue(ol.Contains("_onlineTargetWindow.OnTargetPicked = OnAreaTargetPicked"),
+                "提示窗 OnTargetPicked 必须接到 OnAreaTargetPicked：_Input 的场上点选分支先于 AreaSlot._GuiInput，"
+                + "点地区走 PickFromArena→OnTargetPicked，置 null 会空投递（用户实测：选择地区后无法点确认）");
         }
 
         /// <summary>
