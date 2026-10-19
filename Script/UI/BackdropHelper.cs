@@ -144,7 +144,13 @@ namespace Script.UI
                 ? tex
                 : new AtlasTexture { Atlas = tex, Region = region };
             rect.CustomMinimumSize = Vector2.Zero;
-            rect.CustomMaximumSize = Vector2.Zero;   // 关键：清掉历史上误设的 250×250 上限
+            // 【2026-10-20 致命 bug 修复】这里原来把 custom_maximum_size 显式设成了 (0, 0)，
+            // 但 Godot 4.7 里 (0,0) 不是"无上限"，而是**把尺寸钳成 0×0**
+            // （实测：父 480×200、锚点 FullRect 的 TextureRect，设 (0,0) 后 size 恒为 0）。
+            // 后果是凡走本方法的背景（争夺区半区、手牌区底纹）**一个像素都不渲染**，
+            // 表现为"争夺区背景完全没生效"。用 (-1,-1) 才是"无上限"，同时仍能清掉历史上
+            // MainMenu 那种误设的 250×250 上限。
+            rect.CustomMaximumSize = new Vector2(-1f, -1f);
             rect.ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize;
             rect.StretchMode = TextureRect.StretchModeEnum.KeepAspectCovered;   // 等比铺满、溢出裁掉
             rect.MouseFilter = Control.MouseFilterEnum.Ignore;
@@ -176,6 +182,55 @@ namespace Script.UI
             host.AddChild(rect);
             host.MoveChild(rect, 0);
             return rect;
+        }
+
+        /// <summary>区域遮罩节点的固定名字（幂等）。</summary>
+        public const string ZoneMaskNodeName = "__ZoneMask";
+
+        /// <summary>
+        /// 【2026-10-20 用户口径】整块玩家区铺**一张**背景图，各功能区域用「黑色半透明块」区分，
+        /// 而不是每个区域各铺一张图（那样每块图的取景、亮度都不一样，拼起来像补丁）。
+        ///
+        /// 本方法给 `Control` 类区域（`HandContainer`/`AssetContainer`/`CouncilContainer`）挂遮罩：
+        /// **黑色半透明 + 1px 极淡描边**，挂在区域**最底层**（index 0），
+        /// 于是天然满足「区域色在卡片 UI 之下、在背景图之上」的层序要求。
+        ///
+        /// `Panel` 类区域（`DeckZone`/`GraveyardZone`/`ScoreZone`）不用本方法——
+        /// 它们的底就是自己的 stylebox，再叠一层会把 stylebox 的边框盖掉，改走 `UITheme.ApplyZonePanel`。
+        /// </summary>
+        public static Panel EnsureZoneMask(Control host, float alpha = 0.42f)
+        {
+            if (host == null || !GodotObject.IsInstanceValid(host)) return null;
+
+            var mask = host.GetNodeOrNull<Panel>(ZoneMaskNodeName);
+            if (mask != null && GodotObject.IsInstanceValid(mask))
+            {
+                mask.Visible = true;
+                ApplyZoneMaskStyle(mask, alpha);
+                return mask;
+            }
+
+            mask = new Panel { Name = ZoneMaskNodeName, MouseFilter = Control.MouseFilterEnum.Ignore };
+            mask.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            ApplyZoneMaskStyle(mask, alpha);
+            host.AddChild(mask);
+            host.MoveChild(mask, 0);   // 区域最底层：卡片、标签一律压在它上面
+            return mask;
+        }
+
+        /// <summary>遮罩外观：黑半透明 + 极淡描边（描边只为"分区"，不能抢卡面）。</summary>
+        public static void ApplyZoneMaskStyle(Panel mask, float alpha = 0.42f)
+        {
+            if (mask == null || !GodotObject.IsInstanceValid(mask)) return;
+            var sb = new StyleBoxFlat
+            {
+                BgColor = new Color(0f, 0f, 0f, alpha),
+                BorderColor = new Color(1f, 1f, 1f, 0.07f),
+            };
+            sb.SetBorderWidthAll(1);
+            sb.SetCornerRadiusAll(8);
+            sb.SetContentMarginAll(0f);
+            mask.AddThemeStyleboxOverride("panel", sb);
         }
     }
 }

@@ -296,9 +296,34 @@ namespace Script.Tests
             Assert.IsTrue(bg.Contains("\"Player1Area\"") && bg.Contains("\"Player2Area\""),
                 "区域背景必须双方玩家区都铺（单机/联机同款）");
 
-            // 堆叠区（StackPanel，表头「堆叠区（后进先出）」）必须用「堆叠2」做底
-            Assert.IsTrue(bg.Contains("ApplyStackPanel") && bg.Contains("PileReaper"),
-                "堆叠区背景必须用「堆叠2」（PileReaper）");
+            // 【2026-10-20 用户口径】整块玩家区只铺**一张**底图，手牌/资产/秘社等 `Control` 类区域
+            // 改用「黑色半透明遮罩」区分，而不是各铺各的图（每块图取景/亮度不同，拼起来像补丁）。
+            Assert.IsTrue(bg.Contains("PlayerZoneImage"),
+                "玩家区必须有整块底图（整块玩家区一张背景）");
+            Assert.IsTrue(bg.Contains("EnsureZoneMask"),
+                "手牌区/资产区/秘社区必须用黑色半透明遮罩分区");
+            Assert.IsTrue(bg.Contains("HandContainer") && bg.Contains("AssetContainer") && bg.Contains("CouncilContainer"),
+                "三个 Control 类区域都必须挂遮罩");
+            // 手牌区不再单独铺极扁的 `手牌.jpg`（放大 2.9 倍后只剩一片糊，用户实测"几乎看不见背景"）
+            Assert.IsFalse(bg.Contains("HandLeather"),
+                "手牌区不得再单独铺 HandLeather（改由整块玩家区底图承担）");
+
+            // 堆叠区（StackPanel，表头「堆叠区（后进先出）」）必须用「牌手信息」皮革面板做底
+            Assert.IsTrue(bg.Contains("ApplyStackPanel") && bg.Contains("LeatherPanel"),
+                "堆叠区背景必须用「牌手信息」（LeatherPanel）");
+
+            // 层序红线：区域遮罩必须挂在区域**最底层**（卡片 UI 在它上面），且遮罩不拦截鼠标
+            string bh = Read("Script/UI/BackdropHelper.cs");
+            Assert.IsTrue(bh.Contains("EnsureZoneMask"),
+                "BackdropHelper 必须提供区域遮罩入口");
+            Assert.IsTrue(bh.Contains("host.MoveChild(mask, 0)"),
+                "区域遮罩必须移到 index 0（区域色在卡片 UI 之下）");
+            // 【Godot 4.7 坑】custom_maximum_size 设 (0,0) 会把控件尺寸钳成 0×0，
+            // 背景整块不渲染（"争夺区背景完全没生效"的真凶）。必须是 (-1,-1) = 无上限。
+            Assert.IsFalse(bh.Contains("CustomMaximumSize = Vector2.Zero"),
+                "背景控件不得把 custom_maximum_size 设为 (0,0)（会钳成 0 尺寸，背景不可见）");
+            Assert.IsTrue(bh.Contains("new Vector2(-1f, -1f)"),
+                "清上限必须用 (-1,-1)（Godot 4.7 的 (0,0) 会钳成 0 尺寸）");
 
             // 争夺区（地区槽上下半区）：红/蓝必须按**座位**着色，不能按节点名写死——
             // 联机镜像视图下 Player1Area 恒为本方半边，玩家 2 视角下红蓝必须互换。
