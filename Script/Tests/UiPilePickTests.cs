@@ -135,6 +135,42 @@ namespace Script.Tests
                 "墓地错位必须与牌库一致（基准 0.25px/张 + 总位移封顶 10px），不得写死 5px 导致斜出面板");
         }
 
+        /// <summary>
+        /// ②d 【JC085 修复】联机"墓地行动"第二级选地区必须取 `ClientAreaManager.GetOrderedAreaUids()`，
+        /// 不得用 `ClientZoneManager.GetZoneCards(AreaZone, 0)`——联机快照里地区卡注册在 `AreaManager._areas`，
+        /// 不在 ZoneManager 的 `_area` 桶，后者拿不到 ⇒ areas.Count==0 ⇒ 选地区窗永远弹不出来。
+        /// </summary>
+        public void TestPile_联机墓地行动选地区走AreaManager()
+        {
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("ClientAreaManager?.GetOrderedAreaUids()"),
+                "联机墓地行动选地区必须取 ClientAreaManager.GetOrderedAreaUids()（与单机 OpenGraveyardAreaChoice 同源）");
+            Assert.IsFalse(ol.Contains("clientZone?.GetZoneCards(CardZone.AreaZone"),
+                "联机墓地行动禁止用 ClientZoneManager.GetZoneCards(AreaZone) 拿地区（快照里地区卡注册在 AreaManager，不在该桶）");
+        }
+
+        /// <summary>
+        /// ②e 【JC107 修复】选卡窗（独立 Window）打开期间，角标/资产/墓地 hover 面板一律不弹（两端都要）。
+        /// 面板是战场内 Control（层级 830），被 Window 盖住点不到，去点它反而触发 `OnFocusExited` ⇒ 选卡窗被取消。
+        /// </summary>
+        public void TestPile_选卡窗打开时抑制hover面板()
+        {
+            string ol = Read("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("IsOnlinePickWindowOpen"),
+                "联机必须提供『选卡窗是否打开』的判据（否则 hover 面板会在选卡窗期间乱弹）");
+            Assert.IsTrue(ol.Contains("if (IsOnlinePickWindowOpen()) return;"),
+                "联机角标 hover 入口必须在选卡窗打开时直接 return（不弹面板）");
+
+            string arena = Read("Script/UI/Arena.BadgePeek.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(arena), "必须能读到 Arena.BadgePeek.cs");
+            Assert.IsTrue(arena.Contains("IsActivePickWindowOpen"),
+                "单机必须提供『选卡窗是否打开』的判据");
+            Assert.IsTrue(arena.Contains("if (IsActivePickWindowOpen()) return;"),
+                "单机角标 hover 入口必须在选卡窗打开时直接 return（不弹面板）");
+        }
+
         /// <summary>③ 联机选卡窗：三种"从区域选一张"都走 CardPickWindow，回包仍是 SelectedUid。</summary>
         public void TestPick_联机选卡窗走真卡面且协议不变()
         {
