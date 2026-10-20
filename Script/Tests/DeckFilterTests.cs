@@ -167,7 +167,7 @@ namespace Script.Tests
         {
             Assert.IsTrue(CardSearchIndex.EnsureLoaded(),
                 "卡池索引未加载成功：请确认 Cards/card_index.json 存在（重跑 res://Script/Tools/CardIndexRunner.cs 生成）");
-            Assert.AreEqual(698, CardSearchIndex.Count, "索引条目数应为 698（玩家卡）");
+            Assert.AreEqual(667, CardSearchIndex.Count, "索引条目数应为 667（玩家卡；2026-10-20 删掉误导出的 Cards/Data/PlayerCards/DQ/ 后由 698 降为 667）");
 
             // 抽查 JC004 力场法师：黄忠诚 2、类别=角色、有心灵领域
             DeckSearchIndexEntry jc004 = null;
@@ -190,10 +190,10 @@ namespace Script.Tests
                 "『角色』应命中 373 张（含 4 张角色|附属 复合卡）");
             Assert.AreEqual(143, CountMatches(cards, new DeckFilterModel { CategoryMask = (int)CardCategory.Attachment }),
                 "『附属』应命中 143 张（含 4 张复合卡）");
-            Assert.AreEqual(339, CountMatches(cards, new DeckFilterModel { DomainFilter = DeckFilterModel.DomainNone }),
-                "『无领域』应为 339 张");
-            Assert.AreEqual(92, CountMatches(cards, new DeckFilterModel { DomainFilter = (int)MagicDomain.Star }),
-                "『星空』应为 92 张");
+            Assert.AreEqual(312, CountMatches(cards, new DeckFilterModel { DomainFilter = DeckFilterModel.DomainNone }),
+                "『无领域』应为 312 张（删掉 27 张误导出的 DQ 地区卡后由 339 降为 312）");
+            Assert.AreEqual(91, CountMatches(cards, new DeckFilterModel { DomainFilter = (int)MagicDomain.Star }),
+                "『星空』应为 91 张（删掉误导出的 DQ 目录后由 92 降为 91）");
             Assert.AreEqual(31, CountMatches(cards, new DeckFilterModel { UniqueOnly = true }),
                 "仅独有卡应为 31 张");
             Assert.AreEqual(214, CountMatches(cards, new DeckFilterModel { SubCategoryQuery = "人类" }),
