@@ -639,7 +639,7 @@ node .\工具\Web\Web运行自检.mjs --wait 45 --shot logs\shot.png > logs\shot
 |---|---|---|---|
 | 1 | 端口占用只查 `Get-NetUDPEndpoint` | 旧服务端占着 **TCP** 端口却检测不到 → 新服务端 `CreateServer failed: AlreadyInUse` → 脚本退出 | 新增 `Get-PortOwnerPid`：**TCP(`-State Listen`) + UDP 都查** |
 | 2 | 命令行匹配工程目录**对斜杠方向敏感** | 命令行写成 `D:/MYPROJECT/UWPro`（正斜杠）时 `-like "*D:\…*"` 匹配不到 → 旧进程杀不掉 | `ConvertTo-NormPath` 统一 `/` → `\` 后再比 |
-| 3 | 默认 `ServerIp` 硬编码 `172.19.163.3` | 换网段后客户端连不上（本机实际是 `192.168.110.20`） | 默认空 → `Get-LocalIPv4` 自动探测（UDP 出口 IP → DNS → 回落 `127.0.0.1`） |
+| 3 | 默认 `ServerIp` 硬编码 `172.19.163.3` | 换网段后客户端连不上（本机实际是 `192.168.x.x`） | 默认空 → `Get-LocalIPv4` 自动探测（UDP 出口 IP → DNS → 回落 `127.0.0.1`） |
 
 另外：杀进程改为**三条判定取并集**（命令行含工程目录 / 可执行文件属于本工程 Godot / 当前端口占用者），
 杀完后**等端口真正释放**再继续；启动服务端前增加一次端口预检；`AlreadyInUse` 也纳入失败判定（不用白等 12 秒）。
