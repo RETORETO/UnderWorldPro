@@ -3,51 +3,44 @@
 1v1 卡牌对战游戏 —— Godot 4.7.2 + C#（.NET 9），桌面与 Web 同源。
 
 > 仓库名 `UnderWorldPro`，工程内部代号 `UWPro`（`project.godot` 里的 `config/name`）。
+> 本仓库只放源码、卡池与文档，**不含任何启动 / 打包脚本**，下面直接给命令行。
 
 ## 快速开始
+
+先装 **.NET（mono）版** Godot 4.7.2 —— 标准版加载不了 C# 脚本。
 
 ### 只想玩：加入公开测试服
 
 测试服常驻 `120.76.248.92:28950`（WebSocket 传输，桌面 / 浏览器同服）。
 
-1. 安装 **.NET（mono）版** Godot 4.7.2 —— 标准版加载不了 C# 脚本。
-2. 双击根目录 `连服务器.bat`；或命令行：
+用 Godot 打开 `project.godot`（首次会还原 NuGet 依赖，需要联网），F5 进主菜单，在联机页填地址即可；
+或者命令行直接落在大厅：
 
-   ```
-   启动联机客户端.bat 120.76.248.92 28950 你的昵称
-   ```
+```
+Godot_v4.7.2-stable_mono_win64.exe --path . res://Scenes/Net/NetEntry.tscn -- --lobby 120.76.248.92 28950 你的昵称
+```
 
-3. 进大厅开房 / 加入房间，双方到齐自动开局。
+### 本地起一个大厅服务端
 
-### 改代码：本地跑起来
+```
+Godot_v4.7.2-stable_mono_console.exe --headless --max-fps 30 --path . res://Scenes/Net/NetServer.tscn -- --port 28950
+```
 
-1. 用 Godot 4.7.2 **mono** 版导入本目录的 `project.godot`
-2. 首次打开会还原 NuGet 依赖（`Godot.NET.Sdk`、`Ater.DeepSeek.Core`），需要联网
-3. F5
+> `--max-fps 30` 别省：headless 不限帧会吃满一整个核。
 
-### 自己三开测联机
+### 本地三开自测
 
-`一键联机三开.bat` —— 起 1 个大厅服务端 + 2 个客户端，本机自连。详见 `start_online_3.ps1` 顶部注释（支持 `-ServerOnly` / `-ClientOnly` 跨机联调）。
+起一个服务端（上面那条），再开两个客户端（昵称不同）指向 `127.0.0.1:28950`：
 
-## 根目录脚本
-
-| 脚本 | 用途 |
-|---|---|
-| `连服务器.bat` | 连公开测试服（地址写死在脚本内，与 `Script/IO/OnlineDefaults.cs` 同步） |
-| `启动联机客户端.bat <IP> <端口> <昵称>` | 连指定服务器 |
-| `一键联机三开.bat`（内部 `start_online_3.ps1`） | 本机 1 服务端 + 2 客户端自测 |
-| `启动大厅服务端.bat` | 单独起大厅服务端 |
-| `启动联机三进程测试.bat` | 自动冒烟三进程 |
-| `启动Web预览.cmd` | 本地 HTTP 预览已有的 Web 构建 |
-| `ResolveGodot.ps1` | 定位 Godot(mono) 可执行文件，上面几个脚本共用 |
-
-> 打包 / 导出脚本（桌面包、Web 包）不在本仓库维护。想自己出包，环境搭建与三条硬约束见 `文档/设计/Web/Web导出环境状态与下一步.md`。
+```
+Godot_v4.7.2-stable_mono_win64.exe --path . res://Scenes/Net/NetEntry.tscn -- --lobby 127.0.0.1 28950 玩家A
+```
 
 ## Web 版
 
-Web 构建带线程（SharedArrayBuffer），浏览器要求页面处于跨源隔离状态，所以**必须通过 HTTP 打开**，直接双击 `index.html` 会报错。已有构建用 `启动Web预览.cmd` 预览。
+Web 构建带线程（SharedArrayBuffer），浏览器要求页面处于**跨源隔离**状态，所以必须通过 HTTP 打开、并带 COOP/COEP 响应头（配置示例见 `web_deploy_headers/`），直接双击 `index.html` 会报错。
 
-自己导出需要 **魔改版 Godot**（官方版不支持 C# 导出 Web），流程同样是三步：装魔改版引擎 → 确认 .NET 运行时版本与工程 `TargetFramework` 同代 → 导出后验证 pck 里 `Cards/card_index.json`、`Decks/*.json` 都在。细节见上面那份文档。
+自己导出需要 **魔改版 Godot**（官方版不支持 C# 导出 Web）。三条硬约束与踩坑记录见 `文档/设计/Web/Web导出环境状态与下一步.md`，要点是：引擎锁 4.7.2-stable、`TargetFramework` 必须与引擎内静态链接的 mono 运行时同代、导出后确认 pck 里 `Cards/card_index.json` 与 `Decks/*.json` 都在。
 
 ## 工程结构
 
@@ -59,6 +52,7 @@ Web 构建带线程（SharedArrayBuffer），浏览器要求页面处于跨源�
 | `Decks/` | 预置卡组（含各色全量测试卡组） |
 | `制作指南/` | 各类效果 / 卡型的制作规范，改卡前先看这份 |
 | `文档/` | 需求原文、设计稿、进度账本 |
+| `工具/` | Web 包检查、压测、文档链接修正等辅助脚本（Python / Node） |
 | `fonts/` | Web 端字体兜底与授权说明 |
 
 ## 自检
