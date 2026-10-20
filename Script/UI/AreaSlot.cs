@@ -362,6 +362,11 @@ public partial class AreaSlot : Control
 
     public void UpdateMarks(int p1, int p2)
     {
+        // 【2026-10-20·用户口径】势力点角标「红方势力：X / 蓝方势力：X」吃的是**座位原始值**
+        // （红方＝座位1、蓝方＝座位2），因此**不参与**镜像交换 —— "红方"是绝对身份，
+        // 若跟着镜像换，玩家 2 视角下会把对手的势力标成红方。
+        _areaCardUI?.UpdateInfluence(p1, p2);
+
         // 【P1】镜像视图下 Player1Area = 本方、Player2Area = 对手 ⇒ 值与文案一起换（避免"P1: 3 P2: 1"里 P1 其实是自己）
         if (MirrorSeats)
         {

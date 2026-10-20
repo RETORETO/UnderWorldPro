@@ -134,14 +134,15 @@ namespace Script.UI
             else
             {
                 _effectPanel.Visible = true;
-                _effectText.Text = entry.EffectText ?? "效果发动";
+                _effectText.Text = ResolveEffectText(entry);
 
-                // 触发效果：尝试显示来源卡 UI（如银钥探求者的卡图）
-                var sourceTemplate = entry.StackEffect?.Source?.PlayerTemplate;
-                if (_triggerCardArt != null && sourceTemplate != null && !string.IsNullOrEmpty(sourceTemplate.UID))
+                // 触发/激活效果：显示来源卡卡图（玩家卡 **与秘社卡** 都支持）。
+                // 【2026-10-20】旧实现只认 `Source.PlayerTemplate`，而秘社卡没有 PlayerTemplate
+                // ⇒ 秘社发动效果时堆叠条目只剩一个空白的"效果发动"角标（用户实测）。
+                string artPath = ResolveSourceArtPath(entry);
+                if (_triggerCardArt != null && !string.IsNullOrEmpty(artPath))
                 {
-                    string path = ResolveCardImagePath(sourceTemplate.UID);
-                    var tex = ResourceLoader.Load<Texture2D>(path);
+                    var tex = ResourceLoader.Load<Texture2D>(artPath);
                     if (tex != null)
                     {
                         _triggerCardArt.Texture = tex;
@@ -149,7 +150,7 @@ namespace Script.UI
                     }
                     else
                     {
-                        GD.PrintErr($"[StackEntryUI] 触发来源卡卡图加载失败: {path}");
+                        GD.PrintErr($"[StackEntryUI] 触发来源卡卡图加载失败: {artPath}");
                         _triggerCardArt.Visible = false;
                     }
                 }
@@ -158,6 +159,35 @@ namespace Script.UI
                     _triggerCardArt.Visible = false;
                 }
             }
+        }
+
+        /// <summary>
+        /// 【2026-10-20】条目文案兜底：`EffectText` 为空（服务端没给 / 旧存档）时用来源卡名拼一句，
+        /// 绝不把空白面板摆给玩家看。
+        /// </summary>
+        public static string ResolveEffectText(StackEntry entry)
+        {
+            if (entry == null) return "效果发动";
+            if (!string.IsNullOrEmpty(entry.EffectText)) return entry.EffectText;
+            var src = entry.StackEffect?.Source ?? entry.SourceCard;
+            string name = src?.EffectiveCardName;
+            if (string.IsNullOrEmpty(name)) name = src?.CouncilTemplate?.CardName;
+            if (string.IsNullOrEmpty(name)) name = src?.PlayerTemplate?.CardName;
+            return string.IsNullOrEmpty(name) ? "效果发动" : $"{name}·效果";
+        }
+
+        /// <summary>
+        /// 【2026-10-20】来源卡卡图路径：秘社卡走 `CouncilCardData.CardImagePath`（它自己带完整路径），
+        /// 玩家卡仍按"UID 前缀目录"约定拼（与 `CardUI.ResolveCardImagePath` 同款）。
+        /// </summary>
+        public static string ResolveSourceArtPath(StackEntry entry)
+        {
+            if (entry == null) return null;
+            var src = entry.StackEffect?.Source ?? entry.SourceCard;
+            if (src?.CouncilTemplate != null) return src.CouncilTemplate.CardImagePath;
+            var pt = src?.PlayerTemplate;
+            if (pt != null && !string.IsNullOrEmpty(pt.UID)) return ResolveCardImagePath(pt.UID);
+            return null;
         }
 
         /// <summary>

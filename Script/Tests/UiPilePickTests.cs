@@ -206,6 +206,8 @@ namespace Script.Tests
         /// <summary>
         /// ②h 【游戏结束不了】`CheckGameOver` 必须有平局出口：双方牌库均耗尽 / 双方总分相等时，
         /// 旧实现 `return 0`（不判胜），而 CheckGameOver 只在"卡进分数区"时触发 ⇒ 对局永久卡死。
+        /// 【2026-10-20 补】光有出口不够——`CheckGameOver` 全工程只有一个调用点，
+        /// 若那个调用点在入口按 `zone != ScoreZone` 早退，「牌库耗尽负」就永远判不到（实测服务器 14 局全投降收场）。
         /// </summary>
         public void TestGameOver_平局出口不卡死()
         {
@@ -213,6 +215,15 @@ namespace Script.Tests
             Assert.IsFalse(string.IsNullOrEmpty(pm), "必须能读到 PlayerManager.cs");
             Assert.IsTrue(pm.Contains("BreakTieByFirst"),
                 "游戏结束判定必须有平局出口（双方牌库均耗尽/双方总分相等时不能再 return 0 卡死）");
+
+            string tm = Read("Script/Manager/TurnManager.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(tm), "必须能读到 TurnManager.cs");
+            Assert.IsTrue(tm.Contains("_playerManager.IsDeckEmpty(1) || _playerManager.IsDeckEmpty(2)"),
+                "牌库耗尽必须有判定入口：任意移动后若某方牌库为空，必须调用 CheckGameOver");
+            Assert.IsFalse(tm.Contains("if (card == null || zone != CardZone.ScoreZone) return;"),
+                "禁止恢复『只有卡进分数区才判胜』的早退（牌库被磨空后对局将永远结束不了）");
+            Assert.IsTrue(tm.Contains("if (TurnCount < 1) return;"),
+                "胜负判定必须有『已开局』守卫：TurnCount<1（初始化装载/第0回合调度）时牌库可能未装完，会误判负");
         }
 
         /// <summary>③ 联机选卡窗：三种"从区域选一张"都走 CardPickWindow，回包仍是 SelectedUid。</summary>
@@ -249,8 +260,11 @@ namespace Script.Tests
                 "调度必须先按 cat-1/cat-2 分类（自己手牌＝全 cat-1 ⇒ 不弹窗）");
             Assert.IsTrue(ol.Contains("BeginMulliganFieldPick"),
                 "cat-1 调度必须走『场上手牌高亮 + 左键切换 + 提示窗确认』");
-            Assert.IsTrue(ol.Contains("OnMultiConfirmed = () => SubmitMulliganPick"),
-                "提示窗的确认必须落到调度上报");
+            // 【2026-10-20 重构】提示窗确认不再直接绑 `SubmitMulliganPick`：手牌多选统一收口到
+            // `BeginHandPick`（开局调度 / 恢复步骤手牌上限弃牌共用），确认一律走 `SubmitHandPick`
+            // 再回调用方给的回调 ⇒ 这里锁"确认 → 统一提交"这条链，调度→上报由 `BeginMulliganFieldPick` 的回调保证。
+            Assert.IsTrue(ol.Contains("_onlineTargetWindow.OnMultiConfirmed = SubmitHandPick;"),
+                "提示窗的确认必须落到手牌多选的统一提交（BeginHandPick 内唯一接线）");
             Assert.IsTrue(ol.Contains("PlayerIntent.Kind.MulliganReport"),
                 "回包仍是 MulliganReport 意图（协议零改动）");
             Assert.IsTrue(ol.Contains("new CardMultiPickWindow()"),

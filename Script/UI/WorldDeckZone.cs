@@ -59,7 +59,12 @@ public partial class WorldDeckZone : Control
         }
 
         if (_countLabel != null)
-            _countLabel.Text = _countCache.ToString();
+        {
+            // 【2026-10-20·用户口径】世界牌库**不再显示剩余数量**（"世界×N" 对玩家没有决策价值，
+            // 卡背堆叠本身已表达"这里是一叠牌"）⇒ 直接隐藏标签，不再写字。
+            // 注意：只隐藏标签，卡背堆叠（displayCount）照旧渲染。
+            _countLabel.Visible = false;
+        }
     }
 
     public int Count => _countCache;

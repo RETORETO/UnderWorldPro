@@ -33,6 +33,24 @@ namespace Script.Net.Godot
         private bool _disposed;
 
         /// <summary>
+        /// 【幽灵连接·2026-10-20】应用层心跳间隔（毫秒）。
+        ///
+        /// **它不代表"思考超时"**：桌游一回合想几分钟很正常，服务端只要每 15s 收到这样一个几十字节的
+        /// `Ping`，就会刷新该会话的 `LastMessageTick`，永不判掉线。玩家感知不到任何东西。
+        /// 只有**进程被杀 / 断网 / 休眠**导致心跳彻底停止时，服务端才会在阈值（默认 5 分钟起）后释放座位。
+        ///
+        /// 为什么不用 WebSocket 原生 ping：原生 pong 由底层库自动回应，业务层拿不到"对端是否还活着"的结论；
+        /// 而 TCP 半开时内核要十几分钟才报错（`tcp_retries2`），远慢于桌游需要的回收速度。
+        /// </summary>
+        public const int HeartbeatIntervalMs = 15000;
+
+        /// <summary>上次发心跳的时刻（`System.Environment.TickCount64`）。Hello 发出时初始化，避免连上就补发一条。</summary>
+        private long _lastHeartbeatTick;
+
+        /// <summary>最近一条心跳的 RequestId：其应答在分发处被吞掉，业务层（大厅页/BOT/测试）永远看不到。</summary>
+        private string _heartbeatRequestId;
+
+        /// <summary>
         /// 对局视图（投影 + 快照应用 + 决策请求分发）。**懒创建**：首次收到对局消息时建立，
         /// 投影 CardManager 用 `NetClientCardManager`（跨进程从模板重建卡实例）。
         /// 大厅流程与旧的单场 `NetworkMatchLauncher` 复用同一实现（`ClientMatchView`），避免两套投影逻辑分叉。
@@ -168,9 +186,16 @@ namespace Script.Net.Godot
             // 用 `_helloSent && !IsConnected` 兜住"连过又被对端关掉"的情形；`LinkFailed` 兜住"根本没连上"的情形。
             if (LinkFailed || (_helloSent && !IsConnected)) NotifyDisconnected();
 
-            if (_helloSent) return;
+            if (_helloSent)
+            {
+                // 【幽灵连接·2026-10-20】已登录后每 15s 发一次心跳。放在这里而不是各页面里，
+                // 是为了让大厅页 / 房间页 / 战场页三个驱动点（都只是调 `Poll()`）自动都带心跳。
+                if (IsConnected) PumpHeartbeat();
+                return;
+            }
             if (!IsConnected) return;
             _helloSent = true;
+            _lastHeartbeatTick = System.Environment.TickCount64;
             OnConnected?.Invoke();
             var hello = new LobbyRequest
             {
@@ -180,6 +205,22 @@ namespace Script.Net.Godot
             };
             _helloRequestId = Send(hello);
             GD.Print($"[ClientSession] 已连接，已发送 Hello（协议版本 {LobbyProtocol.ProtocolVersion}）");
+        }
+
+        /// <summary>
+        /// 【幽灵连接·2026-10-20】到点发一条 `LobbyRequest{Ping}`。
+        ///
+        /// 服务端 `LobbyServer.Handle` 的 `Ping` 分支只回一条空应答（不做任何状态变更），
+        /// 但 `ServerHost.OnSessionMessage` 会因此刷新 `LastMessageTick` —— 这就是服务端判定
+        /// "这条连接还活着"的唯一依据。旧版本客户端不发心跳，服务端因此**不会**对"在房会话"做超时回收
+        /// （见 `LobbyServer.SweepIdleSessions` 的 `HeartbeatSeen` 守卫），所以服务端先升级也不会误踢旧客户端。
+        /// </summary>
+        private void PumpHeartbeat()
+        {
+            long now = System.Environment.TickCount64;
+            if (now - _lastHeartbeatTick < HeartbeatIntervalMs) return;
+            _lastHeartbeatTick = now;
+            _heartbeatRequestId = Send(new LobbyRequest { Kind = LobbyRequestKind.Ping });
         }
 
         /// <summary>上行一个大厅/房间请求（自动补 `RequestId`）。</summary>
@@ -307,6 +348,10 @@ namespace Script.Net.Godot
                         if (!IsHelloAcked && res.Ok && !string.IsNullOrEmpty(res.SessionId)
                             && (string.IsNullOrEmpty(_helloRequestId) || res.RequestId == _helloRequestId))
                             IsHelloAcked = true;
+                        // 心跳应答：只用于刷新服务端的活跃时间，对业务层**完全不可见**。
+                        // 若上抛，"大厅页"会把它当成一次成功的空操作（无害但噪声），
+                        // 而 "BOT 的连续失败计数" 会被它无条件清零（`NetBotClient.OnResponse` 的成功分支）。
+                        if (!string.IsNullOrEmpty(_heartbeatRequestId) && res.RequestId == _heartbeatRequestId) break;
                         OnLobbyResponse?.Invoke(res);
                         break;
                     }

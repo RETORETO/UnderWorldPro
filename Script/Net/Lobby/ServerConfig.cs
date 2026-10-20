@@ -20,6 +20,15 @@ namespace Script.Net.Lobby
         /// <summary>空房间（无人）立即销毁；此值用于回收"**不在任何房间**且长时间无消息"的会话（秒；≤0 = 关闭该机制）。</summary>
         public int SessionIdleTimeoutSeconds = 300;
         /// <summary>
+        /// 【幽灵连接·2026-10-20】**对局中**会话的失联回收阈值（秒；≤0 = 关闭）。
+        ///
+        /// 桌游一回合想几分钟很正常，所以刻意比 `SessionIdleTimeoutSeconds` 宽得多。
+        /// 判定依据是"多久没收到任何上行"——新版客户端每 15s 一条心跳（`ClientSession.HeartbeatIntervalMs`），
+        /// 因此**正常思考永远不会触发**；只有进程被杀/断网导致心跳彻底停止才会超时。
+        /// 旧版客户端不发心跳，故只对 `HeartbeatSeen` 的会话启用（服务端先升级也不会误踢旧客户端）。
+        /// </summary>
+        public int MatchIdleTimeoutSeconds = 900;
+        /// <summary>
         /// 对局结束后、在**战场页**展示获胜者的时长（秒）。到点后服务端自动复用原房间回到等待阶段。
         /// 期间房间停留在 `Finished`（客户端据此停在战场页展示结果），无需任何玩家操作。
         /// </summary>
@@ -47,6 +56,7 @@ namespace Script.Net.Lobby
                     case "--result-seconds": if (Next(out var rs) && int.TryParse(rs, out var resultSecs)) { cfg.MatchResultDisplaySeconds = resultSecs; i++; } break;
                     case "--finished-ttl": if (Next(out var ft) && int.TryParse(ft, out var ttl)) { cfg.FinishedRoomTtlSeconds = ttl; i++; } break;
                     case "--idle-timeout": if (Next(out var it) && int.TryParse(it, out var idle)) { cfg.SessionIdleTimeoutSeconds = idle; i++; } break;
+                    case "--match-idle-timeout": if (Next(out var mit) && int.TryParse(mit, out var midle)) { cfg.MatchIdleTimeoutSeconds = midle; i++; } break;
                     case "--verbose": cfg.Verbose = true; break;
                     // 说明：`--ws` 曾是"改用 WebSocket 监听"的开关；传输层统一为 WebSocket 后已无意义（默认即是），
                     // 保留为静默接受的参数以兼容既有脚本与文档，无需任何处理。

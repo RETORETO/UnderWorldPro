@@ -37,9 +37,24 @@ namespace Script.UI
         /// <summary>【2026-10·触发窗口改造】单选取目标是否显示「取消」出口（由调用方经 Open 指定）。</summary>
         public bool AllowCancel { get; private set; }
 
+        /// <summary>
+        /// 【2026-10-20·强制多选】是否给了「取消」出口。为 false 时：
+        ///  · 不显示取消按钮（如恢复步骤手牌上限弃牌："不能不丢" ⇒ 不能有"一张不丢"的按钮）；
+        ///  · 标题栏关闭键被忽略（否则玩家一点 X 就让服务端永远等回包）。
+        /// </summary>
+        public bool HasCancelExit => _multiPick ? OnCancelled != null : AllowCancel;
+
         private string _pickedUid;
         private Button _cancelButton;
         private bool _multiPick;
+
+        /// <summary>
+        /// 【2026-10-20·用户口径】**本窗是否允许被关闭**（标题栏 X）。
+        /// 强制流程（手牌上限弃牌、必须选一个目标的弃牌/取目标）**只能靠"完成选择"离开**：
+        /// 关掉窗子既不能让流程推进、又会让玩家以为"选择已取消"，故直接忽略关闭请求。
+        /// 判据：多选＝`showCancel`；单选＝有取消出口或该槽出口按钮（`extraLabel`）。
+        /// </summary>
+        private bool _closable = true;
 
         /// <summary>【2026-10 修复】本次 `Open` 发生的帧号：用于吞掉"开窗同帧的关闭请求"。</summary>
         private ulong _openedFrame = ulong.MaxValue;
@@ -68,7 +83,23 @@ namespace Script.UI
                 GD.Print("[TargetSelectionWindow] 忽略开窗同帧的关闭请求（拖拽松手/焦点切换误触）");
                 return;
             }
-            if (_multiPick || OnCancelled != null) { OnCancelPressed(); return; }
+            // 【2026-10-20·用户口径】强制流程（没有任何取消/留空出口）⇒ 窗口关不掉。
+            // 用户原文："丢弃提示窗不能通过丢牌以外方式关闭"。旧行为是"关窗就隐藏，但流程仍在等选择"，
+            // 玩家会以为已经取消 ⇒ 这里保持窗口可见，直到玩家真正完成选择。
+            if (!_closable)
+            {
+                GD.Print("[TargetSelectionWindow] 强制流程：忽略窗口关闭请求（必须完成本次选择）");
+                return;
+            }
+            if (_multiPick)
+            {
+                // 【2026-10-20·强制多选】没有取消回调 ⇒ 这是"必须选够才能走"的流程（手牌上限弃牌）：
+                // 窗口不提供任何退出路径，点标题栏 X 一律忽略，避免"点了关窗 → 服务端永远等回包 → 对局卡死"。
+                if (OnCancelled != null) OnCancelPressed();
+                else GD.Print("[TargetSelectionWindow] 强制多选流程：忽略窗口关闭请求（必须选够张数）");
+                return;
+            }
+            if (OnCancelled != null) { OnCancelPressed(); return; }
             var extra = OnExtra;
             if (extra != null)
             {
@@ -102,21 +133,37 @@ namespace Script.UI
         /// 与单选取目标的区别：窗口**保持打开**（不点选即关闭），玩家左键加选、右键取消，
         /// 最后按"确认"或"取消"；"确认"的可用性由调用方判定（JC021：必须已选地区且至少 1 个角色）。
         /// </summary>
-        public void OpenMultiPick(string hint, string cancelLabel = null)
+        /// <param name="cancelLabel">取消按钮文案；`showCancel=false` 时忽略。</param>
+        /// <param name="showCancel">
+        /// 【2026-10-20·手牌上限弃牌】是否给「取消」出口。**强制恰好 N 张**的流程（弃到上限）传 false：
+        /// 不画取消按钮、点标题栏 X 也不生效 —— 用户口径"不能不丢，所以不需要一张不丢的按钮"。
+        /// </param>
+        /// <param name="confirmLabel">确认按钮文案（null ⇒ "确认"）。</param>
+        public void OpenMultiPick(string hint, string cancelLabel = null, bool showCancel = true,
+            string confirmLabel = null)
         {
             SetMultiPickLayout(true);
             _multiPick = true;
             _pickedUid = null;
-            if (ConfirmButton != null) ConfirmButton.Text = "确认";
+            if (ConfirmButton != null)
+            {
+                ConfirmButton.Text = string.IsNullOrEmpty(confirmLabel) ? "确认" : confirmLabel;
+                // 【2026-10-20】强制流程不画取消按钮 ⇒ 确认按钮铺满整行（否则右半边留一块空白）
+                ConfirmButton.OffsetLeft = 16;
+                ConfirmButton.OffsetRight = showCancel ? 270 : 544;
+            }
             // 【2026-10-19】多选的"取消"语义由调用方决定：取目标场景＝"取消"，
             // 开局调度场景＝"不调度（一张不选）"——两者都只是回一个空清单，但文案必须说人话。
             if (_cancelButton != null)
+            {
+                _cancelButton.Visible = showCancel;
                 _cancelButton.Text = string.IsNullOrEmpty(cancelLabel) ? "取消" : cancelLabel;
+            }
             if (HintLabel != null) HintLabel.Text = string.IsNullOrEmpty(hint) ? "左键选择右键取消" : hint;
-            var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
+            // 【2026-10-20】没有取消出口 ⇒ 也关不掉（强制流程只能靠"选够并确认"离开）
+            _closable = showCancel;
             _openedFrame = Engine.GetProcessFrames();   // 同上：吞掉开窗同帧的误触关闭
-            Popup();
+            WindowCenter.PopupCentered(this);           // 【2026-10-20】居中唯一实现（见 WindowCenter 注释）
         }
 
         /// <summary>多选模式：每次选择变化后刷新标题（含计数）/"左键选择右键取消"提示/"确认"可用性。</summary>
@@ -268,11 +315,10 @@ namespace Script.UI
         {
             SetMultiPickLayout(false);                                    // 还原单选取目标布局（多选模式可能改过尺寸/按钮）
             ApplySingleCancelLayout(allowCancel, cancelLabel);            // 再叠加/还原「取消」出口
-            // 水平、垂直双向居中
-            var vp = GetViewport().GetVisibleRect().Size;
-            Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
+            // 【2026-10-20·用户口径】"没有取消出口 + 没有该槽出口按钮"＝强制取目标 ⇒ 窗口关不掉。
+            _closable = allowCancel || !string.IsNullOrEmpty(extraLabel);
             _openedFrame = Engine.GetProcessFrames();   // 记录开窗帧（吞掉同帧误触的关闭请求，见 OnCloseRequested）
-            Popup();
+            WindowCenter.PopupCentered(this);           // 【2026-10-20】居中唯一实现（原先取自身视口 ⇒ 落在左上角）
             _pickedUid = null;
             // 标题：调用方给的文案已是**完整句子**（如"请选择要弃掉的手牌""额外费用：选择要牺牲的角色"）时
             // 不再叠加"选择目标："前缀——否则会显示成"选择目标：请选择要弃掉的手牌"（2026-10 用户实测语句不通）。

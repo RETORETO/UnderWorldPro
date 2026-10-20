@@ -1019,6 +1019,10 @@ public partial class ZoneManager : Node
             AbilityUsedThisTurn = c.AbilityUsedThisTurn,
         };
 
+        // 【2026-10-20】卡上指示物/标志计数随快照下行（客户端卡面角标显示「时间标志×2」等）。
+        if (c.Counters != null)
+            foreach (var kv in c.Counters) r.Counters[kv.Key] = kv.Value;
+
         // 【P1·运行时状态投影补全】静止标记 / 当前子类别 / 运行时授予 / 先手值：
         // 客户端不运行 EffectEngine，这些状态只能随快照走，否则客户端上的同一份规则函数必然算出不同结果。
         foreach (var f in c.StaticFlags) r.StaticFlags.Add((int)f);

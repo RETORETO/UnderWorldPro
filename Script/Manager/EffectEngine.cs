@@ -8474,11 +8474,25 @@ namespace Script.Manager
         /// 角色/附属激活能力入堆叠（D9 激活框架接驳点）：将一条激活型 EffectData 包装为 Trigger 类
         /// StackEntry 入堆叠，统一走 ResolveEntry 的 Trigger 分支执行（含 D16 目标丢失校验）。
         /// </summary>
+        /// <summary>
+        /// 【2026-10-20】堆叠条目的可读文案：卡文 `FaqNote` → `"&lt;来源卡名&gt;·效果"` → `"效果发动"`。
+        /// 抽出来的原因：秘社卡没有 `PlayerTemplate`（`EffectiveCardName` 只在形态覆盖时才有值），
+        /// 旧实现直接把 `EffectId` 塞进 `EffectText`，堆叠区就显示成 `MSJC001_1_DrawIfFirstPlayer`。
+        /// </summary>
+        private static string ResolveStackEffectText(CardInstance card, EffectData ability)
+        {
+            string faq = ability?.FaqNote;
+            if (!string.IsNullOrEmpty(faq)) return faq;
+            string name = card?.EffectiveCardName;
+            if (string.IsNullOrEmpty(name)) name = card?.CouncilTemplate?.CardName;
+            if (string.IsNullOrEmpty(name)) name = card?.PlayerTemplate?.CardName;
+            return string.IsNullOrEmpty(name) ? "效果发动" : $"{name}·效果";
+        }
+
         public void PushActivationToStack(StackManager sm, CardInstance card, EffectData ability, CardInstance target = null,
             string sourceZoneDetailSnapshot = null, int sourceControllerSnapshot = -1, int targetPlayerId = -1,
             string targetAreaId = null, int eventAmount = -1)
-        {
-            if (sm == null || card == null || ability == null) return;
+        {            if (sm == null || card == null || ability == null) return;
             var entry = new StackEntry(card.OwnerId, $"[激活]{ability.EffectId}")
             {
                 Kind = ResolveKind.Trigger,
@@ -8496,7 +8510,10 @@ namespace Script.Manager
                 // 供 `ValueExpr="代价数量"` 读取（与触发事件的"事件数量"共用同一条透传通路）。
                 EventAmount = eventAmount,
                 EffectDataEffect = ability,
-                EffectText = ability.EffectId,
+                // 【2026-10-20】堆叠条目文案改为**可读文本**（旧实现写裸 `EffectId`，如
+                // `MSJC001_1_DrawIfFirstPlayer`，玩家完全看不出这是什么效果）。
+                // 优先级：卡文 FaqNote（若有）→ "<来源卡名>·效果"。
+                EffectText = ResolveStackEffectText(card, ability),
                 // 参照 TurnManager.PushTriggerToStack：填充 TriggerInstance，
                 // 使 StackEntryUI 能经 entry.StackEffect.Source.PlayerTemplate 取到来源卡，渲染卡图。
                 StackEffect = new Script.Data.Effects.StackEffectInstance

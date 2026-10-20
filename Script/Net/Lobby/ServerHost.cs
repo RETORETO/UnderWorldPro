@@ -26,6 +26,12 @@ namespace Script.Net.Lobby
             public bool Helloed;
             public long ConnectedAtTick;
             public long LastMessageTick;
+            /// <summary>
+            /// 【幽灵连接·2026-10-20】该会话是否主动发过心跳（`LobbyRequestKind.Ping`）。
+            /// **能力协商**：旧版客户端不发心跳，服务端不能拿"无上行"当"已掉线"去踢它（会误伤正常玩家）。
+            /// 故"在房会话的超时回收"只对 `HeartbeatSeen` 的会话生效 —— 服务端先升级是安全的。
+            /// </summary>
+            public bool HeartbeatSeen;
             /// <summary>已处理过的 RequestId → 缓存应答 JSON（用于幂等回放）。</summary>
             public readonly Dictionary<string, string> RecentResponses = new Dictionary<string, string>();
             /// <summary>已受理但尚未应答的 RequestId（防并发重复执行）。</summary>
@@ -195,6 +201,9 @@ namespace Script.Net.Lobby
                 Notice(session.SessionId, LobbyErrorCode.UnknownRequest, "空请求。");
                 return;
             }
+
+            // 【幽灵连接·2026-10-20】收到心跳 ⇒ 对端进程仍在运行。只做标记，不进幂等流程、不改任何业务状态。
+            if (req.Kind == LobbyRequestKind.Ping) session.HeartbeatSeen = true;
 
             // ---- 幂等：重复 RequestId 一律不重复执行 ----
             if (!string.IsNullOrEmpty(req.RequestId))

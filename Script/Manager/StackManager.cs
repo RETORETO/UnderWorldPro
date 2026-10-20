@@ -237,8 +237,14 @@ public partial class StackManager : Node
                 // 客户端堆叠 UI 对齐单机所需（箭头/地区卡面/来源卡图）
                 ControllerId = e.ControllerId,
                 WonAreaUid = e.WonAreaUid,
+                // 【2026-10-20】来源模板同时支持玩家卡与**秘社卡**（秘社没有 PlayerTemplate，
+                // 旧实现只取 PlayerTemplate ⇒ 秘社发动效果时客户端拿不到卡图）。
                 SourceTemplateUid = e.SourceCard?.PlayerTemplate?.UID
-                                    ?? e.StackEffect?.Source?.PlayerTemplate?.UID,
+                                    ?? e.StackEffect?.Source?.PlayerTemplate?.UID
+                                    ?? e.SourceCard?.CouncilTemplate?.UID
+                                    ?? e.StackEffect?.Source?.CouncilTemplate?.UID,
+                SourceIsCouncil = (e.SourceCard?.PlayerTemplate == null && e.StackEffect?.Source?.PlayerTemplate == null)
+                                  && (e.SourceCard?.CouncilTemplate != null || e.StackEffect?.Source?.CouncilTemplate != null),
                 Targets = StackTargetsToSnap(e.Targets),
             });
         }

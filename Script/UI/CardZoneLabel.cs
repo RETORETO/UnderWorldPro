@@ -30,7 +30,7 @@ namespace Script.UI
 
             string F(int id) => id == chooserId
                 ? "你"
-                : (playerNameOf?.Invoke(id) ?? $"玩家{id}");
+                : (playerNameOf?.Invoke(id) ?? PlayerSide.Name(id));
             string AreaOf(CardInstance c) =>
                 $"{F(c.ControllerId)}地区{areaIndexOf?.Invoke(c.ZoneDetailId) ?? 0}";
 

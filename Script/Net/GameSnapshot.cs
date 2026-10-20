@@ -239,6 +239,13 @@ namespace Script.Net
         /// <summary>版本号：卡每次进入不同区域自增，用于"目标丢失"判定（D16 等价）。</summary>
         public int VersionId;
 
+        /// <summary>
+        /// 【2026-10-20】卡上的指示物/标志计数（名称 → 数量，如 `"时间标志" → 2`）。
+        /// 客户端要用它在卡面角标上显示「时间标志×2」；不下行则联机端永远看不到指示物。
+        /// 隐藏占位（`IsHidden`）为空表——不泄露身份即不泄露指示物。
+        /// </summary>
+        public Dictionary<string, int> Counters = new Dictionary<string, int>();
+
         /// <summary>本卡是否已发动过能力（每回合重置，简化）。</summary>
         public bool AbilityUsedThisTurn;
 
@@ -278,6 +285,12 @@ namespace Script.Net
         public string WonAreaUid;
         /// <summary>效果型条目的来源卡模板 UID（客户端据此显示来源卡卡图；空则不显示）。</summary>
         public string SourceTemplateUid;
+        /// <summary>
+        /// 【2026-10-20】`SourceTemplateUid` 指向的是**秘社卡**（`CouncilCardData`）还是玩家卡。
+        /// 秘社卡的卡图不在 `PlayerCards/` 下，客户端拼路径时必须分开（旧实现一律按玩家卡拼 ⇒
+        /// 秘社发动效果时堆叠区永远取不到卡图，用户实测"秘社效果入堆叠没有正确显示"）。
+        /// </summary>
+        public bool SourceIsCouncil;
         /// <summary>堆叠条目的目标引用（客户端据此绘制"条目 → 目标"箭头）。</summary>
         public List<StackTargetSnap> Targets = new List<StackTargetSnap>();
     }

@@ -103,11 +103,19 @@ offset_right = 1446.0
 offset_bottom = 290.0
 
 [node name="ScoreLabel" type="Label" parent="Player1Area/ScoreZone" unique_id=336436700]
-custom_minimum_size = Vector2(40, 40)
+z_index = 860
+custom_minimum_size = Vector2(40, 24)
 layout_mode = 1
-offset_left = 196.0
-offset_right = 236.0
-offset_bottom = 40.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -30.0
+offset_right = 0.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+horizontal_alignment = 1
 
 [node name="CardContainer" type="Control" parent="Player1Area/ScoreZone" unique_id=16017608]
 anchors_preset = 0
@@ -127,10 +135,12 @@ offset_right = 1900.0
 offset_bottom = 210.0
 
 [node name="AssetLabel" type="Label" parent="Player1Area/AssetContainer" unique_id=1599476929]
+z_index = 650
+z_as_relative = false
 layout_mode = 0
 offset_top = 210.0
-offset_right = 40.0
-offset_bottom = 233.0
+offset_right = 400.0
+offset_bottom = 252.0
 
 [node name="CouncilContainer" type="Control" parent="Player1Area" unique_id=1054534558]
 anchors_preset = 0
@@ -140,6 +150,7 @@ offset_right = 170.0
 offset_bottom = 195.0
 
 [node name="DeckZone" type="Panel" parent="Player1Area" unique_id=258447404 node_paths=PackedStringArray("_cardContainer", "_countLabel")]
+z_index = 350
 layout_mode = 0
 offset_left = 1200.0
 offset_right = 1300.0
@@ -149,7 +160,8 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player1Area/DeckZone" unique_id=769952412]
-z_index = 860
+z_index = 890
+z_as_relative = false
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -169,6 +181,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="GraveyardZone" type="Panel" parent="Player1Area" unique_id=1611069934 node_paths=PackedStringArray("_cardContainer", "_countLabel")]
+z_index = 350
 layout_mode = 0
 offset_left = 1350.0
 offset_right = 1450.0
@@ -178,7 +191,8 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player1Area/GraveyardZone" unique_id=308346305]
-z_index = 860
+z_index = 890
+z_as_relative = false
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -228,11 +242,15 @@ offset_bottom = 196.0
 
 [node name="ScoreLabel" type="Label" parent="Player2Area/ScoreZone" unique_id=950149439]
 z_index = 860
-custom_minimum_size = Vector2(40, 40)
+custom_minimum_size = Vector2(40, 24)
 layout_mode = 1
-offset_left = 196.0
-offset_right = 236.0
-offset_bottom = 40.0
+anchor_right = 1.0
+offset_top = 6.0
+offset_right = 0.0
+offset_bottom = 30.0
+grow_horizontal = 2
+mouse_filter = 2
+horizontal_alignment = 1
 
 [node name="CardContainer" type="Control" parent="Player2Area/ScoreZone" unique_id=1588912882]
 anchors_preset = 0
@@ -252,10 +270,12 @@ offset_right = 1900.0
 offset_bottom = 210.0
 
 [node name="AssetLabel" type="Label" parent="Player2Area/AssetContainer" unique_id=2036160825]
+z_index = 650
+z_as_relative = false
 layout_mode = 0
-offset_top = 210.0
-offset_right = 40.0
-offset_bottom = 233.0
+offset_top = 150.0
+offset_right = 400.0
+offset_bottom = 192.0
 
 [node name="CouncilContainer" type="Control" parent="Player2Area" unique_id=1001878460]
 anchors_preset = 0
@@ -264,6 +284,7 @@ offset_right = 1660.0
 offset_bottom = 150.0
 
 [node name="DeckZone" type="Panel" parent="Player2Area" unique_id=623896743 node_paths=PackedStringArray("_cardContainer", "_countLabel")]
+z_index = 350
 layout_mode = 0
 offset_left = 1200.0
 offset_top = 110.0
@@ -274,6 +295,8 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player2Area/DeckZone" unique_id=1996344867]
+z_index = 890
+z_as_relative = false
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -293,6 +316,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="GraveyardZone" type="Panel" parent="Player2Area" unique_id=139620376 node_paths=PackedStringArray("_cardContainer", "_countLabel")]
+z_index = 350
 layout_mode = 0
 offset_left = 1350.0
 offset_top = 110.0
@@ -303,6 +327,8 @@ _cardContainer = NodePath("CardContainer")
 _countLabel = NodePath("CountLabel")
 
 [node name="CountLabel" type="Label" parent="Player2Area/GraveyardZone" unique_id=851128685]
+z_index = 890
+z_as_relative = false
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 1
 anchors_preset = 5
@@ -356,7 +382,7 @@ offset_top = 110.0
 offset_right = 120.0
 offset_bottom = 160.0
 mouse_filter = 1
-text = "P1让过"
+text = "红方让过"
 
 [node name="OpponentPassButton" type="Button" parent="ActionPanel" unique_id=1860794695]
 layout_mode = 1
@@ -365,7 +391,7 @@ offset_top = 170.0
 offset_right = 120.0
 offset_bottom = 220.0
 mouse_filter = 1
-text = "P2让过"
+text = "蓝方让过"
 
 [node name="EndTurnButton" type="Button" parent="ActionPanel" unique_id=1571477633]
 layout_mode = 1
@@ -408,17 +434,22 @@ offset_bottom = 23.0
 grow_horizontal = 2
 text = "堆叠区（后进先出）"
 
-[node name="StackContainer" type="VBoxContainer" parent="StackPanel" unique_id=200001002]
+[node name="StackScroll" type="ScrollContainer" parent="StackPanel" unique_id=200001005]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 10.0
-offset_top = 34.0
-offset_right = -10.0
-offset_bottom = -10.0
+offset_left = 6.0
+offset_top = 30.0
+offset_right = -6.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
+horizontal_scroll_mode = 0
+
+[node name="StackContainer" type="VBoxContainer" parent="StackPanel/StackScroll" unique_id=200001002]
+layout_mode = 2
+size_flags_horizontal = 3
 
 [node name="ArrowLayer" type="Control" parent="." unique_id=200001003]
 z_index = 800

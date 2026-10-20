@@ -76,8 +76,14 @@ public partial class MainMenu : Control
         // 场景里预留的空 Background 节点（还带 custom_maximum_size=250×250）一律停用，避免和上面的背景层打架。
         if (GetNodeOrNull<TextureRect>("Background") is TextureRect legacyBg) legacyBg.Visible = false;
 
-        // ② 全屏场景图：庄园夜景，压暗 0.58 保证标题与按钮可读（不追求"看清图"，只做氛围）。
-        BackdropHelper.AttachCover(backdrop, "res://Cards/Image/桌面3.jpg", 0.58f);
+        // ② 全屏场景图：桌面4（用户 2026-10-20 指定换封面），压暗 0.58 保证标题与按钮可读
+        //    （不追求"看清图"，只做氛围）。
+        // 【2026-10-20 排查】用户反馈"首页背景没有替换成桌面4"：这里显式打一条日志，
+        // 开一次游戏就能在日志里确认**到底加载的是哪张图**（若日志仍是旧内容 ⇒ 跑的是旧 DLL）。
+        GD.Print("[MainMenu] 首页封面背景 = res://Cards/Image/桌面4.jpg（压暗 0.58）");
+        var cover = BackdropHelper.AttachCover(backdrop, "res://Cards/Image/桌面4.jpg", 0.58f);
+        if (cover == null)
+            GD.PrintErr("[MainMenu] ⚠ 首页封面图加载失败：res://Cards/Image/桌面4.jpg（只剩纯色底，需检查导入缓存）");
 
         // ③ 左侧皮革侧栏：`牌手信息.jpg` 是 300×900（0.333），铺 360×1080 时缩放系数恰为 1.2，
         //    纵向正好铺满、横向零裁切 ⇒ 底部「隐秘世界」压印 LOGO 完整可见。

@@ -710,23 +710,61 @@ namespace Script.Net.Lobby
         }
 
         /// <summary>
-        /// 【M7】回收空闲连接（`ServerConfig.SessionIdleTimeoutSeconds`，≤0 表示关闭该机制）。
-        /// **只回收不在任何房间的会话**：房间内/对局中的玩家"长时间不发消息"是完全正常的（思考、看牌），
-        /// 误踢代价远大于多占一个连接槽位；房间自身的清理由 `FinishedRoomTtlSeconds` 与空房规则负责。
+        /// 回收失联连接。分三档（秒；≤0 = 关闭该档）：
+        ///   · 不在任何房间 —— `SessionIdleTimeoutSeconds`（默认 300）
+        ///   · 在房间（等待/准备）—— 同上
+        ///   · 对局中 —— `MatchIdleTimeoutSeconds`（默认 900；桌游思考窗口刻意放宽）
+        ///
+        /// 【幽灵连接·2026-10-20 修复】原实现 `if (RoomOfSession(sid) != null) continue;` 让"在房会话"**永远**不被回收：
+        /// 客户端进程被杀 / 断网 / 休眠形成 TCP 半开时服务端收不到 close 帧，座位被永久占住 ⇒ 房间永不判空、
+        /// 房间数不再回落（实测日志：50 次建连 / 48 次断开，残留 2 个死会话把房间 r2 占死，房间数长期停在 1），
+        /// 持续累积还会吃光 `MaxConnections`（16）导致新玩家直接 `ServerFull`。
+        ///
+        /// 现在靠**客户端心跳**（`ClientSession` 每 15s 一条 `Ping`，服务端只刷新 `LastMessageTick`）：
+        /// 正常思考时心跳照发，玩家想多久都不会被踢；只有心跳彻底停止才算失联。
+        /// `HeartbeatSeen` 是能力协商 —— 旧客户端不发心跳，仍走原规则（在房不回收），避免"服务端先升级就误伤旧客户端"。
         /// </summary>
         private void SweepIdleSessions(long now)
         {
-            int limit = _config.SessionIdleTimeoutSeconds;
-            if (limit <= 0 || Host == null) return;
+            if (Host == null) return;
+            int idleLimit = _config.SessionIdleTimeoutSeconds;
+            int matchLimit = _config.MatchIdleTimeoutSeconds;
 
             foreach (var sid in new List<string>(Host.SessionIds))
             {
                 var info = Host.GetSession(sid);
                 if (info == null) continue;
-                if (RoomOfSession(sid) != null) continue;                 // 在房里：不回收
+
+                var room = CurrentRoom(sid);
+                int limit;
+                string where;
+                if (room == null)
+                {
+                    if (idleLimit <= 0) continue;
+                    limit = idleLimit;
+                    where = "不在房间";
+                }
+                else
+                {
+                    // 在房/对局中：只有发过心跳的新版客户端才做失联回收（旧客户端保持原行为，不踢）。
+                    if (!info.HeartbeatSeen) continue;
+                    if (room.Phase == RoomPhase.InMatch)
+                    {
+                        if (matchLimit <= 0) continue;
+                        limit = matchLimit;
+                        where = "对局中";
+                    }
+                    else
+                    {
+                        if (idleLimit <= 0) continue;
+                        limit = idleLimit;
+                        where = $"房间 {room.RoomId}（{room.Phase}）";
+                    }
+                }
+
                 if (now - info.LastMessageTick <= limit * 1000L) continue;
-                Log($"[Lobby] 会话 {sid}（{info.PlayerName ?? "未登录"}）空闲超过 {limit}s，回收连接");
-                Host.Notice(sid, LobbyErrorCode.Disconnected, "长时间无操作，连接已断开。");
+                Log($"[Lobby] 会话 {sid}（{info.PlayerName ?? "未登录"}，{where}）失联超过 {limit}s，回收连接并释放座位");
+                Host.Notice(sid, LobbyErrorCode.Disconnected, "长时间无响应，连接已断开。");
                 Host.Disconnect(sid, "idle timeout");
             }
         }

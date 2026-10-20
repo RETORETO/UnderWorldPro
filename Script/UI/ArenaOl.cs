@@ -257,7 +257,9 @@ namespace Script.UI
             _scoreContainer2 = GetNodeOrNull<Control>("Player2Area/ScoreZone/CardContainer");
             _councilContainer1 = GetNodeOrNull<Control>("Player1Area/CouncilContainer");
             _councilContainer2 = GetNodeOrNull<Control>("Player2Area/CouncilContainer");
-            _stackContainer = GetNodeOrNull<Control>("StackPanel/StackContainer");
+            _stackContainer = GetNodeOrNull<Control>("StackPanel/StackScroll/StackContainer");
+            // 【2026-10-20·用户口径】堆叠区标题与卡面封/附角标统一风格（金色 + 黑描边）
+            CardBadgeStyle.ApplyZoneHeaderLabel(GetNodeOrNull<Label>("StackPanel/StackHeader"));
             _resultLabel = GetNodeOrNull<Label>("CenterArea/ResultLabel");
             _concedeButton = GetNodeOrNull<Button>("ActionPanel/ConcedeButton");
 
@@ -392,6 +394,8 @@ namespace Script.UI
             CardPreviewBus.Detach(_hoverPreview);   // 【鼠标悬浮预览】反注册（避免悬挂引用）
             DetachBadgePeek();
             DetachLauncher();
+            // 【2026-10-20】静态开关复位（详见 CardTextVisibility.ResetSilent 的注释：此处不能派发事件）
+            CardTextVisibility.ResetSilent();
             base._ExitTree();
         }
 
@@ -690,12 +694,22 @@ namespace Script.UI
         /// <summary>【第0回合·调度】当前打开的调度窗（多选选卡窗；快照到达时靠它判"已弹出"）。</summary>
         private CardMultiPickWindow _mulliganWindow;
 
-        // ==================== 【2026-10-19·cat-1 调度】场上手牌多选态 ====================
-        // 用户口径：调度候选＝自己手牌＝全 cat-1 ⇒ **不弹卡面网格窗**，改用
-        // "手牌高亮 + 左键加选/右键取消 + 提示窗确认"（与 JC021/JC062 的"一个窗多选"同款交互）。
-        private bool _mulliganPickActive;
-        private readonly System.Collections.Generic.List<CardInstance> _mulliganPickCards = new();
-        private readonly System.Collections.Generic.HashSet<string> _mulliganPickPicked = new();
+        // ==================== 【2026-10-20】场上"手牌多选"态（调度 / 手牌上限弃牌 共用） ====================
+        // 口径来源：
+        //  · 2026-10-19「调度候选＝自己手牌＝全 cat-1 ⇒ 不弹卡面网格窗，改'手牌高亮 + 左键加选/右键取消 + 提示窗确认'」；
+        //  · 2026-10-20「恢复步骤手牌上限弃牌也要用这套 UI；但不能不丢，所以不要'一张不丢'的按钮」。
+        // 实现要点：
+        //  · 状态只存 **UID**（快照重建会整批换掉 `CardUI` 实例，存实例会失效）；
+        //  · `_handPickMin/_handPickMax` 决定"确认"何时可用；
+        //  · `_handPickAllowCancel=false` ⇒ 不画取消按钮、点标题栏 X 也不生效（强制流程）。
+        private bool _handPickActive;
+        private readonly System.Collections.Generic.List<string> _handPickCandidates = new();
+        private readonly System.Collections.Generic.HashSet<string> _handPickPicked = new();
+        private int _handPickMin;
+        private int _handPickMax;
+        private string _handPickHint = "左键选择，右键取消选择";
+        private string _handPickTitlePrefix = "已选择";
+        private System.Action<System.Collections.Generic.List<string>> _handPickOnConfirm;
 
         /// <summary>
         /// 【第0回合·调度（客户端驱动）】每次应用快照后检查：若处于第 0 回合且尚未上报，
@@ -721,12 +735,12 @@ namespace Script.UI
                     _mulliganWindow = null;
                     GD.Print("[ArenaOl] 调度阶段已结束，关闭本地调度窗");
                 }
-                if (_mulliganPickActive) CloseMulliganPick("调度阶段已结束");
+                if (_handPickActive) CloseHandPick("调度阶段已结束");
                 return;
             }
             if (_mulliganReportedLocal) return;                    // 已上报
             if (_mulliganWindow != null && GodotObject.IsInstanceValid(_mulliganWindow)) return;   // 已弹出
-            if (_mulliganPickActive) return;                       // cat-1 场上多选态已在进行
+            if (_handPickActive) return;                            // 场上手牌多选态已在进行（调度 / 弃牌）
 
             int localSeat = _matchClient.LocalSeat;
             var hand = _matchClient.ClientZoneManager?.GetZoneCards(CardZone.Hand, localSeat);
@@ -790,30 +804,53 @@ namespace Script.UI
                 OpenMulliganFallbackPrompt(localSeat, hand);
                 return;
             }
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)((vpSize.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             _mulliganWindow = win;
             GD.Print($"[ArenaOl] 第0回合·已弹出调度选卡窗（候选 {cards.Count} 张手牌）");
         }
 
         // ============================================================
-        // 【2026-10-19 用户口径·cat-1】**开局调度＝场上手牌多选**（不弹卡面网格窗）
-        // 候选是自己手牌 ⇒ 全 cat-1 ⇒ 按规则走"场上高亮 + 左键点选"。
-        // 多选（0..N）不能"点一张即提交"，故配一个提示窗承载「确认调度 / 不调度」。
-        // 回包仍是 `PlayerIntent.Kind.MulliganReport`（协议零改动）。
+        // 【2026-10-20】**场上"手牌多选"通用实现**（开局调度 / 恢复步骤手牌上限弃牌 共用）
+        // 候选是自己手牌 ⇒ 全 cat-1 ⇒ 按规则走"场上高亮 + 左键点选"，
+        // 多选不能"点一张即提交"，故配一个提示窗承载「确认 / 取消」。
+        // 两个使用方的差别只有三处：数量约束（min/max）、有没有取消出口、确认后回什么包。
         // ============================================================
 
-        /// <summary>开"场上手牌多选"调度态。返回 false ⇒ 调用方退回 `CardMultiPickWindow` 兜底。</summary>
-        private bool BeginMulliganFieldPick(int localSeat, List<CardInstance> cards)
+        /// <summary>
+        /// 开"场上手牌多选"态。返回 false ⇒ 调用方**必须**退回原来的列表窗/通用面板（不要静默什么都不做）。
+        /// </summary>
+        /// <param name="cards">候选手牌（只取 UID；快照重建会换掉 CardUI 实例，故不存实例）。</param>
+        /// <param name="minCount">"确认"至少需要选中的张数（0＝可以不选）。</param>
+        /// <param name="maxCount">最多可选张数（≤0 ⇒ 候选总数）。</param>
+        /// <param name="hint">窗内操作提示（左键加选/右键取消 + 本次语义）。</param>
+        /// <param name="titlePrefix">窗口标题前半段（后面自动拼"（已选/上限）"）。</param>
+        /// <param name="confirmLabel">确认按钮文案。</param>
+        /// <param name="cancelLabel">取消按钮文案；`allowCancel:false` 时忽略。</param>
+        /// <param name="allowCancel">
+        /// 是否给「取消」出口。开局调度＝true（取消即"不调度"）；手牌上限弃牌＝false（用户口径"不能不丢"）。
+        /// </param>
+        /// <param name="onConfirm">确认回调：按候选顺序输出已选 UID（可空）。</param>
+        private bool BeginHandPick(System.Collections.Generic.IReadOnlyList<CardInstance> cards,
+            int minCount, int maxCount, string hint, string titlePrefix, string confirmLabel,
+            string cancelLabel, bool allowCancel,
+            System.Action<System.Collections.Generic.List<string>> onConfirm)
         {
             EnsureTargetWindow();
-            if (_onlineTargetWindow == null || cards == null || cards.Count == 0) return false;
+            if (_onlineTargetWindow == null || cards == null || cards.Count == 0 || onConfirm == null) return false;
+            if (_handPickActive) return false;      // 已有另一轮手牌多选在跑（不叠两层状态机）
 
-            _mulliganPickActive = true;
-            _mulliganPickCards.Clear();
-            _mulliganPickCards.AddRange(cards);
-            _mulliganPickPicked.Clear();
+            _handPickCandidates.Clear();
+            foreach (var c in cards)
+                if (c != null && !string.IsNullOrEmpty(c.UID)) _handPickCandidates.Add(c.UID);
+            if (_handPickCandidates.Count == 0) return false;
+
+            _handPickActive = true;
+            _handPickPicked.Clear();
+            _handPickMin = Mathf.Max(0, minCount);
+            _handPickMax = maxCount > 0 ? Mathf.Min(maxCount, _handPickCandidates.Count) : _handPickCandidates.Count;
+            _handPickHint = string.IsNullOrEmpty(hint) ? "左键选择，右键取消选择" : hint;
+            _handPickTitlePrefix = string.IsNullOrEmpty(titlePrefix) ? "已选择" : titlePrefix;
+            _handPickOnConfirm = onConfirm;
 
             _activationSelectionBusy = true;      // 决策期间延后快照应用，避免重建把手牌高亮洗掉
             _activationTargetActive = false;      // 独立状态机：点一张不提交
@@ -822,28 +859,24 @@ namespace Script.UI
 
             _onlineTargetWindow.OnTargetPicked = null;
             _onlineTargetWindow.OnExtra = null;
-            _onlineTargetWindow.OnMultiConfirmed = () => SubmitMulliganPick(localSeat);
-            // 调度允许"一张都不选" ⇒ 取消按钮的语义就是"不调度（提交空选）"，不是中断流程。
-            _onlineTargetWindow.OnCancelled = () => SubmitMulliganPick(localSeat);
+            _onlineTargetWindow.OnMultiConfirmed = SubmitHandPick;
+            // 允许取消 ⇒ 取消＝回一个空清单（调用方决定语义）；强制 ⇒ **没有取消回调**（关窗也被忽略）
+            _onlineTargetWindow.OnCancelled = allowCancel ? (System.Action)SubmitHandPick : null;
             _onlineTargetWindow.SetBlocking(false);
-            _onlineTargetWindow.OpenMultiPick(
-                "左键选择要调度的牌，右键取消选择；选中的牌会置入牌库底并补抽等量张",
-                cancelLabel: "不调度（一张不选）");
-            if (_onlineTargetWindow.ConfirmButton != null) _onlineTargetWindow.ConfirmButton.Text = "确认调度";
+            _onlineTargetWindow.OpenMultiPick(_handPickHint, cancelLabel: cancelLabel,
+                showCancel: allowCancel, confirmLabel: confirmLabel);
 
-            RefreshMulliganPick();
-            GD.Print($"[ArenaOl] 第0回合·调度走场上手牌多选（候选 {cards.Count} 张，不弹卡面窗）");
+            RefreshHandPick();
             return true;
         }
 
-        /// <summary>重算调度高亮：候选＝手牌全部亮起；已选＝`SetPickedHighlight` 另一种强调。</summary>
-        private void RefreshMulliganPick()
+        /// <summary>重算手牌高亮：候选＝全部亮起；已选＝`SetPickedHighlight` 另一种强调。</summary>
+        private void RefreshHandPick()
         {
-            if (!_mulliganPickActive) return;
+            if (!_handPickActive) return;
 
             _activationLegalCardUids.Clear();
-            foreach (var c in _mulliganPickCards)
-                if (c != null) _activationLegalCardUids.Add(c.UID);
+            foreach (var uid in _handPickCandidates) _activationLegalCardUids.Add(uid);
 
             foreach (var kv in _cardUIMap)
             {
@@ -852,10 +885,10 @@ namespace Script.UI
                 if (ui.Instance.CurrentZone != CardZone.Hand || ui.Instance.OwnerId != _localPlayerId) continue;
                 bool candidate = _activationLegalCardUids.Contains(ui.Instance.UID);
                 ui.SetTargetHighlight(candidate);
-                ui.SetPickedHighlight(candidate && _mulliganPickPicked.Contains(ui.Instance.UID));
+                ui.SetPickedHighlight(candidate && _handPickPicked.Contains(ui.Instance.UID));
             }
 
-            // 调度不涉及地区：清掉可能残留的地区高亮/选中，避免与上一局或上一槽串味
+            // 手牌多选不涉及地区：清掉可能残留的地区高亮/选中，避免与上一局或上一槽串味
             HighlightOnlineCouncilTargets(false);
             ClearOnlineAreaHighlights();
             if (_areaSlots != null)
@@ -868,45 +901,55 @@ namespace Script.UI
                     slot.OnAreaRightClicked = null;
                 }
 
+            bool canConfirm = _handPickPicked.Count >= _handPickMin && _handPickPicked.Count <= _handPickMax;
             _onlineTargetWindow?.SetMultiPick(
-                "左键选择要调度的牌，右键取消选择",
-                $"开局调度：已选择（{_mulliganPickPicked.Count}/{_mulliganPickCards.Count}）",
-                true);   // 0 张也可以确认（＝不调度）
+                _handPickHint,
+                $"{_handPickTitlePrefix}（{_handPickPicked.Count}/{_handPickMax}）",
+                canConfirm);
         }
 
         /// <summary>左键＝切换选中；右键＝取消该卡的选中。</summary>
-        private void ToggleMulliganPick(string uid, bool rightClick)
+        private void ToggleHandPick(string uid, bool rightClick)
         {
-            if (string.IsNullOrEmpty(uid) || !_mulliganPickActive) return;
+            if (string.IsNullOrEmpty(uid) || !_handPickActive) return;
             if (rightClick)
             {
-                if (_mulliganPickPicked.Remove(uid)) RefreshMulliganPick();
+                if (_handPickPicked.Remove(uid)) RefreshHandPick();
                 return;
             }
-            if (!_activationLegalCardUids.Contains(uid)) return;
-            if (!_mulliganPickPicked.Remove(uid)) _mulliganPickPicked.Add(uid);
-            RefreshMulliganPick();
+            if (!_handPickCandidates.Contains(uid)) return;
+            if (_handPickPicked.Contains(uid)) _handPickPicked.Remove(uid);
+            else if (_handPickPicked.Count < _handPickMax) _handPickPicked.Add(uid);   // 达上限不再加选
+            else return;
+            RefreshHandPick();
         }
 
-        /// <summary>确认/不调度：按候选顺序输出已选 UID，上报 `MulliganReport`。</summary>
-        private void SubmitMulliganPick(int localSeat)
+        /// <summary>确认 / 取消：按候选顺序收集已选 UID 交给调用方（窗口与状态一并收掉）。</summary>
+        private void SubmitHandPick()
         {
-            if (!_mulliganPickActive) return;
+            if (!_handPickActive) return;
+            // 强制流程（无取消出口）只能在"选够/选对张数"时提交；按钮本身已禁用，这里再兜一层
+            if (_handPickPicked.Count < _handPickMin || _handPickPicked.Count > _handPickMax)
+            {
+                GD.Print($"[ArenaOl] 手牌多选未达数量约束（{_handPickPicked.Count}/{_handPickMin}..{_handPickMax}），忽略提交");
+                return;
+            }
+
             var uids = new System.Collections.Generic.List<string>();
-            foreach (var c in _mulliganPickCards)
-                if (c != null && _mulliganPickPicked.Contains(c.UID)) uids.Add(c.UID);
+            foreach (var uid in _handPickCandidates)
+                if (_handPickPicked.Contains(uid)) uids.Add(uid);
 
-            _mulliganReportedLocal = true;     // 先置：避免上报后的快照又弹一次
-            CloseMulliganPick("已提交");
-            _matchClient?.SendIntentAs(localSeat, PlayerIntent.Kind.MulliganReport, uids.ToArray());
-            GD.Print($"[ArenaOl] 调度已上报：{uids.Count} 张（场上手牌多选）");
+            var cb = _handPickOnConfirm;
+            CloseHandPick("已提交");
+            cb?.Invoke(uids);
         }
 
-        /// <summary>关闭调度多选态：清高亮 / 清回调 / 关提示窗 / 复位本地模态。</summary>
-        private void CloseMulliganPick(string why)
+        /// <summary>关闭手牌多选态：清高亮 / 清回调 / 关提示窗 / 复位本地模态。</summary>
+        private void CloseHandPick(string why)
         {
-            if (!_mulliganPickActive) return;
-            _mulliganPickActive = false;
+            if (!_handPickActive) return;
+            _handPickActive = false;
+            _handPickOnConfirm = null;
 
             foreach (var kv in _cardUIMap)
             {
@@ -916,15 +959,92 @@ namespace Script.UI
                 ui.SetPickedHighlight(false);
             }
 
-            _mulliganPickCards.Clear();
-            _mulliganPickPicked.Clear();
+            _handPickCandidates.Clear();
+            _handPickPicked.Clear();
             ClearActivationTargetSelection();      // 清合法集/地区高亮/关窗/复位 _activationSelectionBusy
             if (_onlineTargetWindow != null && GodotObject.IsInstanceValid(_onlineTargetWindow))
             {
                 _onlineTargetWindow.OnMultiConfirmed = null;
                 _onlineTargetWindow.OnCancelled = null;
             }
-            GD.Print($"[ArenaOl] 调度多选态结束（{why}）");
+            GD.Print($"[ArenaOl] 手牌多选态结束（{why}）");
+        }
+
+        /// <summary>
+        /// 【2026-10-19 用户口径·cat-1】**开局调度＝场上手牌多选**（不弹卡面网格窗）。
+        /// 调度可以"一张都不选"（＝不调度）⇒ 取消出口的语义是"提交空清单"。
+        /// 回包仍是 `PlayerIntent.Kind.MulliganReport`（协议零改动）。
+        /// </summary>
+        private bool BeginMulliganFieldPick(int localSeat, List<CardInstance> cards)
+        {
+            bool ok = BeginHandPick(cards,
+                minCount: 0,
+                maxCount: cards?.Count ?? 0,
+                hint: "左键选择要调度的牌，右键取消选择；选中的牌会置入牌库底并补抽等量张",
+                titlePrefix: "开局调度：已选择",
+                confirmLabel: "确认调度",
+                cancelLabel: "不调度（一张不选）",
+                allowCancel: true,
+                onConfirm: uids =>
+                {
+                    _mulliganReportedLocal = true;     // 先置：避免上报后的快照又弹一次
+                    _matchClient?.SendIntentAs(localSeat, PlayerIntent.Kind.MulliganReport, uids.ToArray());
+                    GD.Print($"[ArenaOl] 调度已上报：{uids.Count} 张（场上手牌多选）");
+                });
+            if (ok) GD.Print($"[ArenaOl] 第0回合·调度走场上手牌多选（候选 {cards.Count} 张，不弹卡面窗）");
+            return ok;
+        }
+
+        /// <summary>
+        /// 【2026-10-20·用户口径】恢复步骤"手牌上限弃牌"（`Kind.SelectHandCards`，强制恰好 N 张）：
+        /// 候选＝本机自己的手牌（全 cat-1）⇒ 与开局调度**同一套**"场上手牌高亮 + 提示窗"，
+        /// 不再弹"勾选框列表"。强制流程 ⇒ 没有"一张不丢"的按钮（`allowCancel:false`），
+        /// 张数没选够时"确认"是灰的，窗口也关不掉。
+        /// 返回 false ⇒ 退回通用决策面板（可放弃的展示类 / 候选不在本机手牌 / 不是"恰好 N 张"）。
+        /// </summary>
+        private bool OpenOnlineHandLimitDiscardWindow(Script.Net.ChoiceRequest req)
+        {
+            if (req == null || !req.ForceChoice) return false;
+            if (req.NumberMin <= 0 || req.NumberMin != req.NumberMax) return false;   // 只接管"必须恰好 N 张"
+            var mgr = _matchClient?.ClientCardManager;
+            if (mgr == null) return false;
+            int chooserId = req.PlayerId > 0 ? req.PlayerId : _localPlayerId;
+            if (chooserId != _localPlayerId) return false;      // 只能操作本机自己的手牌
+
+            int required = req.NumberMin;
+            var cards = new List<CardInstance>();
+            var uids = req.OptionUids ?? new List<string>();
+            foreach (var uid in uids)
+            {
+                if (string.IsNullOrEmpty(uid)) continue;
+                var inst = mgr.GetInstance(uid);
+                // 候选必须**全部**是"本机自己手牌"：任一缺失/越权 ⇒ 交给旧面板（不猜、不丢候选）
+                if (inst == null || inst.CurrentZone != CardZone.Hand || inst.OwnerId != chooserId) return false;
+                cards.Add(inst);
+            }
+            if (cards.Count < required) return false;
+            if (CardPickChannel.Classify(cards, chooserId) != CardPickChannelKind.FieldClick) return false;
+
+            bool ok = BeginHandPick(cards,
+                minCount: required,
+                maxCount: required,
+                hint: $"左键选择要弃掉的牌，右键取消选择；必须恰好弃掉 {required} 张",
+                titlePrefix: "手牌上限：已选择",
+                confirmLabel: $"确认弃掉 {required} 张",
+                cancelLabel: null,
+                allowCancel: false,
+                onConfirm: picked =>
+                {
+                    var res = new Script.Net.ChoiceResult { RequestId = req.RequestId, Cancelled = false };
+                    res.SelectedUids.AddRange(picked);
+                    // 与通用面板同款：确认瞬间先本地把牌从手牌 UI 摘掉（乐观回显），服务端快照随后收敛
+                    TryOptimisticEchoHandLimitDiscard(req, res);
+                    _matchClient?.SendChoiceResult(res);
+                    GD.Print($"[ArenaOl] 手牌上限弃牌已回包：{picked.Count}/{required} 张");
+                });
+            if (ok)
+                GD.Print($"[ArenaOl] 手牌上限弃牌走『场上高亮 + 提示窗』（候选 {cards.Count} 张，必须弃 {required} 张）");
+            return ok;
         }
 
         /// <summary>命中点击处的手牌 UI（调度多选用；公共 `PickFieldCardAt` 故意不含手牌）。</summary>
@@ -978,9 +1098,7 @@ namespace Script.UI
                 _matchClient?.SendIntentAs(localSeat, Script.Net.PlayerIntent.Kind.MulliganReport, picked.ToArray());
                 GD.Print($"[ArenaOl] 调度已上报（兜底面板）：{picked.Count} 张");
             });
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)((vpSize.Y - _choicePromptPanel.Size.Y) / 2));
-            _choicePromptPanel.Popup();
+            WindowCenter.PopupCentered(_choicePromptPanel);   // 【2026-10-20·用户口径】弹窗居中唯一实现
         }
 
         /// <summary>服务端下发决策请求：弹出联机决策面板，玩家选择后回包。</summary>
@@ -1008,9 +1126,7 @@ namespace Script.UI
                 if (_matchClient != null)
                     _matchClient.SendChoiceResult(result);
             });
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            _choicePromptPanel.Position = new Vector2I((int)((vpSize.X - _choicePromptPanel.Size.X) / 2), (int)((vpSize.Y - _choicePromptPanel.Size.Y) / 2));
-            _choicePromptPanel.Popup();
+            WindowCenter.PopupCentered(_choicePromptPanel);   // 【2026-10-20·用户口径】弹窗居中唯一实现
         }
 
         /// <summary>
@@ -1122,6 +1238,12 @@ namespace Script.UI
                     // 【2026-09·JC062/JC057 用户口径】检视结果：与单机 1:1 同款 `InspectWindow`
                     // （整批卡面列在一个窗、只有一个『确认』）；请求未带卡面引用时退回通用面板（卡名列示）。
                     return OpenOnlineInspectWindow(req);
+                case Script.Net.ChoiceRequest.Kind.SelectHandCards:
+                    // 【2026-10-20·用户口径】恢复步骤「手牌上限弃牌」：候选＝本机自己手牌（全 cat-1）
+                    // ⇒ 与开局调度同款"场上手牌高亮 + 提示窗"，不再弹勾选框列表；
+                    // 强制恰好 N 张 ⇒ 没有"一张不丢"的按钮。接管失败退回通用面板（旧口径逐字不变）。
+                    if (OpenOnlineHandLimitDiscardWindow(req)) return true;
+                    return false;
                 case Script.Net.ChoiceRequest.Kind.SelectZoneCard:
                 case Script.Net.ChoiceRequest.Kind.SelectHandCard:
                 case Script.Net.ChoiceRequest.Kind.SelectDeckCard:
@@ -1300,9 +1422,7 @@ namespace Script.UI
                 GD.Print($"[ArenaOl] 战斗对抗分配已回包：{res.SelectedUids.Count} 个目标");
             };
             win.Configure(req.PlayerId, req.Amount, req.AreaUid, req.AreaNo);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlineStrengthWindow = win;
             _onlineCombatWindowOpen = true;
@@ -1344,9 +1464,7 @@ namespace Script.UI
             }
 
             AddChild(win);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
             win.Configure(req.PlayerId, req.AreaNo, cards,
                 (winner, toTop, toBottom) =>
@@ -1401,9 +1519,7 @@ namespace Script.UI
             }
 
             AddChild(win);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             win.OnResolved = () => { _onlineInvestigationWindow = null; _onlineCombatWindowOpen = false; _activationSelectionBusy = false; };
             win.Configure(req.PlayerId, 0, cards,
                 (pid, toTop, toBottom) =>
@@ -1473,9 +1589,7 @@ namespace Script.UI
             // 会把 `Init` 里翻好的正面盖成卡背）；`Init` 里已显式设定窗口尺寸，故随后的居中取值正确。
             AddChild(win);
             win.Init(req.Prompt, cards);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlineInspectWindow = win;
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
@@ -1577,9 +1691,7 @@ namespace Script.UI
             // **先入树、再 Init**（`CardUI._Ready()` 的 `SetFace(false)` 会盖掉 Init 里翻好的正面）
             AddChild(win);
             win.Init(pickReq);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlinePickWindow = win;
             _activationSelectionBusy = true;   // 决策期间延后快照应用，避免重建把窗口内容洗掉
@@ -1654,9 +1766,7 @@ namespace Script.UI
             var win = new CardPickWindow();
             AddChild(win);          // **先入树、再 Init**（CardUI._Ready 的 SetFace(false) 会盖掉正面）
             win.Init(pickReq);
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlinePickWindow = win;
             _activationSelectionBusy = true;   // 决策期间延后快照应用
@@ -1691,9 +1801,7 @@ namespace Script.UI
                 _activationSelectionBusy = false;
                 GD.Print($"[ArenaOl] 先手破平回包：{(confirmed ? "确认" : "取消")}");
             });
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlineCombatWindowOpen = true;
             _activationSelectionBusy = true;
@@ -1733,9 +1841,7 @@ namespace Script.UI
                 GD.Print($"[ArenaOl] 准备维护回包：{(pay ? $"支付{req.PayAmount}" : "横置")}");
             });
 
-            var vp = GetViewport().GetVisibleRect().Size;
-            win.Position = new Vector2I((int)((vp.X - win.Size.X) / 2), (int)((vp.Y - win.Size.Y) / 2));
-            win.Popup();
+            WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
 
             _onlinePayOrTapWindow = win;
             _activationSelectionBusy = true;   // 决策期间本地模态（并延后快照应用，避免重建打断窗口）
@@ -2449,16 +2555,25 @@ namespace Script.UI
             }
 
             // 分数显示：只显示胜利分数（费用池已移到 PlayerXArea/AssetContainer/AssetLabel）
-            // 【P1】视角归一：标签跟着"它所在的界面槽位"走，文案用 本方/对手（座位号已随镜像翻转，直接标 P1/P2 会误导）
+            // 【2026-10-20·用户口径】分数标签已在**分数区内部**，且面板本身就按座位分开放，
+            // 故文案不再带"本方/对手"前缀（去掉重复信息），统一"分数：X" + 封/附同款角标风格。
             if (snap.Players.Count > 0)
             {
                 var l1 = ScoreLabelOf(1);
-                if (l1 != null) l1.Text = $"{SeatName(1)} 分数 {snap.Players[0].ScoreTotal}";
+                if (l1 != null)
+                {
+                    CardBadgeStyle.Apply(l1, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
+                    l1.Text = $"分数：{snap.Players[0].ScoreTotal}";
+                }
             }
             if (snap.Players.Count > 1)
             {
                 var l2 = ScoreLabelOf(2);
-                if (l2 != null) l2.Text = $"{SeatName(2)} 分数 {snap.Players[1].ScoreTotal}";
+                if (l2 != null)
+                {
+                    CardBadgeStyle.Apply(l2, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
+                    l2.Text = $"分数：{snap.Players[1].ScoreTotal}";
+                }
             }
 
             // 费用池（对标单机 Arena.RefreshAssetLabels）：费用：可用/总 + 颜色忠诚 + 领域忠诚
@@ -2503,9 +2618,9 @@ namespace Script.UI
         {
             // 【2026-10-19·cat-1 调度】快照重建会 `ClearAllUI()` 抹掉手牌高亮，而快照延迟只有 1.5s
             // （玩家在调度时稍微多想一会儿就会被强制应用）⇒ 必须按当前选择补回。
-            if (_mulliganPickActive)
+            if (_handPickActive)
             {
-                RefreshMulliganPick();
+                RefreshHandPick();
                 return;
             }
             if (_onlineMultiPickActive)
@@ -2555,6 +2670,8 @@ namespace Script.UI
                 if (psnap != null) available = psnap.AvailableMana;   // 快照权威值优先（含临时费用）
             }
             int total = zone.GetZoneCards(CardZone.AssetZone, playerId).Count;
+            // 【2026-10-20·用户口径】费用池文案改封/附同款角标风格（与单机 Arena 同一口径）
+            CardBadgeStyle.Apply(label, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline, null, false);
             label.Text = Arena.FormatCostPoolText(available, total,
                 pm.GetColorLoyalty(playerId), pm.GetDomainLoyalty(playerId));
         }
@@ -2984,6 +3101,11 @@ namespace Script.UI
                         if (a != null && GodotObject.IsInstanceValid(a)) attachSeals.Add(a);
                 }
                 CardLayoutHelper.LayoutAreaRow(container, roles, attachSeals);
+
+                // 【2026-10-20·用户口径】与单机同口径：这一行里"结附/封印于地区"的卡在自己卡面左下角
+                // 标出「附属」/「封印」（卡面类别文字已隐藏，否则玩家分不清角色与附属）。
+                ApplyOnlineRoleMarkers(roles);
+                ApplyOnlineRoleMarkers(attachSeals);
             }
 
             // 诊断日志：争夺区统一平铺序列（用于排查"横置卡错位 / 形态角色与地区附属重叠"）
@@ -3002,6 +3124,17 @@ namespace Script.UI
             // 宿主位置已最终化（含地区附属平铺后的角色重排），再统一相对宿主定位附属/封印。
             foreach (var p in OrderHostFirst(pendingRelative))
                 LayoutAttachmentRelative(p.ui, p.hostUi, p.isSeal, p.idx);
+        }
+
+        /// <summary>给一组争夺区内的卡按实例身份打/清左下角「附属 / 封印」标记（幂等）。</summary>
+        private static void ApplyOnlineRoleMarkers(System.Collections.Generic.List<Control> cards)
+        {
+            if (cards == null) return;
+            foreach (var c in cards)
+            {
+                if (c == null || !GodotObject.IsInstanceValid(c)) continue;
+                CardRoleMarker.ApplyFor((c as CardUI)?.Instance, c);
+            }
         }
 
         /// <summary>
@@ -3071,7 +3204,7 @@ namespace Script.UI
             if (inst.SealedCards != null)
                 foreach (var s in inst.SealedCards)
                     if (s != null && ReferenceEquals(s.SealedBy, inst)) sealedCount++;
-            CardBadges.Apply(hostUi, attached, sealedCount);
+            CardBadges.Apply(hostUi, attached, sealedCount, CardBadges.BuildCounterTexts(inst));
         }
 
         /// <summary>重建分数区（ScoreZone）：渲染赢取地区/计分卡，并从快照刷新双方胜利分数。</summary>
@@ -3172,9 +3305,17 @@ namespace Script.UI
                     var art = ui.GetNodeOrNull<TextureRect>("TriggerCardArt");
                     if (art != null)
                     {
-                        var tex = ResourceLoader.Load<Texture2D>(ResolvePlayerCardImagePath(snap.SourceTemplateUid));
+                        // 【2026-10-20】秘社来源的卡图在 `CouncilCards/` 下，不能按玩家卡路径拼
+                        string artPath = snap.SourceIsCouncil
+                            ? ResolveCouncilCardImagePath(snap.SourceTemplateUid)
+                            : ResolvePlayerCardImagePath(snap.SourceTemplateUid);
+                        var tex = ResourceLoader.Load<Texture2D>(artPath);
                         if (tex != null) { art.Texture = tex; art.Visible = true; }
-                        else art.Visible = false;
+                        else
+                        {
+                            GD.PrintErr($"[ArenaOl] 堆叠来源卡卡图加载失败: {artPath}");
+                            art.Visible = false;
+                        }
                     }
                 }
 
@@ -3359,14 +3500,14 @@ namespace Script.UI
             // 【2026-10-19·cat-1 调度】手牌多选态：左键切换选中 / 右键取消选中。
             // 必须在"手牌拖拽起手"之前接管（否则第一次按下会被当成拖牌）。
             // 没点在手牌上时不吞事件 —— 窗口上的「确认调度 / 不调度」按钮仍要能点。
-            if (_mulliganPickActive
+            if (_handPickActive
                 && @event is InputEventMouseButton mullMb && mullMb.Pressed
                 && (mullMb.ButtonIndex == MouseButton.Left || mullMb.ButtonIndex == MouseButton.Right))
             {
                 var mullHit = PickHandCardAt(mullMb.GlobalPosition);
                 if (mullHit?.Instance != null)
                 {
-                    ToggleMulliganPick(mullHit.Instance.UID, mullMb.ButtonIndex == MouseButton.Right);
+                    ToggleHandPick(mullHit.Instance.UID, mullMb.ButtonIndex == MouseButton.Right);
                     AcceptEvent();
                     return;
                 }
@@ -3488,6 +3629,10 @@ namespace Script.UI
             _commandInput.Visible = show;
             _commandInput.ZIndex = CommandInputZIndex;
             _commandInput.Text = "";
+
+            // 【2026-10-20·用户口径】与单机同一口径：GM 命令框即"卡面提示性文字"总开关（静态开关，全端同步）。
+            CardTextVisibility.Set(show);
+            GD.Print($"[ArenaOl] GM 命令框{(show ? "打开" : "关闭")} ⇒ 卡面提示性文字同步{(show ? "显示" : "隐藏")}");
             if (show)
             {
                 _commandInput.GrabFocus();
@@ -5214,6 +5359,13 @@ namespace Script.UI
             // 改用共享的 ASCII 前缀判定（卡号 UID 均为 ASCII，行为一致）。
             string folder = Script.IO.WebSafeText.LeadingAsciiLetters(uid, "JC");
             return $"res://Cards/Image/PlayerCards/{folder}/{uid}.jpg";
+        }
+
+        /// <summary>【2026-10-20】秘社卡卡图路径（`CouncilCardData.CardImagePath` 的目录约定）。</summary>
+        private static string ResolveCouncilCardImagePath(string uid)
+        {
+            string folder = Script.IO.WebSafeText.LeadingAsciiLetters(uid, "MS");
+            return $"res://Cards/Image/CouncilCards/{folder}/{uid}.jpg";
         }
 
         /// <summary>查找落点命中的"己方争夺区"对应地区 UID（本地玩家 1→Player1Area，2→Player2Area）。</summary>

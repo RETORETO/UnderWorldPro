@@ -108,15 +108,14 @@ namespace Script.UI.Interaction
             var window = _tieBreakWindowScene.Instantiate<TieBreakWindow>();
             AddChild(window);
             // 水平、垂直双向居中
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
-            window.Popup();
+            WindowCenter.PopupCentered(window);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             _lockModal?.Invoke(ModalWindow.TieBreak);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.TieBreak);
             window.Configure(areaNo, type, resolved =>
             {
                 onResolved?.Invoke(resolved);   // true=确认破平 / false=取消
             });
+            WindowCenter.CenterInRoot(window);   // Configure 可能改尺寸 ⇒ 落定后再居中一次
             GD.Print($"【ModalCoordinator】先手破平确认窗口已打开（地区area{areaNo}，对抗{type}）");
         }
 
@@ -169,9 +168,7 @@ namespace Script.UI.Interaction
             var window = _investigationWindowScene.Instantiate<InvestigationWindow>();
             AddChild(window);
             // 水平、垂直双向居中
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
-            window.Popup();
+            WindowCenter.PopupCentered(window);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             _lockModal?.Invoke(ModalWindow.Investigation);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Investigation);
             window.OnResolved = () =>
@@ -181,6 +178,7 @@ namespace Script.UI.Interaction
             // 仅回传纯数据分配结果（toTop/toBottom），牌库最终顺序由 ZoneManager 统一编排，
             // Arena 通过 OnDeckReordered 事件按序纯重绘，不再在 View 侧计算谁去顶/底。
             window.Configure(winnerPlayer, areaNo, cards, OnInvestigationConfirmed, (pid, count) => _actionService.DrawCards(pid, count));
+            WindowCenter.CenterInRoot(window);   // Configure 铺开卡面后尺寸会变 ⇒ 再居中一次
             GD.Print($"【ModalCoordinator】调查对抗窗口已打开（胜者P{winnerPlayer}，X={x}，地区area{areaNo}）");
         }
 
@@ -219,12 +217,11 @@ namespace Script.UI.Interaction
             var window = _strengthWindowScene.Instantiate<StrengthWindow>();
             AddChild(window);
             // 水平、垂直双向居中
-            var vpSize = GetViewport().GetVisibleRect().Size;
-            window.Position = new Vector2I((int)((vpSize.X - window.Size.X) / 2), (int)((vpSize.Y - window.Size.Y) / 2));
-            window.Popup();
+            WindowCenter.PopupCentered(window);   // 【2026-10-20·用户口径】弹窗居中唯一实现
             _lockModal?.Invoke(ModalWindow.Strength);
             window.TreeExiting += () => _unlockModal?.Invoke(ModalWindow.Strength);
             window.Configure(winnerPlayer, x, areaUid, areaNo);
+            WindowCenter.CenterInRoot(window);   // Configure 可能改尺寸 ⇒ 落定后再居中一次
             window.FindCardUI = (inst) => _findCardUIByUID?.Invoke(inst.UID);
             window.CardManager = _cardManager;   // 注入伤害结算入口，避免窗口直接改 Model
             window.CombatManager = _combatManager;   // 注入合法目标判定（规则层）

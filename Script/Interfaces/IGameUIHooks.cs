@@ -50,6 +50,34 @@ namespace Script.Interfaces
             System.Action<CardInstance> onPicked);
 
         /// <summary>
+        /// 【2026-10-20·恢复步骤手牌上限】**一次选够恰好 `count` 张**手牌弃掉（强制、不可取消）。
+        ///
+        /// 为什么不在接口层新增"抽象"方法：本接口有十余个测试桩（`JCTestStubs` 等）逐个实现，
+        /// 新增抽象成员会全部编译失败。故给**默认实现**＝确定性取候选前 `count` 张（与"无 UI 兜底"完全一致），
+        /// 真实竞技场 `Arena` 覆写为"场上高亮手牌 + 一个提示窗"（与开局调度同一套交互）。
+        ///
+        /// 契约（View 必须保证）：
+        ///  · 回调**必然**被调用一次，且张数恰好为 `count`（不足时由调用方补齐，见 `TurnManager`）；
+        ///  · 这是**强制**流程 ⇒ 窗口不得提供"取消/不丢"出口，也不得被关闭（`WindowCenter` + `showCancel:false`）。
+        /// </summary>
+        /// <param name="discarderId">弃牌者（做选择的玩家；手牌上限弃牌下与 chooser 同一人）。</param>
+        /// <param name="candidates">候选手牌（= 该玩家当前手牌）。</param>
+        /// <param name="count">必须恰好弃掉的张数。</param>
+        /// <param name="onPicked">回传实际要弃的牌（顺序即丢弃顺序）。</param>
+        void PromptDiscardToLimit(int discarderId, List<CardInstance> candidates, int count,
+            System.Action<List<CardInstance>> onPicked)
+        {
+            var picked = new List<CardInstance>();
+            if (candidates != null)
+                foreach (var c in candidates)
+                {
+                    if (picked.Count >= count) break;
+                    if (c != null) picked.Add(c);
+                }
+            onPicked?.Invoke(picked);
+        }
+
+        /// <summary>
         /// 【P2】通用"从候选卡中选一张"（封印取手牌 / 检索取牌 / 检索『结附』选宿主共用；弃牌见 <see cref="PromptDiscard"/>）。
         ///  · 封印（Seal `Args[0]="手牌"`）：候选 = 封印者手牌；
         ///  · 检索（Search）：候选 = 牌库中通过筛选的牌；**【A53·2026-09 用户拍板】检索一律强制、不可取消**

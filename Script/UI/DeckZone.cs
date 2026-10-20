@@ -226,7 +226,11 @@ public partial class DeckZone : Control
     private void UpdateCount()
     {
         if (_countLabel != null)
-            _countLabel.Text = $"卡组: {_deckCards.Count}";
+        {
+            // 【2026-10-20·用户口径】张数文字改为封/附同款角标风格（"卡组×30"），并抬到绝对层避免被卡背遮挡
+            CardBadgeStyle.ApplyZoneCountLabel(_countLabel);
+            _countLabel.Text = $"卡组×{_deckCards.Count}";
+        }
     }
 
     // ---------- 工具 ----------

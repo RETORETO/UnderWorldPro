@@ -493,6 +493,13 @@ public partial class CardManager : Node
         inst.IsHidden = r.IsHidden;   // Phase B 信息隔离：占位实例标记（只画卡背，不参与规则/交互）
         inst.SyncVersion(r.VersionId);
 
+        // 【2026-10-20】指示物/标志计数随快照还原（客户端卡面角标要显示它）。
+        // 全量覆盖：快照是权威态，不能"只加不减"，否则移除指示物后客户端角标会留在旧值。
+        inst.ClearCounters();
+        if (r.Counters != null)
+            foreach (var kv in r.Counters)
+                if (!string.IsNullOrEmpty(kv.Key) && kv.Value > 0) inst.AddCounter(kv.Key, kv.Value);
+
         // 【P1·运行时状态投影补全】静止标记 / 当前子类别 / 运行时授予 / 先手值：
         // 客户端不运行 EffectEngine，这些状态必须由快照带过来，客户端上的判定与展示才与服务端同解。
         // （单进程回环复用同一实例时等价于"照抄自己"，无副作用；真跨进程则把服务端真值搬过来。）

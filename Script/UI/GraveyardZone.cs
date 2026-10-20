@@ -81,7 +81,11 @@ public partial class GraveyardZone : Control
     private void UpdateCount()
     {
         if (_countLabel != null)
-            _countLabel.Text = $"墓地: {_graveyardCards.Count}";
+        {
+            // 【2026-10-20·用户口径】张数文字改为封/附同款角标风格（"墓地×12"），并抬到绝对层避免被卡背遮挡
+            CardBadgeStyle.ApplyZoneCountLabel(_countLabel);
+            _countLabel.Text = $"墓地×{_graveyardCards.Count}";
+        }
     }
 
     public List<CardUI> GetCards() => _graveyardCards;

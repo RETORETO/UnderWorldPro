@@ -110,6 +110,9 @@ public partial class Arena
         ArrangeAllAttachments();
         // 封印卡偏移布局：封印于角色时 Y 向上偏移；封印于地区时不偏移（挂地区容器）
         ArrangeAllSeals();
+
+        // 【2026-10-20】地区附属/封印的左下角身份标记（全量对账，非地区附属的一律清掉）
+        SweepAreaRoleMarkers();
     }
 
     /// <summary>
@@ -187,7 +190,7 @@ public partial class Arena
                 CollapseMember(ui, m, depth);
             }
 
-        CardBadges.Apply(hostUi, attached, sealedCount);
+        CardBadges.Apply(hostUi, attached, sealedCount, CardBadges.BuildCounterTexts(hostInst));
 
         return attached + sealedCount;
     }
@@ -348,6 +351,30 @@ public partial class Arena
             roleGroups.TryGetValue(container, out var roles);
             attachGroups.TryGetValue(container, out var attachSeals);
             CardLayoutHelper.LayoutAreaRow(container, roles, attachSeals);
+        }
+    }
+
+    /// <summary>
+    /// 【2026-10-20·用户口径】给"结附/封印于地区"的卡在自己卡面左下角标「附属」/「封印」。
+    ///
+    /// 数据源必须用**争夺区那两个列表**（`_areaCardUIs` 角色 + `_areaAttachSealUIs` 地区附属/封印）：
+    /// `_cardUIMap` 只登记"容器里的卡"（牌库/手牌等），争夺区角色与地区附属都**不在其中**。
+    /// 卡片离场时的清除由 `SyncCardUIToZone` 统一负责（见那里的 `CardRoleMarker.Clear`）。
+    /// 代价可忽略——对角色卡只是一次 `GetNodeOrNull` 空查询。
+    /// </summary>
+    private void SweepAreaRoleMarkers()
+    {
+        ApplyRoleMarkersTo(_areaCardUIs);
+        ApplyRoleMarkersTo(_areaAttachSealUIs);
+    }
+
+    private static void ApplyRoleMarkersTo(List<CardUI> cards)
+    {
+        if (cards == null) return;
+        foreach (var ui in cards)
+        {
+            if (ui == null || !GodotObject.IsInstanceValid(ui)) continue;
+            CardRoleMarker.ApplyFor(ui.Instance, ui);
         }
     }
 
@@ -523,6 +550,13 @@ public partial class Arena
     private void SyncCardUIToZone(CardInstance card, CardZone toZone, int playerId, string detailId)
     {
         if (card == null) return;
+
+        // 【2026-10-20】换区即清掉"附属/封印"左下角身份标记：若是地区附属/封印，
+        // 稍后的排版收尾（`SweepAreaRoleMarkers`）会重新打上；若不是，就不该残留旧标记。
+        {
+            var markerUi = FindCardUIByUID(card.UID);
+            if (markerUi != null && GodotObject.IsInstanceValid(markerUi)) CardRoleMarker.Clear(markerUi);
+        }
 
         // 【2026-10 修复·结附秘社的附属"UI 上看不见"】
         // `ZoneManager.AttachAndRegister` 为规避 `DetachAttachmentsToGraveyard` 的无限递归，采用
@@ -1107,6 +1141,8 @@ public partial class Arena
 
         int available = _playerManager.GetAvailableMana(playerId);
         int total = _zoneManager.GetZoneCards(CardZone.AssetZone, playerId).Count;
+        // 【2026-10-20·用户口径】费用池文案改封/附同款角标风格（暖金+黑描边），左对齐保留三行结构
+        CardBadgeStyle.Apply(label, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline, null, false);
         label.Text = FormatCostPoolText(available, total,
             _playerManager.GetColorLoyalty(playerId), _playerManager.GetDomainLoyalty(playerId));
     }

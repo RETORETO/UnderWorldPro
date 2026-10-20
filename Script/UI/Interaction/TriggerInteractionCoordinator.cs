@@ -619,7 +619,8 @@ namespace Script.UI.Interaction
             System.Func<FieldPickState, bool> canConfirm,
             System.Func<FieldPickState, string, bool> canAddCard,
             System.Action<List<string>, List<string>> onConfirmed,
-            System.Action onCancelled)
+            System.Action onCancelled,
+            bool allowCancel = true, string confirmLabel = null)
         {
             if (_targetSelectionWindow == null)
             {
@@ -648,13 +649,17 @@ namespace Script.UI.Interaction
 
             _targetSelectionWindow.OnTargetPicked = null;   // 多选模式：点击走 HandleTargetSelectionClick
             _targetSelectionWindow.OnExtra = null;
-            _targetSelectionWindow.OnCancelled = () =>
-            {
-                GD.Print("[TriggerCoordinator] 多选取消（不发动）");
-                var cb = _onMultiCancelled;
-                CleanupTargetSelection();
-                cb?.Invoke();
-            };
+            // 【2026-10-20·强制多选】`allowCancel:false`（手牌上限弃牌）⇒ 不给取消回调：
+            // 既没有取消按钮，标题栏 X 也被 `TargetSelectionWindow` 忽略（`_closable=false`）。
+            _targetSelectionWindow.OnCancelled = allowCancel
+                ? (System.Action)(() =>
+                {
+                    GD.Print("[TriggerCoordinator] 多选取消（不发动）");
+                    var cb = _onMultiCancelled;
+                    CleanupTargetSelection();
+                    cb?.Invoke();
+                })
+                : null;
             _targetSelectionWindow.OnMultiConfirmed = () =>
             {
                 if (_multiCanConfirm != null && !_multiCanConfirm(_multiPick))
@@ -670,7 +675,8 @@ namespace Script.UI.Interaction
                 cb?.Invoke(cards, areas);
             };
             _targetSelectionWindow.SetBlocking(false);
-            _targetSelectionWindow.OpenMultiPick(_multiHint);
+            _targetSelectionWindow.OpenMultiPick(_multiHint, cancelLabel: null, showCancel: allowCancel,
+                confirmLabel: confirmLabel);
             _triggerOrderWindow?.SetButtonsEnabled(false);
             _lockTargetSelectionModal?.Invoke();
             RefreshMultiPick();   // 首次渲染：标题/提示/可选高亮/确认可用性

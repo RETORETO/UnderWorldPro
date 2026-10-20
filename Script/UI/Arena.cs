@@ -19,6 +19,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private Control _handContainerRef;
     private Control _handContainerRef2;
     private Label _scoreLabel;
+    /// <summary>对手（座位 2）分数区的分数标签——与 `_scoreLabel` 同口径刷新。</summary>
+    private Label _scoreLabel2;
     private Control _areasContainer;
     private Label _phaseStatusLabel;
     private Label _resultLabel;   // 胜负结算文字（居中覆盖），初始隐藏
@@ -310,6 +312,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         _handContainerRef = GetNode<Control>("Player1Area/HandContainer");
         _scoreLabel = GetNode<Label>("Player1Area/ScoreZone/ScoreLabel");
         if (_scoreLabel != null) _scoreLabel.Text = "";
+        // 【2026-10-20·用户口径】分数显示移到分数区内部、双方都要显示 ⇒ 对手那枚标签也纳入刷新
+        _scoreLabel2 = GetNodeOrNull<Label>("Player2Area/ScoreZone/ScoreLabel");
+        if (_scoreLabel2 != null) _scoreLabel2.Text = "";
+        CardBadgeStyle.Apply(_scoreLabel, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
+        CardBadgeStyle.Apply(_scoreLabel2, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
         _handContainerRef2 = GetNode<Control>("Player2Area/HandContainer");
         _deckZone2 = GetNode<DeckZone>("Player2Area/DeckZone");
         _graveyardZone2 = GetNode<GraveyardZone>("Player2Area/GraveyardZone");
@@ -328,7 +335,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         if (_resultLabel != null) _resultLabel.Visible = false;
 
         // ---- 1.5 获取堆叠区节点 ----
-        _stackContainer = GetNode<Control>("StackPanel/StackContainer");
+        _stackContainer = GetNode<Control>("StackPanel/StackScroll/StackContainer");
+        // 【2026-10-20·用户口径】堆叠区标题与卡面封/附角标统一风格（金色 + 黑描边）
+        CardBadgeStyle.ApplyZoneHeaderLabel(GetNodeOrNull<Label>("StackPanel/StackHeader"));
         _arrowLayer = GetNode<Control>("ArrowLayer");
 
         // ---- 1.55 卡面兜底容器（见字段注释）----
@@ -939,6 +948,82 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     }
 
     /// <summary>
+    /// 【2026-10-20·恢复步骤手牌上限】**一次选够恰好 N 张**手牌弃掉（单机版）。
+    ///
+    /// 用户口径原文："手牌超出上限在 endrecover 的弃牌弹窗没有用最新的 UI，和调度类似需要提示选择手牌高亮卡丢弃
+    /// （但是不能不丢，所以不需要一张不丢的按钮）"。
+    /// 实现与开局调度完全同源：**场上手牌高亮 + 一个提示窗**（左键加选 / 右键取消），区别只有两处：
+    ///  · 张数**恰好** N（不满足时"确认"是灰的）；
+    ///  · **没有取消出口**：不给取消按钮，标题栏 X 也被忽略（`_closable=false`）——
+    ///    "不能不丢"＝不能取消丢弃，且窗口只能靠丢牌关闭。
+    ///
+    /// 返回 false / 窗口不可用 ⇒ 调用方（`TurnManager`）走确定性兜底（取候选前 N 张），流程绝不卡死。
+    /// </summary>
+    public void PromptDiscardToLimit(int discarderId,
+        System.Collections.Generic.List<CardInstance> candidates, int count,
+        System.Action<System.Collections.Generic.List<CardInstance>> onPicked)
+    {
+        if (onPicked == null) return;
+        count = System.Math.Max(0, count);
+        var pool = new System.Collections.Generic.List<CardInstance>();
+        if (candidates != null)
+            foreach (var c in candidates) if (c != null) pool.Add(c);
+
+        // 无需选择的情形（没有候选 / 全弃）⇒ 直接交回，不弹窗
+        if (count <= 0 || pool.Count <= count)
+        {
+            onPicked(new System.Collections.Generic.List<CardInstance>(pool));
+            return;
+        }
+
+        void Fallback(string why)
+        {
+            GD.Print($"[Arena] 💥 PromptDiscardToLimit 回退为确定性取前 {count} 张（{why}）");
+            onPicked(pool.GetRange(0, count));
+        }
+
+        if (_triggerCoordinator == null) { Fallback("无协调器"); return; }
+
+        var uids = new System.Collections.Generic.List<string>();
+        foreach (var c in pool) uids.Add(c.UID);
+
+        // 候选＝自己的手牌（全 cat-1）⇒ 场上高亮 + 提示窗（与调度同款交互）
+        bool opened = _triggerCoordinator.RequestFieldMultiPick(
+            hint: $"左键选择要弃掉的牌，右键取消选择；必须恰好弃掉 {count} 张",
+            candidatesOf: _ =>
+            {
+                var res = new Script.UI.Interaction.FieldCandidates();
+                res.Cards.AddRange(uids);
+                return res;
+            },
+            maxCards: count, maxAreas: 0,
+            titleOf: st => $"手牌上限：已选择（{st.Cards.Count}/{count}）",
+            canConfirm: st => st.Cards.Count == count,
+            canAddCard: null,
+            onConfirmed: (pickedCards, _) =>
+            {
+                var picked = new System.Collections.Generic.List<CardInstance>();
+                foreach (var uid in pickedCards)
+                {
+                    var inst = _cardManager?.GetInstance(uid);
+                    if (inst != null) picked.Add(inst);
+                }
+                GD.Print($"[Arena] 手牌上限弃牌：玩家{discarderId} 选中 {picked.Count}/{count} 张");
+                onPicked(picked);
+            },
+            onCancelled: null,
+            allowCancel: false,                                   // 不能不丢 ⇒ 没有取消出口
+            confirmLabel: $"确认弃掉 {count} 张");
+
+        if (opened)
+        {
+            GD.Print($"[Arena] 恢复步骤·手牌上限：场上手牌多选（候选 {pool.Count} 张，必须弃 {count} 张，不可取消）");
+            return;
+        }
+        Fallback("多选通道不可用");
+    }
+
+    /// <summary>
     /// 【UI 立即刷新·帧同步点】实现 <see cref="IGameUIHooks.WaitForUIRefresh"/>：
     /// 先把待刷新的容器立即重排一次（数据层已同步、UI 树已更新，立刻重排保证"本帧即刻可见"），
     /// 再等待一个 <c>ProcessFrame</c> 让 Godot 真正完成一次绘制，然后交还控制权。
@@ -1005,7 +1090,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
     private string PlayerNameOf(int id)
     {
         var p = _playerManager?.GetPlayer(id);
-        return string.IsNullOrEmpty(p?.Name) ? $"玩家{id}" : p.Name;
+        // 【2026-10-20·用户口径】兜底名由"玩家1/玩家2"改为"红方/蓝方"（与争夺区红蓝配色一致）
+        return string.IsNullOrEmpty(p?.Name) ? PlayerSide.Name(id) : p.Name;
     }
 
     /// <summary>地区 UID → 地区编号（1-based；选择窗区域标签用）。</summary>
@@ -1220,15 +1306,14 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         AddChild(win);
         // 【2026-09】预测窗也是"玩家决策窗"：等待期间持原子锁（选完先解锁再交回 Controller）
         LockChoiceWindow(win);
-        var vpSize = GetViewport().GetVisibleRect().Size;
-        win.Position = new Vector2I((int)((vpSize.X - win.Size.X) / 2), (int)((vpSize.Y - win.Size.Y) / 2));
-        win.Popup();
+        WindowCenter.PopupCentered(win);   // 【2026-10-20·用户口径】弹窗居中唯一实现
         win.Configure(predictorId, 0, cards,
             (pid, toTop, toBottom) => { UnlockChoiceWindow(win); onConfirmed?.Invoke(toTop, toBottom); },
             (pid, n) => { /* 预测不是抽牌：不执行任何抽牌 */ },
             // 【2026-10 用户口径·JC104】预测窗必须显示成"**预测动作 UI**"（窗口标题栏 + 标题 + 两区 + 提示），
             // 不得显示成调查对抗 UI（文案由 `AllocationWindowTexts.Prediction` 数据驱动，任何预测X 都复用）。
             Script.UI.AllocationWindowTexts.Prediction(count));
+        WindowCenter.CenterInRoot(win);   // Configure 铺开卡面后尺寸会变 ⇒ 再居中一次
         // 未确认即关闭（点窗外/关闭按钮）→ 按"原序全部留在牌库顶"兜底交付一次（回调唯一性）
         win.CloseRequested += () => { UnlockChoiceWindow(win); onConfirmed?.Invoke(null, cards); };
     }
@@ -1674,6 +1759,9 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         // 【鼠标悬浮预览】反注册总线（避免旧 Arena 的浮层引用残留到下一局/联机视图）
         CardPreviewBus.Detach(_hoverPreview);
         DetachBadgePeek();
+        // 【2026-10-20】卡面提示文字的开关是静态的（活过切场景）⇒ 离开战场静默复位，
+        // 否则 GM 框开着就退出去，主菜单/卡组编辑器里的卡会一直带着提示性文字。
+        CardTextVisibility.ResetSilent();
         base._ExitTree();
     }
 
@@ -2417,6 +2505,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 BeginActivate(inst, opt.EffectDataList[0], null, -1);
                 RefreshActivateHighlights();
             });
+
+            // 【2026-10-20·用户口径】所有弹窗必须**居中**。
+            // 本窗此前是唯一"没有 Popup 调用"的 Window：只 AddChild + Init，于是直接落在场景里写死的
+            // `position = (0, 36)`（屏幕左上角）。补一次 PopupCentered 与其余 16 个窗口对齐。
+            win.PopupCentered();
         }
 
         /// <summary>
@@ -3403,6 +3496,12 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
         _commandInput.Visible = show;
         _commandInput.ZIndex = CommandInputZIndex;   // 始终高于卡牌/秘社/悬浮预览
         _commandInput.Text = "";
+
+        // 【2026-10-20·用户口径】GM 命令框同时充当"卡面提示性文字"的总开关：
+        // 关上时卡面只留卡图 + 角标/数值，打开时才显示实例ID/类别/子类型/领域（及地区卡、秘社卡的说明文字）。
+        // 走静态开关 ⇒ 战场内、选择窗、检视窗、角标展开面板、牌库/墓地里的卡**全部**同步，无需逐个遍历。
+        CardTextVisibility.Set(show);
+        GD.Print($"[Arena] GM 命令框{(show ? "打开" : "关闭")} ⇒ 卡面提示性文字同步{(show ? "显示" : "隐藏")}");
         if (show)
         {
             _commandInput.GrabFocus();

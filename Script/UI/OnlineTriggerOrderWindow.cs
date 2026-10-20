@@ -177,9 +177,8 @@ namespace Script.UI
 
             if (!Visible)
             {
-                var vp = GetViewport().GetVisibleRect().Size;
-                Position = new Vector2I((int)((vp.X - Size.X) / 2), (int)((vp.Y - Size.Y) / 2));
-                Popup();
+                // 【2026-10-20】居中唯一实现（原先取自身视口 ⇒ 落在屏幕左上角）
+                WindowCenter.PopupCentered(this);
             }
 
             _waitingForServer = false;

@@ -33,6 +33,10 @@ namespace Script.UI
         private Label _caption;
         private CardInstance _current;
 
+        /// <summary>当前浮层尺寸（玩家卡/秘社卡＝竖版 260×364；地区卡＝横版 364×260，见 `ShowTemplateCore`）。</summary>
+        private float _frameW = PREVIEW_WIDTH;
+        private float _frameH = PREVIEW_HEIGHT;
+
         /// <summary>当前正在预览的卡（没有则为 null）。</summary>
         public CardInstance Current => _current;
 
@@ -64,6 +68,8 @@ namespace Script.UI
 
             _frame = new PanelContainer();
             _frame.MouseFilter = MouseFilterEnum.Ignore;
+            _frameW = ScaledWidth;    // 与 _frame 的初始尺寸保持一致，避免首次 Show 时又白改一遍
+            _frameH = ScaledHeight;
             _frame.CustomMinimumSize = new Vector2(ScaledWidth, ScaledHeight);
             _frame.Size = new Vector2(ScaledWidth, ScaledHeight);
             AddChild(_frame);
@@ -128,6 +134,9 @@ namespace Script.UI
         {
             string path;
             string cardName;
+            // 【2026-10-20·用户口径】地区卡也要有悬浮整卡图（"和秘社卡玩家卡类似"）。
+            // 地区卡是**横版** 560×400，浮层必须用横版框（否则竖框里上下大片留白、卡图被压得很小）。
+            bool landscape = false;
             if (template is PlayerCardData player)
             {
                 path = CardUI.ResolveCardImagePath(player.UID);
@@ -137,6 +146,12 @@ namespace Script.UI
             {
                 path = council.CardImagePath;
                 cardName = council.CardName;
+            }
+            else if (template is AreaCardData area)
+            {
+                path = area.CardImagePath;
+                cardName = area.CardName;
+                landscape = true;
             }
             else
             {
@@ -151,6 +166,8 @@ namespace Script.UI
                 HidePreview();
                 return;
             }
+
+            ApplyFrameSize(landscape);
             _image.Texture = tex;
             _caption.Text = string.IsNullOrEmpty(areaHint)
                 ? cardName
@@ -159,6 +176,25 @@ namespace Script.UI
             Visible = true;
             _frame.Visible = true;
             PositionFrame(anchorGlobalPos);
+        }
+
+        /// <summary>按卡种切换浮层尺寸：竖卡 260×364、地区卡（横版）364×260。幂等（尺寸没变就不动）。</summary>
+        private void ApplyFrameSize(bool landscape)
+        {
+            float w = landscape ? PREVIEW_HEIGHT : PREVIEW_WIDTH;
+            float h = landscape ? PREVIEW_WIDTH : PREVIEW_HEIGHT;
+            w *= (PreviewScale > 0f ? PreviewScale : 1f);
+            h *= (PreviewScale > 0f ? PreviewScale : 1f);
+            if (Mathf.IsEqualApprox(_frameW, w) && Mathf.IsEqualApprox(_frameH, h)) return;
+
+            _frameW = w;
+            _frameH = h;
+            if (_frame != null)
+            {
+                _frame.CustomMinimumSize = new Vector2(w, h);
+                _frame.Size = new Vector2(w, h);
+            }
+            if (_image != null) _image.CustomMinimumSize = new Vector2(w - 8f, h - 30f);
         }
 
         /// <summary>隐藏浮层。</summary>
@@ -175,7 +211,7 @@ namespace Script.UI
         private void PositionFrame(Vector2 anchorGlobalPos)
         {
             var vp = GetViewportRect().Size;
-            float w = ScaledWidth, h = ScaledHeight;
+            float w = _frameW, h = _frameH;
             float x = anchorGlobalPos.X + 110f;                     // 卡面宽 100 → 右侧留 10px 间隙
             if (x + w > vp.X - 8f) x = anchorGlobalPos.X - w - 10f;
             float y = anchorGlobalPos.Y - 40f;

@@ -96,6 +96,29 @@ namespace Script.UI
             overlay.HidePreview();
         }
 
+        /// <summary>
+        /// 【2026-10-20·用户口径】`AreaCardUI`（地区卡）鼠标进入时调用 —— 地区卡也要有"悬浮看整张卡图"，
+        /// 与玩家卡/秘社卡同款体验（地区卡图是 560×400 横版，浮层会自动切成横版框）。
+        /// <para>与卡牌的差别：地区卡持有的是**模板**（`AreaCardData`）而非 `CardInstance`，
+        /// 因此**没有**"能否查看"的规则判定（地区是公开信息，不存在信息隔离），直接走模板直连预览。</para>
+        /// </summary>
+        public static void RequestHover(AreaCardUI ui)
+        {
+            if (ui == null) return;
+            var overlay = ResolveOverlay(ui);
+            if (overlay == null) return;                 // 未接管：不弹（headless/测试场景无副作用）
+            var data = ui.Data;
+            if (data == null) { overlay.HidePreview(); return; }
+            overlay.ShowFor(data, ui.GlobalPosition);
+        }
+
+        /// <summary>`AreaCardUI`（地区卡）鼠标离开时调用。</summary>
+        public static void EndHover(AreaCardUI ui)
+        {
+            var overlay = ResolveOverlay(ui);
+            overlay?.HidePreview();
+        }
+
         /// <summary>公共悬浮请求：按注入判定决定是否弹出整张卡图浮层（玩家卡与秘社卡共用）。
         /// 【2026-09】浮层与判定都按"悬浮卡所在窗口"解析（子窗口自带浮层优先，否则回退全局）。</summary>
         private static void RequestHoverCore(Node sourceNode, CardInstance card, Vector2 anchorGlobalPos)

@@ -97,6 +97,10 @@ namespace Script.UI
             AnchorLeft = AnchorTop = AnchorRight = AnchorBottom = 0;
             PivotOffset = new Vector2(CARD_WIDTH, CARD_HEIGHT) / 2f;
 
+            // 【2026-10-20】数值标签统一角标风格（暖金 + 黑描边）；提示性文字默认隐藏，见 `CardTextVisibility`。
+            ApplyValueBadgeStyle();
+            CardTextVisibility.Changed += OnCardTextVisibilityChanged;
+
             SetFace(false);
             _targetPosition = Position;
 
@@ -544,24 +548,68 @@ namespace Script.UI
         /// <summary>当前是否为正面朝上（持久状态，供 PM 命令 flip 判断）</summary>
         public bool IsFaceUp { get; private set; } = false;
 
+        /// <summary>
+        /// 【2026-10-20】卡面数值标签（费用 / 调 / 战 / 势 / 防）→ 统一"暖金 + 黑描边"的角标风格，
+        /// 与封/附角标同族。**只改样式不改位置**（位置由场景锚点决定）。
+        /// </summary>
+        private void ApplyValueBadgeStyle()
+        {
+            CardBadgeStyle.Apply(_costLabel, CardBadgeStyle.ValueFontSize, CardBadgeStyle.ValueOutline);
+            CardBadgeStyle.Apply(_defenseLabel, CardBadgeStyle.ValueFontSize, CardBadgeStyle.ValueOutline);
+            // 底部三连"调/战/势"是左对齐排布 ⇒ 不强制居中（否则 HBox 内每格居中会左右跳）
+            CardBadgeStyle.Apply(_investigationLabel, CardBadgeStyle.ValueFontSize, CardBadgeStyle.ValueOutline, null, false);
+            CardBadgeStyle.Apply(_combatLabel, CardBadgeStyle.ValueFontSize, CardBadgeStyle.ValueOutline, null, false);
+            CardBadgeStyle.Apply(_powerLabel, CardBadgeStyle.ValueFontSize, CardBadgeStyle.ValueOutline, null, false);
+        }
+
+        /// <summary>GM 命令框开关变化 ⇒ 按当前正/背面重跑一次显隐（提示性文字只在开时可见）。</summary>
+        private void OnCardTextVisibilityChanged()
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            SetFace(IsFaceUp);
+        }
+
+        public override void _ExitTree()
+        {
+            CardTextVisibility.Changed -= OnCardTextVisibilityChanged;
+        }
+
         public void SetFace(bool isFaceUp)
         {
             IsFaceUp = isFaceUp;
             if (_frontface != null) _frontface.Visible = isFaceUp;
             if (_backface != null) _backface.Visible = !isFaceUp;
 
-            // 控制文字标签可见性（卡名强制隐藏）
+            // 【2026-10-20·用户口径】分两类：
+            //  · **提示性文字**（实例ID/类别/子类型/领域）= 与印刷卡图重复的说明 ⇒ 默认隐藏，只有打开 GM 命令框才显示；
+            //  · **数值**（费用/调/战/势/防）= 印刷卡图上没有当前值（含效果修正），必须常显，走角标风格。
+            bool hint = isFaceUp && CardTextVisibility.ShowHintText;
+            if (_instanceIdLabel != null) _instanceIdLabel.Visible = hint;
+            if (_categoryLabel != null) _categoryLabel.Visible = hint;
+            if (_subCategoriesLabel != null) _subCategoriesLabel.Visible = hint;
+            if (_magicDomainsLabel != null) _magicDomainsLabel.Visible = hint;
+
+            // 【2026-10-20·第二批·用户口径】"调/战/势/防"只在**争夺区**与**附属/封印区**显示，
+            // 其余区域（手牌/牌库/墓地/资产/分数/检视窗）只留费用。见 `ZoneShowsStatValues`。
+            bool stats = isFaceUp && _instance != null && ZoneShowsStatValues(_instance.CurrentZone);
             if (_costLabel != null) _costLabel.Visible = isFaceUp;
-            if (_investigationLabel != null) _investigationLabel.Visible = isFaceUp;
-            if (_subCategoriesLabel != null) _subCategoriesLabel.Visible = isFaceUp;
-            if (_magicDomainsLabel != null) _magicDomainsLabel.Visible = isFaceUp;
-            if (_instanceIdLabel != null) _instanceIdLabel.Visible = isFaceUp;
-            if (_categoryLabel != null) _categoryLabel.Visible = isFaceUp;
-            if (_combatLabel != null) _combatLabel.Visible = isFaceUp;
-            if (_powerLabel != null) _powerLabel.Visible = isFaceUp;
-            if (_defenseLabel != null) _defenseLabel.Visible = isFaceUp;
+            if (_investigationLabel != null) _investigationLabel.Visible = stats;
+            if (_combatLabel != null) _combatLabel.Visible = stats;
+            if (_powerLabel != null) _powerLabel.Visible = stats;
+            if (_defenseLabel != null) _defenseLabel.Visible = stats;
             if (_cardImage != null) _cardImage.Visible = isFaceUp;
         }
+
+        /// <summary>
+        /// 【2026-10-20·用户口径】卡面"调 X / 战 X / 势 X / 防 X"**只在争夺区与附属/封印区显示**。
+        /// 判据用卡实例的**逻辑区域**（不是 UI 所在容器）：附属/封印卡在 UI 上可能挂在宿主里、
+        /// 或被折叠成宿主角标，但它的 `CurrentZone` 恒为 `AttachedZone`/`SealedZone`。
+        /// 手续费（费用）不在此列 —— 费用是"打出前就要看"的数值，任何区域都显示。
+        /// </summary>
+        public static bool ZoneShowsStatValues(CardZone zone)
+            => zone == CardZone.AreaZone
+            || zone == CardZone.AttachedZone
+            || zone == CardZone.SealedZone;
 
         public void CancelDrag()
         {

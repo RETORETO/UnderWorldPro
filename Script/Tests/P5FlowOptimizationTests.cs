@@ -68,10 +68,10 @@ namespace Script.Tests
             tm.FirstPlayerId = 2;
             tm.PriorityPlayerId = 1;
             tm.CurrentPhase = global::TurnManager.TurnPhase.ActionFirst;
-            Assert.AreEqual("第2回合\n先手：P2\n先手行动步骤\n行动权：P1", tm.TurnStatusText,
+            Assert.AreEqual("第2回合\n先手：蓝方\n先手行动步骤\n行动权：红方", tm.TurnStatusText,
                 "四行顺序：回合 / 先手 / 步骤 / 行动权");
             tm.PriorityPlayerId = 0;
-            Assert.AreEqual("第2回合\n先手：P2\n先手行动步骤\n行动权：无", tm.TurnStatusText,
+            Assert.AreEqual("第2回合\n先手：蓝方\n先手行动步骤\n行动权：无", tm.TurnStatusText,
                 "无人持有时第四行＝行动权：无");
         }
 
@@ -414,7 +414,8 @@ namespace Script.Tests
             Assert.IsTrue(game.TurnManager.HasFirstPlayer, "双方调度完成后应已产生先手玩家");
             int first = game.TurnManager.FirstPlayerId;
             Assert.IsTrue(first == 1 || first == 2, $"先手必须是 P1/P2，实际 P{first}");
-            Assert.AreEqual($"先手：P{first}", game.TurnManager.FirstPlayerDisplayText, "产生后 UI 显示对应先手");
+            Assert.AreEqual($"先手：{(first == 1 ? "红方" : "蓝方")}", game.TurnManager.FirstPlayerDisplayText,
+                "产生后 UI 显示对应先手（【2026-10-20】座位称呼＝红方/蓝方）");
             Assert.IsTrue(game.PlayerManager.IsFirstPlayer(first), "先手标志应落在随机出的玩家上");
             Assert.IsFalse(game.PlayerManager.IsFirstPlayer(first == 1 ? 2 : 1), "对手不得持有先手标志");
         }

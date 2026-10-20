@@ -311,14 +311,23 @@ public partial class Arena : Control
         RefreshScoreLabel();
     }
 
-    /// <summary>刷新 Player1Area/ScoreZone/ScoreLabel 显示玩家1计分区总分（"分数：X"）。
+    /// <summary>刷新双方 ScoreZone/ScoreLabel（"分数：X"，X=该玩家计分区总分）。
     /// 总分 = 计分区内所有玩家卡 Score 之和 + 赢取地区累计分数，均由 PlayerManager 统一计算（GetScoreTotal 已含两部分）。
-    /// 在计分区有卡加入/离开时调用，确保分数实时更新。</summary>
+    /// 在计分区有卡加入/离开时调用，确保分数实时更新。
+    /// 【2026-10-20·用户口径】分数改为显示在**分数区内部**（标签已移入面板）+ 封/附同款角标风格，且**双方都显示**。</summary>
     private void RefreshScoreLabel()
     {
-        if (_playerManager == null || _scoreLabel == null) return;
-        int s1 = _playerManager.GetScoreTotal(1);
-        _scoreLabel.Text = $"分数：{s1}";
+        if (_playerManager == null) return;
+        if (_scoreLabel != null)
+        {
+            CardBadgeStyle.Apply(_scoreLabel, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
+            _scoreLabel.Text = $"分数：{_playerManager.GetScoreTotal(1)}";
+        }
+        if (_scoreLabel2 != null)
+        {
+            CardBadgeStyle.Apply(_scoreLabel2, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline);
+            _scoreLabel2.Text = $"分数：{_playerManager.GetScoreTotal(2)}";
+        }
         // GD.Print($"[Arena.UI] 刷新分数 Label：分数：{s1}");
     }
 
@@ -349,7 +358,8 @@ public partial class Arena : Control
     {
         if (_resultLabel != null)
         {
-            _resultLabel.Text = winnerId == 1 ? "玩家1 胜利！" : "玩家2 胜利！";
+            // 【2026-10-20·用户口径】"玩家1/玩家2"→"红方/蓝方"（与争夺区红蓝配色一致）
+            _resultLabel.Text = $"{PlayerSide.Name(winnerId)}胜利！";
             _resultLabel.Visible = true;
         }
         GD.Print($"🏁 [Arena] 游戏结束，获胜=玩家{winnerId}，3 秒后返回主界面");

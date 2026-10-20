@@ -74,7 +74,11 @@ namespace Script.UI
         private void UpdateCount()
         {
             if (_countLabel != null && GodotObject.IsInstanceValid(_countLabel))
-                _countLabel.Text = Count.ToString();
+            {
+                // 【2026-10-20·用户口径】与单机同口径：封/附风格 + 绝对层（"卡组×30"）
+                CardBadgeStyle.ApplyZoneCountLabel(_countLabel);
+                _countLabel.Text = $"卡组×{Count}";
+            }
         }
     }
 }

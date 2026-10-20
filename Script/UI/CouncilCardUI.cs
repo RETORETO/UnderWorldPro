@@ -38,6 +38,13 @@ namespace Script.UI
 
         public bool IsFaceUp { get; private set; } = true;
 
+        /// <summary>
+        /// 【2026-10-20·用户口径】文字底衬面板（`Display`）。它是 Godot 默认主题的 `Panel`＝
+        /// 半透明深灰块，原本给卡名/子类型/效果全文当底衬；文字默认隐藏后只剩灰底 ⇒
+        /// 整张秘社卡看着像蒙了一层灰。故与文字同开关：只在开 GM 输入框时显示。
+        /// </summary>
+        private Control _display;
+
         // ---------- 卡牌基础视觉状态（与 CardUI 对称搬入） ----------
         // 横置标记：仅维护 UI 表现，由 Arena 在排版前从实例 Instance.IsTapped 同步。
         public bool IsTapped { get; private set; } = false;
@@ -80,6 +87,8 @@ namespace Script.UI
 
             TargetPosition = Position;
 
+            _display = GetNodeOrNull<Control>("Display");
+            CardTextVisibility.Changed += OnCardTextVisibilityChanged;
             SetFace(true); // 默认正面朝上（需求①）
             GuiInput += OnGuiInput;
 
@@ -202,6 +211,18 @@ namespace Script.UI
             SetFace(true); // 默认正面朝上（需求①）
         }
 
+        /// <summary>GM 命令框开关变化 ⇒ 按当前正/背面重跑一次显隐。</summary>
+        private void OnCardTextVisibilityChanged()
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            SetFace(IsFaceUp);
+        }
+
+        public override void _ExitTree()
+        {
+            CardTextVisibility.Changed -= OnCardTextVisibilityChanged;
+        }
+
         /// <summary>正面/背面切换：正面显示卡图+文本，背面显示卡背。</summary>
         public void SetFace(bool isFaceUp)
         {
@@ -209,9 +230,15 @@ namespace Script.UI
             if (_frontface != null) _frontface.Visible = isFaceUp;
             if (_backface != null) _backface.Visible = !isFaceUp;
             if (_cardImage != null) _cardImage.Visible = isFaceUp;
-            if (_nameLabel != null) _nameLabel.Visible = isFaceUp;
-            if (_subTypeLabel != null) _subTypeLabel.Visible = isFaceUp;
-            if (_textLabel != null) _textLabel.Visible = isFaceUp;
+
+            // 【2026-10-20·用户口径】秘社卡的卡名/子类型/效果全文与印刷卡图重复 ⇒ 默认隐藏，
+            // 只有打开 GM 命令框才显示（与 `CardUI` / `AreaCardUI` 同一开关、同一口径）。
+            bool hint = isFaceUp && CardTextVisibility.ShowHintText;
+            if (_display == null) _display = GetNodeOrNull<Control>("Display");   // 兜底：_Ready 之前调用
+            if (_display != null) _display.Visible = hint;   // 灰底随文字一起消失（否则卡面像蒙了一层灰）
+            if (_nameLabel != null) _nameLabel.Visible = hint;
+            if (_subTypeLabel != null) _subTypeLabel.Visible = hint;
+            if (_textLabel != null) _textLabel.Visible = hint;
         }
 
         private void ClearLabels()

@@ -82,6 +82,11 @@ namespace Script.UI
         /// <summary>区域容器的计数/标题标签（牌库张数、堆叠张数等）。</summary>
         public const int ZoneOverlayLabel = 650;
 
+        /// <summary>【2026-10-20】牌库/墓地面板本体：**必须压住分数区里"赢取地区"卡的卡面**（300~340），
+        /// 否则赢取地区会压在牌库/墓地上。取 350（卡牌带 300–399 内、拖拽层 400 之下）：
+        /// 面板内的卡背按索引 +0~39 ⇒ 最高 389，拖拽中的卡(400)仍在其上。</summary>
+        public const int ZoneContainerPanel = 350;
+
         // ==================== 浮层（800–899）====================
         /// <summary>箭头层（堆叠目标箭头、激活拖拽箭头）：压住所有卡与附属。</summary>
         public const int Arrows = 800;
@@ -95,6 +100,11 @@ namespace Script.UI
 
         /// <summary>计数/得分叠层标签（`CountLabel` / `ScoreLabel`，牌库张数等）。</summary>
         public const int StatsLabel = 860;
+
+        /// <summary>【2026-10-20】牌库/墓地张数角标：**必须压住容器内的卡面**。
+        /// 场景里该标签与卡面同层（甚至更低），P2 侧实测被卡背盖住 ⇒ 改用**绝对层**
+        ///（`ZAsRelative=false`）取 890：高于卡本体带（300~399）与 `StatsLabel`(860)，低于命令框(900)。</summary>
+        public const int ZoneCountLabel = 890;
 
         // ==================== 最上层交互（900–999）====================
         /// <summary>PM 命令输入框：**战场内最高层**（必须压住秘社卡与卡面悬浮预览）。</summary>

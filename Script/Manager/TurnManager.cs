@@ -56,10 +56,15 @@ public partial class TurnManager : Node
     /// <summary>是否已产生先手玩家（第0回合调度期间为 false）。</summary>
     public bool HasFirstPlayer => FirstPlayerId == 1 || FirstPlayerId == 2;
     /// <summary>
-    /// 先手行 UI 文案（View 只读）：未产生时显示"先手：未产生"，否则"先手：P1/P2"。
+    /// 先手行 UI 文案（View 只读）：未产生时显示"先手：未产生"，否则"先手：红方/蓝方"。
     /// 单机/联机两处回合状态标签共用本属性，避免文案分叉。
+    /// 【2026-10-20·用户口径】"行动栏依然有 P1/P2 的描述，需要改成红方蓝方" ⇒ 座位称呼统一走
+    /// `Script.UI.PlayerSide`（红=座位1、蓝=座位2，与争夺区归属色一致，不随本地视角镜像）。
     /// </summary>
-    public string FirstPlayerDisplayText => HasFirstPlayer ? $"先手：P{FirstPlayerId}" : "先手：未产生";
+    public string FirstPlayerDisplayText => HasFirstPlayer ? $"先手：{SeatText(FirstPlayerId)}" : "先手：未产生";
+
+    /// <summary>座位号 → 界面称呼（红方/蓝方）。唯一实现复用 `PlayerSide.Name`，此处只做 null 安全包装。</summary>
+    internal static string SeatText(int playerId) => Script.UI.PlayerSide.Name(playerId);
 
     // ============================================================
     // 事件系统（供 UI 订阅）
@@ -681,12 +686,34 @@ public partial class TurnManager : Node
         _zoneManager.OnPostMove += OnCardMovedForVictoryCheck;
     }
 
-    /// <summary>分数区变动后的即时胜利判定：卡进入分数区 → CheckGameOver（命中即 TriggerGameOver，丢弃未结算堆叠）。</summary>
+    /// <summary>
+    /// 【胜利判定·2026-10-20 修复】任意区域变更后检查一次结束条件（不再只盯分数区）。
+    ///
+    /// 原实现（配合 `PlayerManager.CheckGameOver` 的 2026-10-19 平局出口）在入口就
+    /// `if (zone != CardZone.ScoreZone) return;` 早退 ⇒ **牌库耗尽永远不触发检查**，
+    /// 规则里写死的「牌库耗尽负」事实上从未生效：`DeckManager` 抽牌/磨牌走到牌库空时只打一行
+    /// `❌ 玩家N卡组已空` 就 `return null`，既不判负也不再触发判定 ⇒ 双方互相磨牌直到无牌可抓，
+    /// 对局再也结束不了（实测：服务器 14 局全部只能靠"投降"收场）。
+    ///
+    /// 为什么不能改成 `zone == CardZone.Deck`：`OnPostMove` 的 `zone` 是**目标区**，
+    /// 抽牌/磨牌离开牌库时 zone 是 Hand / Graveyard，而不是 Deck。
+    ///
+    /// 开销控制：分数区移动走完整判定；其余移动先做两次零分配的 `IsDeckEmpty`（`List.Count`），
+    /// 只有真的出现空牌库才调用完整判定（`GetScoreTotal` 会 new List，不挂在每次移动上）。
+    /// </summary>
     private void OnCardMovedForVictoryCheck(CardInstance card, CardZone zone, int playerId, string detailId)
     {
-        if (card == null || zone != CardZone.ScoreZone) return;
+        if (card == null) return;
+        // 未开局（初始化装载 / 第 0 回合调度）不判胜：此时牌库可能还没装完，`IsDeckEmpty` 会假命中。
+        // 工程里没有 `IsMatchStarted` 一类标志，`CurrentPhase` 也不可用（`Reset()` 之后与开局后都是 `StartReset`），
+        // 故用 `TurnCount`：`Reset()` 置 0，`StartGame()` 置 1。
+        if (TurnCount < 1) return;
         if (_playerManager == null || _playerManager.IsGameOver) return;
-        _playerManager.CheckGameOver();   // 内部命中胜者会立即 TriggerGameOver（清堆叠+广播）
+
+        if (zone == CardZone.ScoreZone) { _playerManager.CheckGameOver(); return; }
+
+        if (_playerManager.IsDeckEmpty(1) || _playerManager.IsDeckEmpty(2))
+            _playerManager.CheckGameOver();
     }
 
     // ============================================================
@@ -5625,12 +5652,13 @@ public partial class TurnManager : Node
 
     /// <summary>
     /// 回合状态标签四行文案（单机 Arena 与联机 ArenaOl **共用唯一口径**）：
-    /// ① 第n回合　② 先手：P1/P2（未产生时"先手：未产生"）　③ 步骤中文名（含对抗地区）
-    /// ④ 行动权：P1/P2（无人持有时"行动权：无"）。View 只做 `Label.Text = turn.TurnStatusText`。
+    /// ① 第n回合　② 先手：红方/蓝方（未产生时"先手：未产生"）　③ 步骤中文名（含对抗地区）
+    /// ④ 行动权：红方/蓝方（无人持有时"行动权：无"）。View 只做 `Label.Text = turn.TurnStatusText`。
+    /// 【2026-10-20·用户口径】原为 P1/P2，统一改成红方/蓝方（与争夺区配色一致）。
     /// </summary>
     public string TurnStatusText =>
         $"第{TurnCount}回合\n{FirstPlayerDisplayText}\n{CurrentPhaseDisplayName}\n"
-        + (PriorityPlayerId > 0 ? $"行动权：P{PriorityPlayerId}" : "行动权：无");
+        + (PriorityPlayerId > 0 ? $"行动权：{SeatText(PriorityPlayerId)}" : "行动权：无");
 
     /// <summary>是否为按地区逐个结算的对抗步骤（需要带地区序号显示）。</summary>
     public static bool IsCombatPhase(TurnPhase phase)
@@ -5909,21 +5937,29 @@ public partial class TurnManager : Node
         }
         else
         {
-            var remaining = new System.Collections.Generic.List<CardInstance>(candidates);
+            // 【2026-10-20·用户口径】单机不再"逐张弹一次窗"，改为**一次选够 N 张**：
+            //  · 和开局调度同一套交互（场上手牌高亮 + 一个提示窗，左键加选/右键取消）；
+            //  · 这是**强制**流程 ⇒ 窗口没有"取消/不丢"出口、也不能被关掉；
+            //  · UI 不可用（headless/测试桩）时走接口默认实现＝确定性取前 N 张。
             var picked = new System.Collections.Generic.List<CardInstance>();
-            for (int i = 0; i < requiredCount && remaining.Count > 0; i++)
+            if (EE?.UIHooks != null)
             {
-                CardInstance chosen = null;
-                if (EE?.UIHooks != null)
-                {
-                    var tcs = new System.Threading.Tasks.TaskCompletionSource<CardInstance>();
-                    EE.UIHooks.PromptDiscard(discarderId, chooserPlayerId, remaining, (c) => tcs.TrySetResult(c));
-                    chosen = await tcs.Task;
-                }
-                if (chosen == null) chosen = remaining[0]; // 无 UI 或取消：强制取第一张（手牌上限为强制弃牌）
-                picked.Add(chosen);
-                remaining.Remove(chosen);
+                var tcs = new System.Threading.Tasks.TaskCompletionSource<System.Collections.Generic.List<CardInstance>>();
+                EE.UIHooks.PromptDiscardToLimit(discarderId, new System.Collections.Generic.List<CardInstance>(candidates),
+                    requiredCount, list => tcs.TrySetResult(list));
+                var chosenList = await tcs.Task;
+                if (chosenList != null)
+                    foreach (var c in chosenList)
+                        if (c != null && candidates.Contains(c) && !picked.Contains(c)) picked.Add(c);
             }
+            // 兜底：没选够（无 UI / 窗口异常）⇒ 确定性补齐，保证"手牌上限弃牌"一定能推进
+            if (picked.Count < requiredCount)
+                foreach (var c in candidates)
+                {
+                    if (picked.Count >= requiredCount) break;
+                    if (c != null && !picked.Contains(c)) picked.Add(c);
+                }
+            if (picked.Count > requiredCount) picked = picked.GetRange(0, requiredCount);
             if (picked.Count > 0)
             {
                 DiscardCards(discarderId, picked, picked.Count);

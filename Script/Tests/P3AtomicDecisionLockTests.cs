@@ -184,6 +184,17 @@ namespace Script.Tests
             public void PromptDiscard(int discarderId, int chooserPlayerId, List<CardInstance> candidates,
                 System.Action<CardInstance> onPicked) => DiscardPending.Add((chooserPlayerId, candidates, onPicked));
 
+            /// <summary>
+            /// 【2026-10-20】恢复步骤"手牌上限弃牌"改成一窗选够 N 张后的待回包队列
+            /// （与 `DiscardPending` 同语义：都要"等玩家点完"才续算，故原子锁断言照旧成立）。
+            /// </summary>
+            public readonly List<(List<CardInstance> Candidates, int Count, System.Action<List<CardInstance>> Callback)>
+                DiscardLimitPending = new List<(List<CardInstance>, int, System.Action<List<CardInstance>>)>();
+
+            public void PromptDiscardToLimit(int discarderId, List<CardInstance> candidates, int count,
+                System.Action<List<CardInstance>> onPicked)
+                => DiscardLimitPending.Add((candidates, count, onPicked));
+
             public void PromptPickCard(int chooserPlayerId, string prompt, List<CardInstance> candidates,
                 bool allowCancel, System.Action<CardInstance> onPicked)
                 => PickPending.Add((chooserPlayerId, candidates, onPicked));
@@ -244,10 +255,30 @@ namespace Script.Tests
             /// <summary>"玩家点击"最新打开的弃牌窗（null＝第一候选）。</summary>
             public void ClickDiscard(string uid)
             {
+                // 【2026-10-20】手牌上限弃牌＝"一窗选够 N 张"，优先消费该队列（点一次＝一次多选确认）
+                if (DiscardLimitPending.Count > 0)
+                {
+                    var (candidates, count, limitCb) = DiscardLimitPending[0];
+                    DiscardLimitPending.RemoveAt(0);
+                    var picked = new List<CardInstance>();
+                    if (!string.IsNullOrEmpty(uid))
+                    {
+                        var chosen = Find(candidates, uid);
+                        if (chosen != null) picked.Add(chosen);
+                    }
+                    if (candidates != null)
+                        foreach (var c in candidates)
+                        {
+                            if (picked.Count >= count) break;
+                            if (c != null && !picked.Contains(c)) picked.Add(c);
+                        }
+                    limitCb?.Invoke(picked);
+                    return;
+                }
                 Assert.IsTrue(DiscardPending.Count > 0, "前置：应有一个等待玩家的弃牌窗");
-                var (_, candidates, cb) = DiscardPending[0];
+                var (_, candidates2, cb) = DiscardPending[0];
                 DiscardPending.RemoveAt(0);
-                cb?.Invoke(Find(candidates, uid));
+                cb?.Invoke(Find(candidates2, uid));
             }
 
             public void AnswerNumber(int value)
@@ -734,12 +765,13 @@ namespace Script.Tests
 
             tm.EnterPhase(global::TurnManager.TurnPhase.EndRecover);
 
-            Assert.IsTrue(hooks.DiscardPending.Count >= 1, "恢复步骤·手牌上限弃牌应弹窗询问玩家");
+            Assert.IsTrue(hooks.DiscardLimitPending.Count >= 1 || hooks.DiscardPending.Count >= 1,
+                "恢复步骤·手牌上限弃牌应弹窗询问玩家");
             Assert.IsTrue(tm.IsAtomicLocked, "恢复步骤弃牌等待玩家选择期间必须持原子锁");
 
-            // 依次点掉全部待弃（每点一次可能再开一个窗）
+            // 依次点掉全部待弃（【2026-10-20】一窗选够 N 张 ⇒ 通常一次点完）
             int guard = 0;
-            while (hooks.DiscardPending.Count > 0 && guard++ < 10)
+            while ((hooks.DiscardLimitPending.Count > 0 || hooks.DiscardPending.Count > 0) && guard++ < 10)
                 hooks.ClickDiscard(null);
 
             Assert.IsFalse(tm.IsAtomicLocked, "弃牌完成（含帧同步等待）→ 释放原子锁");

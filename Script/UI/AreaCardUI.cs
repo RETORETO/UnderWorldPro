@@ -30,6 +30,22 @@ namespace Script.UI
         private AreaCardData _data;
         public AreaCardData Data => _data;
 
+        // ---------- 【2026-10-20】地区卡新增角标 ----------
+        /// <summary>势力点角标（"红方势力：X" / "蓝方势力：X"）：代码创建，走封/附同款角标风格。</summary>
+        private Label _influenceLabel;
+        /// <summary>当前势力方（0＝无、1＝红方、2＝蓝方）——用于翻面/开关变化时恢复显隐。</summary>
+        private int _influenceSide;
+        /// <summary>正/背面状态（`SetFace` 无 `IsFaceUp` 属性，故自己记一份）。</summary>
+        private bool _isFaceUp = true;
+
+        /// <summary>
+        /// 【2026-10-20·用户口径】文字底衬面板（`AreaCardDisplay`）。
+        /// 它是 Godot 默认主题的 `Panel`＝半透明深灰块，原本给"提示性文字"当底衬；
+        /// 文字默认隐藏后**只剩这块灰底** ⇒ 整张地区卡看着像蒙了一层灰。故与文字同开关：
+        /// 只有打开 GM 输入框（文字要显示）时才显示底衬，平时完全透明。
+        /// </summary>
+        private Control _display;
+
         // ---------- 交互状态 ----------
         private bool _isDragging;
         private Vector2 _dragOffset;
@@ -44,11 +60,87 @@ namespace Script.UI
         public override void _Ready()
         {
             CheckExports();
+            EnsureInfluenceLabel();
+            _display = GetNodeOrNull<Control>("AreaCardDisplay");
+            CardTextVisibility.Changed += OnCardTextVisibilityChanged;
             SetFace(false); // 默认显示背面（安全起见）
 
             // 地区卡拖拽已禁用，仅手牌可拖拽（如需恢复取消下一行注释）
             // GuiInput += OnGuiInput;
 
+            // 【2026-10-20·用户口径】地区卡接入鼠标悬浮整卡图（与 `CardUI`/`CouncilCardUI` 同款体验）。
+            // 地区卡图是 560×400 横版，浮层会按卡种自动切横版框（见 `CardHoverPreview.ApplyFrameSize`）。
+            MouseEntered += OnMouseEnteredPreview;
+            MouseExited += OnMouseExitedPreview;
+
+        }
+
+        public override void _ExitTree()
+        {
+            CardTextVisibility.Changed -= OnCardTextVisibilityChanged;
+        }
+
+        private void OnCardTextVisibilityChanged() => SetFace(_isFaceUp);
+
+        private void OnMouseEnteredPreview() => CardPreviewBus.RequestHover(this);
+
+        private void OnMouseExitedPreview() => CardPreviewBus.EndHover(this);
+
+        /// <summary>
+        /// 【2026-10-20】创建"势力点"角标（右下角）。只在没有时创建一次，之后只改文本/颜色/显隐。
+        /// 位置：地区卡 196×140，右下角贴边；宽度 136 足够容纳"红方势力：99"（12px 字号）。
+        /// </summary>
+        private void EnsureInfluenceLabel()
+        {
+            if (_influenceLabel != null && GodotObject.IsInstanceValid(_influenceLabel)) return;
+            _influenceLabel = new Label
+            {
+                Name = "__InfluenceBadge",
+                MouseFilter = MouseFilterEnum.Ignore,   // 纯显示：不抢点击/hover
+                AnchorLeft = 1f, AnchorTop = 1f,
+                AnchorRight = 1f, AnchorBottom = 1f,
+                OffsetLeft = -136f, OffsetTop = -22f,
+                OffsetRight = -4f, OffsetBottom = -2f,
+                ZAsRelative = true,
+                ZIndex = 1,
+            };
+            CardBadgeStyle.Apply(_influenceLabel);
+            _influenceLabel.Visible = false;
+            AddChild(_influenceLabel);
+        }
+
+        /// <summary>
+        /// 【2026-10-20·用户口径】势力点改为「红方势力：X」/「蓝方势力：X」，走封/附同款角标风格。
+        /// 规则上红蓝不可能同时在同区有势力（`AreaManager.AddPowerMark` 先抵扣对方），故**只显示非零的那一方**；
+        /// 两方都为 0 时不显示。
+        /// <para>注意：本方法吃的是**座位原始值**（p1＝红方/座位1、p2＝蓝方/座位2），
+        /// **不得**按镜像视图交换——"红方"是绝对身份，不是"本方/对手"。</para>
+        /// </summary>
+        public void UpdateInfluence(int redSide, int blueSide)
+        {
+            EnsureInfluenceLabel();
+            if (_influenceLabel == null) return;
+
+            if (redSide > 0)
+            {
+                _influenceSide = 1;
+                _influenceLabel.Text = $"红方势力：{redSide}";
+                CardBadgeStyle.Apply(_influenceLabel, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline,
+                    CardBadgeStyle.RedSide);
+            }
+            else if (blueSide > 0)
+            {
+                _influenceSide = 2;
+                _influenceLabel.Text = $"蓝方势力：{blueSide}";
+                CardBadgeStyle.Apply(_influenceLabel, CardBadgeStyle.BadgeFontSize, CardBadgeStyle.BadgeOutline,
+                    CardBadgeStyle.BlueSide);
+            }
+            else
+            {
+                _influenceSide = 0;
+                _influenceLabel.Text = "";
+            }
+            _influenceLabel.Visible = _isFaceUp && _influenceSide != 0;
         }
 
         // ============================================================
@@ -131,16 +223,23 @@ namespace Script.UI
         /// </summary>
         public void SetFace(bool isFaceUp)
         {
+            _isFaceUp = isFaceUp;
             if (_frontface != null) _frontface.Visible = false;       // 当前未使用，避免重复显示
             if (_backface != null) _backface.Visible = !isFaceUp;
             if (_cardImage != null) _cardImage.Visible = isFaceUp;      // 正面完整卡图
             if (_background != null) _background.Visible = !isFaceUp;   // 卡背底图，正面时隐藏
 
-            // 控制文字标签（背面隐藏）
-            if (_nameLabel != null) _nameLabel.Visible = isFaceUp;
-            if (_powerLabel != null) _powerLabel.Visible = isFaceUp;
-            if (_scoreLabel != null) _scoreLabel.Visible = isFaceUp;
-            if (_marksLabel != null) _marksLabel.Visible = isFaceUp;
+            // 【2026-10-20·用户口径】地区卡上的名称/需求势力/分数/效果说明全是"与印刷卡图重复的提示性文字"
+            // ⇒ 默认全部屏蔽，只有打开 GM 命令框才显示；常显的只有下方"势力点"角标。
+            bool hint = isFaceUp && CardTextVisibility.ShowHintText;
+            if (_display == null) _display = GetNodeOrNull<Control>("AreaCardDisplay");   // 兜底：_Ready 之前调用
+            if (_display != null) _display.Visible = hint;   // 灰底随文字一起消失（否则卡面像蒙了一层灰）
+            if (_nameLabel != null) _nameLabel.Visible = hint;
+            if (_powerLabel != null) _powerLabel.Visible = hint;
+            if (_scoreLabel != null) _scoreLabel.Visible = hint;
+            if (_marksLabel != null) _marksLabel.Visible = hint;
+
+            if (_influenceLabel != null) _influenceLabel.Visible = isFaceUp && _influenceSide != 0;
         }
 
         /// <summary>

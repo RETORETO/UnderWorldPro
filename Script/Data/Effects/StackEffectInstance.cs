@@ -109,7 +109,24 @@ namespace Script.Data.Effects
         public bool NeedsAreaTarget => IsAreaTarget;
 
         public string DisplayName => EffectDataRef?.EffectId ?? "入堆叠效果";
-        public string DisplayText => EffectDataRef?.FaqNote ?? "";
+
+        /// <summary>
+        /// 【2026-10-20】可读文本：卡文 `FaqNote` → `"&lt;来源卡名&gt;·效果"`。
+        /// 旧实现只取 `FaqNote`，而绝大多数 EffectData 没写 FaqNote ⇒ 触发排序窗/堆叠区**整行空白**
+        /// （用户实测"对手发动的某些效果进入堆叠后没有正确显示"）。
+        /// </summary>
+        public string DisplayText
+        {
+            get
+            {
+                string faq = EffectDataRef?.FaqNote;
+                if (!string.IsNullOrEmpty(faq)) return faq;
+                string name = Source?.EffectiveCardName;
+                if (string.IsNullOrEmpty(name)) name = Source?.CouncilTemplate?.CardName;
+                if (string.IsNullOrEmpty(name)) name = Source?.PlayerTemplate?.CardName;
+                return string.IsNullOrEmpty(name) ? "效果发动" : $"{name}·效果";
+            }
+        }
 
         public override string ToString()
             => $"StackEffect[{UID}] {DisplayName} owner={OwnerPlayerId} areaTarget={IsAreaTarget} target={SelectedTargetUid}";
