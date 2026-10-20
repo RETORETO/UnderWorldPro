@@ -620,7 +620,7 @@ namespace Script.UI.Interaction
             System.Func<FieldPickState, string, bool> canAddCard,
             System.Action<List<string>, List<string>> onConfirmed,
             System.Action onCancelled,
-            bool allowCancel = true, string confirmLabel = null)
+            bool allowCancel = true, string confirmLabel = null, string windowTitle = null)
         {
             if (_targetSelectionWindow == null)
             {
@@ -676,7 +676,7 @@ namespace Script.UI.Interaction
             };
             _targetSelectionWindow.SetBlocking(false);
             _targetSelectionWindow.OpenMultiPick(_multiHint, cancelLabel: null, showCancel: allowCancel,
-                confirmLabel: confirmLabel);
+                confirmLabel: confirmLabel, windowTitle: windowTitle);
             _triggerOrderWindow?.SetButtonsEnabled(false);
             _lockTargetSelectionModal?.Invoke();
             RefreshMultiPick();   // 首次渲染：标题/提示/可选高亮/确认可用性
@@ -816,6 +816,22 @@ namespace Script.UI.Interaction
         private bool _targetSelectionActive;
         /// <summary>选目标交互是否进行中（供 Arena 输入路由判断是否拦截点击）。</summary>
         public bool IsTargetSelectionActive => _targetSelectionActive;
+
+        /// <summary>
+        /// 【2026-10-20 修复·恢复步骤手牌上限弃牌】该坐标是否命中「本次候选」里的某张卡（含手牌）。
+        ///
+        /// 为什么需要这个探测：`Arena._Input` 里"手牌拖拽起手"分支排在"选目标点击转发"之前，
+        /// 弃牌提示窗打开时点手牌会被当成**起手拖牌/激活拖拽**整条吞掉（`AcceptEvent` + return），
+        /// 协调器的 `MultiPickCard` 永远收不到 ⇒ 玩家看到的是"点手牌没选中，提示窗反而被搞没了"。
+        /// 故在拖拽分支之前先用本探测判断"这一下该交给选目标流程"，命中才拦截。
+        /// </summary>
+        public bool HitsCandidateAt(Vector2 globalPos)
+        {
+            if (!_targetSelectionActive) return false;
+            var uids = CurrentPickUids();
+            if (uids == null || uids.Count == 0) return false;
+            return !string.IsNullOrEmpty(_pickCandidateCardUidAt?.Invoke(globalPos, uids));
+        }
         private bool _targetIsArea;          // true=目标为地区槽位（机动）；false=目标为场上卡
         private HashSet<string> _validTargetUids = new HashSet<string>();
         private HashSet<string> _validAreaUids = new HashSet<string>();

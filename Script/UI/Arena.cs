@@ -978,7 +978,11 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
 
         void Fallback(string why)
         {
-            GD.Print($"[Arena] 💥 PromptDiscardToLimit 回退为确定性取前 {count} 张（{why}）");
+            // 【2026-10-20 诊断强化】"强制弃牌"一旦走兜底，玩家会看到"窗一闪/没窗，牌却没了"——
+            // 这是最容易被误报成"点击手牌把提示窗关了"的路径。把并发状态一并打出来，
+            // 便于从日志区分"窗口被关掉"与"根本没开成窗、直接确定性弃牌"。
+            GD.PushWarning($"[Arena] 💥 PromptDiscardToLimit 回退为确定性取前 {count} 张" +
+                           $"（{why}；目标选择激活中={_triggerCoordinator?.IsTargetSelectionActive}）");
             onPicked(pool.GetRange(0, count));
         }
 
@@ -1013,7 +1017,8 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
             },
             onCancelled: null,
             allowCancel: false,                                   // 不能不丢 ⇒ 没有取消出口
-            confirmLabel: $"确认弃掉 {count} 张");
+            confirmLabel: $"确认弃掉 {count} 张",
+            windowTitle: "手牌上限弃牌");
 
         if (opened)
         {
@@ -3645,6 +3650,26 @@ public partial class Arena : Control, Script.Interfaces.IGameUIHooks
                 AcceptEvent();
                 return;
             }
+        }
+
+        // 【2026-10-20 修复·恢复步骤手牌上限弃牌】**选目标/多选进行中，点击候选手牌必须先交给协调器**。
+        //
+        // 现状：`CardDragController.TryBeginDragAt` 与 `TryHandleHandActivationDoubleClick` 已经各自加了
+        // `IsTargetSelectionActive` 守卫，所以单机点手牌本来能落到下面的选目标分支。但这条守卫是**分散在
+        // 三个类里的隐式契约**：任何一处被改动（新增一种"选目标期间也可拖拽"的特例），点击候选手牌就会
+        // 重新被拖拽/激活链路 `AcceptEvent()` 吞掉，表现为"点手牌没选中、提示窗还消失了"
+        // （`EndActivateDrag` 走取消路径会 `CleanupTargetSelection`，把外层多选窗一起掀掉）。
+        // 这里在拖拽分支之前显式兜一层：命中本次候选就直接交给协调器加选/取消，落在空白处仍走原逻辑。
+        if (_triggerCoordinator != null && _triggerCoordinator.IsTargetSelectionActive
+            && @event is InputEventMouseButton candMb && candMb.Pressed
+            && (candMb.ButtonIndex == MouseButton.Left || candMb.ButtonIndex == MouseButton.Right)
+            && _cardDragController != null && !_cardDragController.IsDragging && !_cardDragController.IsActivating
+            && _triggerCoordinator.HitsCandidateAt(candMb.GlobalPosition))
+        {
+            _triggerCoordinator.HandleTargetSelectionClick(candMb.GlobalPosition,
+                rightClick: candMb.ButtonIndex == MouseButton.Right);
+            AcceptEvent();
+            return;
         }
 
         // ---- 手牌拖拽（全局输入驱动，绕开 Godot 命中分发失效问题）----

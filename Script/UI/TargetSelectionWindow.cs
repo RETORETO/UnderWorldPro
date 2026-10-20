@@ -140,11 +140,14 @@ namespace Script.UI
         /// </param>
         /// <param name="confirmLabel">确认按钮文案（null ⇒ "确认"）。</param>
         public void OpenMultiPick(string hint, string cancelLabel = null, bool showCancel = true,
-            string confirmLabel = null)
+            string confirmLabel = null, string windowTitle = null)
         {
             SetMultiPickLayout(true);
             _multiPick = true;
             _pickedUid = null;
+            // 【2026-10-20】标题栏文案：默认沿用场景里的「选择目标」，但弃牌/调度这类**不是取目标**的
+            // 多选流程必须换掉，否则窗内写着"手牌上限：已选择（1/3）"、标题栏却是"选择目标"，误导玩家。
+            if (!string.IsNullOrEmpty(windowTitle)) Title = windowTitle;
             if (ConfirmButton != null)
             {
                 ConfirmButton.Text = string.IsNullOrEmpty(confirmLabel) ? "确认" : confirmLabel;

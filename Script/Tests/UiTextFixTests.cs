@@ -537,6 +537,19 @@ namespace Script.Tests
             Assert.IsTrue(win.Contains("_closable = allowCancel || !string.IsNullOrEmpty(extraLabel);"),
                 "单选窗：既没取消出口也没该槽出口按钮时（强制取目标/强制弃牌）必须不可关闭");
             Assert.IsTrue(win.Contains("if (!_closable)"), "关闭请求必须先过 _closable 判定");
+
+            // 【2026-10-20 回归·"点击手牌提示窗就直接没了"】联机的手牌多选态现在有**两个用户**：
+            // ①第0回合开局调度 ②恢复步骤手牌上限弃牌。`EnsureMulliganPrompt()` 每次快照重建后都会跑，
+            // 它的收尾分支曾**只看"有没有多选态"、不看"是谁在用"** ⇒ 弃牌期间任何一份快照到达
+            // （含 1.5s 延迟强制应用）都会把弃牌提示窗当成调度窗关掉。本契约锁死"按用途打标"。
+            string ol = ReadSource("Script/UI/ArenaOl.cs");
+            Assert.IsFalse(string.IsNullOrEmpty(ol), "必须能读到 ArenaOl.cs");
+            Assert.IsTrue(ol.Contains("_handPickIsMulligan"),
+                "手牌多选态必须按用途打标（否则弃牌窗会被 EnsureMulliganPrompt 顺手关掉）");
+            Assert.IsTrue(ol.Contains("forMulligan: true"),
+                "调度必须在 BeginHandPick 时显式标记 forMulligan: true");
+            Assert.IsTrue(ol.Contains("_handPickActive && _handPickIsMulligan"),
+                "EnsureMulliganPrompt 只允许关闭『调度』态的手牌多选，不得波及弃牌");
         }
 
         /// <summary>

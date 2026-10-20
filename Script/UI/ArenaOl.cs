@@ -703,6 +703,19 @@ namespace Script.UI
         //  · `_handPickMin/_handPickMax` 决定"确认"何时可用；
         //  · `_handPickAllowCancel=false` ⇒ 不画取消按钮、点标题栏 X 也不生效（强制流程）。
         private bool _handPickActive;
+
+        /// <summary>
+        /// 【2026-10-20 修复·"点击手牌提示窗就没了"】本套手牌多选态**是不是开局调度**在用。
+        ///
+        /// 这套状态机现在有两个用户：①第0回合开局调度；②恢复步骤手牌上限弃牌。
+        /// `EnsureMulliganPrompt()` 每次**快照重建后**都会跑一遍，它的收尾分支原本**只看"有没有多选态"、
+        /// 不看"是谁在用"** ⇒ 恢复步骤弃牌期间只要有**任何一份快照**到达（服务端下发 / 延迟 1.5s 的
+        /// `SnapshotMaxDeferSeconds` 强制应用），弃牌提示窗就会被当成"调度窗"当场关掉，
+        /// 玩家看到的就是"提示窗刚出现，点一下手牌（或等一会儿）就没了"。
+        /// 故按"用途"打标：只有调度态才允许被 `EnsureMulliganPrompt` 关掉。
+        /// </summary>
+        private bool _handPickIsMulligan;
+
         private readonly System.Collections.Generic.List<string> _handPickCandidates = new();
         private readonly System.Collections.Generic.HashSet<string> _handPickPicked = new();
         private int _handPickMin;
@@ -735,7 +748,7 @@ namespace Script.UI
                     _mulliganWindow = null;
                     GD.Print("[ArenaOl] 调度阶段已结束，关闭本地调度窗");
                 }
-                if (_handPickActive) CloseHandPick("调度阶段已结束");
+                if (_handPickActive && _handPickIsMulligan) CloseHandPick("调度阶段已结束");
                 return;
             }
             if (_mulliganReportedLocal) return;                    // 已上报
@@ -833,7 +846,8 @@ namespace Script.UI
         private bool BeginHandPick(System.Collections.Generic.IReadOnlyList<CardInstance> cards,
             int minCount, int maxCount, string hint, string titlePrefix, string confirmLabel,
             string cancelLabel, bool allowCancel,
-            System.Action<System.Collections.Generic.List<string>> onConfirm)
+            System.Action<System.Collections.Generic.List<string>> onConfirm,
+            bool forMulligan = false)
         {
             EnsureTargetWindow();
             if (_onlineTargetWindow == null || cards == null || cards.Count == 0 || onConfirm == null) return false;
@@ -845,6 +859,7 @@ namespace Script.UI
             if (_handPickCandidates.Count == 0) return false;
 
             _handPickActive = true;
+            _handPickIsMulligan = forMulligan;      // 只有调度态才归 `EnsureMulliganPrompt` 管
             _handPickPicked.Clear();
             _handPickMin = Mathf.Max(0, minCount);
             _handPickMax = maxCount > 0 ? Mathf.Min(maxCount, _handPickCandidates.Count) : _handPickCandidates.Count;
@@ -864,7 +879,8 @@ namespace Script.UI
             _onlineTargetWindow.OnCancelled = allowCancel ? (System.Action)SubmitHandPick : null;
             _onlineTargetWindow.SetBlocking(false);
             _onlineTargetWindow.OpenMultiPick(_handPickHint, cancelLabel: cancelLabel,
-                showCancel: allowCancel, confirmLabel: confirmLabel);
+                showCancel: allowCancel, confirmLabel: confirmLabel,
+                windowTitle: forMulligan ? "开局调度" : "手牌上限弃牌");
 
             RefreshHandPick();
             return true;
@@ -949,6 +965,7 @@ namespace Script.UI
         {
             if (!_handPickActive) return;
             _handPickActive = false;
+            _handPickIsMulligan = false;
             _handPickOnConfirm = null;
 
             foreach (var kv in _cardUIMap)
@@ -990,7 +1007,8 @@ namespace Script.UI
                     _mulliganReportedLocal = true;     // 先置：避免上报后的快照又弹一次
                     _matchClient?.SendIntentAs(localSeat, PlayerIntent.Kind.MulliganReport, uids.ToArray());
                     GD.Print($"[ArenaOl] 调度已上报：{uids.Count} 张（场上手牌多选）");
-                });
+                },
+                forMulligan: true);
             if (ok) GD.Print($"[ArenaOl] 第0回合·调度走场上手牌多选（候选 {cards.Count} 张，不弹卡面窗）");
             return ok;
         }
