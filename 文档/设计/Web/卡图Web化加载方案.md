@@ -150,5 +150,5 @@ Path.GetFileNameWithoutExtension(fileName).StartsWith(uid, ...)
 
 ## 关联文档
 
-- Web 导出环境准备：`准备Web导出环境.ps1`
+- Web 导出环境准备：`工具\Web\准备Web导出环境.ps1`
 - 引擎选型讨论见会话记录（魔改版 vs dn2cpp vs GDScript vs PixiJS）

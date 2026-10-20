@@ -2095,10 +2095,10 @@ namespace Script.Tests
                 if (!seen.Contains(id)) violations.Add($"㉖覆盖矩阵｜判据{id} 未登记（覆盖矩阵缺号）");
 
             // 文档一致性：总览表必须列出全部编号（含新增 ㉖–㉙）
-            string doc = ReadProjectText("JC效果代码核查项.md");
+            string doc = ReadProjectText("文档/进度与核查/JC效果代码核查项.md");
             if (doc == null)
             {
-                violations.Add("[自检] 判据文档 `JC效果代码核查项.md` 不可读 ⇒ 无法校验文档与矩阵一致");
+                violations.Add("[自检] 判据文档 `文档/进度与核查/JC效果代码核查项.md` 不可读 ⇒ 无法校验文档与矩阵一致");
             }
             else
             {

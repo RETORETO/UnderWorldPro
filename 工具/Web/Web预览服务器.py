@@ -40,7 +40,9 @@ mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/octet-stream", ".pck")
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 工具\Web\ -> 工具\ -> 工程根（默认预览 <工程根>/build/web）
+ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 def parse_args(argv):

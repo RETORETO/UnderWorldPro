@@ -40,6 +40,10 @@ import re
 import struct
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 工具\Web\ -> 工具\ -> 工程根
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
 def parse_pck(path):
     with open(path, 'rb') as f:
         d = f.read()
@@ -84,7 +88,7 @@ def expected_sizes(proj):
 
 
 def main():
-    proj = os.path.dirname(os.path.abspath(__file__))
+    proj = ROOT
     pck = sys.argv[1] if len(sys.argv) > 1 else os.path.join(proj, 'build', 'web', 'index.pck')
     if not os.path.isfile(pck):
         raise SystemExit('找不到 %s —— 请先运行 导出Web版.ps1' % pck)

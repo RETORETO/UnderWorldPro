@@ -1,0 +1,8 @@
+# 本目录是纯文档，禁止 Godot 扫描 / 导入 / 打进 pck。
+# 只靠"文件存在"生效，内容不影响行为（与 打包发布.ps1 给 data_ 目录写 .gdignore 同理）。
+#
+# 注意：
+#  1) 本目录不要放 .cs —— Godot.NET.Sdk 默认 `**/*.cs` glob 不排除自建目录，
+#     放进来会被编进 UWPro.dll（Web 构建更会因多文件顶级语句直接 CS8805）。
+#  2) 不要把本目录加进 export_presets.cfg 的 include_filter，会与本文件冲突。
+#  3) 删本目录下资源的 .import 必须与写本文件同批，否则编辑器会把 .import 重新生成。

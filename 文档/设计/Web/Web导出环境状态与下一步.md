@@ -55,7 +55,7 @@ Web 版**只能当客户端**（浏览器不能监听端口），但「登录大
 | 打包字体 | `fonts/`（Noto Sans SC + Noto Emoji + DejaVu Sans，共 11.7MB） | ✅ 仅 Web 端启用 |
 | 字体兜底脚本 | `Script/Web/WebFontFallback.cs`（`project.godot` 中注册为首个 autoload） | ✅ |
 | Web 导出预设 | `export_presets.cfg` 的 `preset.1`（platform=Web，thread_support=true） | ✅ |
-| 脚本 | `导出Web版.ps1`、`Web预览服务器.py`、`启动Web预览.cmd`、`检查Web包.py`、`Web运行自检.mjs` | ✅ |
+| 脚本 | `导出Web版.ps1`、`启动Web预览.cmd`、`工具\Web\`{Web预览服务器.py、检查Web包.py、Web运行自检.mjs} | ✅ |
 | 回滚备份 | `*.pre-web-4.8.bak`、`*.pre-webfix.bak` | ✅ |
 
 > 为什么有「用户级 SDK」：本机当前**不是管理员**，`dotnet workload install` 无法写入 `C:\Program Files\dotnet`（MSI 需要提权）。改用「下载 SDK zip 解压到 D:\dotnet10 + 在用户目录装 workload」，完全免提权。
@@ -87,7 +87,7 @@ mkdir D:\MYPROJECT\UWPro\build\web           # 目标目录必须先存在
 ### 导出后自检（强烈建议）
 
 ```powershell
-python .\检查Web包.py           # 解包 index.pck，核对 .NET 程序集有没有被裁、引导类在不在
+python .\工具\Web\检查Web包.py           # 解包 index.pck，核对 .NET 程序集有没有被裁、引导类在不在
 ```
 
 实测过程中就是靠它定位到「`UWPro.dll` 被 ILLink 裁成 4096 字节」。
@@ -100,7 +100,7 @@ python .\检查Web包.py           # 解包 index.pck，核对 .NET 程序集有
   --headless=new --remote-debugging-port=9222 --user-data-dir=C:\tmp_ep `
   --enable-unsafe-swiftshader "http://127.0.0.1:8080/index.html"
 # 2) 采集控制台输出并截图（零依赖，只用 Node 自带 fetch/WebSocket）
-node .\Web运行自检.mjs --wait 100 --shot shot.png
+node .\工具\Web\Web运行自检.mjs --wait 100 --shot shot.png
 ```
 
 ---
@@ -585,7 +585,7 @@ GetTree().ProcessFrame += OnProbeProcessFrame;
 
 ```powershell
 # 浏览器 9222 与预览服务器 8080 常驻时，直接：
-node .\Web运行自检.mjs --wait 45 --shot logs\shot.png > logs\shot.txt 2>&1
+node .\工具\Web\Web运行自检.mjs --wait 45 --shot logs\shot.png > logs\shot.txt 2>&1
 ```
 
 > ⚠️ **CDP 的 `Runtime.enable` 会回放上一次的缓存日志**，所以"日志里出现过 Aborted"

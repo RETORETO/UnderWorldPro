@@ -47,9 +47,10 @@ import os
 import re
 import sys
 
-DEFAULT_HTML = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "build", "web", "index.html"
-)
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 工具\Web\ -> 工具\ -> 工程根
+ROOT = os.path.dirname(os.path.dirname(HERE))
+DEFAULT_HTML = os.path.join(ROOT, "build", "web", "index.html")
 
 # 与 WebPerfParams.cs 的开关一一对应：长名称 -> 命令行写法
 # 说明：**没有 nofont**。字体回退必须无条件执行 —— 启动期（autoload）里读性能开关
