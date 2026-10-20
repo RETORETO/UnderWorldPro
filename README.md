@@ -2,6 +2,8 @@
 
 1v1 卡牌对战游戏 —— Godot 4.7.2 + C#（.NET 9），桌面与 Web 同源。
 
+> 仓库名 `UnderWorldPro`，工程内部代号 `UWPro`（`project.godot` 里的 `config/name`）。
+
 ## 快速开始
 
 ### 只想玩：加入公开测试服
@@ -27,14 +29,25 @@
 
 `一键联机三开.bat` —— 起 1 个大厅服务端 + 2 个客户端，本机自连。详见 `start_online_3.ps1` 顶部注释（支持 `-ServerOnly` / `-ClientOnly` 跨机联调）。
 
+## 根目录脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `连服务器.bat` | 连公开测试服（地址写死在脚本内，与 `Script/IO/OnlineDefaults.cs` 同步） |
+| `启动联机客户端.bat <IP> <端口> <昵称>` | 连指定服务器 |
+| `一键联机三开.bat`（内部 `start_online_3.ps1`） | 本机 1 服务端 + 2 客户端自测 |
+| `启动大厅服务端.bat` | 单独起大厅服务端 |
+| `启动联机三进程测试.bat` | 自动冒烟三进程 |
+| `启动Web预览.cmd` | 本地 HTTP 预览已有的 Web 构建 |
+| `ResolveGodot.ps1` | 定位 Godot(mono) 可执行文件，上面几个脚本共用 |
+
+> 打包 / 导出脚本（桌面包、Web 包）不在本仓库维护。想自己出包，环境搭建与三条硬约束见 `文档/设计/Web/Web导出环境状态与下一步.md`。
+
 ## Web 版
 
-Web 导出必须用 **魔改版 Godot**（官方版不支持 C# 导出 Web）：
+Web 构建带线程（SharedArrayBuffer），浏览器要求页面处于跨源隔离状态，所以**必须通过 HTTP 打开**，直接双击 `index.html` 会报错。已有构建用 `启动Web预览.cmd` 预览。
 
-- 导出：`powershell -ExecutionPolicy Bypass -File 导出Web版.ps1`
-- 预览：`启动Web预览.cmd`
-
-Web 构建带线程（SharedArrayBuffer），浏览器要求页面处于跨源隔离状态，所以**必须通过 HTTP 打开**，直接双击 `index.html` 会报错。
+自己导出需要 **魔改版 Godot**（官方版不支持 C# 导出 Web），流程同样是三步：装魔改版引擎 → 确认 .NET 运行时版本与工程 `TargetFramework` 同代 → 导出后验证 pck 里 `Cards/card_index.json`、`Decks/*.json` 都在。细节见上面那份文档。
 
 ## 工程结构
 
