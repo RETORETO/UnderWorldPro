@@ -206,7 +206,7 @@ public partial class MainMenu : Control
 
         GD.Print("[WebPerf] 自动进入：" + _autoTargetState.ToString());
         if (_autoTargetState == GameManager.GameState.DeckBuilder)
-            GameManager.Instance.EditingDeckPath = null; // 新建卡组，与点「编辑卡组」一致
+            GameManager.Instance.EditingDeckPath = null; // 载入"上次使用的卡组"，与点「编辑卡组」一致
         GameManager.Instance.GoToState(_autoTargetState);
     }
 
@@ -310,7 +310,7 @@ public partial class MainMenu : Control
     private void OnDeckPressed()
     {
         GD.Print("【主菜单】进入卡组编辑");
-        GameManager.Instance.EditingDeckPath = null; // 新建卡组
+        GameManager.Instance.EditingDeckPath = null; // 进编辑页即载入"上次使用的卡组"（与房间页同一口径）
         GameManager.Instance.GoToState(GameManager.GameState.DeckBuilder);
     }
 

@@ -225,11 +225,18 @@ public partial class DeckBuilder : Control
                 + $"loadOpts={__tLoadOpts - __tScanCouncil}ms refreshPool={__tPool - __tLoadOpts}ms "
                 + $"(" + PageSize + $" 行/页) readyTotal={__tPool - __tStart}ms");
 
-            // 若从房间/主菜单带入了要编辑的卡组，则载入（卡组名由文件里的 deckName 回填）
-            var editPath = GameManager.Instance.EditingDeckPath;
-            if (!string.IsNullOrEmpty(editPath))
+            // 进入编辑页显示哪个卡组：
+            //   ① 显式带入的编辑目标（房间/主菜单）优先；
+            //   ② 否则载入"上次使用的卡组" —— 与房间页的默认卡组**同一逻辑**
+            //      （DeckSelection.ResolveDefault：偏好记录 > default_deck.json > 目录第一个）。
+            // 注意：这里**只读不写**。"打开看一眼编辑页"不应该被记成一次选择，否则默认卡组会莫名漂移。
+            string editPath = GameManager.Instance.EditingDeckPath;
+            if (string.IsNullOrEmpty(editPath)) editPath = DeckSelection.ResolveDefault();
+
+            if (!string.IsNullOrEmpty(editPath) && FileAccess.FileExists(editPath))
             {
                 LoadDeckFromFile(editPath);
+                GD.Print($"【DeckBuilder】进入编辑页：载入默认卡组 {editPath}");
             }
             else
             {
@@ -577,31 +584,16 @@ public partial class DeckBuilder : Control
         _deckLoadList.AddChild(MkDeckLoadRow("（新建卡组）", null));
 
         // ② 已保存的卡组
-        var files = new List<string>();
-        using (var dir = DirAccess.Open(DecksDir))
+        // 【2026-10-20】改走 DeckCatalog：与房间页下拉框**同一份清单、同一套排序**
+        //（ASCII 折叠忽略大小写，中文名也不会踩 ICU；原先这里另写了一份 DirAccess 扫描）。
+        var paths = DeckCatalog.ListDeckPaths();
+        foreach (var p in paths)
         {
-            if (dir != null)
-            {
-                dir.ListDirBegin();
-                string name = dir.GetNext();
-                while (!string.IsNullOrEmpty(name))
-                {
-                    if (!dir.CurrentIsDir() && name.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase))
-                        files.Add(name);
-                    name = dir.GetNext();
-                }
-                dir.ListDirEnd();
-            }
-        }
-        // 显式 Ordinal：无参 Sort() 走文化敏感比较器（ICU），Web 上会 abort
-        files.Sort(System.StringComparer.Ordinal);
-        foreach (var f in files)
-        {
-            _deckLoadList.AddChild(MkDeckLoadRow(f, DecksDir + "/" + f));
+            _deckLoadList.AddChild(MkDeckLoadRow(DeckCatalog.DisplayName(p), p));
         }
 
         // 面板高度按条目数收紧（不多占、也不超出）
-        int h = Mathf.Clamp(6 + DeckLoadRowH * (files.Count + 1), DeckLoadRowH + 12, DeckLoadMaxH);
+        int h = Mathf.Clamp(6 + DeckLoadRowH * (paths.Count + 1), DeckLoadRowH + 12, DeckLoadMaxH);
         _deckLoadPanel.OffsetBottom = 42f + h;
     }
 
@@ -619,8 +611,18 @@ public partial class DeckBuilder : Control
         b.Pressed += () =>
         {
             HideDeckLoadPanel();
-            if (path == null) ClearWorkingDeck();
-            else LoadDeckFromFile(path);
+            if (path == null)
+            {
+                ClearWorkingDeck();
+            }
+            else
+            {
+                LoadDeckFromFile(path);
+                // 【2026-10-20】在编辑页选中卡组 = 把该卡组设为新的"默认卡组"
+                //（写盘 + 同步本场 GameManager，房间页/开局立刻生效）。
+                DeckSelection.Remember(path);
+                GD.Print($"【DeckBuilder】已将该卡组设为默认：{path}");
+            }
         };
         return b;
     }
@@ -2140,8 +2142,9 @@ public partial class DeckBuilder : Control
         // 输入框回填"实际用于文件名的名字"：名字里若有非法文件名字符会被替换成下划线，
         // 回填后下次保存仍命中同一个文件（真正实现"按卡组名覆盖"）。
         _nameEdit.Text = display;
-        GameManager.Instance.SelectedDeckPath = path;
-        GameManager.Instance.UseSelectedDeck = true;
+        // 【2026-10-20】刚保存的卡组即成为新的"默认卡组"（写盘 + 同步 GameManager）。
+        // 原先是直接写 GameManager 两个字段，现在统一走 DeckSelection，保证与房间页口径一致。
+        DeckSelection.Remember(path);
         GD.Print($"【DeckBuilder】卡组已保存：{path}");
     }
 

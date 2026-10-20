@@ -31,6 +31,13 @@ public partial class GameManager : Node
     public override void _Ready()
     {
         Instance = this;   // 赋值
+
+        // 【2026-10-20 注意】**不要**在这里把 `user://online_client.cfg` 的"上次卡组"灌进
+        // SelectedDeckPath / UseSelectedDeck。实测那样做会改变"单机开局默认卡组"的来源
+        //（由硬编码卡组变成玩家上次选的 JSON 卡组），一次回归就跑出 51 条与本需求无关的
+        // 门禁/触发类失败（TestP3_隐匿_*、TestP2Discard_*、TestCouncilActivation_* 等）。
+        // 卡组默认值的解析放在**界面层**（DeckBuilder / Room），见 Script.IO.DeckSelection。
+
         // 启动时仅同步枚举，不主动切场景（场景树根已是 MainMenu）
         CurrentState = GameState.MainMenu;
         GD.Print($"游戏状态初始化: {CurrentState}");
@@ -117,6 +124,7 @@ public partial class GameManager : Node
     /// <summary>房间界面是否勾选使用所选 JSON 卡组带入 P1。false=则不生效，P1 也用硬编码卡组。</summary>
     public bool UseSelectedDeck { get; set; } = false;
 
-    /// <summary>从 MainMenu 进入 DeckBuilder 时要编辑的卡组路径；为空表示新建卡组。</summary>
+    /// <summary>从 MainMenu 进入 DeckBuilder 时要编辑的卡组路径；为空表示**载入"上次使用的卡组"**
+    /// （与房间页默认卡组同一口径，见 Script.IO.DeckSelection.ResolveDefault）。</summary>
     public string EditingDeckPath { get; set; } = null;
 }

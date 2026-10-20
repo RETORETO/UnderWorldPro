@@ -105,15 +105,19 @@ public partial class Room : Control
             dir.ListDirEnd();
         }
 
-        // 若之前已选过某卡组，恢复选中项
+        // 恢复选中项：与卡组编辑页 / 联机房间**同一口径**（偏好里的上次卡组 > default_deck.json > 目录第一个）。
+        // 用 ResolveForUi 而不是直接读 GameManager：本场已明确选过就用本场的（含"硬编码"的空值），
+        // 还没选过才去读持久化偏好 —— 这样重启后房间也能恢复"上次使用的卡组"。
+        string preferred = Script.IO.DeckSelection.ResolveForUi();
         int selectIndex = 0;
-        if (!string.IsNullOrEmpty(GameManager.Instance.SelectedDeckPath))
+        if (!Script.IO.WebSafeText.IsNullOrWhiteSpaceAscii(preferred))
         {
-            selectIndex = _deckPaths.FindIndex(p => p == GameManager.Instance.SelectedDeckPath);
+            selectIndex = _deckPaths.FindIndex(p => Script.IO.WebSafeText.EqualsIgnoreCaseAscii(p, preferred));
             if (selectIndex < 0) selectIndex = 0;
         }
         _deckOption.Select(selectIndex);
         GameManager.Instance.UseSelectedDeck = selectIndex > 0;
+        GameManager.Instance.SelectedDeckPath = selectIndex > 0 ? _deckPaths[selectIndex] : "";
     }
 
     private void OnDeckSelected(long index)
@@ -121,15 +125,14 @@ public partial class Room : Control
         int i = (int)index;
         if (i <= 0 || i >= _deckPaths.Count)
         {
-            // 「默认卡组（硬编码）」：不带入 JSON
-            GameManager.Instance.UseSelectedDeck = false;
-            GameManager.Instance.SelectedDeckPath = "";
+            // 「默认卡组（硬编码）」：不带入 JSON（只同步内存，不覆盖已记住的卡组文件）
+            Script.IO.DeckSelection.Remember("");
             GD.Print("【房间】选用：默认硬编码卡组");
         }
         else
         {
-            GameManager.Instance.UseSelectedDeck = true;
-            GameManager.Instance.SelectedDeckPath = _deckPaths[i];
+            // 选卡组 = 变更"默认卡组"（写盘 + 同步本场），卡组编辑页下次进入即显示它
+            Script.IO.DeckSelection.Remember(_deckPaths[i]);
             GD.Print($"【房间】选用卡组 JSON: {_deckPaths[i]}");
         }
     }
