@@ -56,6 +56,14 @@ namespace Script.UI
         /// <summary>魔法领域过滤；<see cref="DomainAny"/> = 不限，<see cref="DomainNone"/> = 仅无领域，0..4 = 指定领域。</summary>
         public int DomainFilter = DomainAny;
 
+        /// <summary>颜色过滤；-1 = 不限，0..8 = 指定颜色（对应 <c>CardColor</c>，卡牌 Colors 列表包含即命中）。</summary>
+        public int ColorFilter = -1;
+
+        /// <summary>
+        /// 组织过滤；空 = 不限，否则按序数**精确匹配**（下拉项来自索引里去重后的组织名）。
+        /// </summary>
+        public string OrganizationQuery = "";
+
         /// <summary>忠诚条件（AND 组合）。</summary>
         public List<LoyaltyCond> Loyalties = new List<LoyaltyCond>();
 
@@ -78,6 +86,8 @@ namespace Script.UI
             || (SubCategoryQuery != null && SubCategoryQuery.Length > 0)
             || CategoryMask != 0
             || DomainFilter != DomainAny
+            || ColorFilter >= 0
+            || (OrganizationQuery != null && OrganizationQuery.Length > 0)
             || (Loyalties != null && Loyalties.Count > 0)
             || UniqueOnly
             || HasAnyMinAttr;
@@ -147,6 +157,16 @@ namespace Script.UI
                 {
                     if (none || !e.MagicDomains.Contains(DomainFilter)) return false;
                 }
+            }
+
+            // 颜色：卡牌颜色集合包含所选颜色
+            if (ColorFilter >= 0 && (e.Colors == null || !e.Colors.Contains(ColorFilter))) return false;
+
+            // 组织：序数精确匹配（下拉项即索引里的原值）
+            if (!string.IsNullOrEmpty(OrganizationQuery))
+            {
+                string org = e.Organization ?? "";
+                if (!string.Equals(org, OrganizationQuery, System.StringComparison.Ordinal)) return false;
             }
 
             // 忠诚：AND 组合 + 点数 ≥

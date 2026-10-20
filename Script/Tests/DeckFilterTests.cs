@@ -138,6 +138,34 @@ namespace Script.Tests
                 "UniqueField 为空 → 独有卡筛选不应命中");
         }
 
+        public void TestColorFilter()
+        {
+            var brown = Entry(colors: new List<int> { (int)CardColor.Brown });
+            var multi = Entry(colors: new List<int> { (int)CardColor.Red, (int)CardColor.Blue });
+
+            var mRed = new DeckFilterModel { ColorFilter = (int)CardColor.Red };
+            var mBrown = new DeckFilterModel { ColorFilter = (int)CardColor.Brown };
+            var mYellow = new DeckFilterModel { ColorFilter = (int)CardColor.Yellow };
+            Prep(mRed, mBrown, mYellow);
+
+            Assert.IsTrue(mRed.Matches(multi), "红/蓝 卡应命中『红』（颜色集合包含）");
+            Assert.IsFalse(mRed.Matches(brown), "棕卡不应命中『红』");
+            Assert.IsTrue(mBrown.Matches(brown), "棕卡应命中『棕』");
+            Assert.IsFalse(mYellow.Matches(brown), "棕卡不应命中『黄』");
+            Assert.IsTrue(new DeckFilterModel { ColorFilter = -1 }.PrepAndMatches(brown), "颜色不限时应命中任何卡");
+        }
+
+        public void TestOrganizationFilter()
+        {
+            var e = Entry(org: "帷幕守望");
+            var empty = Entry(org: "");
+
+            Assert.IsTrue(new DeckFilterModel { OrganizationQuery = "帷幕守望" }.PrepAndMatches(e), "组织精确匹配应命中");
+            Assert.IsFalse(new DeckFilterModel { OrganizationQuery = "方碑序列" }.PrepAndMatches(e), "组织不同不应命中");
+            Assert.IsFalse(new DeckFilterModel { OrganizationQuery = "帷幕" }.PrepAndMatches(e), "组织为精确匹配，前缀不应命中");
+            Assert.IsTrue(new DeckFilterModel { OrganizationQuery = "" }.PrepAndMatches(empty), "组织不限时应命中空组织卡");
+        }
+
         public void TestEmptyConditionsAreNoOp()
         {
             var m = new DeckFilterModel();
@@ -198,6 +226,12 @@ namespace Script.Tests
                 "仅独有卡应为 31 张");
             Assert.AreEqual(214, CountMatches(cards, new DeckFilterModel { SubCategoryQuery = "人类" }),
                 "子类别含『人类』应为 214 张");
+            Assert.AreEqual(72, CountMatches(cards, new DeckFilterModel { ColorFilter = (int)CardColor.Red }),
+                "颜色『红』应为 72 张");
+            Assert.AreEqual(123, CountMatches(cards, new DeckFilterModel { ColorFilter = (int)CardColor.Brown }),
+                "颜色『棕』应为 123 张（删掉 31 张误导出的 DQ 卡后由 154 降为 123）");
+            Assert.AreEqual(70, CountMatches(cards, new DeckFilterModel { OrganizationQuery = "帷幕守望" }),
+                "组织『帷幕守望』应为 70 张");
         }
 
         /// <summary>编号搜索行为不变：含 jc 应为 135 张（等同改造前的文件名子串过滤）。</summary>
@@ -240,6 +274,8 @@ namespace Script.Tests
             int cat = 0,
             List<string> subCats = null,
             List<int> domains = null,
+            List<int> colors = null,
+            string org = "",
             List<LoyaltyEntry> colorLoyalties = null,
             List<LoyaltyEntry> domainLoyalties = null,
             int inv = 0, int str = 0, int pow = 0, int def = -1,
@@ -252,6 +288,8 @@ namespace Script.Tests
                 SubCardName = subName,
                 UniqueField = unique,
                 CategoryFlagValue = cat,
+                Organization = org,
+                Colors = colors ?? new List<int>(),
                 MagicDomains = domains ?? new List<int>(),
                 ColorLoyalties = colorLoyalties ?? new List<LoyaltyEntry>(),
                 DomainLoyalties = domainLoyalties ?? new List<LoyaltyEntry>(),

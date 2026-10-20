@@ -2192,6 +2192,10 @@ public partial class DeckBuilder : Control
     private LineEdit _fSubCatBox;
     private OptionButton _fCategoryOption;
     private OptionButton _fDomainOption;
+    private OptionButton _fColorOption;
+    private OptionButton _fOrgOption;
+    /// <summary>组织下拉项与索引一一对应：下标 0 = 「不限」（空串），其余为索引里去重后的组织名。</summary>
+    private readonly List<string> _orgOptions = new List<string>();
     private CheckBox _fUniqueCheck;
     private readonly LineEdit[] _fAttrEdits = new LineEdit[DeckFilterModel.AttrCount];
     private Label _fLoyaltyDisplay;
@@ -2213,6 +2217,9 @@ public partial class DeckBuilder : Control
     /// <summary>领域下拉：索引 → 值（-2 = 不限，-1 = 无领域，0..4 = 具体领域）。</summary>
     private static readonly int[] FilterDomainValues = { -2, -1, 0, 1, 2, 3, 4 };
     private static readonly string[] FilterDomainNames = { "不限", "无领域", "心灵", "神圣", "星空", "死亡", "鲜血" };
+
+    /// <summary>颜色下拉：下标 0 = 不限，下标 i&gt;0 对应枚举值 i-1（棕黄白绿灰紫蓝黑红）。</summary>
+    private static readonly string[] FilterColorNames = { "不限", "棕", "黄", "白", "绿", "灰", "紫", "蓝", "黑", "红" };
 
     /// <summary>属性输入框标签（顺序必须与 DeckFilterModel.Attr* 常量一致）。</summary>
     private static readonly string[] FilterAttrNames =
@@ -2274,19 +2281,41 @@ public partial class DeckBuilder : Control
         row1.AddChild(_fSubNameBox);
         _filterBox.AddChild(row1);
 
-        // 第 2 行：类别 / 领域 / 仅独有卡
-        var row2 = MkRow();
-        row2.AddChild(MkLabel("类别", 34));
-        _fCategoryOption = MkOption(96);
+        // 第 2 行：类别 / 领域 / 颜色 / 组织 / 仅独有卡
+        // 一行 9 个控件，宽度紧：标签压到 30px，下拉给较小最小宽 + ExpandFill 平分剩余空间。
+        var row2 = MkRow(4);
+        row2.AddChild(MkLabel("类别", 30));
+        _fCategoryOption = MkOption(56);
+        _fCategoryOption.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         for (int i = 0; i < FilterCategoryNames.Length; i++) _fCategoryOption.AddItem(FilterCategoryNames[i]);
         _fCategoryOption.Select(0);
         row2.AddChild(_fCategoryOption);
-        row2.AddChild(MkLabel("领域", 34));
-        _fDomainOption = MkOption(96);
+
+        row2.AddChild(MkLabel("领域", 30));
+        _fDomainOption = MkOption(56);
+        _fDomainOption.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         for (int i = 0; i < FilterDomainNames.Length; i++) _fDomainOption.AddItem(FilterDomainNames[i]);
         _fDomainOption.Select(0);
         row2.AddChild(_fDomainOption);
+
+        row2.AddChild(MkLabel("颜色", 30));
+        _fColorOption = MkOption(56);
+        _fColorOption.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        for (int i = 0; i < FilterColorNames.Length; i++) _fColorOption.AddItem(FilterColorNames[i]);
+        _fColorOption.Select(0);
+        row2.AddChild(_fColorOption);
+
+        row2.AddChild(MkLabel("组织", 30));
+        _fOrgOption = MkOption(64);
+        _fOrgOption.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        // 组织项依赖索引（构建期抽出的去重组织名），先只放「不限」，索引就绪后由 RefreshOrgOptions 重建
+        _orgOptions.Add("");
+        _fOrgOption.AddItem("不限");
+        _fOrgOption.Select(0);
+        row2.AddChild(_fOrgOption);
+
         _fUniqueCheck = new CheckBox { Text = "仅独有卡" };
+        _fUniqueCheck.SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd;
         row2.AddChild(_fUniqueCheck);
         _filterBox.AddChild(row2);
 
@@ -2362,6 +2391,62 @@ public partial class DeckBuilder : Control
         //（打包脚本每次导出前会强制重生成，这里只做运行时兜底提示，不阻断功能）。
         if (_indexReady && CardSearchIndex.Count != _allPoolPaths.Count)
             GD.PrintErr($"【DeckBuilder】卡池索引疑似过期：索引 {CardSearchIndex.Count} 条 ≠ 卡池 {_allPoolPaths.Count} 张；请重跑 CardIndexRunner");
+
+        // 索引就绪后重建组织下拉（项来自索引里去重后的组织名）
+        if (_indexReady) RefreshOrgOptions();
+    }
+
+    /// <summary>
+    /// 组织下拉的动态项：索引就绪后按去重组织名重建；索引未就绪时只有「不限」。
+    /// 重建时尽量保留用户已选的组织。
+    /// </summary>
+    private void RefreshOrgOptions()
+    {
+        if (_fOrgOption == null) return;
+
+        int sel = _fOrgOption.Selected;
+        string cur = (sel > 0 && sel < _orgOptions.Count) ? _orgOptions[sel] : null;
+
+        _orgOptions.Clear();
+        _fOrgOption.Clear();
+        _orgOptions.Add("");                 // 下标 0 = 不限（空串代表不过滤）
+        _fOrgOption.AddItem("不限");
+
+        if (CardSearchIndex.Available)
+        {
+            var set = new List<string>();
+            var cards = CardSearchIndex.Cards;
+            for (int i = 0; i < cards.Count; i++)
+            {
+                string o = cards[i].Organization;
+                if (WebSafeText.IsNullOrWhiteSpaceAscii(o)) continue;
+                if (IndexOfOrdinal(set, o) < 0) set.Add(o);
+            }
+            // 【Web 安全】显式序数比较器：无参 Sort() 走文化敏感路径（ICU），Web 上会 abort。
+            set.Sort(System.StringComparer.Ordinal);
+            for (int i = 0; i < set.Count; i++)
+            {
+                _orgOptions.Add(set[i]);
+                _fOrgOption.AddItem(set[i]);
+            }
+        }
+
+        int restore = 0;
+        if (cur != null)
+        {
+            int k = IndexOfOrdinal(_orgOptions, cur);
+            if (k > 0) restore = k;
+        }
+        _fOrgOption.Select(restore);
+
+        WebPerfParams.Log("deck.filter orgOptions=" + WebSafeText.Int(_orgOptions.Count - 1));
+    }
+
+    private static int IndexOfOrdinal(List<string> list, string v)
+    {
+        for (int i = 0; i < list.Count; i++)
+            if (string.Equals(list[i], v, System.StringComparison.Ordinal)) return i;
+        return -1;
     }
 
     /// <summary>进屏后延迟预热索引：不阻塞 _Ready，也不让"首次结构化搜索"承担 ~170ms 的反序列化。</summary>
@@ -2448,6 +2533,8 @@ public partial class DeckBuilder : Control
         if (_filterToggleButton != null)
             _filterToggleButton.Text = pressed ? "▲ 收起筛选" : "▼ 高级筛选（类别 / 属性 / 忠诚）";
         if (_filterBoxScroll != null) _filterBoxScroll.Visible = pressed;
+        // 组织项来自索引：展开时若索引已就绪但下拉还没填充过，补一次
+        if (pressed) RefreshOrgOptions();
         // 等这一帧布局完成后再量内容高度
         Callable.From(ReflowPoolTop).CallDeferred();
     }
@@ -2605,6 +2692,13 @@ public partial class DeckBuilder : Control
         _filter.CategoryMask = (ci >= 0 && ci < FilterCategoryMasks.Length) ? FilterCategoryMasks[ci] : 0;
         int di = _fDomainOption.Selected;
         _filter.DomainFilter = (di >= 0 && di < FilterDomainValues.Length) ? FilterDomainValues[di] : DeckFilterModel.DomainAny;
+
+        int ci2 = _fColorOption.Selected;
+        _filter.ColorFilter = (ci2 > 0 && ci2 <= 9) ? ci2 - 1 : -1;
+
+        int oi = _fOrgOption.Selected;
+        _filter.OrganizationQuery = (oi > 0 && oi < _orgOptions.Count) ? _orgOptions[oi] : "";
+
         _filter.UniqueOnly = _fUniqueCheck.ButtonPressed;
 
         for (int i = 0; i < DeckFilterModel.AttrCount; i++)
