@@ -1449,7 +1449,7 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   **2026-10-02 已废弃**：`ColorText` 同步颜色+阵营两个语义，与玩家卡不同名不同构），
   "初始手牌：N"→`StartingHandSize`。
 - **起始手牌**：001~008 / 010~015 / 017 = **6**；**016 颂亡者 = 5**（XML 原文，PT 也是 5，保留未改）；
-  **009 秘社 = 7**（用户指定："XML 里是 6，测试需要改成 7"）。
+  **009 秘社 = 6**（XML 原文即 6；早期曾按"测试需要"临时改成 7，**2026-10-20 已回退为 6**，与 `CardText`「初始手牌：6」一致）。
 - **构筑限制**：001~008 = `FilterByColor + TargetColor=<派系色> + GreaterOrEqual + RequiredCount=25`（黄1/白2/绿3/灰4/紫5/蓝6/黑7/红8）；
   **009 秘社无限制**；**010~017 的 8 张当前无法表达**（模型只有"正向 AND 筛选 + 数量比较"，无法表达"只能包含…＋例外"与"非X非中立≤N"）——
   已在 `.tres` 留空并在《秘社制作交接提示词.md》逐张列出原文与建议模型，未伪造字段。
@@ -1458,7 +1458,7 @@ headless 全量 `TestsRunner` **70 套件 502 例 全绿 0 失败 0 错误**。
   卡文与 FAQ 原文写进 doc 注释，`ActivateWindow/Cost/每局一次/Target=null` 等实现要点写在 TODO 里）。
 - **兜底秘社改为 MSJC009**（用户："玩家不带秘社时的兜底秘社改成 MSJC009"）：`GameInitializer.DefaultCouncilPath`、
   `DeckListLoader.FallbackCouncilPath`、`DeckBuilder._workingCouncil` 三处；实局验证
-  `起始手牌：座位1 = 7 张 / 座位2 = 7 张`（＝MSJC009 的 7 起手生效）。
+  `起始手牌：座位1 = 6 张 / 座位2 = 6 张`（＝MSJC009 的 6 起手生效；2026-10-20 起手数由 7 回退为 6）。
 - 账本：全量 headless **138 套件 995 例 全绿 0 失败 0 错误**；Arena 冒烟 **0 SCRIPT ERROR**（秘社 UI 显示「秘社」）。
 - **交接**：新窗口制作 010~017 的提示词与逐张数据见 **`UWPro/秘社制作交接提示词.md`**。
 

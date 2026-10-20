@@ -4,8 +4,8 @@
 
 [resource]
 script = ExtResource("1")
-RequiredPower = 0
-Score = 0
+RequiredPower = 3
+Score = 2
 CardImagePath = "res://Cards/Image/AreaCards/DQ012_wulingyuan.jpg"
 CategoryFlag = 16
 SubCategories = Array[String](["山脉", "隐秘对抗"])

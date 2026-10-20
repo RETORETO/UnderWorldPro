@@ -8,7 +8,7 @@ script = ExtResource("1_msjc")
 CardText = "行动3，横置：若你具有【先手标志】，则抓一张牌。
 初始手牌：6"
 CardImagePath = "res://Cards/Image/CouncilCards/JC/MSJC009_mishe.jpg"
-StartingHandSize = 7
+StartingHandSize = 6
 SubType = "秘社"
 Colors = Array[int]([0])
 Organization = "中立"

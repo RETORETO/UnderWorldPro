@@ -10,6 +10,7 @@
 [resource]
 script = ExtResource("1")
 Cost = 1
+Score = 1
 ColorLoyaltyRequirements = Array[ExtResource("2")]([])
 DomainLoyaltyRequirements = Array[ExtResource("3")]([])
 CategoryFlag = 24

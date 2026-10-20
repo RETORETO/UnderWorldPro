@@ -8,7 +8,7 @@ namespace Cards.Script.CouncilCards.JC
 {
     /// <summary>
     /// MSJC009_mishe （秘社）。
-    /// 卡文（来源 Card.xml）：行动3，横置：若你具有【先手标志】，则抓一张牌。／初始手牌：**7**（用户口径：测试需要 7）。
+    /// 卡文（来源 Card.xml）：行动3，横置：若你具有【先手标志】，则抓一张牌。／初始手牌：**6**（与 .tres `StartingHandSize = 6` 一致；早期曾临时改为 7，已回退）。
     /// 实现：单一激活选项＝`Draw{1}` + 条件谓词 `具有先手标志`（【A57】：来源控制者是否为本回合先手）。
     /// 说明：本秘社**无构筑限制**（卡文只写"初始手牌"），也是"玩家未携带秘社"时的**兜底默认秘社**
     /// （`GameInitializer.DefaultCouncilPath` / `DeckListLoader.FallbackCouncilPath` / `DeckBuilder` 默认值）。

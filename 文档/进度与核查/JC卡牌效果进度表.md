@@ -1200,12 +1200,12 @@
 
   **【批次】秘社 17 张 .tres 数据 ＋ 兜底秘社改 MSJC009（2026-09，用户指定）**：
   · **17 张 `.tres` 全部生成**（3 位编号 + 拼音命名，与卡图名一致；字段全部来自 `Card.xml`：CardText/SubType/Colors+Organization/PT/
-    RelatedCardUID/TableRow/Cost/StartingHandSize/Organization）；**起始手牌**：多数 6、**016=5**（XML 原文）、**009=7**（用户指定）。
+    RelatedCardUID/TableRow/Cost/StartingHandSize/Organization）；**起始手牌**：多数 6、**016=5**（XML 原文）、**009=6**（XML 原文；曾临时改 7，2026-10-20 已回退）。
   · **构筑限制**：001~008＝`FilterByColor+TargetColor+≥25`（黄1/白2/绿3/灰4/紫5/蓝6/黑7/红8）；009 无限制；
     **010~017 的 8 张当前模型表达不了**（"只能包含…＋例外"/"非X非中立≤12"），已在 .tres 留空并写成交接文档，未伪造字段。
   · **脚本**：001~009 已按卡文实现（001~008 同构两条；009 单条）；010~017 占位（卡文与 FAQ 写进 doc 注释 + TODO 要点）。
   · **兜底秘社 → MSJC009**（三处：`GameInitializer.DefaultCouncilPath`/`DeckListLoader.FallbackCouncilPath`/`DeckBuilder`），
-    实局验证起手 **7 张** ✓。
+    实局验证起手 **6 张** ✓（2026-10-20 由 7 回退为 6）。
   · 账本：全量 headless **138 套件 995 例 全绿 0 失败 0 错误**；Arena 冒烟 0 SCRIPT ERROR。
   · **交接**：`UWPro/秘社制作交接提示词.md`（新窗口贴它即可开工：010~017 效果 + 8 张构筑限制模型 + 逐张卡文）。
 
